@@ -1,0 +1,17 @@
+/target
+**/target
+Cargo.lock
+*.rar
+*.zip
+*.7z
+
+# Test models are never committed. Only fingerprints and manifests.
+# See ../ayatsuri2d-research/docs/09-test-corpus.md
+/corpus
+**/corpus/**/*.moc3
+**/corpus/**/*.model3.json
+**/corpus/**/*.png
+**/*.cmo3
+
+.DS_Store
+*.swp

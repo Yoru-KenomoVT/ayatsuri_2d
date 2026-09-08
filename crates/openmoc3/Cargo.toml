@@ -1,0 +1,26 @@
+[package]
+name = "openmoc3"
+version = "0.1.0"
+edition = "2021"
+# MIT only, not the usual MIT/Apache dual: portions derive from
+# PurismCore, which is MIT. See NOTICE.
+license = "MIT"
+description = "A safe, allocation-free reader for Live2D .moc3 model files"
+repository = "https://github.com/ayatsuri2d/ayatsuri2d"
+keywords = ["live2d", "moc3", "vtuber", "parser"]
+categories = ["parser-implementations", "no-std"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+
+[dev-dependencies]
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+integer_arithmetic = "warn"

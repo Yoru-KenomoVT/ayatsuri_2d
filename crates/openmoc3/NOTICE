@@ -1,0 +1,39 @@
+# Provenance
+
+`openmoc3` is a Rust reader for Live2D `.moc3` model files.
+
+## What it derives from
+
+**Sakura Motion / PurismCore** <https://github.com/SakuraMotion/PurismCore>
+MIT licensed. A C99 reimplementation of Cubism Core with v6 support. Portions
+of this crate's structure and its version-dependent constants derive from that
+work. Their copyright notice is preserved in LICENSE, as MIT requires.
+
+**OpenL2D Project** <https://github.com/OpenL2D/moc3ingbird>
+Free Development Public License 1.0-US. `src/moc3.hexpat` names every field in
+moc3 v3.00 through v5.00. Its README states: "you are free to use the included
+model files and pattern files to create your own MOC3 readers and writers. No
+license will restrict your right to do so." The malformed `exploit.moc3` from
+that repository (CVE-2023-27566) is used as a fuzz seed.
+
+**Live2D Inc.'s published documentation**
+The JSON sidecar specifications at <https://github.com/Live2D/CubismSpecs> and
+the Standard Parameter List in the Cubism Editor manual. Public documentation,
+used as published.
+
+**Our own analysis**
+Section extents, element widths and field semantics verified independently
+across five models spanning three format versions, by decoding every section
+into typed values and re-encoding it byte-identically. Method and results are
+in `ayatsuri2d-research/docs/`.
+
+## What it does NOT derive from
+
+No Live2D software was installed. No Live2D binary was disassembled. No
+contributor has accepted the Live2D Cubism SDK licence or the Cubism Editor
+licence. Two other public implementations, `py-moc3` and `moc3-reader-re`,
+derive from a decompilation of Cubism's own exporter and were deliberately not
+consulted.
+
+Live2D and Cubism are trademarks of Live2D Inc. This is an independent
+interoperability effort, not affiliated with or endorsed by Live2D Inc.
