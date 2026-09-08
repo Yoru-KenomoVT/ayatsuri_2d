@@ -1,5 +1,11 @@
 # The format
 
+Models are saved as **`.aom`**, the Ayatsuri Open Model: the Alterion container
+shared with `.aodx` and `.aprj`, carrying a MessagePack payload with bulk arrays
+stored as raw `bin` blobs. Self-describing where that buys tolerant versioning,
+flat where that buys zero-copy. The byte layout is specified in
+[aom-format.md](aom-format.md).
+
 ## Ours is a superset
 
     openmoc3 --parses--> ayatsuri format <--consumes-- ayatsuri-core

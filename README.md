@@ -44,8 +44,11 @@ nobody uses. Every language binding holds an opaque handle and passes
 primitives; none of them owns model state or allocates per frame, so a puppet
 runs at the same speed from C as it does from Rust.
 
-Models are saved in a native format that is a superset of `.moc3`: everything
-moc3 can express round-trips back out, and everything added on top does not.
+Models are saved as **`.aom`**, the Ayatsuri Open Model: a MessagePack payload
+in the same container as Alterion's other formats, with bulk vertex and keyform
+data kept as flat blobs so it can be read without copying. It is a superset of
+`.moc3`, so everything moc3 can express round-trips back out, and everything
+added on top does not.
 Live2D models import, and PSD import is the migration path for riggers who want
 the features moc3 cannot carry.
 
