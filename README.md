@@ -49,6 +49,10 @@ in the same container as Alterion's other formats, with bulk vertex and keyform
 data kept as flat blobs so it can be read without copying. It is a superset of
 `.moc3`, so everything moc3 can express round-trips back out, and everything
 added on top does not.
+
+Every model exports as a moc3 bundle, so it runs in VTube Studio and any engine
+on the Cubism SDK today. Hosts that link `ayatsuri-capi` load `.aom` directly
+and get the features moc3 cannot carry.
 Live2D models import, and PSD import is the migration path for riggers who want
 the features moc3 cannot carry.
 
