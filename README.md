@@ -1,12 +1,10 @@
-<!-- Drop logo-dark.png and logo-light.png into assets/ and uncomment.
 <div align="center">
     <picture>
         <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
         <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.png">
-        <img alt="Ayatsuri2D Logo" src="assets/logo-dark.png" width="400">
+        <img alt="Ayatsuri2D Logo" src="assets/logo-light.png" width="400">
     </picture>
 </div>
--->
 
 <div align="center">
 
