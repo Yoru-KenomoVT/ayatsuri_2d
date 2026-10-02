@@ -1,0 +1,25 @@
+[package]
+name = "ayatsuri-capi"
+description = "The C ABI: ayatsuri.h plus a static and shared lib. The load-bearing wall."
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+# Apache-2.0, not the workspace GPL-3.0: a copyleft ABI cannot be embedded in
+# a proprietary game, which is most of what a puppet runtime is for. See LICENSE.
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+# The one crate that will carry unsafe: the FFI boundary. Everything behind it
+# inherits the workspace forbid.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[dependencies]
+ayatsuri-core = { workspace = true }
+ayatsuri-format = { workspace = true }
