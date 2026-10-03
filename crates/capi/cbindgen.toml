@@ -1,0 +1,41 @@
+# ayatsuri.h is generated from the Rust source: `cargo xtask capi` writes it
+# and `cargo xtask capi --check` (part of ci) fails when it is stale.
+language = "C"
+include_guard = "AYATSURI_H"
+cpp_compat = true
+documentation = true
+documentation_style = "c"
+header = """/*
+ * ayatsuri.h: the Ayatsuri2D runtime for anything that can call C.
+ *
+ * Coarse by design: arrays in, arrays out, never a call per parameter.
+ * A model is an opaque handle; every call on it is cheap and none allocate
+ * per frame. Panics never cross this boundary: a failing call returns a
+ * status or a null and ay2d_last_error() says why.
+ *
+ * Generated from crates/capi by cbindgen; edit the Rust, not this file.
+ * Apache-2.0. See LICENSE beside this header.
+ */"""
+usize_is_size_t = true
+sys_includes = ["stddef.h", "stdint.h"]
+no_includes = true
+
+[export]
+item_types = ["constants", "globals", "enums", "structs", "opaque", "typedefs", "functions"]
+
+[export.rename]
+"Status" = "ay2d_status"
+"Model" = "ay2d_model"
+"Drawable" = "ay2d_drawable"
+"Geometry" = "ay2d_geometry"
+"Canvas" = "ay2d_canvas"
+
+[enum]
+rename_variants = "ScreamingSnakeCase"
+prefix_with_name = true
+
+[fn]
+sort_by = "None"
+
+[parse]
+parse_deps = false
