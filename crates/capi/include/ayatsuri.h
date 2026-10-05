@@ -222,6 +222,28 @@ enum ay2d_status ay2d_set_parameters(struct ay2d_model *m,
  */
 enum ay2d_status ay2d_set_all_parameters(struct ay2d_model *m, const float *values, size_t n);
 
+/*
+ Every part's host opacity, by index, into `values`
+ (`ay2d_part_count` floats, 0 to 1; 1 when never set).
+
+ # Safety
+ `m` is a live handle; `values` holds `n` writable floats.
+ */
+enum ay2d_status ay2d_get_part_opacities(const struct ay2d_model *m, float *values, size_t n);
+
+/*
+ Set `n` parts' host opacities at once: `indices[i]` takes `values[i]`,
+ clamped to 0 to 1. An index past the model fails the whole call before
+ anything changes. Nothing is evaluated until `ay2d_update`.
+
+ # Safety
+ `m` is a live handle; `indices` and `values` hold `n` readable items.
+ */
+enum ay2d_status ay2d_set_part_opacities(struct ay2d_model *m,
+                                         const uint32_t *indices,
+                                         const float *values,
+                                         size_t n);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

@@ -9,6 +9,7 @@
 mod error;
 mod handle;
 mod params;
+mod parts;
 
 use std::ffi::c_char;
 
@@ -21,6 +22,7 @@ pub use handle::{
 pub use params::{
     ay2d_get_parameters, ay2d_parameter_ranges, ay2d_set_all_parameters, ay2d_set_parameters,
 };
+pub use parts::{ay2d_get_part_opacities, ay2d_set_part_opacities};
 
 /// The ABI version a host checks before anything else. Bumped only on a
 /// breaking change to the header.
