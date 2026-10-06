@@ -244,6 +244,50 @@ enum ay2d_status ay2d_set_part_opacities(struct ay2d_model *m,
                                          const float *values,
                                          size_t n);
 
+/*
+ Advance the model by `dt` seconds and evaluate it: physics steps (when
+ the model has a rig and it is on), parameters resolve, deformers and
+ meshes move, draw order sorts. After this `ay2d_drawables` is current.
+ `dt` of zero evaluates without moving physics.
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_update(struct ay2d_model *m, float dt);
+
+/*
+ 1 when the model carries a pendulum rig, else 0.
+
+ # Safety
+ `m` is a live handle.
+ */
+int32_t ay2d_has_physics(const struct ay2d_model *m);
+
+/*
+ Run (1) or hold (0) the rig on update. On by default when the model
+ has one; off, the physics-driven parameters keep their set values.
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_set_physics(struct ay2d_model *m, int32_t on);
+
+/*
+ Wind on the rig, in the same units gravity has (down is 0, -1).
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_set_wind(struct ay2d_model *m, float x, float y);
+
+/*
+ Put every pendulum back at rest, as after a scene cut.
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_reset_physics(struct ay2d_model *m);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

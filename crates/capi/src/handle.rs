@@ -16,6 +16,9 @@ pub struct Model {
     pub(crate) param_ids: Vec<CString>,
     pub(crate) part_ids: Vec<CString>,
     pub(crate) mesh_ids: Vec<CString>,
+    /// Physics runs on update while this is set; on by default when the
+    /// model has a rig.
+    pub(crate) physics_on: bool,
     /// Where each visible drawable's data sits after the last update, in
     /// draw order, so `ay2d_drawables` hands out views without a sort.
     pub(crate) order: Vec<usize>,
@@ -117,12 +120,14 @@ pub unsafe extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
         let mesh_ids = cstrings(m.art_meshes.iter().map(|a| a.id.as_str()));
         let mut puppet = Puppet::new(payload.model);
         puppet.update();
+        let physics_on = puppet.has_physics();
         let mut model = Model {
             puppet,
             textures: payload.textures.into_iter().map(|b| b.into_vec()).collect(),
             param_ids,
             part_ids,
             mesh_ids,
+            physics_on,
             order: Vec::new(),
         };
         model.refresh_order();
