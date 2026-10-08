@@ -6,6 +6,7 @@
 //! Panics never cross the boundary: every entry point runs under a catch,
 //! reports through `ay2d_last_error` and returns a status or a null.
 
+mod draw;
 mod error;
 mod handle;
 mod params;
@@ -14,6 +15,10 @@ mod physics;
 
 use std::ffi::c_char;
 
+pub use draw::{
+    AY2D_FLAG_ADDITIVE, AY2D_FLAG_DOUBLE_SIDED, AY2D_FLAG_INVERTED_MASK, AY2D_FLAG_MULTIPLICATIVE,
+    Drawable, ay2d_drawables, ay2d_mesh_geometry,
+};
 pub use error::{Status, ay2d_last_error};
 pub use handle::{
     Canvas, Model, ay2d_canvas, ay2d_free, ay2d_load, ay2d_mesh_count, ay2d_mesh_id,

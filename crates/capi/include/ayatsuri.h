@@ -17,6 +17,26 @@
 #include <stdint.h>
 
 /*
+ Drawn with additive blending.
+ */
+#define AY2D_FLAG_ADDITIVE 1
+
+/*
+ Drawn with multiplicative blending.
+ */
+#define AY2D_FLAG_MULTIPLICATIVE 2
+
+/*
+ Both faces drawn; no back-face culling.
+ */
+#define AY2D_FLAG_DOUBLE_SIDED 4
+
+/*
+ The masks cut the mesh out where they are drawn, not where they are not.
+ */
+#define AY2D_FLAG_INVERTED_MASK 8
+
+/*
  What a call reports. Zero is success, as C expects.
  */
 typedef enum ay2d_status {
@@ -49,6 +69,29 @@ typedef enum ay2d_status {
 typedef struct ay2d_model ay2d_model;
 
 /*
+ One mesh to draw: where its vertices are now, where they read the
+ texture, and how. `positions` and `uvs` hold `vertex_count` xy pairs in
+ model units and 0 to 1; `indices` a triangle list into them; `masks`
+ the meshes (by mesh index) whose texture alpha clips this one.
+ */
+typedef struct ay2d_drawable {
+  uint32_t mesh;
+  uint32_t texture;
+  /*
+   `AY2D_FLAG_*` bits.
+   */
+  uint32_t flags;
+  float opacity;
+  uint32_t vertex_count;
+  uint32_t index_count;
+  uint32_t mask_count;
+  const float *positions;
+  const float *uvs;
+  const uint16_t *indices;
+  const uint32_t *masks;
+} ay2d_drawable;
+
+/*
  The canvas the model is drawn on: pixels, and how model units map
  onto them (`px = unit * pixels_per_unit + origin`).
  */
@@ -75,6 +118,31 @@ uint32_t ay2d_abi_version(void);
  long as the library.
  */
 const char *ay2d_version(void);
+
+/*
+ The visible meshes after the last update, back to front, into `out`.
+ Returns how many there are; with `n` smaller than that (zero and a
+ null `out` to just ask) only the first `n` are written. Masks are not
+ among the drawables unless drawn in their own right; use
+ `ay2d_mesh_geometry` to render a mask.
+
+ # Safety
+ `m` is a live handle; `out` holds `n` writable drawables, or `n` is zero.
+ */
+uint32_t ay2d_drawables(const struct ay2d_model *m, struct ay2d_drawable *out, size_t n);
+
+/*
+ A mesh's geometry right now, visible or not: for rendering a mask, or
+ for a host that keeps everything on the GPU and only streams positions.
+ `uvs` and `indices` never change for a mesh; upload them once and read
+ `positions` after each update. Fails with range past the mesh count.
+
+ # Safety
+ `m` is a live handle; `out` points at one writable drawable.
+ */
+enum ay2d_status ay2d_mesh_geometry(const struct ay2d_model *m,
+                                    uint32_t mesh,
+                                    struct ay2d_drawable *out);
 
 /*
  Why the last call on this thread failed, NUL-terminated; empty when it
