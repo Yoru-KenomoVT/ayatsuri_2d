@@ -12,6 +12,7 @@ mod handle;
 mod params;
 mod parts;
 mod physics;
+mod textures;
 
 use std::ffi::c_char;
 
@@ -32,6 +33,7 @@ pub use parts::{ay2d_get_part_opacities, ay2d_set_part_opacities};
 pub use physics::{
     ay2d_has_physics, ay2d_reset_physics, ay2d_set_physics, ay2d_set_wind, ay2d_update,
 };
+pub use textures::ay2d_texture;
 
 /// The ABI version a host checks before anything else. Bumped only on a
 /// breaking change to the header.

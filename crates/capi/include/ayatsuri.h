@@ -356,6 +356,18 @@ enum ay2d_status ay2d_set_wind(struct ay2d_model *m, float x, float y);
  */
 enum ay2d_status ay2d_reset_physics(struct ay2d_model *m);
 
+/*
+ Texture page `i` as encoded bytes (PNG), alive as long as the model.
+ A drawable's `texture` is an index into these.
+
+ # Safety
+ `m` is a live handle; `bytes` and `len` each point at one writable slot.
+ */
+enum ay2d_status ay2d_texture(const struct ay2d_model *m,
+                              uint32_t i,
+                              const uint8_t **bytes,
+                              size_t *len);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
