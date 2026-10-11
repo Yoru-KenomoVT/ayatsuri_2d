@@ -126,20 +126,13 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
     if doc.width == 0 || doc.height == 0 {
         return Err(ImportError::Export("document has no size".into()));
     }
-    // one part per distinct group path, created on first sight, all under
-    // a root part so top-level layers have a home in the Parts palette
-    let mut parts: Vec<Part> = vec![Part {
-        id: id_of("Part", 0),
-        parent_part: None,
-        visible: true,
-        enabled: true,
-        binding: Binding::default(),
-        draw_orders: vec![500.0],
-    }];
-    let mut part_names: Vec<String> = vec!["Root".into()];
-    let mut paths: Vec<Vec<String>> = vec![Vec::new()];
+    // one part per distinct group path, created on first sight; layers
+    // outside any group stay part-less and show at the palette's top level
+    let mut parts: Vec<Part> = Vec::new();
+    let mut part_names: Vec<String> = Vec::new();
+    let mut paths: Vec<Vec<String>> = Vec::new();
     let mut part_for = |path: &[String], parts: &mut Vec<Part>| -> Option<u32> {
-        let mut parent: Option<u32> = Some(0);
+        let mut parent: Option<u32> = None;
         for depth in 1..=path.len() {
             let sub = path.get(..depth).unwrap_or(&[]).to_vec();
             let found = paths.iter().position(|p| *p == sub);

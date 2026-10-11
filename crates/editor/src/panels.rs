@@ -187,6 +187,8 @@ pub struct EditorUi {
     /// Collapsed rows in the Deformer palette, and canvas-locked deformers.
     def_collapsed: std::collections::HashSet<usize>,
     def_locked: std::collections::HashSet<usize>,
+    /// Folded folders in the Parts palette.
+    part_collapsed: std::collections::HashSet<usize>,
     new_param: Option<ParamNew>,
     new_folder: Option<String>,
     new_model: Option<ModelNew>,
@@ -399,6 +401,7 @@ impl Default for EditorUi {
             export_dlg: None,
             def_collapsed: std::collections::HashSet::new(),
             def_locked: std::collections::HashSet::new(),
+            part_collapsed: std::collections::HashSet::new(),
             new_param: None,
             new_folder: None,
             new_model: None,
@@ -4352,7 +4355,9 @@ impl EditorUi {
         let mut guard = 0;
         while let Some((i, depth)) = stack.pop() {
             order.push((i, depth));
-            if let Some(kids) = children.get(i) {
+            if !self.part_collapsed.contains(&i)
+                && let Some(kids) = children.get(i)
+            {
                 for &k in kids.iter().rev() {
                     stack.push((k, depth + 1));
                 }
@@ -4362,6 +4367,9 @@ impl EditorUi {
                 break;
             }
         }
+        // a folder can fold when it holds sub-folders or meshes
+        let has_mesh: std::collections::HashSet<u32> =
+            s.puppet.model().art_meshes.iter().filter_map(|m| m.parent_part).collect();
 
         // live stack positions, front-most last, for the right-hand column
         let stack: std::collections::HashMap<usize, usize> =
@@ -4417,7 +4425,32 @@ impl EditorUi {
                 }
                 let ring = pos2(rect.min.x + 27.0, rect.center().y);
                 ui.painter().circle_stroke(ring, 4.0, Stroke::new(1.2, theme::pal().key_ring));
-                let label_x = rect.min.x + 38.0 + depth as f32 * 14.0;
+                let label_x = rect.min.x + 48.0 + depth as f32 * 14.0;
+                let foldable = children.get(i).is_some_and(|k| !k.is_empty())
+                    || has_mesh.contains(&(i as u32));
+                if foldable {
+                    let caret = Rect::from_center_size(
+                        pos2(label_x - 8.0, rect.center().y),
+                        vec2(12.0, 16.0),
+                    );
+                    let open_now = !self.part_collapsed.contains(&i);
+                    ui.painter().text(
+                        caret.center(),
+                        Align2::CENTER_CENTER,
+                        if open_now { "⏷" } else { "⏵" },
+                        FontId::proportional(9.0),
+                        theme::pal().text_faint,
+                    );
+                    let cresp =
+                        ui.interact(caret, egui::Id::new(("part-caret", i)), Sense::click());
+                    if cresp.clicked() {
+                        if open_now {
+                            self.part_collapsed.insert(i);
+                        } else {
+                            self.part_collapsed.remove(&i);
+                        }
+                    }
+                }
                 paint_folder(ui, pos2(label_x, rect.center().y));
                 // the part's own preview, like the reference palette shows
                 let thumb =
@@ -4491,8 +4524,10 @@ impl EditorUi {
                     }
                 });
 
-                // the part's meshes, nested one level deeper
-                let part_effective = effective;
+                // the part's meshes, nested one level deeper, unless folded
+                if self.part_collapsed.contains(&i) {
+                    continue;
+                }
                 let meshes: Vec<(usize, String)> = s
                     .puppet
                     .model()
@@ -4503,50 +4538,23 @@ impl EditorUi {
                     .map(|(mi, m)| (mi, m.id.clone()))
                     .collect();
                 for (mi, mid) in meshes {
-                    let (rect, resp) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
-                    if self.selected == Some(Sel::Mesh(mi)) {
-                        ui.painter().rect_filled(rect, 0.0, theme::pal().select);
-                    }
-                    let mesh_on = s.mesh_shown.get(mi).copied().unwrap_or(true);
-                    let eye = Rect::from_min_size(rect.min, vec2(18.0, 16.0));
-                    paint_eye(ui, eye, mesh_on, mesh_on && part_effective);
-                    let eresp = ui.interact(eye, egui::Id::new(("mesh-eye", mi)), Sense::click());
-                    if eresp.clicked() {
-                        let now = !mesh_on;
-                        if let Some(f) = s.mesh_shown.get_mut(mi) {
-                            *f = now;
-                        }
-                        s.puppet.set_mesh_visible(mi, now);
-                        s.dirty = true;
-                    }
-                    let x = rect.min.x + 56.0 + depth as f32 * 14.0;
-                    ui.painter().circle_filled(
-                        pos2(x, rect.center().y),
-                        2.0,
-                        theme::pal().text_faint,
-                    );
-                    ui.painter().text(
-                        pos2(x + 8.0, rect.center().y),
-                        Align2::LEFT_CENTER,
-                        truncate(&mid, 20),
-                        FontId::proportional(10.5),
-                        theme::pal().text,
-                    );
-                    // the live stack position, what actually decides overlap
-                    let pos_label =
-                        stack.get(&mi).map(|p| format!("#{p}")).unwrap_or_else(|| "–".into());
-                    ui.painter().text(
-                        rect.right_center() - vec2(6.0, 0.0),
-                        Align2::RIGHT_CENTER,
-                        pos_label,
-                        FontId::proportional(10.0),
-                        theme::pal().text_faint,
-                    );
-                    if resp.clicked() {
-                        self.selected = Some(Sel::Mesh(mi));
-                    }
+                    let x_off = 66.0 + depth as f32 * 14.0;
+                    parts_mesh_row(ui, s, &mut self.selected, mi, &mid, x_off, effective, &stack);
                 }
+            }
+            // meshes that belong to no part sit at the top level, so imports
+            // need no artificial root folder
+            let loose: Vec<(usize, String)> = s
+                .puppet
+                .model()
+                .art_meshes
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.parent_part.is_none())
+                .map(|(mi, m)| (mi, m.id.clone()))
+                .collect();
+            for (mi, mid) in loose {
+                parts_mesh_row(ui, s, &mut self.selected, mi, &mid, 30.0, true, &stack);
             }
         });
     }
@@ -4739,6 +4747,29 @@ impl EditorUi {
             })
             .collect();
 
+        // which deformer each mesh hangs from, and each deformer's parent,
+        // so a row can find everything it moves for its preview
+        let def_parent: Vec<Option<u32>> =
+            s.puppet.model().deformers.iter().map(|d| d.parent_deformer).collect();
+        let mesh_def: Vec<Option<u32>> =
+            s.puppet.model().art_meshes.iter().map(|m| m.parent_deformer).collect();
+        let moved_by = |mesh: usize, def: usize| -> bool {
+            let mut cur = mesh_def.get(mesh).copied().flatten();
+            let mut hops = 0;
+            while let Some(d) = cur {
+                if d as usize == def {
+                    return true;
+                }
+                cur = def_parent.get(d as usize).copied().flatten();
+                hops += 1;
+                if hops > 256 {
+                    break;
+                }
+            }
+            false
+        };
+        let mut budget = 2usize;
+        let ctx = ui.ctx().clone();
         ScrollArea::vertical().id_salt("deformers").show(ui, |ui| {
             for (i, dep, id, is_warp, has_kids) in rows {
                 let (rect, resp) =
@@ -4807,13 +4838,54 @@ impl EditorUi {
                 } else {
                     paint_rotation_glyph(ui, pos2(x, rect.center().y));
                 }
+                // a preview of the artwork this deformer moves, Cubism style
+                let thumb = Rect::from_min_size(pos2(x + 13.0, rect.min.y + 1.0), vec2(16.0, 16.0));
+                if !s.deformer_previews.contains_key(&i) && budget > 0 && ui.is_rect_visible(thumb)
+                {
+                    budget -= 1;
+                    let handle = crate::thumb::render_filtered(
+                        &s.puppet,
+                        &s.preview_tex,
+                        &|m| moved_by(m, i),
+                        96,
+                    )
+                    .map(|(w, h, px)| {
+                        let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
+                        ctx.load_texture(format!("def-prev-{i}"), img, egui::TextureOptions::LINEAR)
+                    });
+                    s.deformer_previews.insert(i, handle);
+                }
+                if !s.deformer_previews.contains_key(&i) {
+                    ctx.request_repaint();
+                }
+                ui.painter().rect_filled(thumb, 2.0, theme::pal().canvas_bg);
+                let preview = s.deformer_previews.get(&i).and_then(|h| h.clone());
+                if let Some(h) = &preview {
+                    let sz = h.size_vec2();
+                    let k = (thumb.width() / sz.x).min(thumb.height() / sz.y);
+                    ui.painter().image(
+                        h.id(),
+                        Rect::from_center_size(thumb.center(), sz * k),
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
                 ui.painter().text(
-                    pos2(x + 16.0, rect.center().y),
+                    pos2(x + 34.0, rect.center().y),
                     Align2::LEFT_CENTER,
-                    truncate(&id, 24),
+                    truncate(&id, 22),
                     FontId::proportional(11.5),
                     theme::pal().text,
                 );
+                if let Some(h) = preview
+                    && resp.hovered()
+                {
+                    resp.clone().on_hover_ui(|ui| {
+                        let sz = h.size_vec2();
+                        let k = (160.0 / sz.x).min(200.0 / sz.y);
+                        ui.image((h.id(), sz * k));
+                    });
+                }
                 if resp.clicked() {
                     self.selected = Some(Sel::Deformer(i));
                 }
@@ -6437,6 +6509,65 @@ fn rig_groups_reach(rig: &ayatsuri_format::model::PhysicsRig, sel: usize) -> f32
                 + 10.0
         })
         .unwrap_or(20.0)
+}
+
+/// One mesh row in the Parts palette: eye, dot, name, live stack position.
+#[allow(clippy::too_many_arguments)]
+fn parts_mesh_row(
+    ui: &mut Ui,
+    s: &mut Session,
+    selected: &mut Option<Sel>,
+    mi: usize,
+    mid: &str,
+    x_off: f32,
+    parent_effective: bool,
+    stack: &std::collections::HashMap<usize, usize>,
+) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
+    if *selected == Some(Sel::Mesh(mi)) {
+        ui.painter().rect_filled(rect, 0.0, theme::pal().select);
+    }
+    let mesh_on = s.mesh_shown.get(mi).copied().unwrap_or(true);
+    let eye = Rect::from_min_size(rect.min, vec2(18.0, 16.0));
+    paint_eye(ui, eye, mesh_on, mesh_on && parent_effective);
+    let eresp = ui.interact(eye, egui::Id::new(("mesh-eye", mi)), Sense::click());
+    if eresp.clicked() {
+        let now = !mesh_on;
+        if let Some(f) = s.mesh_shown.get_mut(mi) {
+            *f = now;
+        }
+        s.puppet.set_mesh_visible(mi, now);
+        s.dirty = true;
+    }
+    let x = rect.min.x + x_off;
+    ui.painter().circle_filled(pos2(x, rect.center().y), 2.0, theme::pal().text_faint);
+    // names come first: the stack column only shows once a name has room
+    // for a dozen glyphs beside it (about 6px a glyph)
+    let glyph = 6.2;
+    let with_stack = (rect.max.x - 44.0 - (x + 8.0)).max(0.0);
+    let show_stack = with_stack / glyph >= 12.0;
+    let room = if show_stack { with_stack } else { (rect.max.x - 6.0 - (x + 8.0)).max(0.0) };
+    ui.painter().text(
+        pos2(x + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        truncate(mid, ((room / glyph) as usize).max(3)),
+        FontId::proportional(10.5),
+        theme::pal().text,
+    );
+    if show_stack {
+        // the live stack position, what actually decides overlap
+        let pos_label = stack.get(&mi).map(|p| format!("#{p}")).unwrap_or_else(|| "–".into());
+        ui.painter().text(
+            rect.right_center() - vec2(6.0, 0.0),
+            Align2::RIGHT_CENTER,
+            pos_label,
+            FontId::proportional(10.0),
+            theme::pal().text_faint,
+        );
+    }
+    if resp.clicked() {
+        *selected = Some(Sel::Mesh(mi));
+    }
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {

@@ -80,6 +80,8 @@ pub struct Session {
     /// Rendered Parts palette previews, filled lazily a few per frame and
     /// dropped whenever the model is rebuilt.
     pub part_previews: HashMap<usize, Option<TextureHandle>>,
+    /// The same for the Deformer palette: everything a deformer moves.
+    pub deformer_previews: HashMap<usize, Option<TextureHandle>>,
     /// Animation clips; they ride inside the .aom payload.
     pub animations: Vec<ayatsuri_format::Animation>,
     pub current_anim: Option<usize>,
@@ -480,6 +482,7 @@ impl Session {
             modified: false,
             preview_tex,
             part_previews: HashMap::new(),
+            deformer_previews: HashMap::new(),
             animations: Vec::new(),
             current_anim: None,
             part_shown: vec![true; n_parts],
@@ -577,6 +580,7 @@ impl Session {
         // the rebuilt model may have gained deformers
         self.deformer_shown.resize(puppet.model().deformers.len(), true);
         self.part_previews.clear();
+        self.deformer_previews.clear();
         self.param_colors.resize(puppet.model().parameters.len(), None);
         for (i, shown) in self.deformer_shown.iter().enumerate() {
             puppet.set_deformer_visible(i, *shown);
