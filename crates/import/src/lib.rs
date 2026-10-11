@@ -7,11 +7,33 @@
 
 #![forbid(unsafe_code)]
 
+mod kra;
+mod layers;
 mod moc3;
+mod moc3_export;
 mod physics3;
+mod psd_doc;
+
+pub use layers::Imported;
+
+/// A Photoshop document as a fresh, rig-ready model.
+pub fn from_psd(bytes: &[u8]) -> Result<Imported, ImportError> {
+    let doc = psd_doc::read_psd(bytes)?;
+    layers::build(&doc)
+}
+
+/// A Krita document as a fresh, rig-ready model. Layers Krita stores in
+/// other colour models are skipped and counted.
+pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
+    let (doc, skipped) = kra::read_kra(bytes)?;
+    let mut out = layers::build(&doc)?;
+    out.skipped += skipped;
+    Ok(out)
+}
 
 pub use moc3::from_moc3;
-pub use physics3::from_physics3;
+pub use moc3_export::{ExportVersion, export_warnings, to_moc3};
+pub use physics3::{from_physics3, to_motion3, to_physics3};
 
 use thiserror::Error;
 
@@ -35,4 +57,6 @@ pub enum ImportError {
     UnknownDeformerType { at: usize, value: i32 },
     #[error("physics3.json: {0}")]
     Physics(String),
+    #[error("export: {0}")]
+    Export(String),
 }

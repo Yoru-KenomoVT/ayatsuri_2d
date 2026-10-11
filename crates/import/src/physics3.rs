@@ -154,6 +154,112 @@ fn range(r: Option<Range>) -> PhysicsRange {
     PhysicsRange { min, default: finite(r.default, 0.0).clamp(min, max), max }
 }
 
+/// Serialize a rig back to physics3.json, the inverse of `from_physics3`,
+/// for the embedded export.
+pub fn to_physics3(rig: &ayatsuri_format::model::PhysicsRig) -> Vec<u8> {
+    use serde_json::json;
+    let settings: Vec<_> = rig
+        .groups
+        .iter()
+        .map(|g| {
+            json!({
+                "Id": g.id,
+                "Input": g.inputs.iter().map(|i| json!({
+                    "Source": {"Target": "Parameter", "Id": i.param},
+                    "Weight": i.weight,
+                    "Type": match i.kind { PhysicsIo::Angle => "Angle", PhysicsIo::Y => "Y", _ => "X" },
+                    "Reflect": i.reflect,
+                })).collect::<Vec<_>>(),
+                "Output": g.outputs.iter().map(|o| json!({
+                    "Destination": {"Target": "Parameter", "Id": o.param},
+                    "VertexIndex": o.vertex,
+                    "Scale": o.scale,
+                    "Weight": o.weight,
+                    "Type": match o.kind { PhysicsIo::Angle => "Angle", PhysicsIo::Y => "Y", _ => "X" },
+                    "Reflect": o.reflect,
+                })).collect::<Vec<_>>(),
+                "Vertices": g.nodes.iter().map(|n| json!({
+                    "Position": {"X": n.x, "Y": n.y},
+                    "Mobility": n.mobility,
+                    "Delay": n.delay,
+                    "Acceleration": n.acceleration,
+                    "Radius": n.radius,
+                })).collect::<Vec<_>>(),
+                "Normalization": {
+                    "Position": {"Minimum": g.norm_position.min, "Default": g.norm_position.default, "Maximum": g.norm_position.max},
+                    "Angle": {"Minimum": g.norm_angle.min, "Default": g.norm_angle.default, "Maximum": g.norm_angle.max},
+                },
+            })
+        })
+        .collect();
+    let doc = json!({
+        "Version": 3,
+        "Meta": {
+            "PhysicsSettingCount": rig.groups.len(),
+            "TotalInputCount": rig.groups.iter().map(|g| g.inputs.len()).sum::<usize>(),
+            "TotalOutputCount": rig.groups.iter().map(|g| g.outputs.len()).sum::<usize>(),
+            "VertexCount": rig.groups.iter().map(|g| g.nodes.len()).sum::<usize>(),
+            "Fps": if rig.fps > 0.0 { rig.fps } else { 60.0 },
+            "EffectiveForces": {
+                "Gravity": {"X": rig.gravity_x, "Y": rig.gravity_y},
+                "Wind": {"X": rig.wind_x, "Y": rig.wind_y},
+            },
+            "PhysicsDictionary": rig.groups.iter().map(|g| json!({
+                "Id": g.id,
+                "Name": if g.name.is_empty() { g.id.clone() } else { g.name.clone() },
+            })).collect::<Vec<_>>(),
+        },
+        "PhysicsSettings": settings,
+    });
+    serde_json::to_vec_pretty(&doc).unwrap_or_default()
+}
+
+/// Serialize an animation as motion3.json: linear segments only, which is
+/// all the clip format carries today.
+pub fn to_motion3(anim: &ayatsuri_format::Animation) -> Vec<u8> {
+    use serde_json::json;
+    let mut total_segments = 0usize;
+    let mut total_points = 0usize;
+    let curves: Vec<_> = anim
+        .tracks
+        .iter()
+        .map(|t| {
+            let mut seg: Vec<serde_json::Value> = Vec::new();
+            for (i, (time, value)) in t.points.iter().enumerate() {
+                if i == 0 {
+                    seg.push(json!(time));
+                    seg.push(json!(value));
+                    total_points += 1;
+                } else {
+                    // 0 marks a linear segment in the published schema
+                    seg.push(json!(0));
+                    seg.push(json!(time));
+                    seg.push(json!(value));
+                    total_segments += 1;
+                    total_points += 1;
+                }
+            }
+            json!({"Target": "Parameter", "Id": t.param, "Segments": seg})
+        })
+        .collect();
+    let doc = json!({
+        "Version": 3,
+        "Meta": {
+            "Duration": anim.duration,
+            "Fps": if anim.fps > 0.0 { anim.fps } else { 30.0 },
+            "Loop": anim.looped,
+            "AreBeziersRestricted": true,
+            "CurveCount": curves.len(),
+            "TotalSegmentCount": total_segments,
+            "TotalPointCount": total_points,
+            "UserDataCount": 0,
+            "TotalUserDataSize": 0,
+        },
+        "Curves": curves,
+    });
+    serde_json::to_vec_pretty(&doc).unwrap_or_default()
+}
+
 /// Parse a physics3.json file into the native rig.
 pub fn from_physics3(bytes: &[u8]) -> Result<PhysicsRig, ImportError> {
     let file: File =

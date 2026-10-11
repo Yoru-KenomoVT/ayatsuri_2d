@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod dock;
+mod export;
 mod gpu_view;
 pub mod logging;
 mod panels;

@@ -182,6 +182,105 @@ pub fn render(puppet: &Puppet, textures: &[TexData], width: usize) -> (usize, us
     (width, height, px)
 }
 
+/// Render just one set of meshes, cropped to their bounds: the Parts
+/// palette hover previews. Textures can be any resolution; sampling is
+/// normalized, so the 256px palette copies do fine.
+pub fn render_filtered(
+    puppet: &Puppet,
+    textures: &[TexData],
+    keep: &dyn Fn(usize) -> bool,
+    width: usize,
+) -> Option<(usize, usize, Vec<u8>)> {
+    let c = puppet.model().canvas;
+    // bounds of the kept drawables, in canvas pixels
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for d in puppet.drawables() {
+        if !keep(d.mesh) {
+            continue;
+        }
+        let (pts, _) = d.positions.as_chunks::<2>();
+        for p in pts {
+            let px = c.origin_x + p[0] * c.pixels_per_unit;
+            let py = c.origin_y + p[1] * c.pixels_per_unit;
+            x0 = x0.min(px);
+            y0 = y0.min(py);
+            x1 = x1.max(px);
+            y1 = y1.max(py);
+        }
+    }
+    if x0 > x1 || y0 > y1 {
+        return None;
+    }
+    let pad = ((x1 - x0).max(y1 - y0) * 0.04).max(2.0);
+    let (x0, y0, x1, y1) = (x0 - pad, y0 - pad, x1 + pad, y1 + pad);
+    let scale = width as f32 / (x1 - x0).max(1.0);
+    let height = (((y1 - y0) * scale) as usize).clamp(1, width * 4);
+    let r = Raster {
+        w: width,
+        h: height,
+        sx: scale,
+        sy_off: 0.0,
+        origin_x: c.origin_x - x0,
+        origin_y: c.origin_y - y0,
+        ppu: c.pixels_per_unit,
+    };
+    let mut fb = vec![0f32; width * height * 4];
+    let mut coverage = vec![0f32; width * height];
+    let mut coverage_for: Vec<u32> = Vec::new();
+    for d in puppet.drawables() {
+        if !keep(d.mesh) || d.opacity <= 0.0 {
+            continue;
+        }
+        let Some(tex) = textures.get(d.texture as usize) else { continue };
+        let inverted = d.flags & flags::INVERTED_MASK != 0;
+        let masked = !d.masks.is_empty();
+        if masked && coverage_for != d.masks {
+            coverage_for = d.masks.to_vec();
+            coverage.iter_mut().for_each(|cv| *cv = 0.0);
+            for &src in d.masks {
+                let Some(g) = puppet.mesh_geometry(src as usize) else { continue };
+                let Some(mt) = textures.get(g.texture as usize) else { continue };
+                r.tris(g.positions, g.uvs, g.indices, |px, py, w0, w1, w2, uv, _| {
+                    let u = uv[0][0] * w0 + uv[1][0] * w1 + uv[2][0] * w2;
+                    let v = uv[0][1] * w0 + uv[1][1] * w1 + uv[2][1] * w2;
+                    let a = sample(mt, u, v)[3];
+                    if let Some(cv) = coverage.get_mut(py * width + px) {
+                        *cv = cv.max(a);
+                    }
+                });
+            }
+        }
+        let opacity = d.opacity;
+        r.tris(d.positions, d.uvs, d.indices, |px, py, w0, w1, w2, uv, _| {
+            let u = uv[0][0] * w0 + uv[1][0] * w1 + uv[2][0] * w2;
+            let v = uv[0][1] * w0 + uv[1][1] * w1 + uv[2][1] * w2;
+            let mut src = sample(tex, u, v);
+            let mut a = src[3] * opacity;
+            if masked {
+                let cv = coverage.get(py * width + px).copied().unwrap_or(0.0);
+                a *= if inverted { 1.0 - cv } else { cv };
+            }
+            if a <= 0.004 {
+                return;
+            }
+            src[3] = a;
+            let at = (py * width + px) * 4;
+            if let Some(dst) = fb.get_mut(at..at + 4) {
+                for ch in 0..3 {
+                    if let (Some(dc), Some(&sc)) = (dst.get_mut(ch), src.get(ch)) {
+                        *dc = sc * a + *dc * (1.0 - a);
+                    }
+                }
+                if let Some(da) = dst.get_mut(3) {
+                    *da = a + *da * (1.0 - a);
+                }
+            }
+        });
+    }
+    let px: Vec<u8> = fb.iter().map(|v| (v * 255.0).clamp(0.0, 255.0) as u8).collect();
+    Some((width, height, px))
+}
+
 /// Make sure a cached thumbnail exists for this source file; render one if
 /// not. Returns the cache path when available.
 pub fn ensure(puppet: &Puppet, textures: &[TexData], source: &Path) -> Option<PathBuf> {

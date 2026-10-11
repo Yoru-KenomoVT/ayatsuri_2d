@@ -75,6 +75,14 @@ pub struct Session {
     pub author: String,
     /// Unsaved model changes; the close dialog hangs off this.
     pub modified: bool,
+    /// Downscaled pixel copies (512px on the long side) for CPU previews.
+    pub preview_tex: Vec<ayatsuri_render::TexData>,
+    /// Rendered Parts palette previews, filled lazily a few per frame and
+    /// dropped whenever the model is rebuilt.
+    pub part_previews: HashMap<usize, Option<TextureHandle>>,
+    /// Animation clips; they ride inside the .aom payload.
+    pub animations: Vec<ayatsuri_format::Animation>,
+    pub current_anim: Option<usize>,
     pub puppet: Puppet,
     /// Downscaled for the Texture palette and the non-GPU fallback view.
     pub textures: Vec<Option<TextureHandle>>,
@@ -132,13 +140,57 @@ impl Session {
     /// Open a model: `.aom`, a bare `.moc3`, or a `.model3.json` bundle.
     pub fn load(ctx: &Context, path: &Path) -> Result<Self, String> {
         let started = std::time::Instant::now();
-        let session = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("aom")) {
-            Self::load_aom(ctx, path)?
-        } else {
-            Self::load_moc3(ctx, path)?
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let session = match ext.as_str() {
+            "aom" => Self::load_aom(ctx, path)?,
+            "psd" | "kra" => Self::load_paint(ctx, path, &ext)?,
+            _ => Self::load_moc3(ctx, path)?,
         };
         info!("opened {} in {:.0} ms", path.display(), started.elapsed().as_secs_f32() * 1000.0);
         Ok(session)
+    }
+
+    /// A paint document becomes a brand new model: groups as parts, layers
+    /// as quad meshes, pixels packed into atlases. It starts unsaved, since
+    /// the .psd or .kra is the source and not a model file.
+    fn load_paint(ctx: &Context, path: &Path, ext: &str) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let imported = if ext == "kra" {
+            ayatsuri_import::from_kra(&bytes)
+        } else {
+            ayatsuri_import::from_psd(&bytes)
+        }
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        info!(
+            "{} layers became {} meshes in {} parts on {} texture page(s){}{}",
+            ext.to_uppercase(),
+            imported.model.art_meshes.len(),
+            imported.model.parts.len(),
+            imported.textures.len(),
+            if imported.skipped > 0 {
+                format!(", {} empty/hidden/unsupported layer(s) skipped", imported.skipped)
+            } else {
+                String::new()
+            },
+            if imported.scaled > 0 {
+                format!(", {} oversized layer(s) downscaled", imported.scaled)
+            } else {
+                String::new()
+            }
+        );
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "model".into());
+        let tex_names = (0..imported.textures.len()).map(|i| format!("texture_{i:02}")).collect();
+        let part_names = imported.part_names.clone();
+        let mut s =
+            Self::from_parts(ctx, name, imported.model, imported.textures, tex_names, None, path)?;
+        if part_names.len() == s.part_names.len() {
+            s.part_names = part_names;
+        }
+        s.modified = true;
+        Ok(s)
     }
 
     fn load_aom(ctx: &Context, path: &Path) -> Result<Self, String> {
@@ -158,6 +210,7 @@ impl Session {
         let mut s = Self::from_parts(ctx, name, payload.model, pngs, tex_names, None, path)?;
         s.aom_path = Some(path.to_path_buf());
         s.author = payload.meta.author;
+        s.animations = payload.animations;
         if let Some(d) = payload.display {
             let n = s.puppet.model().parameters.len();
             if d.param_names.len() == n {
@@ -292,6 +345,32 @@ impl Session {
             warn!("no textures found; meshes draw untextured");
         }
 
+        // small copies for the CPU previews; the full set goes to the GPU
+        let preview_tex: Vec<ayatsuri_render::TexData> = full
+            .iter()
+            .map(|t| {
+                let long = t.width.max(t.height).max(1);
+                if long <= 512 {
+                    return t.clone();
+                }
+                let k = 512.0 / long as f32;
+                let (w, h) =
+                    (((t.width as f32 * k) as u32).max(1), ((t.height as f32 * k) as u32).max(1));
+                match image::RgbaImage::from_raw(t.width, t.height, t.rgba.clone()) {
+                    Some(img) => {
+                        let small = image::imageops::resize(
+                            &img,
+                            w,
+                            h,
+                            image::imageops::FilterType::Triangle,
+                        );
+                        ayatsuri_render::TexData { width: w, height: h, rgba: small.into_raw() }
+                    }
+                    None => t.clone(),
+                }
+            })
+            .collect();
+
         let cdi = cdi.unwrap_or_default();
         let param_name_of: HashMap<&str, &Cdi3Entry> =
             cdi.parameters.iter().map(|e| (e.id.as_str(), e)).collect();
@@ -399,6 +478,10 @@ impl Session {
             param_keys,
             author: String::new(),
             modified: false,
+            preview_tex,
+            part_previews: HashMap::new(),
+            animations: Vec::new(),
+            current_anim: None,
             part_shown: vec![true; n_parts],
             mesh_shown: vec![true; n_meshes],
             deformer_shown: vec![true; n_defs],
@@ -493,6 +576,7 @@ impl Session {
         }
         // the rebuilt model may have gained deformers
         self.deformer_shown.resize(puppet.model().deformers.len(), true);
+        self.part_previews.clear();
         self.param_colors.resize(puppet.model().parameters.len(), None);
         for (i, shown) in self.deformer_shown.iter().enumerate() {
             puppet.set_deformer_visible(i, *shown);
@@ -517,6 +601,7 @@ impl Session {
                 .iter()
                 .map(|b| serde_bytes::ByteBuf::from(b.clone()))
                 .collect(),
+            animations: self.animations.clone(),
             display: Some(ayatsuri_format::DisplayInfo {
                 param_names: self.param_names.clone(),
                 param_colors: self

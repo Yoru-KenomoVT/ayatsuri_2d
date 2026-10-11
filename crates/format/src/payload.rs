@@ -27,6 +27,31 @@ pub struct AomPayload {
     pub textures: Vec<serde_bytes::ByteBuf>,
     /// Editor-facing display info: names, palette groups, label colors.
     pub display: Option<DisplayInfo>,
+    /// Animations ride inside the container, per docs/aom-format.md; the
+    /// embedded export writes each one out as `<name>.motion3.json`.
+    pub animations: Vec<Animation>,
+}
+
+/// One animation clip: parameter curves over time. Linear segments for now;
+/// richer easing lands with the timeline editor.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Animation {
+    pub name: String,
+    pub fps: f32,
+    /// Seconds.
+    pub duration: f32,
+    pub looped: bool,
+    pub tracks: Vec<Track>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Track {
+    /// Parameter id the curve drives.
+    pub param: String,
+    /// (time seconds, value) pairs, sorted by time.
+    pub points: Vec<(f32, f32)>,
 }
 
 /// How the editor presents the model: display names, the parameter palette's

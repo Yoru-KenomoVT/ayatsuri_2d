@@ -11,7 +11,7 @@ pub mod read;
 pub mod writer;
 
 pub use model::Model;
-pub use payload::{AomPayload, DisplayInfo, Meta};
+pub use payload::{Animation, AomPayload, DisplayInfo, Meta, Track};
 pub use read::read;
 pub use writer::write;
 

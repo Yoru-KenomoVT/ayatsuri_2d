@@ -65,6 +65,7 @@ mod tests {
             model,
             textures: vec![serde_bytes::ByteBuf::from(vec![1u8, 2, 3])],
             display: None,
+            animations: Vec::new(),
         };
         let bytes = crate::writer::write(&payload).unwrap();
         let back = crate::read::read(&bytes).unwrap();

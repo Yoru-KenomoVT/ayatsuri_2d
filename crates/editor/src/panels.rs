@@ -176,6 +176,17 @@ pub struct EditorUi {
     logged_param: Option<usize>,
     logged_tool: Tool,
     heartbeat: f32,
+    /// Timeline state: playhead seconds, transport, auto-key, and the time
+    /// the tracks were last written into the puppet.
+    anim_time: f32,
+    anim_playing: bool,
+    anim_autokey: bool,
+    anim_applied: f32,
+    new_anim: Option<AnimNew>,
+    export_dlg: Option<ExportDlg>,
+    /// Collapsed rows in the Deformer palette, and canvas-locked deformers.
+    def_collapsed: std::collections::HashSet<usize>,
+    def_locked: std::collections::HashSet<usize>,
     new_param: Option<ParamNew>,
     new_folder: Option<String>,
     new_model: Option<ModelNew>,
@@ -200,8 +211,15 @@ pub struct EditorUi {
     /// Mesh edit mode: the mesh whose vertices are being edited, if any.
     mesh_edit: Option<usize>,
     mesh_drag: Option<MeshDrag>,
-    /// 0 move, 1 add vertices, 2 erase vertices.
+    /// 0 move, 1 add vertices, 2 erase vertices, 3 connect/cut edges.
     mesh_mode: u8,
+    /// New points close a face onto the nearest edge when on.
+    mesh_autoconnect: bool,
+    /// The edge tool's first pick.
+    edge_first: Option<usize>,
+    /// Lines drawn with the edge tool that have not closed a face yet,
+    /// per mesh; they turn into faces as soon as a triangle closes.
+    pending_edges: std::collections::HashMap<usize, Vec<(u16, u16)>>,
     /// The model as it was when mesh editing began, for Cancel.
     mesh_snapshot: Option<Model>,
     deform_path: Option<PathDeform>,
@@ -266,6 +284,22 @@ struct PathDrag {
     /// Accumulated drag in model units.
     mdx: f32,
     mdy: f32,
+}
+
+/// The New Animation dialog's working copy.
+struct AnimNew {
+    name: String,
+    fps: f32,
+    duration: f32,
+    looped: bool,
+}
+
+/// The Export for Embedded Use dialog's working copy.
+struct ExportDlg {
+    name: String,
+    version: usize,
+    physics: bool,
+    motions: bool,
 }
 
 /// The New Model dialog's working copy.
@@ -357,6 +391,14 @@ impl Default for EditorUi {
             logged_param: None,
             logged_tool: Tool::Arrow,
             heartbeat: 0.0,
+            anim_time: 0.0,
+            anim_playing: false,
+            anim_autokey: true,
+            anim_applied: f32::NAN,
+            new_anim: None,
+            export_dlg: None,
+            def_collapsed: std::collections::HashSet::new(),
+            def_locked: std::collections::HashSet::new(),
             new_param: None,
             new_folder: None,
             new_model: None,
@@ -377,6 +419,9 @@ impl Default for EditorUi {
             mesh_edit: None,
             mesh_drag: None,
             mesh_mode: 0,
+            mesh_autoconnect: true,
+            edge_first: None,
+            pending_edges: std::collections::HashMap::new(),
             mesh_snapshot: None,
             deform_path: None,
             warp_drag: None,
@@ -419,8 +464,10 @@ impl EditorUi {
 
     fn import_dialog(&mut self, ctx: &egui::Context) {
         let picked = rfd::FileDialog::new()
+            .add_filter("All supported", &["aom", "moc3", "json", "psd", "kra"])
             .add_filter("Ayatsuri / Live2D model", &["aom", "moc3", "json"])
-            .set_title("Open model")
+            .add_filter("Artwork (Photoshop, Krita)", &["psd", "kra"])
+            .set_title("Open model or artwork")
             .pick_file();
         if let Some(path) = picked {
             self.import(ctx, path);
@@ -616,6 +663,18 @@ impl EditorUi {
                         ui.close();
                         self.new_model = Some(ModelNew::default());
                     }
+                    if ui
+                        .add_enabled(self.session.is_some(), egui::Button::new("New Animation…"))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.new_anim = Some(AnimNew {
+                            name: "idle".into(),
+                            fps: 30.0,
+                            duration: 3.0,
+                            looped: true,
+                        });
+                    }
                     if ui.button("Open…").clicked() {
                         ui.close();
                         self.import_dialog(&ui.ctx().clone());
@@ -656,7 +715,19 @@ impl EditorUi {
                         ui.close();
                         self.export_image();
                     }
-                    let _ = ui.add_enabled(false, egui::Button::new("Export .moc3…"));
+                    if ui
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new("Export for Embedded Use (moc3)…"),
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        let name =
+                            self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+                        self.export_dlg =
+                            Some(ExportDlg { name, version: 3, physics: true, motions: true });
+                    }
                     ui.separator();
                     if ui
                         .add_enabled(self.session.is_some(), egui::Button::new("Model Info…"))
@@ -900,6 +971,31 @@ impl EditorUi {
                         self.set_workspace(Workspace::Animation);
                         ui.close();
                     }
+                    ui.separator();
+                    if ui
+                        .add_enabled(self.session.is_some(), egui::Button::new("New Animation…"))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.new_anim = Some(AnimNew {
+                            name: "idle".into(),
+                            fps: 30.0,
+                            duration: 3.0,
+                            looped: true,
+                        });
+                    }
+                    let has_anim = self.session.as_ref().is_some_and(|s| s.current_anim.is_some());
+                    if ui
+                        .add_enabled(
+                            has_anim,
+                            egui::Button::new(if self.anim_playing { "Pause" } else { "Play" }),
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        self.anim_playing = !self.anim_playing;
+                    }
+                    ui.checkbox(&mut self.anim_autokey, "Auto key");
                 });
                 ui.menu_button("Window", |ui| {
                     for p in PanelKind::ALL {
@@ -1099,6 +1195,89 @@ impl EditorUi {
             }
         }
 
+        // the animation clip drives parameters first, so follow and physics
+        // layer on top of it the way the reference player stacks them
+        if let Some(s) = &mut self.session
+            && let Some(ai) = s.current_anim
+            && let Some(anim) = s.animations.get(ai).cloned()
+        {
+            let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+            if self.anim_playing {
+                self.anim_time += dt;
+                if self.anim_time > anim.duration {
+                    if anim.looped && anim.duration > 0.0 {
+                        self.anim_time %= anim.duration;
+                    } else {
+                        self.anim_time = anim.duration;
+                        self.anim_playing = false;
+                    }
+                }
+                ui.ctx().request_repaint();
+            }
+            let moved = self.anim_time != self.anim_applied;
+            if moved || self.anim_playing {
+                for t in &anim.tracks {
+                    if let (Some(v), Some(pi)) = (
+                        ayatsuri_core::anim::sample(t, self.anim_time),
+                        s.puppet.model().parameters.iter().position(|p| p.id == t.param),
+                    ) {
+                        s.puppet.set_value(pi, v);
+                    }
+                }
+                self.anim_applied = self.anim_time;
+                s.dirty = true;
+            } else if self.anim_autokey && !self.follow_cursor {
+                // auto key: whatever the user moved since the playhead
+                // stopped becomes a key at this time; physics outputs are
+                // left alone while the rig is writing them
+                let physics_out: std::collections::HashSet<String> = if self.physics_on {
+                    s.puppet
+                        .model()
+                        .physics
+                        .as_ref()
+                        .map(|r| {
+                            r.groups
+                                .iter()
+                                .flat_map(|g| g.outputs.iter().map(|o| o.param.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    std::collections::HashSet::new()
+                };
+                let mut keyed = Vec::new();
+                for (pi, p) in s.puppet.model().parameters.iter().enumerate() {
+                    if physics_out.contains(&p.id) {
+                        continue;
+                    }
+                    let reference = anim
+                        .tracks
+                        .iter()
+                        .find(|t| t.param == p.id)
+                        .and_then(|t| ayatsuri_core::anim::sample(t, self.anim_time))
+                        .unwrap_or(p.default);
+                    let v = s.puppet.value(pi);
+                    let eps = 0.1f32.powi(p.decimals.clamp(0, 6)) * 0.5;
+                    if (v - reference).abs() > eps {
+                        keyed.push((p.id.clone(), v));
+                    }
+                }
+                if !keyed.is_empty()
+                    && !ui.ctx().input(|i| i.pointer.any_down())
+                    && let Some(a) = s.animations.get_mut(ai)
+                {
+                    let fps_a = a.fps;
+                    for (id, v) in &keyed {
+                        if let Some(t) = ayatsuri_core::anim::track_mut(a, id) {
+                            ayatsuri_core::anim::set_key(t, self.anim_time, *v, fps_a);
+                        }
+                    }
+                    s.modified = true;
+                    log::debug!("auto key: {} parameter(s) at {:.3}s", keyed.len(), self.anim_time);
+                }
+            }
+        }
+
         // cursor following and the pendulum rig both drive parameters, so
         // they run just ahead of the per-frame evaluate
         if let Some(s) = &mut self.session {
@@ -1180,6 +1359,10 @@ impl EditorUi {
             CentralPanel::default().frame(Frame::NONE.fill(theme::pal().chrome)).show(ui, |ui| {
                 self.home(ui);
             });
+        } else if self.show_physics && self.session.is_some() {
+            CentralPanel::default().frame(Frame::NONE.fill(theme::pal().chrome)).show(ui, |ui| {
+                self.physics_page(ui);
+            });
         } else {
             CentralPanel::default().frame(Frame::NONE.fill(theme::pal().chrome)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap().shrink(dock::theme::GAP);
@@ -1217,12 +1400,13 @@ impl EditorUi {
         self.about_window(ui);
         self.settings_window(ui);
         self.stats_window(ui);
-        self.physics_window(ui);
         self.mesh_edit_window(ui);
         self.param_new_window(ui);
         self.folder_new_window(ui);
         self.model_new_window(ui);
         self.model_info_window(ui);
+        self.new_anim_window(ui);
+        self.export_window(ui);
         self.close_confirm_window(ui);
         self.workspace_windows(ui);
         self.param_edit_window(ui);
@@ -1253,6 +1437,11 @@ impl EditorUi {
                         (0u8, egui_phosphor::regular::CURSOR, "Move vertices"),
                         (1, egui_phosphor::regular::PLUS_CIRCLE, "Add vertices (click a face)"),
                         (2, egui_phosphor::regular::ERASER, "Erase vertices"),
+                        (
+                            3,
+                            egui_phosphor::regular::LINE_SEGMENT,
+                            "Connect or cut edges (click two points)",
+                        ),
                     ] {
                         if ui
                             .selectable_label(
@@ -1266,6 +1455,9 @@ impl EditorUi {
                         }
                     }
                 });
+                ui.separator();
+                ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points")
+                    .on_hover_text("Off: added points stay loose until joined with the edge tool");
                 ui.separator();
                 ui.label("Auto mesh");
                 ui.horizontal(|ui| {
@@ -1315,29 +1507,18 @@ impl EditorUi {
             self.mesh_drag = None;
             self.mesh_snapshot = None;
             self.mesh_mode = 0;
+            self.edge_first = None;
+            self.pending_edges.clear();
             if self.tool == Tool::MeshManual {
                 self.tool = Tool::Arrow;
             }
         }
     }
 
-    /// The physics dialog, Cubism's Physics tab squeezed into a compact
-    /// column: FPS and group rows, Input/Output tabs, then the pendulum
-    /// table beside the preview. Everything edits a working copy that
-    /// Apply commits as one undoable change.
-    fn physics_window(&mut self, ui: &mut Ui) {
-        if !self.show_physics {
-            if self.phys_edit.take().is_some() {
-                // closing re-enables every group, like Cubism's Valid reset
-                if let Some(s) = &mut self.session {
-                    let n = s.puppet.model().physics.as_ref().map(|r| r.groups.len()).unwrap_or(0);
-                    for gi in 0..n {
-                        s.puppet.set_physics_group_enabled(gi, true);
-                    }
-                }
-            }
-            return;
-        }
+    /// The Physics page's editor column: FPS and group rows, Input/Output
+    /// tabs, then the pendulum table beside the preview. Everything edits a
+    /// working copy that Apply commits as one undoable change.
+    fn physics_editor_column(&mut self, ui: &mut Ui) {
         let Some(session_rig) =
             self.session.as_ref().map(|s| s.puppet.model().physics.clone().unwrap_or_default())
         else {
@@ -1364,17 +1545,13 @@ impl EditorUi {
             self.session.as_ref().is_none_or(|s| s.puppet.physics_group_enabled(self.phys_sel));
 
         let mut rig = self.phys_edit.take().unwrap_or_else(|| session_rig.clone());
-        let mut open = self.show_physics;
         let mut apply = false;
         let mut revert = false;
         let mut toggle_enable = false;
         let mut reset_peaks = false;
-        egui::Window::new("Physics Settings")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(400.0)
-            .show(ui.ctx(), |ui| {
+        {
+            let ui = &mut *ui;
+            {
                 ui.spacing_mut().item_spacing = vec2(5.0, 4.0);
                 // fps, wind and the group picker share the first rows
                 ui.horizontal(|ui| {
@@ -1795,7 +1972,8 @@ impl EditorUi {
                         revert = true;
                     }
                 });
-            });
+            }
+        }
         if toggle_enable && let Some(s) = &mut self.session {
             let now = !group_enabled;
             s.puppet.set_physics_group_enabled(self.phys_sel, now);
@@ -1824,16 +2002,114 @@ impl EditorUi {
         } else {
             self.phys_edit = Some(rig);
         }
-        self.show_physics = open;
-        if !self.show_physics {
-            self.phys_edit = None;
-            if let Some(s) = &mut self.session {
-                let n = s.puppet.model().physics.as_ref().map(|r| r.groups.len()).unwrap_or(0);
-                for gi in 0..n {
-                    s.puppet.set_physics_group_enabled(gi, true);
-                }
+    }
+
+    /// Leaving the Physics page re-enables every group, the way the
+    /// reference resets its Valid flags when the window closes.
+    fn close_physics_page(&mut self) {
+        self.show_physics = false;
+        if let Some(s) = &mut self.session {
+            let n = s.puppet.model().physics.as_ref().map(|r| r.groups.len()).unwrap_or(0);
+            for gi in 0..n {
+                s.puppet.set_physics_group_enabled(gi, true);
             }
         }
+    }
+
+    /// The whole Physics page, the way the reference dedicates a window to
+    /// it: editor column, live parameter rail, and the model running beside
+    /// them.
+    fn physics_page(&mut self, ui: &mut Ui) {
+        let content = ui.available_rect_before_wrap();
+        ui.painter().rect_filled(content, 0.0, theme::pal().chrome);
+
+        // header strip with the way back out
+        let bar = Rect::from_min_size(content.min, vec2(content.width(), 30.0));
+        ui.painter().rect_filled(bar, 0.0, theme::pal().header);
+        ui.painter().line_segment(
+            [bar.left_bottom(), bar.right_bottom()],
+            Stroke::new(1.0, theme::pal().border),
+        );
+        ui.painter().text(
+            pos2(bar.min.x + 12.0, bar.center().y),
+            Align2::LEFT_CENTER,
+            "Physics and Scene Blending",
+            FontId::proportional(12.5),
+            theme::pal().text,
+        );
+        let close = Rect::from_min_size(pos2(bar.max.x - 72.0, bar.min.y + 5.0), vec2(60.0, 20.0));
+        let cresp = ui.interact(close, egui::Id::new("phys-close"), Sense::click());
+        ui.painter().rect_filled(close, 4.0, theme::pal().accent);
+        ui.painter().text(
+            close.center(),
+            Align2::CENTER_CENTER,
+            "Close",
+            FontId::proportional(11.0),
+            Color32::WHITE,
+        );
+        if cresp.clicked() || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.close_physics_page();
+            return;
+        }
+
+        let body = Rect::from_min_max(pos2(content.min.x, bar.max.y), content.max);
+        let editor_w = 470.0f32.min(body.width() * 0.45);
+        let rail_w = 205.0f32;
+        let editor_rect = Rect::from_min_size(body.min, vec2(editor_w, body.height()));
+        let rail_rect = Rect::from_min_size(
+            pos2(body.min.x + editor_w + 1.0, body.min.y),
+            vec2(rail_w, body.height()),
+        );
+        let view_rect = Rect::from_min_max(pos2(rail_rect.max.x + 1.0, body.min.y), body.max);
+        for x in [editor_rect.max.x, rail_rect.max.x] {
+            ui.painter().line_segment(
+                [pos2(x, body.min.y), pos2(x, body.max.y)],
+                Stroke::new(1.0, theme::pal().border),
+            );
+        }
+
+        let mut editor_ui = ui.new_child(UiBuilder::new().max_rect(editor_rect.shrink(8.0)));
+        ScrollArea::vertical().id_salt("phys-page").show(&mut editor_ui, |ui| {
+            self.physics_editor_column(ui);
+        });
+
+        let mut rail_ui = ui.new_child(UiBuilder::new().max_rect(rail_rect.shrink(6.0)));
+        self.physics_param_rail(&mut rail_ui);
+
+        let mut view_ui = ui.new_child(UiBuilder::new().max_rect(view_rect));
+        self.viewport(&mut view_ui, view_rect);
+    }
+
+    /// The page's live parameter rail: drive anything while physics runs,
+    /// with the reference's Reset Parameter to Default button up top.
+    fn physics_param_rail(&mut self, ui: &mut Ui) {
+        if ui.button("Reset Parameter to Default").clicked() {
+            self.reset_parameters();
+        }
+        ui.separator();
+        let Some(s) = &mut self.session else { return };
+        ScrollArea::vertical().id_salt("phys-rail").show(ui, |ui| {
+            for pi in 0..s.puppet.model().parameters.len() {
+                let Some((min, max, default)) =
+                    s.puppet.model().parameters.get(pi).map(|p| (p.min, p.max, p.default))
+                else {
+                    break;
+                };
+                let name = s.param_names.get(pi).cloned().unwrap_or_default();
+                let mut v = s.puppet.value(pi);
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [78.0, 14.0],
+                        egui::Label::new(egui::RichText::new(truncate(&name, 11)).size(10.0)),
+                    );
+                    let (changed, _) = param_slider(ui, 104.0, &mut v, min, max, default, &[]);
+                    if changed {
+                        s.puppet.set_value(pi, v);
+                        s.dirty = true;
+                    }
+                });
+            }
+        });
     }
 
     /// The pendulum preview pane: its own tiny simulation of the working
@@ -2653,9 +2929,7 @@ impl EditorUi {
             PanelKind::Textures => self.textures_panel(ui),
             PanelKind::Inspector => self.inspector_panel(ui),
             PanelKind::ToolDetails => self.tool_details_panel(ui),
-            PanelKind::Timeline => {
-                ui.weak("No animation loaded.");
-            }
+            PanelKind::Timeline => self.timeline_panel(ui),
             PanelKind::Log => {
                 ui.horizontal(|ui| {
                     ui.weak("Show:");
@@ -2685,6 +2959,403 @@ impl EditorUi {
                 });
             }
             PanelKind::Viewport => {}
+        }
+    }
+
+    // ---- Timeline ------------------------------------------------------------
+
+    fn timeline_panel(&mut self, ui: &mut Ui) {
+        let Some(s) = &mut self.session else {
+            ui.weak("No model loaded.");
+            return;
+        };
+        if s.animations.is_empty() {
+            ui.horizontal(|ui| {
+                ui.weak("No animation yet.");
+                if ui.button("New Animation…").clicked() {
+                    self.new_anim = Some(AnimNew {
+                        name: "idle".into(),
+                        fps: 30.0,
+                        duration: 3.0,
+                        looped: true,
+                    });
+                }
+            });
+            return;
+        }
+        if s.current_anim.is_none_or(|i| i >= s.animations.len()) {
+            s.current_anim = Some(0);
+        }
+        let ai = s.current_anim.unwrap_or(0);
+
+        // transport row
+        let mut seek: Option<f32> = None;
+        let (fps, duration) = s
+            .animations
+            .get(ai)
+            .map(|a| (a.fps.max(1.0), a.duration.max(0.0)))
+            .unwrap_or((30.0, 0.0));
+        let frame = 1.0 / fps;
+        ui.horizontal(|ui| {
+            let current = s.animations.get(ai).map(|a| a.name.clone()).unwrap_or_default();
+            egui::ComboBox::from_id_salt("anim-pick")
+                .selected_text(truncate(&current, 14))
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    for (i, a) in s.animations.iter().enumerate() {
+                        if ui.selectable_label(i == ai, &a.name).clicked() {
+                            s.current_anim = Some(i);
+                            self.anim_applied = f32::NAN;
+                        }
+                    }
+                });
+            if ui.button(egui_phosphor::regular::SKIP_BACK).on_hover_text("To start").clicked() {
+                seek = Some(0.0);
+            }
+            if ui.button(egui_phosphor::regular::MINUS).on_hover_text("Previous frame").clicked() {
+                seek = Some((self.anim_time - frame).max(0.0));
+            }
+            let play_icon = if self.anim_playing {
+                egui_phosphor::regular::PAUSE
+            } else {
+                egui_phosphor::regular::PLAY
+            };
+            if ui.button(play_icon).clicked() {
+                self.anim_playing = !self.anim_playing;
+            }
+            if ui.button(egui_phosphor::regular::PLUS).on_hover_text("Next frame").clicked() {
+                seek = Some((self.anim_time + frame).min(duration));
+            }
+            if ui.button(egui_phosphor::regular::SKIP_FORWARD).on_hover_text("To end").clicked() {
+                seek = Some(duration);
+            }
+            ui.label(format!(
+                "{:>3} / {:.0}",
+                (self.anim_time * fps).round() as i64,
+                (duration * fps).round()
+            ));
+            ui.separator();
+            ui.checkbox(&mut self.anim_autokey, "Auto key");
+            if let Some(a) = s.animations.get_mut(ai) {
+                ui.checkbox(&mut a.looped, "Loop");
+                ui.weak("Len");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut a.duration)
+                            .range(0.1..=600.0)
+                            .speed(0.05)
+                            .suffix("s"),
+                    )
+                    .changed()
+                {
+                    s.modified = true;
+                }
+            }
+        });
+        ui.separator();
+
+        // dope sheet: ruler on top, one row per track, diamonds on keys
+        let names: Vec<(String, String)> = s
+            .animations
+            .get(ai)
+            .map(|a| {
+                a.tracks
+                    .iter()
+                    .map(|t| {
+                        let label = s
+                            .puppet
+                            .model()
+                            .parameters
+                            .iter()
+                            .position(|p| p.id == t.param)
+                            .and_then(|pi| s.param_names.get(pi).cloned())
+                            .unwrap_or_else(|| t.param.clone());
+                        (t.param.clone(), label)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let label_w = 110.0;
+        let avail = ui.available_width();
+        let lane_w = (avail - label_w - 8.0).max(60.0);
+        let x_of = |t: f32, left: f32| left + label_w + (t / duration.max(1e-3)) * lane_w;
+
+        let (ruler, rresp) = ui.allocate_exact_size(vec2(avail, 18.0), Sense::click_and_drag());
+        let p = ui.painter();
+        p.rect_filled(ruler, 0.0, theme::pal().header);
+        let frames = (duration * fps).round().max(1.0) as i64;
+        let step = ((frames as f32 / (lane_w / 40.0)).ceil() as i64).max(1);
+        let mut f = 0i64;
+        while f <= frames {
+            let x = x_of(f as f32 / fps, ruler.min.x);
+            p.line_segment(
+                [pos2(x, ruler.max.y - 5.0), pos2(x, ruler.max.y)],
+                Stroke::new(1.0, theme::pal().text_faint),
+            );
+            p.text(
+                pos2(x + 2.0, ruler.min.y + 2.0),
+                Align2::LEFT_TOP,
+                f.to_string(),
+                FontId::proportional(9.0),
+                theme::pal().text_faint,
+            );
+            f += step;
+        }
+        if (rresp.dragged() || rresp.clicked())
+            && let Some(ptr) = rresp.interact_pointer_pos()
+        {
+            let t = ((ptr.x - ruler.min.x - label_w) / lane_w * duration).clamp(0.0, duration);
+            // snap to whole frames, like every dope sheet
+            seek = Some((t * fps).round() / fps);
+            self.anim_playing = false;
+        }
+
+        let mut delete: Option<(String, f32)> = None;
+        let rows_top = ui.cursor().min.y;
+        ScrollArea::vertical().id_salt("anim-rows").show(ui, |ui| {
+            if names.is_empty() {
+                ui.weak(
+                    "Move a parameter to record a key (Auto key), or press K on a selected row.",
+                );
+            }
+            for (param, label) in &names {
+                let (row, _) = ui.allocate_exact_size(vec2(avail, 16.0), Sense::hover());
+                let p = ui.painter();
+                p.text(
+                    pos2(row.min.x + 4.0, row.center().y),
+                    Align2::LEFT_CENTER,
+                    truncate(label, 15),
+                    FontId::proportional(10.5),
+                    theme::pal().text,
+                );
+                p.line_segment(
+                    [pos2(row.min.x + label_w, row.max.y), pos2(row.max.x, row.max.y)],
+                    Stroke::new(0.5, theme::pal().border),
+                );
+                let points = s
+                    .animations
+                    .get(ai)
+                    .and_then(|a| a.tracks.iter().find(|t| &t.param == param))
+                    .map(|t| t.points.clone())
+                    .unwrap_or_default();
+                for (t, _) in points {
+                    let c = pos2(x_of(t, row.min.x), row.center().y);
+                    let r = Rect::from_center_size(c, vec2(9.0, 9.0));
+                    let kresp = ui.interact(
+                        r,
+                        egui::Id::new(("key", param, (t * 1000.0) as i64)),
+                        Sense::click(),
+                    );
+                    let col = if kresp.hovered() { theme::pal().accent } else { theme::pal().text };
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        vec![
+                            c + vec2(0.0, -4.0),
+                            c + vec2(4.0, 0.0),
+                            c + vec2(0.0, 4.0),
+                            c + vec2(-4.0, 0.0),
+                        ],
+                        col,
+                        Stroke::NONE,
+                    ));
+                    if kresp.clicked() {
+                        seek = Some(t);
+                        self.anim_playing = false;
+                    }
+                    kresp.context_menu(|ui| {
+                        if ui.button("Delete key").clicked() {
+                            delete = Some((param.clone(), t));
+                            ui.close();
+                        }
+                    });
+                }
+            }
+        });
+        // the playhead runs through ruler and rows
+        let px = x_of(self.anim_time, ruler.min.x);
+        ui.painter().line_segment(
+            [pos2(px, ruler.min.y), pos2(px, ui.cursor().min.y.max(rows_top + 16.0))],
+            Stroke::new(1.5, theme::pal().accent),
+        );
+
+        if let Some((param, t)) = delete
+            && let Some(a) = s.animations.get_mut(ai)
+        {
+            let fps_a = a.fps;
+            if let Some(tr) = a.tracks.iter_mut().find(|tr| tr.param == param) {
+                ayatsuri_core::anim::remove_key(tr, t, fps_a);
+            }
+            a.tracks.retain(|tr| !tr.points.is_empty());
+            s.modified = true;
+            self.anim_applied = f32::NAN;
+        }
+        // K keys the selected parameter row by hand
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::K))
+            && !ui.ctx().egui_wants_keyboard_input()
+            && let Some(pi) = self.sel_param
+            && let Some(id) = s.puppet.model().parameters.get(pi).map(|p| p.id.clone())
+        {
+            let v = s.puppet.value(pi);
+            if let Some(a) = s.animations.get_mut(ai) {
+                let fps_a = a.fps;
+                if let Some(tr) = ayatsuri_core::anim::track_mut(a, &id) {
+                    ayatsuri_core::anim::set_key(tr, self.anim_time, v, fps_a);
+                }
+                s.modified = true;
+            }
+        }
+        if let Some(t) = seek {
+            self.anim_time = t;
+        }
+    }
+
+    fn new_anim_window(&mut self, ui: &mut Ui) {
+        let Some(new) = &mut self.new_anim else { return };
+        let mut open = true;
+        let mut create = false;
+        egui::Window::new("New Animation")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Grid::new("anew").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut new.name);
+                    ui.end_row();
+                    ui.label("FPS");
+                    ui.add(egui::DragValue::new(&mut new.fps).range(1.0..=120.0));
+                    ui.end_row();
+                    ui.label("Length");
+                    ui.add(
+                        egui::DragValue::new(&mut new.duration)
+                            .range(0.1..=600.0)
+                            .speed(0.05)
+                            .suffix(" s"),
+                    );
+                    ui.end_row();
+                    ui.label("Loop");
+                    ui.checkbox(&mut new.looped, "");
+                    ui.end_row();
+                });
+                ui.weak("Saved inside the .aom; exported as motions/<name>.motion3.json.");
+                if ui.button("Create").clicked() {
+                    create = true;
+                }
+            });
+        if create {
+            if let (Some(n), Some(s)) = (self.new_anim.take(), &mut self.session) {
+                let name = if n.name.trim().is_empty() { "motion".into() } else { n.name };
+                s.animations.push(ayatsuri_format::Animation {
+                    name: name.clone(),
+                    fps: n.fps,
+                    duration: n.duration,
+                    looped: n.looped,
+                    tracks: Vec::new(),
+                });
+                s.current_anim = Some(s.animations.len() - 1);
+                s.modified = true;
+                self.anim_time = 0.0;
+                self.anim_applied = f32::NAN;
+                if !self.layout.contains(PanelKind::Timeline) {
+                    self.layout.open_near(PanelKind::Timeline, PanelKind::Viewport);
+                }
+                log::info!("animation {name} created");
+            }
+        } else if !open {
+            self.new_anim = None;
+        }
+    }
+
+    fn export_window(&mut self, ui: &mut Ui) {
+        let Some(dlg) = &mut self.export_dlg else { return };
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new("Export for Embedded Use")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Grid::new("export").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut dlg.name);
+                    ui.end_row();
+                    ui.label("moc3 version");
+                    egui::ComboBox::from_id_salt("moc-ver")
+                        .selected_text(
+                            ayatsuri_import::ExportVersion::ALL
+                                .get(dlg.version)
+                                .map(|v| v.label())
+                                .unwrap_or("4.2"),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (i, v) in ayatsuri_import::ExportVersion::ALL.iter().enumerate() {
+                                ui.selectable_value(&mut dlg.version, i, v.label());
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Include");
+                    ui.vertical(|ui| {
+                        ui.checkbox(&mut dlg.physics, "physics3.json");
+                        ui.checkbox(&mut dlg.motions, "motion3.json for each animation");
+                    });
+                    ui.end_row();
+                });
+                ui.weak("Writes <name>.moc3, .model3.json, .cdi3.json and the textures.");
+                if let (Some(s), Some(v)) =
+                    (&self.session, ayatsuri_import::ExportVersion::ALL.get(dlg.version))
+                {
+                    for w in ayatsuri_import::export_warnings(s.puppet.model(), *v) {
+                        let lossy = !w.starts_with("physics");
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {w}",
+                                if lossy {
+                                    egui_phosphor::regular::WARNING
+                                } else {
+                                    egui_phosphor::regular::INFO
+                                }
+                            ))
+                            .size(11.0)
+                            .color(if lossy {
+                                theme::pal().accent
+                            } else {
+                                theme::pal().text_faint
+                            }),
+                        );
+                    }
+                }
+                if ui.button(egui::RichText::new("Export…").strong()).clicked() {
+                    go = true;
+                }
+            });
+        if go {
+            let Some(dlg) = self.export_dlg.take() else { return };
+            let Some(dir) = rfd::FileDialog::new().pick_folder() else {
+                self.export_dlg = Some(dlg);
+                return;
+            };
+            let version = ayatsuri_import::ExportVersion::ALL
+                .get(dlg.version)
+                .copied()
+                .unwrap_or(ayatsuri_import::ExportVersion::V4_02);
+            if let Some(s) = &self.session {
+                let opt = crate::export::Options {
+                    name: dlg.name.clone(),
+                    version,
+                    physics: dlg.physics,
+                    motions: dlg.motions,
+                };
+                match crate::export::export(s, &dir, &opt) {
+                    Ok(files) => log::info!(
+                        "exported {} files (moc3 {}) to {}",
+                        files.len(),
+                        version.label(),
+                        dir.display()
+                    ),
+                    Err(e) => log::error!("export failed: {e}"),
+                }
+            }
+        } else if !open {
+            self.export_dlg = None;
         }
     }
 
@@ -3695,6 +4366,29 @@ impl EditorUi {
         // live stack positions, front-most last, for the right-hand column
         let stack: std::collections::HashMap<usize, usize> =
             s.puppet.drawables().enumerate().map(|(pos, d)| (d.mesh, pos + 1)).collect();
+        // which part each mesh belongs to, up the whole chain, for previews
+        let part_parent: Vec<Option<u32>> =
+            s.puppet.model().parts.iter().map(|p| p.parent_part).collect();
+        let mesh_part: Vec<Option<u32>> =
+            s.puppet.model().art_meshes.iter().map(|m| m.parent_part).collect();
+        let under = |mesh: usize, part: usize| -> bool {
+            let mut cur = mesh_part.get(mesh).copied().flatten();
+            let mut hops = 0;
+            while let Some(p) = cur {
+                if p as usize == part {
+                    return true;
+                }
+                cur = part_parent.get(p as usize).copied().flatten();
+                hops += 1;
+                if hops > 256 {
+                    break;
+                }
+            }
+            false
+        };
+        // a couple of renders per frame keeps the palette responsive
+        let mut budget = 2usize;
+        let ctx = ui.ctx().clone();
         ScrollArea::vertical().id_salt("parts").show(ui, |ui| {
             for (i, depth) in order {
                 let Some((id, parent)) =
@@ -3725,13 +4419,60 @@ impl EditorUi {
                 ui.painter().circle_stroke(ring, 4.0, Stroke::new(1.2, theme::pal().key_ring));
                 let label_x = rect.min.x + 38.0 + depth as f32 * 14.0;
                 paint_folder(ui, pos2(label_x, rect.center().y));
+                // the part's own preview, like the reference palette shows
+                let thumb =
+                    Rect::from_min_size(pos2(label_x + 14.0, rect.min.y + 1.0), vec2(16.0, 16.0));
+                if !s.part_previews.contains_key(&i) && budget > 0 && ui.is_rect_visible(thumb) {
+                    budget -= 1;
+                    let handle = crate::thumb::render_filtered(
+                        &s.puppet,
+                        &s.preview_tex,
+                        &|m| under(m, i),
+                        96,
+                    )
+                    .map(|(w, h, px)| {
+                        let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
+                        ctx.load_texture(
+                            format!("part-prev-{i}"),
+                            img,
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    s.part_previews.insert(i, handle);
+                }
+                if !s.part_previews.contains_key(&i) {
+                    ctx.request_repaint();
+                }
+                ui.painter().rect_filled(thumb, 2.0, theme::pal().canvas_bg);
+                let preview = s.part_previews.get(&i).and_then(|h| h.clone());
+                if let Some(h) = &preview {
+                    let sz = h.size_vec2();
+                    let k = (thumb.width() / sz.x).min(thumb.height() / sz.y);
+                    let draw = Rect::from_center_size(thumb.center(), sz * k);
+                    ui.painter().image(
+                        h.id(),
+                        draw,
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
                 ui.painter().text(
-                    pos2(label_x + 16.0, rect.center().y),
+                    pos2(label_x + 36.0, rect.center().y),
                     Align2::LEFT_CENTER,
-                    truncate(&name, 22),
+                    truncate(&name, 20),
                     FontId::proportional(11.5),
                     theme::pal().text,
                 );
+                // hovering shows it big, Cubism style
+                if let Some(h) = preview
+                    && resp.hovered()
+                {
+                    resp.clone().on_hover_ui(|ui| {
+                        let sz = h.size_vec2();
+                        let k = (160.0 / sz.x).min(200.0 / sz.y);
+                        ui.image((h.id(), sz * k));
+                    });
+                }
                 if resp.clicked() {
                     self.selected = Some(Sel::Part(i));
                 }
@@ -3975,7 +4716,9 @@ impl EditorUi {
         let mut guard = 0;
         while let Some((i, depth)) = stack.pop() {
             order.push((i, depth));
-            if let Some(kids) = children.get(i) {
+            if !self.def_collapsed.contains(&i)
+                && let Some(kids) = children.get(i)
+            {
                 for &k in kids.iter().rev() {
                     stack.push((k, depth + 1));
                 }
@@ -3985,18 +4728,19 @@ impl EditorUi {
                 break;
             }
         }
-        let rows: Vec<(usize, usize, String, bool)> = order
+        let rows: Vec<(usize, usize, String, bool, bool)> = order
             .into_iter()
             .filter_map(|(i, depth)| {
-                model
-                    .deformers
-                    .get(i)
-                    .map(|d| (i, depth, d.id.clone(), matches!(d.kind, DeformerKind::Warp(_))))
+                model.deformers.get(i).map(|d| {
+                    let has_kids = children.get(i).is_some_and(|k| !k.is_empty())
+                        || model.art_meshes.iter().any(|m| m.parent_deformer == Some(i as u32));
+                    (i, depth, d.id.clone(), matches!(d.kind, DeformerKind::Warp(_)), has_kids)
+                })
             })
             .collect();
 
         ScrollArea::vertical().id_salt("deformers").show(ui, |ui| {
-            for (i, dep, id, is_warp) in rows {
+            for (i, dep, id, is_warp, has_kids) in rows {
                 let (rect, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
                 if self.selected == Some(Sel::Deformer(i)) {
@@ -4014,7 +4758,50 @@ impl EditorUi {
                     s.puppet.set_deformer_visible(i, now);
                     s.dirty = true;
                 }
-                let x = rect.min.x + 24.0 + dep as f32 * 14.0;
+                // the lock column keeps canvas drags off a deformer
+                let locked = self.def_locked.contains(&i);
+                let lock = Rect::from_min_size(rect.min + vec2(16.0, 0.0), vec2(16.0, 18.0));
+                ui.painter().text(
+                    lock.center(),
+                    Align2::CENTER_CENTER,
+                    if locked {
+                        egui_phosphor::regular::LOCK_SIMPLE
+                    } else {
+                        egui_phosphor::regular::LOCK_SIMPLE_OPEN
+                    },
+                    FontId::proportional(10.0),
+                    if locked { theme::pal().accent } else { theme::pal().text_faint },
+                );
+                let lresp = ui.interact(lock, egui::Id::new(("def-lock", i)), Sense::click());
+                if lresp.clicked() {
+                    if locked {
+                        self.def_locked.remove(&i);
+                    } else {
+                        self.def_locked.insert(i);
+                    }
+                }
+                let x = rect.min.x + 48.0 + dep as f32 * 14.0;
+                if has_kids {
+                    let caret =
+                        Rect::from_center_size(pos2(x - 10.0, rect.center().y), vec2(12.0, 14.0));
+                    let open_now = !self.def_collapsed.contains(&i);
+                    ui.painter().text(
+                        caret.center(),
+                        Align2::CENTER_CENTER,
+                        if open_now { "⏷" } else { "⏵" },
+                        FontId::proportional(9.0),
+                        theme::pal().text_faint,
+                    );
+                    let caret_resp =
+                        ui.interact(caret, egui::Id::new(("def-caret", i)), Sense::click());
+                    if caret_resp.clicked() {
+                        if open_now {
+                            self.def_collapsed.insert(i);
+                        } else {
+                            self.def_collapsed.remove(&i);
+                        }
+                    }
+                }
                 if is_warp {
                     paint_warp_glyph(ui, pos2(x, rect.center().y));
                 } else {
@@ -4048,7 +4835,10 @@ impl EditorUi {
                     }
                 });
 
-                // this deformer's meshes, nested
+                // this deformer's meshes, nested unless folded away
+                if self.def_collapsed.contains(&i) {
+                    continue;
+                }
                 let meshes: Vec<(usize, String)> = s
                     .puppet
                     .model()
@@ -4064,7 +4854,7 @@ impl EditorUi {
                     if self.selected == Some(Sel::Mesh(mi)) {
                         ui.painter().rect_filled(rect, 0.0, theme::pal().select);
                     }
-                    let x = rect.min.x + 40.0 + dep as f32 * 14.0;
+                    let x = rect.min.x + 62.0 + dep as f32 * 14.0;
                     ui.painter().circle_filled(
                         pos2(x, rect.center().y),
                         1.8,
@@ -4771,6 +5561,7 @@ impl EditorUi {
                     }
                     if !space {
                         if resp.drag_started()
+                            && !self.def_locked.contains(&di)
                             && let Some((gi, _)) = near
                             && let Some(local) = s.puppet.warp_local_grid(di)
                         {
@@ -4868,6 +5659,7 @@ impl EditorUi {
                         && self.rot_drag.is_none();
                     if !space {
                         if resp.drag_started()
+                            && !self.def_locked.contains(&di)
                             && (near_origin || near_tip)
                             && let Some(ptr) = ptr
                             && let Some(local) = s.puppet.rotation_local_origin(di)
@@ -5155,6 +5947,8 @@ impl EditorUi {
         enum MeshOp {
             Move(usize, usize, f32, f32),
             Add(usize, usize, [f32; 3]),
+            AddFree(usize, usize, [f32; 3], Option<(u16, u16)>),
+            Edge(usize, u16, u16),
             Del(usize, usize),
         }
         let mut mesh_op: Option<MeshOp> = None;
@@ -5185,9 +5979,13 @@ impl EditorUi {
                 }
 
                 if !space && self.mesh_mode == 1 && resp.clicked() && near.is_none() {
-                    // add: split whichever triangle is under the pointer
+                    // add: inside a face splits it (or drops a loose point with
+                    // auto connect off); outside, the point closes a face onto
+                    // the nearest open edge, or stays loose
                     if let Some(ptr) = resp.interact_pointer_pos() {
                         let (tris, _) = g.indices.as_chunks::<3>();
+                        let mut inside: Option<(usize, [f32; 3])> = None;
+                        let mut closest: Option<(usize, [f32; 3], f32)> = None;
                         for (ti, &[a, b, cc]) in tris.iter().enumerate() {
                             let (Some(&s0), Some(&s1), Some(&s2)) = (
                                 screen_pts.get(a as usize),
@@ -5207,12 +6005,72 @@ impl EditorUi {
                                 + (s0.x - s2.x) * (ptr.y - s2.y))
                                 / den;
                             let w2 = 1.0 - w0 - w1;
-                            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                                mesh_op = Some(MeshOp::Add(mi, ti, [w0, w1, w2]));
+                            let worst = w0.min(w1).min(w2);
+                            if worst >= 0.0 {
+                                inside = Some((ti, [w0, w1, w2]));
                                 break;
                             }
+                            if closest.is_none_or(|(_, _, c)| worst > c) {
+                                closest = Some((ti, [w0, w1, w2], worst));
+                            }
+                        }
+                        if let Some((ti, w)) = inside {
+                            mesh_op = Some(if self.mesh_autoconnect {
+                                MeshOp::Add(mi, ti, w)
+                            } else {
+                                MeshOp::AddFree(mi, ti, w, None)
+                            });
+                        } else if let Some((ti, w, _)) = closest {
+                            let connect = if self.mesh_autoconnect {
+                                // open edges belong to exactly one face
+                                let mut count: std::collections::HashMap<(u16, u16), u32> =
+                                    std::collections::HashMap::new();
+                                for t in tris {
+                                    for (x, y) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                                        *count.entry((x.min(y), x.max(y))).or_insert(0) += 1;
+                                    }
+                                }
+                                let mut best: Option<((u16, u16), f32)> = None;
+                                for (&(x, y), &c) in &count {
+                                    if c != 1 {
+                                        continue;
+                                    }
+                                    let (Some(&px), Some(&py)) =
+                                        (screen_pts.get(x as usize), screen_pts.get(y as usize))
+                                    else {
+                                        continue;
+                                    };
+                                    let seg = py - px;
+                                    let len2 = seg.length_sq().max(1e-6);
+                                    let k = ((ptr - px).dot(seg) / len2).clamp(0.0, 1.0);
+                                    let d = ptr.distance(px + seg * k);
+                                    if best.is_none_or(|(_, bd)| d < bd) {
+                                        best = Some(((x, y), d));
+                                    }
+                                }
+                                best.map(|(e, _)| e)
+                            } else {
+                                None
+                            };
+                            mesh_op = Some(MeshOp::AddFree(mi, ti, w, connect));
                         }
                     }
+                }
+                // the edge tool: pick two points; joined ones get cut,
+                // separate ones get joined
+                if !space && self.mesh_mode == 3 && resp.clicked() {
+                    match (near, self.edge_first) {
+                        (Some((vi, _)), None) => self.edge_first = Some(vi),
+                        (Some((vi, _)), Some(first)) if vi == first => self.edge_first = None,
+                        (Some((vi, _)), Some(first)) => {
+                            mesh_op = Some(MeshOp::Edge(mi, first as u16, vi as u16));
+                            self.edge_first = None;
+                        }
+                        (None, _) => self.edge_first = None,
+                    }
+                }
+                if self.mesh_mode != 3 {
+                    self.edge_first = None;
                 }
                 if !space
                     && self.mesh_mode == 2
@@ -5304,6 +6162,31 @@ impl EditorUi {
                 if hover_vi.is_some() && !space {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
+                for &(x, y) in self.pending_edges.get(&mi).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if let (Some(&px), Some(&py)) =
+                        (screen_pts.get(x as usize), screen_pts.get(y as usize))
+                    {
+                        vp.add(egui::Shape::dashed_line(
+                            &[px, py],
+                            Stroke::new(1.2, theme::pal().warp_green),
+                            4.0,
+                            3.0,
+                        ));
+                    }
+                }
+                if let Some(first) = self.edge_first
+                    && let Some(&fp) = screen_pts.get(first)
+                {
+                    vp.circle_stroke(fp, 7.0, Stroke::new(1.5, theme::pal().accent));
+                    if let Some(ptr) = ptr {
+                        vp.add(egui::Shape::dashed_line(
+                            &[fp, ptr],
+                            Stroke::new(1.2, theme::pal().accent),
+                            5.0,
+                            3.0,
+                        ));
+                    }
+                }
             }
 
             // a small header bar with the mesh name and the way out
@@ -5348,7 +6231,42 @@ impl EditorUi {
                 MeshOp::Add(mi, ti, w) => {
                     s.edit(|m| ayatsuri_core::edit::add_vertex(m, mi, ti, w).is_some())
                 }
-                MeshOp::Del(mi, vi) => s.edit(|m| ayatsuri_core::edit::delete_vertex(m, mi, vi)),
+                MeshOp::AddFree(mi, ti, w, connect) => s.edit(|m| {
+                    ayatsuri_core::edit::add_free_vertex(m, mi, ti, w, connect).is_some()
+                }),
+                MeshOp::Edge(mi, a, b) => {
+                    let key = (a.min(b), a.max(b));
+                    let pending = self.pending_edges.entry(mi).or_default();
+                    if let Some(at) = pending.iter().position(|&e| e == key) {
+                        // a pending line just goes away
+                        pending.remove(at);
+                        log::debug!("mesh {mi}: pending line {a}-{b} removed");
+                        true
+                    } else if ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b) {
+                        log::debug!("mesh {mi}: edge {a}-{b} cut");
+                        s.edit(|m| ayatsuri_core::edit::remove_edge(m, mi, a, b))
+                    } else {
+                        let lines = pending.clone();
+                        let closed = s.edit(|m| ayatsuri_core::edit::add_edge(m, mi, a, b, &lines));
+                        let pending = self.pending_edges.entry(mi).or_default();
+                        if closed {
+                            // lines a face now carries are no longer pending
+                            pending.retain(|&(x, y)| {
+                                !ayatsuri_core::edit::has_edge(s.puppet.model(), mi, x, y)
+                            });
+                            log::debug!("mesh {mi}: edge {a}-{b} closed a face");
+                        } else {
+                            pending.push(key);
+                            log::debug!("mesh {mi}: line {a}-{b} pending until a face closes");
+                        }
+                        true
+                    }
+                }
+                MeshOp::Del(mi, vi) => {
+                    // indices shift on delete, so pending lines can't survive it
+                    self.pending_edges.remove(&mi);
+                    s.edit(|m| ayatsuri_core::edit::delete_vertex(m, mi, vi))
+                }
             };
             if !applied {
                 log::warn!("mesh edit had nothing to do");

@@ -566,6 +566,171 @@ pub fn add_vertex(model: &mut Model, mesh: usize, tri: usize, w: [f32; 3]) -> Op
     Some(n)
 }
 
+/// Add a vertex anywhere, placed by barycentric weights against `tri`.
+/// Weights may be negative: outside the mesh the triangle's affine map is
+/// extrapolated, so uv and every keyform stay consistent. With `connect`
+/// the new vertex closes a triangle onto that edge; without it the vertex
+/// starts loose, ready for the edge tool.
+pub fn add_free_vertex(
+    model: &mut Model,
+    mesh: usize,
+    tri: usize,
+    w: [f32; 3],
+    connect: Option<(u16, u16)>,
+) -> Option<usize> {
+    let m = model.art_meshes.get_mut(mesh)?;
+    let n = m.vertex_count as usize;
+    if n >= u16::MAX as usize - 1 {
+        return None;
+    }
+    let at = tri.checked_mul(3)?;
+    let corners = [
+        m.indices.get(at).copied()? as usize,
+        m.indices.get(at + 1).copied()? as usize,
+        m.indices.get(at + 2).copied()? as usize,
+    ];
+    if corners.iter().any(|&c| c >= n) {
+        return None;
+    }
+    if let Some((a, b)) = connect
+        && (a as usize >= n || b as usize >= n || a == b)
+    {
+        return None;
+    }
+    let mix = |pool: &[f32], base: usize| -> Option<(f32, f32)> {
+        let mut x = 0.0;
+        let mut y = 0.0;
+        for (&c, &wc) in corners.iter().zip(w.iter()) {
+            x += pool.get(base + c * 2).copied()? * wc;
+            y += pool.get(base + c * 2 + 1).copied()? * wc;
+        }
+        Some((x, y))
+    };
+    let (u, v) = mix(&m.uvs, 0)?;
+    let stride = n * 2;
+    let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
+    let mut positions = Vec::with_capacity(keyforms * (stride + 2));
+    for k in 0..keyforms {
+        let base = k * stride;
+        let (x, y) = mix(&m.positions, base)?;
+        positions.extend_from_slice(m.positions.get(base..base + stride)?);
+        positions.push(x);
+        positions.push(y);
+    }
+    m.positions = positions;
+    m.uvs.push(u);
+    m.uvs.push(v);
+    m.vertex_count += 1;
+    if let Some((a, b)) = connect {
+        m.indices.extend_from_slice(&[a, b, n as u16]);
+    }
+    Some(n)
+}
+
+/// The vertices joined to both `a` and `b`, by a face edge or one of the
+/// editor's pending lines.
+fn common_neighbours(indices: &[u16], extra: &[(u16, u16)], a: u16, b: u16) -> Vec<u16> {
+    let (tris, _) = indices.as_chunks::<3>();
+    let mut na = Vec::new();
+    let mut nb = Vec::new();
+    for t in tris {
+        if t.contains(&a) {
+            na.extend(t.iter().copied().filter(|&v| v != a));
+        }
+        if t.contains(&b) {
+            nb.extend(t.iter().copied().filter(|&v| v != b));
+        }
+    }
+    for &(x, y) in extra {
+        if x == a {
+            na.push(y);
+        } else if y == a {
+            na.push(x);
+        }
+        if x == b {
+            nb.push(y);
+        } else if y == b {
+            nb.push(x);
+        }
+    }
+    let mut out: Vec<u16> =
+        na.into_iter().filter(|v| nb.contains(v) && *v != a && *v != b).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Join two vertices. A mesh edge only lives on as part of a face, so this
+/// closes a triangle with the nearest common neighbour on each side of the
+/// new edge (sides judged in uv space), skipping faces that already exist.
+/// `pending` are lines the editor holds that have not closed a face yet;
+/// they count as connections. True when at least one face was added.
+pub fn add_edge(model: &mut Model, mesh: usize, a: u16, b: u16, pending: &[(u16, u16)]) -> bool {
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    let n = m.vertex_count as usize;
+    if a == b || a as usize >= n || b as usize >= n {
+        return false;
+    }
+    let uv = |i: u16| -> (f32, f32) {
+        (
+            m.uvs.get(i as usize * 2).copied().unwrap_or(0.0),
+            m.uvs.get(i as usize * 2 + 1).copied().unwrap_or(0.0),
+        )
+    };
+    let (ax, ay) = uv(a);
+    let (bx, by) = uv(b);
+    let (tris, _) = m.indices.as_chunks::<3>();
+    let has_face = |c: u16| tris.iter().any(|t| t.contains(&a) && t.contains(&b) && t.contains(&c));
+    // best candidate per side: smallest perimeter wins
+    let mut best: [Option<(u16, f32)>; 2] = [None, None];
+    for c in common_neighbours(&m.indices, pending, a, b) {
+        if has_face(c) {
+            continue;
+        }
+        let (cx, cy) = uv(c);
+        let side = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        if side.abs() < 1e-12 {
+            continue;
+        }
+        let k = usize::from(side > 0.0);
+        let d = ((cx - ax).powi(2) + (cy - ay).powi(2)).sqrt()
+            + ((cx - bx).powi(2) + (cy - by).powi(2)).sqrt();
+        if let Some(slot) = best.get_mut(k)
+            && slot.is_none_or(|(_, bd)| d < bd)
+        {
+            *slot = Some((c, d));
+        }
+    }
+    let mut added = false;
+    for (c, _) in best.into_iter().flatten() {
+        m.indices.extend_from_slice(&[a, b, c]);
+        added = true;
+    }
+    added
+}
+
+/// Cut the edge between two vertices: every face using both goes.
+pub fn remove_edge(model: &mut Model, mesh: usize, a: u16, b: u16) -> bool {
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    let before = m.indices.len();
+    let (tris, _) = m.indices.as_chunks::<3>();
+    let kept: Vec<u16> = tris
+        .iter()
+        .filter(|t| !(t.contains(&a) && t.contains(&b)))
+        .flat_map(|t| t.iter().copied())
+        .collect();
+    m.indices = kept;
+    m.indices.len() != before
+}
+
+/// Whether a and b share at least one face.
+pub fn has_edge(model: &Model, mesh: usize, a: u16, b: u16) -> bool {
+    model.art_meshes.get(mesh).is_some_and(|m| {
+        let (tris, _) = m.indices.as_chunks::<3>();
+        tris.iter().any(|t| t.contains(&a) && t.contains(&b))
+    })
+}
+
 /// Remove one vertex: its triangles go with it and the pools compact. Glue
 /// pairs pointing at it are dropped, the rest re-indexed.
 pub fn delete_vertex(model: &mut Model, mesh: usize, vertex: usize) -> bool {
@@ -1149,5 +1314,41 @@ mod tests {
         // corner = x form + y form - centre: moved +1 in both
         assert!((am.positions[18] - 1.0).abs() < 1e-6);
         assert!((am.positions[19] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn free_vertex_extrapolates_and_connects() {
+        let mut m = tri_mesh();
+        // outside the triangle, past the (0,0)-(2,0) edge: w sums to one
+        let vi = add_free_vertex(&mut m, 0, 0, [0.5, 0.75, -0.25], Some((0, 1)));
+        assert_eq!(vi, Some(3));
+        let am = m.art_meshes.first().unwrap();
+        assert_eq!(am.indices.len(), 6);
+        // key 0: 0.5*(0,0) + 0.75*(2,0) - 0.25*(0,2) = (1.5, -0.5)
+        assert!((am.positions[6] - 1.5).abs() < 1e-6);
+        assert!((am.positions[7] + 0.5).abs() < 1e-6);
+        // key 1 is the same affine mix of the shifted triangle
+        assert!((am.positions[14] - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn edges_add_and_remove() {
+        let mut m = tri_mesh();
+        // a loose fourth vertex beyond the 1-2 edge, joined to 1 and 2
+        add_free_vertex(&mut m, 0, 0, [-0.5, 0.75, 0.75], None).unwrap();
+        assert!(!has_edge(&m, 0, 1, 3));
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.indices.extend_from_slice(&[1, 3, 2]);
+        }
+        assert!(has_edge(&m, 0, 1, 3));
+        assert!(remove_edge(&mut m, 0, 1, 3));
+        assert!(!has_edge(&m, 0, 1, 3));
+        // 1 and 2 still share vertex 0, and adding 1-2 again finds no
+        // missing face, while 0-3 has no common neighbour at all
+        assert!(!add_edge(&mut m, 0, 0, 3, &[]));
+        // a pending 3-0 line gives 1 and 3 a common neighbour, so joining
+        // them closes the face 1-3-0
+        assert!(add_edge(&mut m, 0, 1, 3, &[(3, 0)]));
+        assert!(has_edge(&m, 0, 0, 3));
     }
 }

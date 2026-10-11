@@ -42,6 +42,7 @@ pub enum Cmd {
     },
 }
 
+#[derive(Clone)]
 pub struct TexData {
     pub width: u32,
     pub height: u32,

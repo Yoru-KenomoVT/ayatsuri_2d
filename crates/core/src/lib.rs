@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anim;
 pub mod blend;
 pub mod deform;
 pub mod edit;

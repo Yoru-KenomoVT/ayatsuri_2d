@@ -31,6 +31,7 @@ fn main() -> Result<(), String> {
         model,
         textures: Vec::new(),
         display: None,
+        animations: Vec::new(),
     };
     let aom = ayatsuri_format::write(&payload).map_err(|e| e.to_string())?;
     std::fs::write(&out, &aom).map_err(|e| e.to_string())?;
