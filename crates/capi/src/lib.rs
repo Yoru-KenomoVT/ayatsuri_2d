@@ -48,3 +48,6 @@ pub extern "C" fn ay2d_abi_version() -> u32 {
 pub extern "C" fn ay2d_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
 }
+
+#[cfg(test)]
+mod tests;

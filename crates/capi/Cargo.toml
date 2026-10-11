@@ -23,3 +23,7 @@ indexing_slicing = "deny"
 [dependencies]
 ayatsuri-core = { workspace = true }
 ayatsuri-format = { workspace = true }
+
+[dev-dependencies]
+# the tests write a small .aom to load through the C surface
+serde_bytes = { workspace = true }

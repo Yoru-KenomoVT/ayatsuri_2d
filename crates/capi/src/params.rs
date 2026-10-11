@@ -108,10 +108,19 @@ pub unsafe extern "C" fn ay2d_set_parameters(
             return Status::Range;
         }
         for (&i, &v) in idx.iter().zip(vals) {
-            model.puppet.set_value(i as usize, v);
+            model.puppet.set_value(i as usize, clamped(model, i as usize, v));
         }
         Status::Ok
     })
+}
+
+/// A value held to its parameter's range; a NaN lands on the default.
+fn clamped(model: &Model, i: usize, v: f32) -> f32 {
+    match model.puppet.model().parameters.get(i) {
+        Some(p) if v.is_finite() => v.clamp(p.min.min(p.max), p.max.max(p.min)),
+        Some(p) => p.default,
+        None => v,
+    }
 }
 
 /// Set every parameter from one array of `ay2d_parameter_count` values,
@@ -140,7 +149,7 @@ pub unsafe extern "C" fn ay2d_set_all_parameters(
             Err(s) => return s,
         };
         for (i, &v) in vals.iter().enumerate() {
-            model.puppet.set_value(i, v);
+            model.puppet.set_value(i, clamped(model, i, v));
         }
         Status::Ok
     })
