@@ -15,3 +15,6 @@ Cargo.lock
 
 .DS_Store
 *.swp
+
+# Personal study material, not part of the project.
+/study

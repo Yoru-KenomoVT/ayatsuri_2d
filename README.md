@@ -60,8 +60,18 @@ the features moc3 cannot carry.
 
 ```
 moc3 format          mapped and verified across 5 models, 3 versions
-openmoc3             compiles, section map present, parsing not implemented
-runtime / editor     designed, not started
+openmoc3             parses and validates: header, offset table, counts,
+                     section extents, ID tables; rejects the CVE exploit
+                     model in the test suite
+import               .moc3 to the native model, every cross-pool index
+                     validated once at the boundary
+runtime              parameters, keyform interpolation, warp and rotation
+                     deformers, opacity, draw order; a real 356-mesh model
+                     evaluates in 0.45 ms mean, 1 ms p99.9
+editor               native egui app, dockable panels, live viewport with
+                     textures, parameter sliders driving the puppet
+still missing        glue, masking, blend shapes, physics, animation,
+                     .aom save, moc3 export, the C ABI
 ```
 
 Nothing here is usable yet. The [documentation](docs/) is ahead of the code on
@@ -70,15 +80,24 @@ purpose: the decisions that are expensive to reverse were made first.
 ## Layout
 
 ```
-crates/ayatsuri-format    the puppet format: types, versioning, serialisation
-crates/ayatsuri-core      deformation, physics, masking, animation, draw order
-                          no I/O, no renderer, no allocation after load
-crates/ayatsuri-render    renderer behind a trait; backend not yet chosen
-crates/ayatsuri-capi      the C ABI: ayatsuri.h, plus a static and shared lib
-                          this is the load-bearing wall, see docs/integration.md
-crates/ayatsuri-psd       PSD import
-crates/openmoc3           standalone safe reader for Live2D .moc3 files
+crates/format       ayatsuri-format   the puppet format: types, versioning,
+                                      serialisation
+crates/core         ayatsuri-core     deformation, physics, masking, animation,
+                                      draw order; no I/O, no renderer, no
+                                      allocation after load
+crates/render       ayatsuri-render   renderer behind a trait
+crates/capi         ayatsuri-capi     the C ABI: ayatsuri.h, plus a static and
+                                      shared lib; the load-bearing wall, see
+                                      docs/integration.md
+crates/editor       ayatsuri-editor   the egui editor frontend: dockable panels,
+                                      viewport, parameters, timeline
+crates/openmoc3     openmoc3          standalone safe reader for Live2D .moc3
+apps/ayatsuri                         the desktop app
+apps/ayatsuri-launcher                launcher stub
+xtask                                 cargo xtask layers | ci
 ```
+
+A planned `ayatsuri-psd` crate will handle PSD import.
 
 `ayatsuri-core` never depends on `openmoc3`. The moc3 parser is the
 hostile-input surface and is kept isolated, and `openmoc3` is useful on its own

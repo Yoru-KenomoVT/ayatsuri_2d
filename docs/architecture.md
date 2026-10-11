@@ -6,13 +6,23 @@ An editor with nowhere to export to is dead, and a runtime nobody can feed is
 dead. But the runtime is what other software embeds, and that is what decides
 whether a format lives.
 
-    ayatsuri-format     the puppet format: types, versioning, serialisation
-    ayatsuri-core       deformation, physics, masking, animation, draw order
-                        no I/O, no renderer, no allocation after load
-    ayatsuri-render     renderer behind a trait. Backend not yet chosen.
-    ayatsuri-capi       the C ABI, and the header everything else binds to
-    ayatsuri-psd        PSD import
-    openmoc3            standalone reader for Live2D .moc3 files
+    crates/format     ayatsuri-format   the puppet format: types, versioning,
+                                        serialisation
+    crates/core       ayatsuri-core     deformation, physics, masking,
+                                        animation, draw order; no I/O, no
+                                        renderer, no allocation after load
+    crates/render     ayatsuri-render   renderer behind a trait. Backend not
+                                        yet chosen.
+    crates/capi       ayatsuri-capi     the C ABI, and the header everything
+                                        else binds to
+    crates/editor     ayatsuri-editor   the egui editor frontend
+    crates/openmoc3   openmoc3          standalone reader for Live2D .moc3
+    apps/ayatsuri                       the desktop app (eframe shell)
+
+    A planned ayatsuri-psd crate will handle PSD import.
+
+The dependency rules below are enforced as a build failure by
+`cargo xtask layers`, the way FilmCraft enforces its layering.
 
 ## One core, thin bindings
 

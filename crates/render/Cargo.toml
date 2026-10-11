@@ -1,0 +1,15 @@
+[package]
+name = "ayatsuri-render"
+description = "Renderer behind a trait; backends plug in underneath"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ayatsuri-core = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }

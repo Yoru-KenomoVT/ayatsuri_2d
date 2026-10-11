@@ -18,28 +18,42 @@ pub enum Version {
 }
 
 impl Version {
-    /// TODO: map the raw byte. 1..=6 are defined; anything else is an error.
-    pub fn from_byte(_b: u8) -> Option<Self> {
-        todo!()
+    /// Map the raw header byte. 1..=6 are defined; anything else is an error.
+    pub fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            1 => Some(Version::V3_00),
+            2 => Some(Version::V3_03),
+            3 => Some(Version::V4_00),
+            4 => Some(Version::V4_02),
+            5 => Some(Version::V5_00),
+            6 => Some(Version::V6),
+            _ => None,
+        }
     }
 
     /// How many `u32` entries the section offset table holds.
     ///
-    /// **This is the one people get wrong.** It is not implied by where the
-    /// count table begins: the space between the end of the table and the
-    /// count table is reserved padding, and reading it as more entries is a
-    /// mistake (it is all zeroes, so nothing catches you).
+    /// **This is the one people get wrong.** Public references model 160
+    /// entries; measured files say 480 in v3 through v5 and 1440 in v6
+    /// (GIST-moc3-v6.md section 1). The table runs from 0x40 to the count
+    /// table offset held in slot 0, so the length is
+    /// `(count_table_offset - 0x40) / 4`, and a v6 file populates entries
+    /// 160 through 166, which a reader hardcoded to 160 silently loses.
     pub fn sot_entries(self) -> usize {
         match self {
-            Version::V6 => 480,
-            _ => 160,
+            Version::V6 => 1440,
+            _ => 480,
         }
     }
 
     /// Size of the count info table in bytes. v5 doubled it to make room for
     /// the blend-shape counts.
     pub fn count_table_bytes(self) -> usize {
-        if self >= Version::V5_00 { 256 } else { 128 }
+        if self >= Version::V5_00 {
+            256
+        } else {
+            128
+        }
     }
 
     /// Highest slot index that carries meaning in this version. Slots above it

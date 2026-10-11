@@ -1,0 +1,24 @@
+[package]
+name = "ayatsuri"
+description = "The Ayatsuri2D desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = { workspace = true }
+ayatsuri-core = { workspace = true }
+ayatsuri-import = { workspace = true }
+ayatsuri-format = { workspace = true }
+
+[dependencies]
+ayatsuri-editor = { workspace = true }
+ayatsuri-render = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+log = { workspace = true }

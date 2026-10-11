@@ -1,0 +1,13 @@
+[package]
+name = "ayatsuri-core"
+description = "Deformation, physics, masking, animation, draw order. No I/O, no renderer, no allocation after load."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ayatsuri-format = { workspace = true }
