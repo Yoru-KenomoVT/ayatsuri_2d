@@ -215,8 +215,11 @@ pub struct EditorUi {
     /// Mesh edit mode: the mesh whose vertices are being edited, if any.
     mesh_edit: Option<usize>,
     mesh_drag: Option<MeshDrag>,
-    /// 0 move, 1 add vertices, 2 erase vertices, 3 connect points, 4 cut edges.
+    /// 0 move, 1 add vertices, 2 erase vertices, 3 connect points, 4 cut
+    /// edges, 5 erase brush.
     mesh_mode: u8,
+    /// Points the erase brush has swept over during the current stroke.
+    erase_marked: std::collections::BTreeSet<usize>,
     /// New points close a face onto the nearest edge when on.
     mesh_autoconnect: bool,
     /// The edge tool's first pick.
@@ -435,6 +438,7 @@ impl Default for EditorUi {
             mesh_drag: None,
             mesh_mode: 0,
             mesh_autoconnect: true,
+            erase_marked: std::collections::BTreeSet::new(),
             edge_first: None,
             pending_edges: std::collections::HashMap::new(),
             mesh_snapshot: None,
@@ -1582,6 +1586,11 @@ impl EditorUi {
                             "Connect two points (click one, then the other)",
                         ),
                         (4, egui_phosphor::regular::SCISSORS, "Cut the edge between two points"),
+                        (
+                            5,
+                            egui_phosphor::regular::PAINT_BRUSH_BROAD,
+                            "Erase brush: drag over points to remove them ([ and ] resize)",
+                        ),
                     ] {
                         if ui
                             .selectable_label(
@@ -1596,6 +1605,16 @@ impl EditorUi {
                     }
                 });
                 ui.separator();
+                if self.mesh_mode == 5 {
+                    ui.horizontal(|ui| {
+                        ui.weak("Brush");
+                        ui.add(
+                            egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
+                                .logarithmic(true)
+                                .suffix(" px"),
+                        );
+                    });
+                }
                 ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points")
                     .on_hover_text("Off: added points stay loose until joined with the edge tool");
                 ui.separator();
@@ -4749,7 +4768,9 @@ impl EditorUi {
         match self.tool {
             Tool::MeshManual => {
                 ui.horizontal(|ui| {
-                    for (i, m) in ["Move", "Add", "Erase", "Connect", "Cut"].iter().enumerate() {
+                    for (i, m) in
+                        ["Move", "Add", "Erase", "Connect", "Cut", "Brush erase"].iter().enumerate()
+                    {
                         if ui.selectable_label(self.mesh_mode as usize == i, *m).clicked() {
                             self.mesh_mode = i as u8;
                         }
@@ -6170,6 +6191,7 @@ impl EditorUi {
             AddFree(usize, usize, [f32; 3], Option<(u16, u16)>),
             Connect(usize, u16, u16),
             Cut(usize, u16, u16),
+            EraseMany(usize, Vec<usize>),
             Del(usize, usize),
         }
         let mut mesh_op: Option<MeshOp> = None;
@@ -6277,6 +6299,43 @@ impl EditorUi {
                         }
                     }
                 }
+                // the erase brush: everything the circle sweeps is marked,
+                // and the whole stroke goes in one undo step on release
+                if self.mesh_mode == 5 && !space {
+                    let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
+                    let painting = resp.dragged() || resp.drag_started() || resp.clicked();
+                    if painting && let Some(ptr) = resp.interact_pointer_pos() {
+                        for (vi, sp) in screen_pts.iter().enumerate() {
+                            if sp.distance(ptr) <= r {
+                                self.erase_marked.insert(vi);
+                            }
+                        }
+                    }
+                    if (resp.drag_stopped() || resp.clicked()) && !self.erase_marked.is_empty() {
+                        let marked: Vec<usize> = self.erase_marked.iter().copied().collect();
+                        mesh_op = Some(MeshOp::EraseMany(mi, marked));
+                        self.erase_marked.clear();
+                    }
+                    // [ and ] size the brush, like every paint program
+                    let (shrink, grow) = ui.ctx().input(|i| {
+                        (
+                            i.key_pressed(egui::Key::OpenBracket),
+                            i.key_pressed(egui::Key::CloseBracket),
+                        )
+                    });
+                    if shrink {
+                        self.tool_opts.brush_size = (self.tool_opts.brush_size / 1.25).max(4.0);
+                    }
+                    if grow {
+                        self.tool_opts.brush_size = (self.tool_opts.brush_size * 1.25).min(400.0);
+                    }
+                    if let Some(ptr) = ptr {
+                        vp.circle_stroke(ptr, r, Stroke::new(1.2, theme::pal().rotation_red));
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                    }
+                } else {
+                    self.erase_marked.clear();
+                }
                 // connect and cut both work on a pair: first click picks a
                 // point, second click acts; clicking empty space resets
                 let pairing = matches!(self.mesh_mode, 3 | 4);
@@ -6383,11 +6442,16 @@ impl EditorUi {
                 let hover_vi = near.map(|(vi, _)| vi);
                 for (vi, sp) in screen_pts.iter().enumerate() {
                     let hot = drag_vi == Some(vi) || (drag_vi.is_none() && hover_vi == Some(vi));
-                    let (r, fill) =
-                        if hot { (4.0, theme::pal().accent) } else { (2.6, Color32::WHITE) };
+                    let (r, fill) = if self.erase_marked.contains(&vi) {
+                        (4.0, theme::pal().rotation_red)
+                    } else if hot && self.mesh_mode != 5 {
+                        (4.0, theme::pal().accent)
+                    } else {
+                        (2.6, Color32::WHITE)
+                    };
                     vp.circle(*sp, r, fill, Stroke::new(1.0, theme::pal().accent));
                 }
-                if hover_vi.is_some() && !space {
+                if hover_vi.is_some() && !space && self.mesh_mode != 5 {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 for &(x, y) in self.pending_edges.get(&mi).map(|v| v.as_slice()).unwrap_or(&[]) {
@@ -6497,6 +6561,17 @@ impl EditorUi {
                         log::debug!("mesh {mi}: {a} and {b} were not connected");
                         true
                     }
+                }
+                MeshOp::EraseMany(mi, marked) => {
+                    self.pending_edges.remove(&mi);
+                    let n = marked.len();
+                    let done = s.edit(|m| ayatsuri_core::edit::delete_vertices(m, mi, &marked));
+                    if done {
+                        log::debug!("mesh {mi}: erase brush removed {n} point(s)");
+                    } else {
+                        log::warn!("erase brush: a mesh keeps at least three points");
+                    }
+                    done
                 }
                 MeshOp::Del(mi, vi) => {
                     // indices shift on delete, so pending lines can't survive it

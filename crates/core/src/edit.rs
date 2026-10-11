@@ -734,42 +734,73 @@ pub fn has_edge(model: &Model, mesh: usize, a: u16, b: u16) -> bool {
 /// Remove one vertex: its triangles go with it and the pools compact. Glue
 /// pairs pointing at it are dropped, the rest re-indexed.
 pub fn delete_vertex(model: &mut Model, mesh: usize, vertex: usize) -> bool {
+    delete_vertices(model, mesh, &[vertex])
+}
+
+/// Remove a set of vertices at once (the erase brush): every face touching
+/// one goes, keyform positions and uvs compact, glue pairs on removed
+/// points are dropped and the rest re-indexed. At least three points must
+/// remain, so a mesh is never erased out of existence by accident.
+pub fn delete_vertices(model: &mut Model, mesh: usize, vertices: &[usize]) -> bool {
     let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
     let n = m.vertex_count as usize;
-    if vertex >= n || n <= 3 {
+    let mut gone = vec![false; n];
+    for &v in vertices {
+        if let Some(g) = gone.get_mut(v) {
+            *g = true;
+        }
+    }
+    let removed = gone.iter().filter(|&&g| g).count();
+    if removed == 0 || n.saturating_sub(removed) < 3 {
         return false;
     }
-    let v16 = vertex as u16;
-
-    let mut indices = Vec::with_capacity(m.indices.len());
-    let (tris, _) = m.indices.as_chunks::<3>();
-    for t in tris {
-        if t.contains(&v16) {
-            continue;
-        }
-        for &i in t {
-            indices.push(if i > v16 { i - 1 } else { i });
+    // old index to new index, None for removed points
+    let mut remap: Vec<Option<u16>> = Vec::with_capacity(n);
+    let mut next = 0u16;
+    for &g in &gone {
+        if g {
+            remap.push(None);
+        } else {
+            remap.push(Some(next));
+            next += 1;
         }
     }
-    m.indices = indices;
+    let map = |i: u16| remap.get(i as usize).copied().flatten();
 
+    let (tris, _) = m.indices.as_chunks::<3>();
+    let mut indices = Vec::with_capacity(m.indices.len());
+    for t in tris {
+        if let (Some(a), Some(b), Some(c)) = (map(t[0]), map(t[1]), map(t[2])) {
+            indices.extend_from_slice(&[a, b, c]);
+        }
+    }
     let stride = n * 2;
     let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
-    let mut positions = Vec::with_capacity(keyforms * (stride - 2));
+    let mut positions = Vec::with_capacity(keyforms * (n - removed) * 2);
     for k in 0..keyforms {
         let base = k * stride;
-        for vi in 0..n {
-            if vi == vertex {
-                continue;
+        for (vi, &g) in gone.iter().enumerate() {
+            if !g {
+                positions.push(m.positions.get(base + vi * 2).copied().unwrap_or(0.0));
+                positions.push(m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0));
             }
-            positions.push(m.positions.get(base + vi * 2).copied().unwrap_or(0.0));
-            positions.push(m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0));
         }
     }
+    let uvs: Vec<f32> = gone
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| !**g)
+        .flat_map(|(vi, _)| {
+            [
+                m.uvs.get(vi * 2).copied().unwrap_or(0.0),
+                m.uvs.get(vi * 2 + 1).copied().unwrap_or(0.0),
+            ]
+        })
+        .collect();
+    m.indices = indices;
     m.positions = positions;
-    m.uvs.remove(vertex * 2 + 1);
-    m.uvs.remove(vertex * 2);
-    m.vertex_count -= 1;
+    m.uvs = uvs;
+    m.vertex_count = (n - removed) as u32;
 
     let mesh32 = mesh as u32;
     for g in &mut model.glues {
@@ -777,27 +808,28 @@ pub fn delete_vertex(model: &mut Model, mesh: usize, vertex: usize) -> bool {
             continue;
         }
         // pairs are (a, b) interleaved in weights/indices
-        let affected = |slot: usize| {
+        let on_this = |slot: usize| {
             (slot.is_multiple_of(2) && g.art_mesh_a == mesh32)
                 || (!slot.is_multiple_of(2) && g.art_mesh_b == mesh32)
         };
         let (pairs, _) = g.indices.as_chunks::<2>();
-        let mut keep: Vec<bool> = Vec::with_capacity(pairs.len());
-        for pair in pairs {
-            let hit = pair.iter().enumerate().any(|(s, &i)| affected(s) && i == v16);
-            keep.push(!hit);
-        }
-        let mut wi = 0usize;
         let mut new_w = Vec::with_capacity(g.weights.len());
         let mut new_i = Vec::with_capacity(g.indices.len());
         for (pi, pair) in pairs.iter().enumerate() {
-            if keep.get(pi).copied().unwrap_or(false) {
-                for (slot, &i) in pair.iter().enumerate() {
-                    new_i.push(if affected(slot) && i > v16 { i - 1 } else { i });
-                    new_w.push(g.weights.get(wi + slot).copied().unwrap_or(0.0));
+            let mut out = [0u16; 2];
+            let mut keep = true;
+            for (slot, &i) in pair.iter().enumerate() {
+                let v = if on_this(slot) { map(i) } else { Some(i) };
+                match (v, out.get_mut(slot)) {
+                    (Some(v), Some(o)) => *o = v,
+                    _ => keep = false,
                 }
             }
-            wi += 2;
+            if keep {
+                new_i.extend_from_slice(&out);
+                new_w.push(g.weights.get(pi * 2).copied().unwrap_or(0.0));
+                new_w.push(g.weights.get(pi * 2 + 1).copied().unwrap_or(0.0));
+            }
         }
         g.weights = new_w;
         g.indices = new_i;
@@ -1350,5 +1382,25 @@ mod tests {
         // them closes the face 1-3-0
         assert!(add_edge(&mut m, 0, 1, 3, &[(3, 0)]));
         assert!(has_edge(&m, 0, 0, 3));
+    }
+
+    #[test]
+    fn erase_many_keeps_pools_consistent() {
+        let mut m = tri_mesh();
+        // grow the mesh to seven points, then erase three of them at once
+        for w in [[0.5, 0.25, 0.25], [0.25, 0.5, 0.25], [0.25, 0.25, 0.5], [0.4, 0.3, 0.3]] {
+            add_vertex(&mut m, 0, 0, w).unwrap();
+        }
+        assert!(delete_vertices(&mut m, 0, &[1, 4, 6]));
+        let am = m.art_meshes.first().unwrap();
+        assert_eq!(am.vertex_count, 4);
+        assert_eq!(am.uvs.len(), 8);
+        assert_eq!(am.positions.len(), 16);
+        assert!(am.indices.iter().all(|&i| (i as usize) < 4));
+        // refusing to leave fewer than three points
+        assert!(!delete_vertices(&mut m, 0, &[0, 1]));
+        // and the single-point form still works through the batch
+        assert!(delete_vertex(&mut m, 0, 3));
+        assert_eq!(m.art_meshes.first().unwrap().vertex_count, 3);
     }
 }
