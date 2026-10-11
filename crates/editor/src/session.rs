@@ -75,6 +75,8 @@ pub struct Session {
     pub author: String,
     /// Unsaved model changes; the close dialog hangs off this.
     pub modified: bool,
+    /// Each mesh's uvs and triangles as the file had them, for Reset mesh.
+    pub original_meshes: Vec<(Vec<f32>, Vec<u16>)>,
     /// Downscaled pixel copies (512px on the long side) for CPU previews.
     pub preview_tex: Vec<ayatsuri_render::TexData>,
     /// Rendered Parts palette previews, filled lazily a few per frame and
@@ -459,6 +461,8 @@ impl Session {
         let n_parts = model.parts.len();
         let n_meshes = model.art_meshes.len();
         let n_defs = model.deformers.len();
+        let original_meshes: Vec<(Vec<f32>, Vec<u16>)> =
+            model.art_meshes.iter().map(|m| (m.uvs.clone(), m.indices.clone())).collect();
         let n_params = model.parameters.len();
         let n_tex = texture_names.len();
         let mut puppet = Puppet::new(model);
@@ -481,6 +485,7 @@ impl Session {
             author: String::new(),
             modified: false,
             preview_tex,
+            original_meshes,
             part_previews: HashMap::new(),
             deformer_previews: HashMap::new(),
             animations: Vec::new(),

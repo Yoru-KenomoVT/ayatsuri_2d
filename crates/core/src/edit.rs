@@ -566,7 +566,8 @@ pub fn add_vertex(model: &mut Model, mesh: usize, tri: usize, w: [f32; 3]) -> Op
     Some(n)
 }
 
-/// Add a vertex anywhere, placed by barycentric weights against `tri`.
+/// Add a vertex anywhere, placed by barycentric weights against three
+/// existing points.
 /// Weights may be negative: outside the mesh the triangle's affine map is
 /// extrapolated, so uv and every keyform stay consistent. With `connect`
 /// the new vertex closes a triangle onto that edge; without it the vertex
@@ -574,7 +575,7 @@ pub fn add_vertex(model: &mut Model, mesh: usize, tri: usize, w: [f32; 3]) -> Op
 pub fn add_free_vertex(
     model: &mut Model,
     mesh: usize,
-    tri: usize,
+    corners: [usize; 3],
     w: [f32; 3],
     connect: Option<(u16, u16)>,
 ) -> Option<usize> {
@@ -583,12 +584,8 @@ pub fn add_free_vertex(
     if n >= u16::MAX as usize - 1 {
         return None;
     }
-    let at = tri.checked_mul(3)?;
-    let corners = [
-        m.indices.get(at).copied()? as usize,
-        m.indices.get(at + 1).copied()? as usize,
-        m.indices.get(at + 2).copied()? as usize,
-    ];
+    // any three points of the mesh work as the affine basis; they need not
+    // form a face, which is what lets a mesh with no faces still grow
     if corners.iter().any(|&c| c >= n) {
         return None;
     }
@@ -1130,6 +1127,293 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
     true
 }
 
+/// Cubism's Auto connect: triangulate the mesh's points (in uv space, so
+/// the result does not depend on the pose). With `rebuild` every face is
+/// redone from the points alone; without it the faces already there stay
+/// and only triangles that overlap none of them are added. `keep` filters
+/// candidate triangles by their centroid uv (the editor passes a texture
+/// alpha test for "Protect edge exterior"). Returns the faces added.
+pub fn auto_connect(
+    model: &mut Model,
+    mesh: usize,
+    rebuild: bool,
+    keep: &dyn Fn(f32, f32) -> bool,
+) -> usize {
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return 0 };
+    let (uvp, _) = m.uvs.as_chunks::<2>();
+    let pts: Vec<(f32, f32)> = uvp.iter().map(|&[u, v]| (u, v)).collect();
+    let fresh = crate::automesh::delaunay(&pts);
+    let existing: Vec<[u16; 3]> = if rebuild {
+        Vec::new()
+    } else {
+        let (t, _) = m.indices.as_chunks::<3>();
+        t.to_vec()
+    };
+    // the existing edges, for the overlap test
+    let mut edges: Vec<(u16, u16)> = Vec::new();
+    for t in &existing {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            edges.push((a.min(b), a.max(b)));
+        }
+    }
+    let p = |i: u16| pts.get(i as usize).copied().unwrap_or((0.0, 0.0));
+    let cross = |a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)| {
+        // proper crossing only; shared endpoints are fine
+        let o = |p: (f32, f32), q: (f32, f32), r: (f32, f32)| {
+            (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+        };
+        let (o1, o2, o3, o4) = (o(a, b, c), o(a, b, d), o(c, d, a), o(c, d, b));
+        o1 * o2 < -1e-12 && o3 * o4 < -1e-12
+    };
+    let mut indices: Vec<u16> = existing.iter().flat_map(|t| t.iter().copied()).collect();
+    let mut added = 0;
+    for t in fresh {
+        let tri = [t[0] as u16, t[1] as u16, t[2] as u16];
+        let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
+        if !keep((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0) {
+            continue;
+        }
+        if !rebuild {
+            let mut sorted = tri;
+            sorted.sort_unstable();
+            let duplicate = existing.iter().any(|e| {
+                let mut s = *e;
+                s.sort_unstable();
+                s == sorted
+            });
+            let overlaps =
+                [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])].iter().any(|&(x, y)| {
+                    edges.iter().any(|&(e0, e1)| {
+                        e0 != x && e0 != y && e1 != x && e1 != y && cross(p(x), p(y), p(e0), p(e1))
+                    })
+                });
+            if duplicate || overlaps {
+                continue;
+            }
+        }
+        indices.extend_from_slice(&tri);
+        added += 1;
+    }
+    m.indices = indices;
+    added
+}
+
+/// Cubism's Mesh 4 Division: every face splits into four through its edge
+/// midpoints, shape untouched. New points append, so existing indices (and
+/// any glue on them) stay valid.
+pub fn subdivide4(model: &mut Model, mesh: usize) -> bool {
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    let n = m.vertex_count as usize;
+    let stride = n * 2;
+    let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
+    let (tris, _) = m.indices.as_chunks::<3>();
+    let tris = tris.to_vec();
+    if tris.is_empty() {
+        return false;
+    }
+    let mut mid_of: std::collections::HashMap<(u16, u16), u16> = std::collections::HashMap::new();
+    let mut mids: Vec<(u16, u16)> = Vec::new();
+    for t in &tris {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let key = (a.min(b), a.max(b));
+            if let std::collections::hash_map::Entry::Vacant(slot) = mid_of.entry(key) {
+                let id = n + mids.len();
+                if id >= u16::MAX as usize {
+                    return false;
+                }
+                slot.insert(id as u16);
+                mids.push(key);
+            }
+        }
+    }
+    let half = |pool: &[f32], base: usize, (a, b): (u16, u16)| {
+        let g = |i: u16, k: usize| pool.get(base + i as usize * 2 + k).copied().unwrap_or(0.0);
+        [(g(a, 0) + g(b, 0)) * 0.5, (g(a, 1) + g(b, 1)) * 0.5]
+    };
+    let new_n = n + mids.len();
+    let mut positions = Vec::with_capacity(keyforms * new_n * 2);
+    for k in 0..keyforms {
+        let base = k * stride;
+        positions.extend_from_slice(m.positions.get(base..base + stride).unwrap_or(&[]));
+        for &e in &mids {
+            positions.extend_from_slice(&half(&m.positions, base, e));
+        }
+    }
+    let mut uvs = m.uvs.clone();
+    for &e in &mids {
+        let h = half(&m.uvs, 0, e);
+        uvs.extend_from_slice(&h);
+    }
+    let mid = |a: u16, b: u16| mid_of.get(&(a.min(b), a.max(b))).copied().unwrap_or(a);
+    let mut indices = Vec::with_capacity(tris.len() * 12);
+    for t in &tris {
+        let (a, b, c) = (t[0], t[1], t[2]);
+        let (ab, bc, ca) = (mid(a, b), mid(b, c), mid(c, a));
+        indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
+    }
+    m.positions = positions;
+    m.uvs = uvs;
+    m.indices = indices;
+    m.vertex_count = new_n as u32;
+    true
+}
+
+/// Bind two meshes with glue, Cubism style: vertex pairs that overlap (in
+/// the given world positions, within `tolerance` model units) are attached,
+/// nearest pairs first, each vertex used once, weights starting at an even
+/// 50:50. Binding the same two meshes again adds the new pairs to the glue
+/// they already share. Returns the glue's index and the pairs added.
+pub fn bind_glue(
+    model: &mut Model,
+    a: usize,
+    b: usize,
+    world_a: &[f32],
+    world_b: &[f32],
+    tolerance: f32,
+) -> Option<(usize, usize)> {
+    if a == b || a >= model.art_meshes.len() || b >= model.art_meshes.len() {
+        return None;
+    }
+    let (pa, _) = world_a.as_chunks::<2>();
+    let (pb, _) = world_b.as_chunks::<2>();
+    let t2 = tolerance * tolerance;
+    let mut candidates: Vec<(f32, u16, u16)> = Vec::new();
+    for (i, p) in pa.iter().enumerate() {
+        for (j, q) in pb.iter().enumerate() {
+            let d = (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2);
+            if d <= t2 {
+                candidates.push((d, i as u16, j as u16));
+            }
+        }
+    }
+    candidates.sort_by(|x, y| x.0.total_cmp(&y.0));
+    // an existing glue between these two, in either order, gets the pairs
+    let existing = model.glues.iter().position(|g| {
+        (g.art_mesh_a as usize, g.art_mesh_b as usize) == (a, b)
+            || (g.art_mesh_a as usize, g.art_mesh_b as usize) == (b, a)
+    });
+    let flipped =
+        existing.and_then(|gi| model.glues.get(gi)).is_some_and(|g| g.art_mesh_a as usize == b);
+    let (mut used_a, mut used_b): (Vec<u16>, Vec<u16>) = existing
+        .and_then(|gi| model.glues.get(gi))
+        .map(|g| {
+            let (pairs, _) = g.indices.as_chunks::<2>();
+            if flipped {
+                (pairs.iter().map(|p| p[1]).collect(), pairs.iter().map(|p| p[0]).collect())
+            } else {
+                (pairs.iter().map(|p| p[0]).collect(), pairs.iter().map(|p| p[1]).collect())
+            }
+        })
+        .unwrap_or_default();
+    let mut fresh: Vec<(u16, u16)> = Vec::new();
+    for (_, i, j) in candidates {
+        if used_a.contains(&i) || used_b.contains(&j) {
+            continue;
+        }
+        used_a.push(i);
+        used_b.push(j);
+        fresh.push((i, j));
+    }
+    if fresh.is_empty() {
+        return None;
+    }
+    let added = fresh.len();
+    let gi = match existing {
+        Some(gi) => gi,
+        None => {
+            model.glues.push(ayatsuri_format::model::Glue {
+                id: format!("Glue{}", model.glues.len()),
+                art_mesh_a: a as u32,
+                art_mesh_b: b as u32,
+                binding: Binding::default(),
+                intensities: vec![1.0],
+                weights: Vec::new(),
+                indices: Vec::new(),
+            });
+            model.glues.len() - 1
+        }
+    };
+    let g = model.glues.get_mut(gi)?;
+    for (i, j) in fresh {
+        let (x, y) = if flipped { (j, i) } else { (i, j) };
+        g.indices.extend_from_slice(&[x, y]);
+        g.weights.extend_from_slice(&[0.5, 0.5]);
+    }
+    Some((gi, added))
+}
+
+/// Remove a glue outright.
+pub fn unbind_glue(model: &mut Model, glue: usize) -> bool {
+    if glue < model.glues.len() {
+        model.glues.remove(glue);
+        true
+    } else {
+        false
+    }
+}
+
+/// How a glue weight brush stroke changes a pair. Weights are pulls: how
+/// far each side moves toward the other, so a side's Cubism "priority" is
+/// one minus its pull.
+#[derive(Clone, Copy, Debug)]
+pub enum GlueBrush {
+    /// Shift the balance, total kept at 100%: toward A's priority, or B's.
+    Balance {
+        favor_a: bool,
+    },
+    /// Strengthen only A (or only B): its point lets go of the other.
+    OnlyA,
+    OnlyB,
+    /// Bring a separated pair back to a full 100% total.
+    Remerge,
+}
+
+/// Apply a brush to some of a glue's pairs: (pair index, strength 0..1).
+pub fn glue_brush(model: &mut Model, glue: usize, hits: &[(usize, f32)], brush: GlueBrush) -> bool {
+    let Some(g) = model.glues.get_mut(glue) else { return false };
+    let mut any = false;
+    for &(pair, k) in hits {
+        let k = k.clamp(0.0, 1.0);
+        let (Some(&w0), Some(&w1)) = (g.weights.get(pair * 2), g.weights.get(pair * 2 + 1)) else {
+            continue;
+        };
+        let (n0, n1) = match brush {
+            GlueBrush::Balance { favor_a } => {
+                let t = if favor_a { (w0 - k).max(0.0) } else { (w0 + k).min(1.0) };
+                (t, 1.0 - t)
+            }
+            GlueBrush::OnlyA => ((w0 - k).max(0.0), w1),
+            GlueBrush::OnlyB => (w0, (w1 - k).max(0.0)),
+            GlueBrush::Remerge => {
+                let missing = (1.0 - w0 - w1).max(0.0) * k;
+                let total = (w0 + w1).max(1e-6);
+                (
+                    (w0 + missing * if total > 1e-5 { w0 / total } else { 0.5 }).min(1.0),
+                    (w1 + missing * if total > 1e-5 { w1 / total } else { 0.5 }).min(1.0),
+                )
+            }
+        };
+        if let Some(s) = g.weights.get_mut(pair * 2) {
+            *s = n0;
+        }
+        if let Some(s) = g.weights.get_mut(pair * 2 + 1) {
+            *s = n1;
+        }
+        any = true;
+    }
+    any
+}
+
+/// Cubism's glue compatibility, set on every keyform (a keyed glue still
+/// varies by parameter afterwards through its own keyforms).
+pub fn set_glue_compatibility(model: &mut Model, glue: usize, value: f32) -> bool {
+    let Some(g) = model.glues.get_mut(glue) else { return false };
+    for v in &mut g.intensities {
+        *v = value.clamp(0.0, 1.0);
+    }
+    true
+}
+
 fn alloc_one() -> Vec<f32> {
     vec![1.0]
 }
@@ -1352,7 +1636,7 @@ mod tests {
     fn free_vertex_extrapolates_and_connects() {
         let mut m = tri_mesh();
         // outside the triangle, past the (0,0)-(2,0) edge: w sums to one
-        let vi = add_free_vertex(&mut m, 0, 0, [0.5, 0.75, -0.25], Some((0, 1)));
+        let vi = add_free_vertex(&mut m, 0, [0, 1, 2], [0.5, 0.75, -0.25], Some((0, 1)));
         assert_eq!(vi, Some(3));
         let am = m.art_meshes.first().unwrap();
         assert_eq!(am.indices.len(), 6);
@@ -1367,7 +1651,7 @@ mod tests {
     fn edges_add_and_remove() {
         let mut m = tri_mesh();
         // a loose fourth vertex beyond the 1-2 edge, joined to 1 and 2
-        add_free_vertex(&mut m, 0, 0, [-0.5, 0.75, 0.75], None).unwrap();
+        add_free_vertex(&mut m, 0, [0, 1, 2], [-0.5, 0.75, 0.75], None).unwrap();
         assert!(!has_edge(&m, 0, 1, 3));
         if let Some(am) = m.art_meshes.get_mut(0) {
             am.indices.extend_from_slice(&[1, 3, 2]);
@@ -1402,5 +1686,63 @@ mod tests {
         // and the single-point form still works through the batch
         assert!(delete_vertex(&mut m, 0, 3));
         assert_eq!(m.art_meshes.first().unwrap().vertex_count, 3);
+    }
+
+    #[test]
+    fn auto_connect_triangulates_loose_points() {
+        let mut m = tri_mesh();
+        // a fourth point beyond the 1-2 edge, loose, then auto connect
+        add_free_vertex(&mut m, 0, [0, 1, 2], [-0.5, 0.75, 0.75], None).unwrap();
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.indices.clear();
+        }
+        let added = auto_connect(&mut m, 0, true, &|_, _| true);
+        assert_eq!(added, 2);
+        // keeping the existing faces adds nothing that overlaps them
+        assert_eq!(auto_connect(&mut m, 0, false, &|_, _| true), 0);
+    }
+
+    #[test]
+    fn subdivide_keeps_shape_and_old_indices() {
+        let mut m = tri_mesh();
+        assert!(subdivide4(&mut m, 0));
+        let am = m.art_meshes.first().unwrap();
+        assert_eq!(am.vertex_count, 6);
+        assert_eq!(am.indices.len(), 12);
+        // the midpoint of corners 0 and 1 on key 1: ((1,0)+(3,0))/2 = (2,0)
+        let stride = 12;
+        let mids: Vec<(f32, f32)> = (3..6)
+            .map(|i| (am.positions[stride + i * 2], am.positions[stride + i * 2 + 1]))
+            .collect();
+        assert!(mids.iter().any(|&(x, y)| (x - 2.0).abs() < 1e-6 && y.abs() < 1e-6));
+    }
+
+    #[test]
+    fn glue_binds_overlaps_and_brushes_weights() {
+        let mut m = tri_mesh();
+        let mut second = m.art_meshes[0].clone();
+        second.id = "M2".into();
+        m.art_meshes.push(second);
+        // world positions: mesh B sits on A except its last point
+        let wa = [0.0, 0.0, 2.0, 0.0, 0.0, 2.0];
+        let wb = [0.001, 0.0, 2.0, 0.001, 5.0, 5.0];
+        let (gi, added) = bind_glue(&mut m, 0, 1, &wa, &wb, 0.01).unwrap();
+        assert_eq!(added, 2);
+        assert_eq!(m.glues[gi].weights, vec![0.5, 0.5, 0.5, 0.5]);
+        // binding again finds nothing new
+        assert!(bind_glue(&mut m, 0, 1, &wa, &wb, 0.01).is_none());
+        // favour A on pair 0: A pulls less, B more, total stays 1
+        assert!(glue_brush(&mut m, gi, &[(0, 0.2)], GlueBrush::Balance { favor_a: true }));
+        let w = &m.glues[gi].weights;
+        assert!((w[0] - 0.3).abs() < 1e-6 && (w[1] - 0.7).abs() < 1e-6);
+        // only-B separates, re-merge restores the total
+        glue_brush(&mut m, gi, &[(1, 0.4)], GlueBrush::OnlyB);
+        assert!((m.glues[gi].weights[3] - 0.1).abs() < 1e-6);
+        glue_brush(&mut m, gi, &[(1, 1.0)], GlueBrush::Remerge);
+        let w = &m.glues[gi].weights;
+        assert!((w[2] + w[3] - 1.0).abs() < 1e-5);
+        assert!(set_glue_compatibility(&mut m, gi, 0.25));
+        assert!(unbind_glue(&mut m, gi));
+        assert!(m.glues.is_empty());
     }
 }

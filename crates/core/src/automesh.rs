@@ -271,7 +271,7 @@ fn resample(loop_: &[(f32, f32)], spacing: f32) -> Vec<(f32, f32)> {
 
 /// Bowyer-Watson Delaunay triangulation. Quadratic, which is fine for the
 /// few hundred to few thousand points a layer gets.
-fn delaunay(pts: &[(f32, f32)]) -> Vec<[usize; 3]> {
+pub fn delaunay(pts: &[(f32, f32)]) -> Vec<[usize; 3]> {
     if pts.len() < 3 {
         return Vec::new();
     }

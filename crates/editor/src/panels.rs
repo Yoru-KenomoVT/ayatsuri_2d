@@ -89,7 +89,6 @@ struct ToolOptions {
     warp_cols: u32,
     warp_rows: u32,
     sequential: bool,
-    glue_weight: f32,
 }
 
 impl Default for ToolOptions {
@@ -103,7 +102,6 @@ impl Default for ToolOptions {
             warp_cols: 5,
             warp_rows: 5,
             sequential: false,
-            glue_weight: 0.5,
         }
     }
 }
@@ -220,6 +218,20 @@ pub struct EditorUi {
     mesh_mode: u8,
     /// Points the erase brush has swept over during the current stroke.
     erase_marked: std::collections::BTreeSet<usize>,
+    /// How close (screen px) a click must be to pick a point.
+    pick_radius: f32,
+    /// Auto connect's options: redo every face, and keep faces off empty
+    /// texture (Cubism's Mesh reconstruction / Protect edge exterior).
+    connect_rebuild: bool,
+    connect_protect: bool,
+    /// The glue being edited, its weight tool (0 A:B, 1 A, 2 B, 3 re-merge),
+    /// brush strength, bind distance in canvas px, and the stroke so far.
+    selected_glue: Option<usize>,
+    glue_mode: u8,
+    glue_strength: f32,
+    glue_tolerance: f32,
+    glue_stroke: std::collections::HashMap<usize, f32>,
+    glue_compat: Option<f32>,
     /// New points close a face onto the nearest edge when on.
     mesh_autoconnect: bool,
     /// The edge tool's first pick.
@@ -291,6 +303,17 @@ struct PathDrag {
     /// Accumulated drag in model units.
     mdx: f32,
     mdy: f32,
+}
+
+/// The one-click mesh operations Cubism's Tool Details offers.
+#[derive(Clone, Copy, PartialEq)]
+enum MeshAction {
+    AutoMesh,
+    Reset,
+    AutoConnect,
+    Divide,
+    Bind,
+    Unbind,
 }
 
 /// What the crash dialog shows, plus where the work was rescued to.
@@ -439,6 +462,15 @@ impl Default for EditorUi {
             mesh_mode: 0,
             mesh_autoconnect: true,
             erase_marked: std::collections::BTreeSet::new(),
+            pick_radius: 8.0,
+            connect_rebuild: true,
+            connect_protect: true,
+            selected_glue: None,
+            glue_mode: 0,
+            glue_strength: 0.3,
+            glue_tolerance: 4.0,
+            glue_stroke: std::collections::HashMap::new(),
+            glue_compat: None,
             edge_first: None,
             pending_edges: std::collections::HashMap::new(),
             mesh_snapshot: None,
@@ -718,6 +750,9 @@ impl EditorUi {
                 };
                 log::debug!("selection: {what}");
             }
+            if self.tool != Tool::Glue {
+                self.selected_glue = None;
+            }
             self.logged_sel = self.selected;
         }
         if self.sel_param != self.logged_param {
@@ -781,6 +816,23 @@ impl EditorUi {
                 self.mesh_edit = Some(mi);
                 self.mesh_snapshot = self.session.as_ref().map(|s| s.puppet.model().clone());
             }
+        }
+        // Ctrl+G binds glue between the two selected meshes, as in Cubism
+        let glue_sc = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::G);
+        if ui.ctx().input_mut(|i| i.consume_shortcut(&glue_sc)) {
+            self.run_mesh_action(MeshAction::Bind);
+        }
+        if let Some(gi) = self.selected_glue
+            && self.mesh_edit.is_none()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui
+                .ctx()
+                .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+            && let Some(s) = &mut self.session
+            && s.edit(|m| ayatsuri_core::edit::unbind_glue(m, gi))
+        {
+            log::info!("glue {gi} deleted");
+            self.selected_glue = None;
         }
         // Ctrl+1 resets every parameter to its default, Ctrl+3 toggles the
         // selected meshes' visibility, both straight from Cubism
@@ -1567,6 +1619,7 @@ impl EditorUi {
         let mut done = false;
         let mut cancel = false;
         let mut auto = false;
+        let mut dialog_action: Option<MeshAction> = None;
         egui::Window::new("Edit Mesh")
             .collapsible(false)
             .resizable(false)
@@ -1615,6 +1668,25 @@ impl EditorUi {
                         );
                     });
                 }
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Auto connect")
+                        .on_hover_text("Triangulate the points you placed")
+                        .clicked()
+                    {
+                        dialog_action = Some(MeshAction::AutoConnect);
+                    }
+                    if ui.button("4 division").clicked() {
+                        dialog_action = Some(MeshAction::Divide);
+                    }
+                    if ui
+                        .button("Reset")
+                        .on_hover_text("Back to the mesh as the file had it")
+                        .clicked()
+                    {
+                        dialog_action = Some(MeshAction::Reset);
+                    }
+                });
                 ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points")
                     .on_hover_text("Off: added points stay loose until joined with the edge tool");
                 ui.separator();
@@ -1668,6 +1740,9 @@ impl EditorUi {
             });
         if auto {
             self.auto_mesh(mi);
+        }
+        if let Some(a) = dialog_action {
+            self.run_mesh_action(a);
         }
         if cancel {
             if let (Some(s), Some(snap)) = (&mut self.session, self.mesh_snapshot.take()) {
@@ -3666,6 +3741,154 @@ impl EditorUi {
 
     /// Rebuild the mesh as a regular grid over its texture alpha, the way
     /// Cubism's auto mesh presets do. Spacing and margin are texture pixels.
+    /// The meshes a mesh action works on: the one being edited, else the
+    /// selection.
+    fn action_targets(&self) -> Vec<usize> {
+        match self.mesh_edit {
+            Some(mi) => vec![mi],
+            None => self.selection_meshes(),
+        }
+    }
+
+    fn run_mesh_action(&mut self, action: MeshAction) {
+        let targets = self.action_targets();
+        match action {
+            MeshAction::AutoMesh => self.auto_mesh_many(&targets),
+            MeshAction::Reset => {
+                let Some(s) = &mut self.session else { return };
+                let originals: Vec<(usize, Vec<f32>, Vec<u16>)> = targets
+                    .iter()
+                    .filter_map(|&mi| {
+                        s.original_meshes.get(mi).map(|(u, i)| (mi, u.clone(), i.clone()))
+                    })
+                    .collect();
+                if s.edit(|m| {
+                    let mut any = false;
+                    for (mi, uvs, idx) in &originals {
+                        any |= ayatsuri_core::edit::remesh(m, *mi, uvs, idx);
+                    }
+                    any
+                }) {
+                    self.pending_edges.clear();
+                    log::info!("mesh reset to its original form on {} mesh(es)", originals.len());
+                }
+            }
+            MeshAction::AutoConnect => {
+                let rebuild = self.connect_rebuild;
+                let protect = self.connect_protect;
+                let Some(s) = &mut self.session else { return };
+                // the texture pages the targets use, for the edge protection
+                let pages: Vec<(usize, Option<ayatsuri_render::TexData>)> = targets
+                    .iter()
+                    .map(|&mi| {
+                        let tex = s.puppet.model().art_meshes.get(mi).map(|m| m.texture as usize);
+                        (mi, tex.and_then(|t| s.preview_tex.get(t).cloned()))
+                    })
+                    .collect();
+                let mut added = 0;
+                s.edit(|m| {
+                    for (mi, page) in &pages {
+                        let keep = |u: f32, v: f32| -> bool {
+                            if !protect {
+                                return true;
+                            }
+                            let Some(t) = page else { return true };
+                            let x =
+                                ((u * t.width as f32) as i64).clamp(0, t.width as i64 - 1) as usize;
+                            let y = ((v * t.height as f32) as i64).clamp(0, t.height as i64 - 1)
+                                as usize;
+                            t.rgba.get((y * t.width as usize + x) * 4 + 3).copied().unwrap_or(255)
+                                > 8
+                        };
+                        added += ayatsuri_core::edit::auto_connect(m, *mi, rebuild, &keep);
+                    }
+                    added > 0
+                });
+                for &mi in &targets {
+                    self.pending_edges.remove(&mi);
+                }
+                log::info!("auto connect: {added} face(s) on {} mesh(es)", targets.len());
+            }
+            MeshAction::Divide => {
+                let Some(s) = &mut self.session else { return };
+                if s.edit(|m| {
+                    let mut any = false;
+                    for &mi in &targets {
+                        any |= ayatsuri_core::edit::subdivide4(m, mi);
+                    }
+                    any
+                }) {
+                    log::info!("mesh 4 division on {} mesh(es)", targets.len());
+                }
+            }
+            MeshAction::Bind => {
+                let sel = self.selection_meshes();
+                let (Some(&a), Some(&b)) = (sel.first(), sel.get(1)) else {
+                    log::warn!("bind glue: select the two meshes to glue (lasso or Ctrl+click)");
+                    return;
+                };
+                let tol_px = self.glue_tolerance;
+                let Some(s) = &mut self.session else { return };
+                let ppu = s.puppet.model().canvas.pixels_per_unit.max(1e-3);
+                let (Some(wa), Some(wb)) = (
+                    s.puppet.mesh_geometry(a).map(|g| g.positions.to_vec()),
+                    s.puppet.mesh_geometry(b).map(|g| g.positions.to_vec()),
+                ) else {
+                    return;
+                };
+                let mut result = None;
+                s.edit(|m| {
+                    result = ayatsuri_core::edit::bind_glue(m, a, b, &wa, &wb, tol_px / ppu);
+                    result.is_some()
+                });
+                match result {
+                    Some((gi, n)) => {
+                        log::info!("glue {gi}: bound {n} overlapping point pair(s)");
+                        self.selected_glue = Some(gi);
+                        self.tool = Tool::Glue;
+                    }
+                    None => log::warn!(
+                        "bind glue: no points of the two meshes overlap within {tol_px} px; add points at the same spots in both, or raise the bind distance"
+                    ),
+                }
+            }
+            MeshAction::Unbind => {
+                let sel = self.selection_meshes();
+                let Some(s) = &mut self.session else { return };
+                let doomed: Vec<usize> = match self.selected_glue {
+                    Some(gi) => vec![gi],
+                    None => s
+                        .puppet
+                        .model()
+                        .glues
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, g)| {
+                            sel.contains(&(g.art_mesh_a as usize))
+                                && sel.contains(&(g.art_mesh_b as usize))
+                        })
+                        .map(|(i, _)| i)
+                        .collect(),
+                };
+                if doomed.is_empty() {
+                    log::warn!("unbind glue: no glue between the selected meshes");
+                    return;
+                }
+                if s.edit(|m| {
+                    // highest first, so earlier indices stay put
+                    let mut any = false;
+                    for &gi in doomed.iter().rev() {
+                        any |= ayatsuri_core::edit::unbind_glue(m, gi);
+                    }
+                    any
+                }) {
+                    log::info!("unbound {} glue(s)", doomed.len());
+                    self.selected_glue = None;
+                }
+            }
+        }
+    }
+
     /// Cubism's auto mesh presets: outline spacing, inner spacing, margin.
     const AUTO_PRESETS: [(&'static str, f32, f32, f32); 3] =
         [("Standard", 24.0, 48.0, 8.0), ("Deform", 14.0, 28.0, 6.0), ("Light", 40.0, 80.0, 10.0)];
@@ -4694,6 +4917,68 @@ impl EditorUi {
             for (mi, mid) in loose {
                 parts_mesh_row(ui, s, &mut self.selected, mi, &mid, 30.0, true, &stack);
             }
+            // glue objects, as the reference palette lists them
+            let glues: Vec<(usize, String, String, String)> = s
+                .puppet
+                .model()
+                .glues
+                .iter()
+                .enumerate()
+                .map(|(gi, g)| {
+                    let name = |i: u32| {
+                        s.puppet
+                            .model()
+                            .art_meshes
+                            .get(i as usize)
+                            .map(|m| m.id.clone())
+                            .unwrap_or_default()
+                    };
+                    (gi, g.id.clone(), name(g.art_mesh_a), name(g.art_mesh_b))
+                })
+                .collect();
+            let mut delete: Option<usize> = None;
+            for (gi, id, a, b) in glues {
+                let (rect, resp) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
+                if self.selected_glue == Some(gi) {
+                    ui.painter().rect_filled(rect, 0.0, theme::pal().select);
+                }
+                let tag = Rect::from_min_size(
+                    pos2(rect.min.x + 22.0, rect.min.y + 3.0),
+                    vec2(30.0, 12.0),
+                );
+                ui.painter().rect_filled(tag, 3.0, Color32::from_rgb(0xE8, 0xC6, 0x3B));
+                ui.painter().text(
+                    tag.center(),
+                    Align2::CENTER_CENTER,
+                    "Glue",
+                    FontId::proportional(9.0),
+                    Color32::BLACK,
+                );
+                ui.painter().text(
+                    pos2(tag.max.x + 6.0, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    format!("{id}  {} ↔ {}", truncate(&a, 10), truncate(&b, 10)),
+                    FontId::proportional(10.5),
+                    theme::pal().text,
+                );
+                if resp.clicked() {
+                    self.selected_glue = Some(gi);
+                    self.tool = Tool::Glue;
+                }
+                resp.context_menu(|ui| {
+                    if ui.button("Delete glue").clicked() {
+                        delete = Some(gi);
+                        ui.close();
+                    }
+                });
+            }
+            if let Some(gi) = delete
+                && s.edit(|m| ayatsuri_core::edit::unbind_glue(m, gi))
+            {
+                log::info!("glue {gi} deleted");
+                self.selected_glue = None;
+            }
         });
     }
     fn tool_strip(&mut self, ui: &mut Ui) {
@@ -4761,27 +5046,98 @@ impl EditorUi {
     fn tool_details_panel(&mut self, ui: &mut Ui) {
         ui.label(egui::RichText::new(self.tool.label()).size(12.0).strong());
         ui.add_space(4.0);
-        // read before the options borrow below; applied after it ends
-        let selection = self.selection_meshes();
-        let mut auto_targets: Option<Vec<usize>> = None;
-        let o = &mut self.tool_opts;
+        let mut action: Option<MeshAction> = None;
+        let section = |ui: &mut Ui, title: &str| {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(title).size(11.0).color(theme::pal().text_faint));
+        };
         match self.tool {
-            Tool::MeshManual => {
-                ui.horizontal(|ui| {
-                    for (i, m) in
-                        ["Move", "Add", "Erase", "Connect", "Cut", "Brush erase"].iter().enumerate()
+            Tool::MeshManual | Tool::MeshAuto => {
+                // the manual's Edit Mesh manually section, in its order
+                section(ui, "Edit mesh");
+                ui.horizontal_wrapped(|ui| {
+                    for (i, (icon, tip)) in [
+                        (egui_phosphor::regular::CURSOR, "Select / Edit"),
+                        (egui_phosphor::regular::PLUS_CIRCLE, "Add points"),
+                        (egui_phosphor::regular::ERASER, "Delete vertex"),
+                        (egui_phosphor::regular::LINE_SEGMENT, "Connect points"),
+                        (egui_phosphor::regular::SCISSORS, "Cut edge"),
+                        (egui_phosphor::regular::PAINT_BRUSH_BROAD, "Eraser brush"),
+                    ]
+                    .iter()
+                    .enumerate()
                     {
-                        if ui.selectable_label(self.mesh_mode as usize == i, *m).clicked() {
+                        if ui
+                            .selectable_label(
+                                self.mesh_mode as usize == i,
+                                egui::RichText::new(*icon).size(15.0),
+                            )
+                            .on_hover_text(*tip)
+                            .clicked()
+                        {
                             self.mesh_mode = i as u8;
                         }
                     }
                 });
-                ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points");
-                ui.weak("Double-click a mesh or press Ctrl+E to start editing it.");
-            }
-            Tool::MeshAuto => {
                 ui.horizontal(|ui| {
-                    ui.label("Preset");
+                    if ui.button("Automatic mesh generator").clicked() {
+                        action = Some(MeshAction::AutoMesh);
+                    }
+                    if ui
+                        .button("Reset mesh")
+                        .on_hover_text("Back to the mesh as the file had it")
+                        .clicked()
+                    {
+                        action = Some(MeshAction::Reset);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Auto connect")
+                        .on_hover_text("Triangulate the points you placed")
+                        .clicked()
+                    {
+                        action = Some(MeshAction::AutoConnect);
+                    }
+                    ui.checkbox(&mut self.connect_rebuild, "Mesh reconstruction").on_hover_text(
+                        "On: redo every face from the points. Off: keep the lines you built",
+                    );
+                });
+                ui.checkbox(&mut self.connect_protect, "Protect edge exterior").on_hover_text(
+                    "No faces over empty texture, so hair and lashes don't get bridged",
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Mesh 4 division").clicked() {
+                        action = Some(MeshAction::Divide);
+                    }
+                    if ui.button("Bind glue").on_hover_text("Ctrl+G").clicked() {
+                        action = Some(MeshAction::Bind);
+                    }
+                    if ui.button("Unbind glue").clicked() {
+                        action = Some(MeshAction::Unbind);
+                    }
+                });
+                ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points");
+                ui.horizontal(|ui| {
+                    ui.label("Selection range on click");
+                    ui.add(
+                        egui::DragValue::new(&mut self.pick_radius).range(2.0..=40.0).suffix(" px"),
+                    );
+                });
+                if self.mesh_mode == 5 {
+                    section(ui, "Eraser");
+                    ui.horizontal(|ui| {
+                        ui.label("Size");
+                        ui.add(
+                            egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
+                                .logarithmic(true)
+                                .suffix(" px"),
+                        );
+                    });
+                }
+                section(ui, "Automatic mesh");
+                let o = &mut self.tool_opts;
+                ui.horizontal(|ui| {
                     for (i, (name, outline, inner, margin)) in Self::AUTO_PRESETS.iter().enumerate()
                     {
                         if ui.selectable_label(o.auto_preset == i, *name).clicked() {
@@ -4792,45 +5148,91 @@ impl EditorUi {
                         }
                     }
                 });
-                ui.horizontal(|ui| {
+                egui::Grid::new("td-auto").num_columns(2).spacing([8.0, 3.0]).show(ui, |ui| {
                     ui.label("Outline spacing");
                     ui.add(
                         egui::DragValue::new(&mut o.auto_spacing).range(4.0..=256.0).suffix(" px"),
                     );
-                });
-                ui.horizontal(|ui| {
+                    ui.end_row();
                     ui.label("Inner spacing");
                     ui.add(
                         egui::DragValue::new(&mut o.auto_inner).range(4.0..=512.0).suffix(" px"),
                     );
-                });
-                ui.horizontal(|ui| {
+                    ui.end_row();
                     ui.label("Margin");
                     ui.add(
                         egui::DragValue::new(&mut o.auto_margin).range(0.0..=128.0).suffix(" px"),
                     );
+                    ui.end_row();
                 });
-                let targets = selection.clone();
-                if ui
-                    .add_enabled(
-                        !targets.is_empty(),
-                        egui::Button::new(format!("Generate for {} mesh(es)", targets.len())),
-                    )
-                    .clicked()
-                {
-                    auto_targets = Some(targets);
-                }
-                ui.weak("Follows each mesh's outline; one undo step for the whole selection.");
+                ui.weak("Mesh actions work on the mesh being edited, or the selection.");
             }
             Tool::Glue => {
-                ui.horizontal(|ui| {
-                    ui.label("Weight");
-                    ui.add(egui::Slider::new(&mut o.glue_weight, 0.0..=1.0));
+                section(ui, "Edit glue");
+                ui.horizontal_wrapped(|ui| {
+                    for (i, (label, tip)) in [
+                        ("A:B", "Drag: favour red A. Shift+drag: favour green B"),
+                        ("A", "Strengthen only red A, pulling its points free"),
+                        ("B", "Strengthen only green B, pulling its points free"),
+                        ("Re-merge", "Rejoin points the A or B brush separated"),
+                    ]
+                    .iter()
+                    .enumerate()
+                    {
+                        if ui
+                            .selectable_label(self.glue_mode as usize == i, *label)
+                            .on_hover_text(*tip)
+                            .clicked()
+                        {
+                            self.glue_mode = i as u8;
+                        }
+                    }
                 });
-                let _ = ui.add_enabled(false, egui::Button::new("Bind selected vertices"));
-                ui.weak("Glue evaluation already runs; binding UI is next.");
+                egui::Grid::new("td-glue").num_columns(2).spacing([8.0, 3.0]).show(ui, |ui| {
+                    ui.label("Weight");
+                    ui.add(
+                        egui::Slider::new(&mut self.glue_strength, 0.01..=1.0)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    );
+                    ui.end_row();
+                    ui.label("Size");
+                    ui.add(
+                        egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
+                            .logarithmic(true)
+                            .suffix(" px"),
+                    );
+                    ui.end_row();
+                    ui.label("Bind distance");
+                    ui.add(
+                        egui::DragValue::new(&mut self.glue_tolerance)
+                            .range(0.1..=64.0)
+                            .suffix(" px"),
+                    )
+                    .on_hover_text("How close two points must be to bind");
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Bind glue").on_hover_text("Ctrl+G, two meshes selected").clicked()
+                    {
+                        action = Some(MeshAction::Bind);
+                    }
+                    if ui.button("Unbind glue").clicked() {
+                        action = Some(MeshAction::Unbind);
+                    }
+                });
+                match self.selected_glue {
+                    Some(gi) => {
+                        ui.weak(format!(
+                            "Editing Glue{gi}. Drag over the points to adjust weights."
+                        ));
+                    }
+                    None => {
+                        ui.weak("Select two meshes and bind, or pick a glue in the Part palette.");
+                    }
+                }
             }
             Tool::WarpCreate => {
+                let o = &mut self.tool_opts;
                 ui.horizontal(|ui| {
                     ui.label("Columns");
                     ui.add(egui::DragValue::new(&mut o.warp_cols).range(1..=32));
@@ -4844,27 +5246,57 @@ impl EditorUi {
                 ui.weak("Or click the canvas with meshes selected.");
             }
             Tool::RotationCreate => {
-                ui.checkbox(&mut o.sequential, "Sequential creation");
+                ui.checkbox(&mut self.tool_opts.sequential, "Sequential creation");
                 if ui.button("Create at selection center").clicked() {
                     self.pending_create = Some((false, None));
                 }
                 ui.weak("Or click the canvas to place the origin.");
             }
-            Tool::BrushSelect | Tool::DeformBrush => {
+            Tool::DeformPath => {
+                section(ui, "Deform path edit");
+                ui.weak("Click to add a control point; drag one to bend the mesh.");
                 ui.horizontal(|ui| {
-                    ui.label("Brush size");
-                    ui.add(egui::Slider::new(&mut o.brush_size, 2.0..=200.0));
+                    if ui
+                        .button("Delete control point")
+                        .on_hover_text("The last one placed (Backspace)")
+                        .clicked()
+                        && let Some(p) = &mut self.deform_path
+                    {
+                        p.points.pop();
+                    }
+                    if ui.button("Delete path").clicked() {
+                        self.deform_path = None;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Falloff size");
+                    ui.add(
+                        egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
+                            .logarithmic(true)
+                            .suffix(" px"),
+                    );
                 });
             }
-            Tool::Arrow | Tool::Lasso => {
-                ui.weak("Shift adds to the selection; drag for a rectangle.");
+            Tool::BrushSelect | Tool::DeformBrush => {
+                section(ui, "Brush");
+                ui.horizontal(|ui| {
+                    ui.label("Size");
+                    ui.add(
+                        egui::Slider::new(&mut self.tool_opts.brush_size, 2.0..=400.0)
+                            .logarithmic(true),
+                    );
+                });
+                ui.weak("Brush selection and deform brushes are the next tools to land.");
             }
-            Tool::DeformPath | Tool::ArtPath | Tool::TextureAtlas => {
+            Tool::Arrow | Tool::Lasso => {
+                ui.weak("Click selects; Alt+click walks up the deformer chain; lasso adds to the selection.");
+            }
+            Tool::ArtPath | Tool::TextureAtlas => {
                 ui.weak("No options yet for this tool.");
             }
         }
-        if let Some(t) = auto_targets {
-            self.auto_mesh_many(&t);
+        if let Some(a) = action {
+            self.run_mesh_action(a);
         }
     }
 
@@ -5124,6 +5556,54 @@ impl EditorUi {
             ui.weak("Nothing selected.");
             return;
         };
+        // a glue being edited shows first, the way the reference inspector
+        // switches to glue display
+        if let Some(gi) = self.selected_glue
+            && let Some(g) = s.puppet.model().glues.get(gi).cloned()
+        {
+            let mesh = |i: u32| {
+                s.puppet
+                    .model()
+                    .art_meshes
+                    .get(i as usize)
+                    .map(|m| m.id.clone())
+                    .unwrap_or_default()
+            };
+            let (name_a, name_b) = (mesh(g.art_mesh_a), mesh(g.art_mesh_b));
+            egui::Grid::new("glue-props").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                ui.weak("Glue");
+                ui.label(&g.id);
+                ui.end_row();
+                ui.weak("Mesh A (red)");
+                ui.label(&name_a);
+                ui.end_row();
+                ui.weak("Mesh B (green)");
+                ui.label(&name_b);
+                ui.end_row();
+                ui.weak("Bound pairs");
+                ui.label((g.indices.len() / 2).to_string());
+                ui.end_row();
+                ui.weak("Compatibility");
+                let current = g.intensities.first().copied().unwrap_or(1.0);
+                let mut v = self.glue_compat.unwrap_or(current);
+                let r = ui.add(
+                    egui::Slider::new(&mut v, 0.0..=1.0)
+                        .custom_formatter(|x, _| format!("{:.0}%", x * 100.0)),
+                );
+                if r.changed() {
+                    self.glue_compat = Some(v);
+                }
+                if (r.drag_stopped() || r.lost_focus())
+                    && let Some(v) = self.glue_compat.take()
+                    && s.edit(|m| ayatsuri_core::edit::set_glue_compatibility(m, gi, v))
+                {
+                    log::debug!("glue {gi}: compatibility {:.0}%", v * 100.0);
+                }
+                ui.end_row();
+            });
+            ui.weak("Lower compatibility weakens the glue; key it per parameter for blends.");
+            ui.separator();
+        }
         let row = |ui: &mut Ui, k: &str, v: String| {
             ui.horizontal(|ui| {
                 ui.add_sized(
@@ -6188,7 +6668,7 @@ impl EditorUi {
         enum MeshOp {
             Move(usize, usize, f32, f32),
             Add(usize, usize, [f32; 3]),
-            AddFree(usize, usize, [f32; 3], Option<(u16, u16)>),
+            AddFree(usize, [usize; 3], [f32; 3], Option<(u16, u16)>, Vec<u16>),
             Connect(usize, u16, u16),
             Cut(usize, u16, u16),
             EraseMany(usize, Vec<usize>),
@@ -6212,90 +6692,122 @@ impl EditorUi {
 
                 // the nearest vertex within reach, for hover and drag start
                 let mut near: Option<(usize, f32)> = None;
+                let reach = self.pick_radius.clamp(2.0, 40.0);
                 if let Some(ptr) = ptr {
                     for (vi, sp) in screen_pts.iter().enumerate() {
                         let d = sp.distance(ptr);
-                        if d < 8.0 && near.is_none_or(|(_, nd)| d < nd) {
+                        if d < reach && near.is_none_or(|(_, nd)| d < nd) {
                             near = Some((vi, d));
                         }
                     }
                 }
 
-                if !space && self.mesh_mode == 1 && resp.clicked() && near.is_none() {
-                    // add: inside a face splits it (or drops a loose point with
-                    // auto connect off); outside, the point closes a face onto
-                    // the nearest open edge, or stays loose
-                    if let Some(ptr) = resp.interact_pointer_pos() {
-                        let (tris, _) = g.indices.as_chunks::<3>();
-                        let mut inside: Option<(usize, [f32; 3])> = None;
-                        let mut closest: Option<(usize, [f32; 3], f32)> = None;
-                        for (ti, &[a, b, cc]) in tris.iter().enumerate() {
-                            let (Some(&s0), Some(&s1), Some(&s2)) = (
-                                screen_pts.get(a as usize),
-                                screen_pts.get(b as usize),
-                                screen_pts.get(cc as usize),
-                            ) else {
-                                continue;
-                            };
-                            let den = (s1.y - s2.y) * (s0.x - s2.x) + (s2.x - s1.x) * (s0.y - s2.y);
-                            if den.abs() < 1e-9 {
-                                continue;
-                            }
-                            let w0 = ((s1.y - s2.y) * (ptr.x - s2.x)
-                                + (s2.x - s1.x) * (ptr.y - s2.y))
-                                / den;
-                            let w1 = ((s2.y - s0.y) * (ptr.x - s2.x)
-                                + (s0.x - s2.x) * (ptr.y - s2.y))
-                                / den;
-                            let w2 = 1.0 - w0 - w1;
-                            let worst = w0.min(w1).min(w2);
-                            if worst >= 0.0 {
-                                inside = Some((ti, [w0, w1, w2]));
-                                break;
-                            }
-                            if closest.is_none_or(|(_, _, c)| worst > c) {
-                                closest = Some((ti, [w0, w1, w2], worst));
-                            }
+                if !space
+                    && self.mesh_mode == 1
+                    && resp.clicked()
+                    && near.is_none()
+                    && let Some(ptr) = resp.interact_pointer_pos()
+                {
+                    // add: inside a face splits it (or drops a loose point
+                    // with auto connect off); outside, the point closes a face
+                    // onto the nearest open edge; with no faces at all it is
+                    // placed against the three nearest points, for planning
+                    let (tris, _) = g.indices.as_chunks::<3>();
+                    let bary = |c: [usize; 3]| -> Option<[f32; 3]> {
+                        let s0 = *screen_pts.get(c[0])?;
+                        let s1 = *screen_pts.get(c[1])?;
+                        let s2 = *screen_pts.get(c[2])?;
+                        let den = (s1.y - s2.y) * (s0.x - s2.x) + (s2.x - s1.x) * (s0.y - s2.y);
+                        if den.abs() < 1e-6 {
+                            return None;
                         }
-                        if let Some((ti, w)) = inside {
-                            mesh_op = Some(if self.mesh_autoconnect {
-                                MeshOp::Add(mi, ti, w)
-                            } else {
-                                MeshOp::AddFree(mi, ti, w, None)
-                            });
-                        } else if let Some((ti, w, _)) = closest {
-                            let connect = if self.mesh_autoconnect {
-                                // open edges belong to exactly one face
-                                let mut count: std::collections::HashMap<(u16, u16), u32> =
-                                    std::collections::HashMap::new();
-                                for t in tris {
-                                    for (x, y) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
-                                        *count.entry((x.min(y), x.max(y))).or_insert(0) += 1;
-                                    }
+                        let w0 =
+                            ((s1.y - s2.y) * (ptr.x - s2.x) + (s2.x - s1.x) * (ptr.y - s2.y)) / den;
+                        let w1 =
+                            ((s2.y - s0.y) * (ptr.x - s2.x) + (s0.x - s2.x) * (ptr.y - s2.y)) / den;
+                        Some([w0, w1, 1.0 - w0 - w1])
+                    };
+                    let mut inside: Option<(usize, [usize; 3], [f32; 3])> = None;
+                    let mut closest: Option<([usize; 3], [f32; 3], f32)> = None;
+                    for (ti, t) in tris.iter().enumerate() {
+                        let c = [t[0] as usize, t[1] as usize, t[2] as usize];
+                        let Some(w) = bary(c) else { continue };
+                        let worst = w[0].min(w[1]).min(w[2]);
+                        if worst >= 0.0 {
+                            inside = Some((ti, c, w));
+                            break;
+                        }
+                        if closest.is_none_or(|(_, _, cw)| worst > cw) {
+                            closest = Some((c, w, worst));
+                        }
+                    }
+                    if let Some((ti, c, w)) = inside {
+                        mesh_op = Some(if self.mesh_autoconnect {
+                            MeshOp::Add(mi, ti, w)
+                        } else {
+                            MeshOp::AddFree(mi, c, w, None, Vec::new())
+                        });
+                    } else if let Some((c, w, _)) = closest {
+                        let connect = if self.mesh_autoconnect {
+                            // open edges belong to exactly one face
+                            let mut count: std::collections::HashMap<(u16, u16), u32> =
+                                std::collections::HashMap::new();
+                            for t in tris {
+                                for (x, y) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                                    *count.entry((x.min(y), x.max(y))).or_insert(0) += 1;
                                 }
-                                let mut best: Option<((u16, u16), f32)> = None;
-                                for (&(x, y), &c) in &count {
-                                    if c != 1 {
-                                        continue;
-                                    }
-                                    let (Some(&px), Some(&py)) =
-                                        (screen_pts.get(x as usize), screen_pts.get(y as usize))
-                                    else {
-                                        continue;
-                                    };
-                                    let seg = py - px;
-                                    let len2 = seg.length_sq().max(1e-6);
-                                    let k = ((ptr - px).dot(seg) / len2).clamp(0.0, 1.0);
-                                    let d = ptr.distance(px + seg * k);
-                                    if best.is_none_or(|(_, bd)| d < bd) {
-                                        best = Some(((x, y), d));
-                                    }
+                            }
+                            let mut best: Option<((u16, u16), f32)> = None;
+                            for (&(x, y), &n) in &count {
+                                if n != 1 {
+                                    continue;
                                 }
-                                best.map(|(e, _)| e)
-                            } else {
-                                None
-                            };
-                            mesh_op = Some(MeshOp::AddFree(mi, ti, w, connect));
+                                let (Some(&px), Some(&py)) =
+                                    (screen_pts.get(x as usize), screen_pts.get(y as usize))
+                                else {
+                                    continue;
+                                };
+                                let seg = py - px;
+                                let len2 = seg.length_sq().max(1e-6);
+                                let k = ((ptr - px).dot(seg) / len2).clamp(0.0, 1.0);
+                                let d = ptr.distance(px + seg * k);
+                                if best.is_none_or(|(_, bd)| d < bd) {
+                                    best = Some(((x, y), d));
+                                }
+                            }
+                            best.map(|(e, _)| e)
+                        } else {
+                            None
+                        };
+                        mesh_op = Some(MeshOp::AddFree(mi, c, w, connect, Vec::new()));
+                    } else {
+                        // no faces: the nearest three points that are not in
+                        // a line give the placement
+                        let mut order: Vec<usize> = (0..screen_pts.len()).collect();
+                        order.sort_by(|&a, &b| {
+                            let da = screen_pts.get(a).map_or(f32::MAX, |p| p.distance(ptr));
+                            let db = screen_pts.get(b).map_or(f32::MAX, |p| p.distance(ptr));
+                            da.total_cmp(&db)
+                        });
+                        let basis = match (order.first(), order.get(1)) {
+                            (Some(&a), Some(&b)) => order
+                                .iter()
+                                .skip(2)
+                                .find_map(|&c| bary([a, b, c]).map(|w| ([a, b, c], w))),
+                            _ => None,
+                        };
+                        match basis {
+                            Some((c, w)) => {
+                                let links = if self.mesh_autoconnect {
+                                    vec![c[0] as u16, c[1] as u16]
+                                } else {
+                                    Vec::new()
+                                };
+                                mesh_op = Some(MeshOp::AddFree(mi, c, w, None, links));
+                            }
+                            None => log::warn!(
+                                "add point: the mesh's points all lie on one line; place one off it first"
+                            ),
                         }
                     }
                 }
@@ -6518,35 +7030,22 @@ impl EditorUi {
                 MeshOp::Add(mi, ti, w) => {
                     s.edit(|m| ayatsuri_core::edit::add_vertex(m, mi, ti, w).is_some())
                 }
-                MeshOp::AddFree(mi, ti, w, connect) => s.edit(|m| {
-                    ayatsuri_core::edit::add_free_vertex(m, mi, ti, w, connect).is_some()
-                }),
-                MeshOp::Connect(mi, a, b) => {
-                    let key = (a.min(b), a.max(b));
-                    if ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b)
-                        || self.pending_edges.get(&mi).is_some_and(|p| p.contains(&key))
-                    {
-                        log::debug!("mesh {mi}: {a} and {b} are already connected");
-                        true
-                    } else {
-                        let lines = self.pending_edges.get(&mi).cloned().unwrap_or_default();
-                        let closed = s.edit(|m| ayatsuri_core::edit::add_edge(m, mi, a, b, &lines));
-                        let pending = self.pending_edges.entry(mi).or_default();
-                        if closed {
-                            // lines a face now carries are no longer pending
-                            pending.retain(|&(x, y)| {
-                                !ayatsuri_core::edit::has_edge(s.puppet.model(), mi, x, y)
-                            });
-                            log::debug!("mesh {mi}: connecting {a}-{b} closed a face");
-                        } else {
-                            pending.push(key);
-                            log::debug!(
-                                "mesh {mi}: line {a}-{b} drawn, fills once it closes a triangle"
-                            );
+                MeshOp::AddFree(mi, corners, w, connect, links) => {
+                    let n =
+                        s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count) as u16;
+                    let ok = s.edit(|m| {
+                        ayatsuri_core::edit::add_free_vertex(m, mi, corners, w, connect).is_some()
+                    });
+                    // auto connect on a faceless mesh: lines to the two
+                    // nearest points, closing a face if those two are joined
+                    if ok {
+                        for l in links {
+                            connect_pair(&mut self.pending_edges, s, mi, n, l);
                         }
-                        true
                     }
+                    ok
                 }
+                MeshOp::Connect(mi, a, b) => connect_pair(&mut self.pending_edges, s, mi, a, b),
                 MeshOp::Cut(mi, a, b) => {
                     let key = (a.min(b), a.max(b));
                     let pending = self.pending_edges.entry(mi).or_default();
@@ -6581,6 +7080,152 @@ impl EditorUi {
             };
             if !applied {
                 log::warn!("mesh edit had nothing to do");
+            }
+        }
+
+        // glue: weight-coloured points, a yellow tag per glue, and the weight
+        // brush while a glue is being edited. Red is mesh A's priority,
+        // green is B's, as in Cubism.
+        {
+            let sel_meshes: Vec<usize> = match self.selected {
+                Some(Sel::Mesh(mi)) => {
+                    let mut v = self.multi_sel.clone();
+                    if !v.contains(&mi) {
+                        v.push(mi);
+                    }
+                    v
+                }
+                _ => self.multi_sel.clone(),
+            };
+            let shown: Vec<usize> = s
+                .puppet
+                .model()
+                .glues
+                .iter()
+                .enumerate()
+                .filter(|(gi, g)| {
+                    self.selected_glue == Some(*gi)
+                        || self.tool == Tool::Glue
+                        || sel_meshes.contains(&(g.art_mesh_a as usize))
+                        || sel_meshes.contains(&(g.art_mesh_b as usize))
+                })
+                .map(|(gi, _)| gi)
+                .collect();
+            let ptr = ui.ctx().input(|i| i.pointer.latest_pos());
+            let shift = ui.ctx().input(|i| i.modifiers.shift);
+            for gi in shown {
+                let Some(g) = s.puppet.model().glues.get(gi) else { continue };
+                let (ga, gb) = (g.art_mesh_a as usize, g.art_mesh_b as usize);
+                let (Some(pa), Some(pb)) = (
+                    s.puppet.mesh_geometry(ga).map(|x| x.positions.to_vec()),
+                    s.puppet.mesh_geometry(gb).map(|x| x.positions.to_vec()),
+                ) else {
+                    continue;
+                };
+                let (pairs, _) = g.indices.as_chunks::<2>();
+                let (weights, _) = g.weights.as_chunks::<2>();
+                let editing = self.selected_glue == Some(gi);
+                let mut centre = Vec2::ZERO;
+                let mut count = 0.0f32;
+                let mut pair_pos: Vec<(Pos2, Pos2)> = Vec::with_capacity(pairs.len());
+                for (&[ia, ib], &[w0, w1]) in pairs.iter().zip(weights) {
+                    let a = (pa.get(ia as usize * 2), pa.get(ia as usize * 2 + 1));
+                    let b = (pb.get(ib as usize * 2), pb.get(ib as usize * 2 + 1));
+                    let (Some(&ax), Some(&ay)) = a else { continue };
+                    let (Some(&bx), Some(&by)) = b else { continue };
+                    let (sa, sb) = (to_screen(ax, ay), to_screen(bx, by));
+                    pair_pos.push((sa, sb));
+                    centre += sa.to_vec2();
+                    count += 1.0;
+                    // priority: one minus the pull toward the other side
+                    let (pa_, pb_) = (1.0 - w0, 1.0 - w1);
+                    let t = pa_ / (pa_ + pb_).max(1e-4);
+                    let col =
+                        Color32::from_rgb((60.0 + 190.0 * t) as u8, (200.0 - 150.0 * t) as u8, 70);
+                    if w0 + w1 < 0.98 {
+                        // pulled apart by the A or B brush
+                        vp.line_segment([sa, sb], Stroke::new(1.0, col));
+                        vp.circle_filled(sb, if editing { 3.0 } else { 2.0 }, col);
+                    }
+                    vp.circle_filled(sa, if editing { 3.5 } else { 2.4 }, col);
+                }
+                // the yellow tag, clickable to start editing this glue
+                if count > 0.0 {
+                    let at = (centre / count).to_pos2() + vec2(0.0, -14.0);
+                    let tag = Rect::from_center_size(at, vec2(36.0, 14.0));
+                    let tresp = ui.interact(tag, egui::Id::new(("glue-tag", gi)), Sense::click());
+                    vp.rect_filled(tag, 3.0, Color32::from_rgb(0xE8, 0xC6, 0x3B));
+                    vp.text(
+                        tag.center(),
+                        Align2::CENTER_CENTER,
+                        "Glue",
+                        FontId::proportional(10.0),
+                        Color32::BLACK,
+                    );
+                    if editing {
+                        vp.rect_stroke(
+                            tag,
+                            3.0,
+                            Stroke::new(1.5, Color32::WHITE),
+                            StrokeKind::Outside,
+                        );
+                    }
+                    if tresp.clicked() {
+                        self.selected_glue = Some(gi);
+                        self.tool = Tool::Glue;
+                    }
+                    tresp.context_menu(|ui| {
+                        if ui.button("Delete glue").clicked() {
+                            self.selected_glue = Some(gi);
+                            ui.close();
+                        }
+                    });
+                }
+                // the weight brush: strength builds while dragging, lands on
+                // release as one undo step
+                if editing && self.tool == Tool::Glue && !space {
+                    let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
+                    if let Some(p) = ptr {
+                        vp.circle_stroke(
+                            p,
+                            r,
+                            Stroke::new(1.2, Color32::from_rgb(0xE8, 0xC6, 0x3B)),
+                        );
+                    }
+                    if (resp.dragged() || resp.drag_started())
+                        && let Some(p) = resp.interact_pointer_pos()
+                    {
+                        let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.001, 0.1);
+                        for (pi, (sa, sb)) in pair_pos.iter().enumerate() {
+                            let d = sa.distance(p).min(sb.distance(p));
+                            if d <= r {
+                                let falloff = 1.0 - d / r;
+                                let e = self.glue_stroke.entry(pi).or_insert(0.0);
+                                *e = (*e + self.glue_strength * falloff * dt * 3.0).min(1.0);
+                            }
+                        }
+                    }
+                    for (pi, k) in &self.glue_stroke {
+                        if let Some((sa, _)) = pair_pos.get(*pi) {
+                            vp.circle_stroke(*sa, 3.0 + 4.0 * k, Stroke::new(1.0, Color32::WHITE));
+                        }
+                    }
+                    if resp.drag_stopped() && !self.glue_stroke.is_empty() {
+                        let hits: Vec<(usize, f32)> = self.glue_stroke.drain().collect();
+                        let brush = match self.glue_mode {
+                            1 => ayatsuri_core::edit::GlueBrush::OnlyA,
+                            2 => ayatsuri_core::edit::GlueBrush::OnlyB,
+                            3 => ayatsuri_core::edit::GlueBrush::Remerge,
+                            _ => ayatsuri_core::edit::GlueBrush::Balance { favor_a: !shift },
+                        };
+                        if s.edit(|m| ayatsuri_core::edit::glue_brush(m, gi, &hits, brush)) {
+                            log::debug!(
+                                "glue {gi}: weight brush on {} pair(s), {brush:?}",
+                                hits.len()
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -6748,6 +7393,38 @@ fn rig_groups_reach(rig: &ayatsuri_format::model::PhysicsRig, sel: usize) -> f32
                 + 10.0
         })
         .unwrap_or(20.0)
+}
+
+/// Join two points of a mesh: a face closes when the pair shares a
+/// neighbour (by face edges or drawn lines); otherwise the line is kept as
+/// drawn until one does. True when anything changed.
+fn connect_pair(
+    pending: &mut std::collections::HashMap<usize, Vec<(u16, u16)>>,
+    s: &mut Session,
+    mi: usize,
+    a: u16,
+    b: u16,
+) -> bool {
+    let key = (a.min(b), a.max(b));
+    if a == b
+        || ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b)
+        || pending.get(&mi).is_some_and(|p| p.contains(&key))
+    {
+        log::debug!("mesh {mi}: {a} and {b} are already connected");
+        return false;
+    }
+    let lines = pending.get(&mi).cloned().unwrap_or_default();
+    let closed = s.edit(|m| ayatsuri_core::edit::add_edge(m, mi, a, b, &lines));
+    let list = pending.entry(mi).or_default();
+    if closed {
+        // lines a face now carries are no longer pending
+        list.retain(|&(x, y)| !ayatsuri_core::edit::has_edge(s.puppet.model(), mi, x, y));
+        log::debug!("mesh {mi}: connecting {a}-{b} closed a face");
+    } else {
+        list.push(key);
+        log::debug!("mesh {mi}: line {a}-{b} drawn, fills once it closes a triangle");
+    }
+    true
 }
 
 /// Hand egui a mesh only when it has something to draw: egui-wgpu panics
