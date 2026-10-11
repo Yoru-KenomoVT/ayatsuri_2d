@@ -117,13 +117,6 @@ impl eframe::App for Launcher {
             p.circle_filled(*pt, r, accent.gamma_multiply(0.08 + 0.16 * tw));
         }
 
-        // a soft glow pooled behind the logo
-        let glow_c = egui::pos2(rect.center().x, rect.center().y - 16.0);
-        for i in 0..10 {
-            let f = 1.0 - i as f32 / 10.0;
-            p.circle_filled(glow_c, 36.0 + i as f32 * 14.0, accent.gamma_multiply(0.015 * f));
-        }
-
         // the logo, faded in over the first moments
         let fade = (t / 0.7).clamp(0.0, 1.0);
         match &self.logo {
