@@ -217,6 +217,33 @@ impl Puppet {
         self.physics.as_ref().and_then(|p| p.group_nodes(rig_group))
     }
 
+    /// The physics dialog's per-group Valid checkbox.
+    pub fn set_physics_group_enabled(&mut self, rig_group: usize, on: bool) {
+        if let Some(ph) = &mut self.physics {
+            ph.set_group_enabled(rig_group, on);
+        }
+    }
+
+    pub fn physics_group_enabled(&self, rig_group: usize) -> bool {
+        self.physics.as_ref().is_none_or(|p| p.group_enabled(rig_group))
+    }
+
+    /// Output Maximum (%) per output of one rig group, dialog fodder.
+    pub fn physics_output_peaks(&self, rig_group: usize) -> Option<Vec<(usize, f32)>> {
+        self.physics.as_ref().and_then(|p| p.output_peaks(rig_group))
+    }
+
+    pub fn reset_physics_output_peaks(&mut self) {
+        if let Some(ph) = &mut self.physics {
+            ph.reset_output_peaks();
+        }
+    }
+
+    /// The evaluated draw order of one mesh at the current pose.
+    pub fn mesh_draw_order_value(&self, mesh: usize) -> f32 {
+        self.mesh_draw_order.get(mesh).copied().unwrap_or(500.0)
+    }
+
     pub fn model(&self) -> &Model {
         &self.model
     }

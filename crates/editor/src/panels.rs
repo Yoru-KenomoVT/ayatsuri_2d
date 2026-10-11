@@ -153,6 +153,10 @@ pub struct EditorUi {
     phys_tab: usize,
     /// The physics dialog's working copy; Apply commits it as one edit.
     phys_edit: Option<ayatsuri_format::model::PhysicsRig>,
+    phys_auto_max: bool,
+    phys_peak_cache: Vec<(usize, f32)>,
+    phys_preset: usize,
+    phys_zoom: f32,
     /// The physics dialog's Valid checkbox: the rig only ticks while on.
     physics_on: bool,
     /// Drive the standard face/body/eye parameters from the cursor.
@@ -162,6 +166,11 @@ pub struct EditorUi {
     edit_level: u8,
     /// The action waiting for its new shortcut in settings, if any.
     rebind: Option<&'static str>,
+    /// Last states the debug log reported, so changes log exactly once.
+    logged_sel: Option<Sel>,
+    logged_param: Option<usize>,
+    logged_tool: Tool,
+    heartbeat: f32,
     new_param: Option<ParamNew>,
     new_folder: Option<String>,
     new_model: Option<ModelNew>,
@@ -327,11 +336,19 @@ impl Default for EditorUi {
             phys_sel: 0,
             phys_tab: 0,
             phys_edit: None,
+            phys_auto_max: true,
+            phys_peak_cache: Vec::new(),
+            phys_preset: 0,
+            phys_zoom: 1.0,
             physics_on: true,
             follow_cursor: false,
             follow: Vec2::ZERO,
             edit_level: 2,
             rebind: None,
+            logged_sel: None,
+            logged_param: None,
+            logged_tool: Tool::Arrow,
+            heartbeat: 0.0,
             new_param: None,
             new_folder: None,
             new_model: None,
@@ -477,6 +494,48 @@ impl EditorUi {
         if let Some(path) = self.pending_import.take() {
             self.import(&ui.ctx().clone(), path);
         }
+        // one-line debug logs for every state change, so the Log panel can
+        // tell the whole story when something misbehaves
+        if self.selected != self.logged_sel {
+            if let Some(s) = &self.session {
+                let m = s.puppet.model();
+                let what = match self.selected {
+                    Some(Sel::Mesh(i)) => format!(
+                        "mesh {i} ({})",
+                        m.art_meshes.get(i).map(|a| a.id.as_str()).unwrap_or("?")
+                    ),
+                    Some(Sel::Deformer(i)) => format!(
+                        "deformer {i} ({})",
+                        m.deformers.get(i).map(|d| d.id.as_str()).unwrap_or("?")
+                    ),
+                    Some(Sel::Part(i)) => format!(
+                        "part {i} ({})",
+                        m.parts.get(i).map(|p| p.id.as_str()).unwrap_or("?")
+                    ),
+                    Some(Sel::Parameter(i)) => format!(
+                        "parameter {i} ({})",
+                        m.parameters.get(i).map(|p| p.id.as_str()).unwrap_or("?")
+                    ),
+                    None => "nothing".into(),
+                };
+                log::debug!("selection: {what}");
+            }
+            self.logged_sel = self.selected;
+        }
+        if self.sel_param != self.logged_param {
+            if let (Some(s), Some(pi)) = (&self.session, self.sel_param) {
+                log::debug!(
+                    "parameter row selected: {pi} ({})",
+                    s.puppet.model().parameters.get(pi).map(|p| p.id.as_str()).unwrap_or("?")
+                );
+            }
+            self.logged_param = self.sel_param;
+        }
+        if self.tool != self.logged_tool {
+            log::debug!("tool: {}", self.tool.label());
+            self.logged_tool = self.tool;
+        }
+
         // closing with unsaved work stops at a dialog first
         if ui.ctx().input(|i| i.viewport().close_requested())
             && !self.force_close
@@ -961,6 +1020,7 @@ impl EditorUi {
                     .clicked()
                 {
                     self.physics_on = !self.physics_on;
+                    log::debug!("physics {}", if self.physics_on { "on" } else { "off" });
                     if self.physics_on
                         && let Some(s) = &mut self.session
                     {
@@ -973,6 +1033,7 @@ impl EditorUi {
                     .clicked()
                 {
                     self.follow_cursor = !self.follow_cursor;
+                    log::debug!("follow cursor {}", if self.follow_cursor { "on" } else { "off" });
                 }
                 ui.separator();
                 if let Some(s) = &self.session {
@@ -1056,10 +1117,31 @@ impl EditorUi {
                 }
             }
             let animating = self.follow_cursor || (self.physics_on && s.puppet.has_physics());
-            if self.physics_on && s.puppet.has_physics() && s.puppet.step_physics(dt) {
+            let physics_moved =
+                self.physics_on && s.puppet.has_physics() && s.puppet.step_physics(dt);
+            if physics_moved {
                 s.dirty = true;
             }
             if animating {
+                // a once-a-second trace heartbeat for the Log panel
+                self.heartbeat += dt;
+                if self.heartbeat >= 1.0 {
+                    self.heartbeat = 0.0;
+                    if self.follow_cursor {
+                        log::trace!(
+                            "follow: target ({:+.2}, {:+.2})",
+                            self.follow.x,
+                            self.follow.y
+                        );
+                    }
+                    if self.physics_on && s.puppet.has_physics() {
+                        log::trace!(
+                            "physics: ticking {} groups, outputs {}",
+                            s.puppet.model().physics.as_ref().map(|r| r.groups.len()).unwrap_or(0),
+                            if physics_moved { "moving" } else { "settled" }
+                        );
+                    }
+                }
                 self.request_anim(&ui.ctx().clone());
             }
         }
@@ -1222,12 +1304,21 @@ impl EditorUi {
         }
     }
 
-    /// The physics dialog, Cubism style: groups on the left, the input,
-    /// pendulum and output tables on the right, edited on a working copy
-    /// that Apply commits as a single undoable change.
+    /// The physics dialog, laid out after Cubism's Physics tab: FPS and
+    /// group row up top, Input/Output settings tabs, the physical model
+    /// table beside the live pendulum preview, all on a working copy that
+    /// Apply commits as one undoable change.
     fn physics_window(&mut self, ui: &mut Ui) {
         if !self.show_physics {
-            self.phys_edit = None;
+            if self.phys_edit.take().is_some() {
+                // closing re-enables every group, like Cubism's Valid reset
+                if let Some(s) = &mut self.session {
+                    let n = s.puppet.model().physics.as_ref().map(|r| r.groups.len()).unwrap_or(0);
+                    for gi in 0..n {
+                        s.puppet.set_physics_group_enabled(gi, true);
+                    }
+                }
+            }
             return;
         }
         let Some(session_rig) =
@@ -1236,385 +1327,457 @@ impl EditorUi {
             self.show_physics = false;
             return;
         };
-        let rig = self.phys_edit.get_or_insert(session_rig.clone());
+        let param_ids: Vec<String> = self
+            .session
+            .as_ref()
+            .map(|s| s.puppet.model().parameters.iter().map(|p| p.id.clone()).collect())
+            .unwrap_or_default();
+        let live_peaks: Vec<(usize, f32)> = if self.phys_auto_max {
+            self.session
+                .as_ref()
+                .and_then(|s| s.puppet.physics_output_peaks(self.phys_sel))
+                .unwrap_or_default()
+        } else {
+            self.phys_peak_cache.clone()
+        };
+        if self.phys_auto_max {
+            self.phys_peak_cache = live_peaks.clone();
+        }
+        let group_enabled =
+            self.session.as_ref().is_none_or(|s| s.puppet.physics_group_enabled(self.phys_sel));
+
+        let mut rig = self.phys_edit.take().unwrap_or_else(|| session_rig.clone());
         let mut open = self.show_physics;
         let mut apply = false;
         let mut revert = false;
-        let mut reset_sim = false;
+        let mut toggle_enable = false;
+        let mut reset_peaks = false;
         egui::Window::new("Physics Settings")
             .open(&mut open)
             .collapsible(false)
-            .default_width(560.0)
+            .default_width(620.0)
             .show(ui.ctx(), |ui| {
+                // (1) calculate fps, like the manual's composition
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.physics_on, "Valid");
-                    if ui.button("Reset pose").clicked() {
-                        reset_sim = true;
-                    }
+                    ui.label("Calculate FPS:");
+                    let mut fps = if rig.fps > 0.0 { rig.fps } else { 60.0 };
+                    egui::ComboBox::from_id_salt("phys-fps")
+                        .selected_text(format!("{fps:.0}"))
+                        .width(60.0)
+                        .show_ui(ui, |ui| {
+                            for v in [15.0f32, 30.0, 60.0, 120.0] {
+                                if ui.selectable_label(fps == v, format!("{v:.0}")).clicked() {
+                                    fps = v;
+                                }
+                            }
+                        });
+                    rig.fps = fps;
                     ui.separator();
                     ui.weak("Wind");
                     ui.add(egui::DragValue::new(&mut rig.wind_x).speed(0.05).prefix("X "));
                     ui.add(egui::DragValue::new(&mut rig.wind_y).speed(0.05).prefix("Y "));
-                    ui.separator();
-                    ui.weak("FPS");
-                    ui.add(egui::DragValue::new(&mut rig.fps).range(0.0..=240.0));
                 });
-                ui.separator();
-                ui.horizontal_top(|ui| {
-                    // group rail
-                    ui.vertical(|ui| {
-                        ui.set_width(150.0);
-                        ScrollArea::vertical().id_salt("phys-groups").max_height(260.0).show(
-                            ui,
-                            |ui| {
-                                for (gi, g) in rig.groups.iter().enumerate() {
-                                    let label = if g.name.is_empty() { &g.id } else { &g.name };
-                                    if ui
-                                        .selectable_label(self.phys_sel == gi, truncate(label, 18))
-                                        .clicked()
-                                    {
-                                        self.phys_sel = gi;
-                                    }
-                                }
-                            },
-                        );
-                        ui.horizontal(|ui| {
-                            if ui.button(egui_phosphor::regular::PLUS).clicked() {
-                                let n = rig.groups.len() + 1;
-                                rig.groups.push(ayatsuri_format::model::PhysicsGroup {
-                                    id: format!("PhysicsSetting{n}"),
-                                    name: format!("Group {n}"),
-                                    inputs: Vec::new(),
-                                    outputs: Vec::new(),
-                                    nodes: vec![
-                                        ayatsuri_format::model::PhysicsNode {
-                                            x: 0.0,
-                                            y: 0.0,
-                                            mobility: 1.0,
-                                            delay: 1.0,
-                                            acceleration: 1.0,
-                                            radius: 0.0,
-                                        },
-                                        ayatsuri_format::model::PhysicsNode {
-                                            x: 0.0,
-                                            y: 5.0,
-                                            mobility: 0.95,
-                                            delay: 1.0,
-                                            acceleration: 1.0,
-                                            radius: 5.0,
-                                        },
-                                    ],
-                                    norm_position: ayatsuri_format::model::PhysicsRange {
-                                        min: -10.0,
-                                        default: 0.0,
-                                        max: 10.0,
-                                    },
-                                    norm_angle: ayatsuri_format::model::PhysicsRange {
-                                        min: -10.0,
-                                        default: 0.0,
-                                        max: 10.0,
-                                    },
-                                });
-                                self.phys_sel = rig.groups.len() - 1;
-                            }
-                            if ui.button(egui_phosphor::regular::TRASH).clicked()
-                                && self.phys_sel < rig.groups.len()
-                            {
-                                rig.groups.remove(self.phys_sel);
-                                self.phys_sel =
-                                    self.phys_sel.min(rig.groups.len().saturating_sub(1));
-                            }
-                        });
 
-                        // the live pendulum preview, the way Cubism shows it
-                        ui.add_space(8.0);
-                        ui.weak("Pendulum");
-                        let (prect, _) = ui.allocate_exact_size(vec2(146.0, 150.0), Sense::hover());
-                        let pp = ui.painter_at(prect);
-                        pp.rect_filled(prect, 4.0, theme::pal().canvas_bg);
-                        pp.rect_stroke(
-                            prect,
-                            4.0,
-                            Stroke::new(1.0, theme::pal().border),
-                            StrokeKind::Inside,
-                        );
-                        for f in [0.25f32, 0.5, 0.75] {
-                            let x = prect.min.x + prect.width() * f;
-                            let y = prect.min.y + prect.height() * f;
-                            let grid = Stroke::new(
-                                if f == 0.5 { 1.0 } else { 0.5 },
-                                theme::pal().border.gamma_multiply(if f == 0.5 {
-                                    1.0
-                                } else {
-                                    0.5
-                                }),
-                            );
-                            pp.line_segment([pos2(x, prect.min.y), pos2(x, prect.max.y)], grid);
-                            pp.line_segment([pos2(prect.min.x, y), pos2(prect.max.x, y)], grid);
-                        }
-                        let nodes = self
-                            .session
-                            .as_ref()
-                            .and_then(|s| s.puppet.physics_group_nodes(self.phys_sel));
-                        match nodes {
-                            Some(pts) if !pts.is_empty() => {
-                                // scale from the group's own reach so the view
-                                // holds still while the strand swings
-                                let reach: f32 = rig
-                                    .groups
-                                    .get(self.phys_sel)
-                                    .map(|g| {
-                                        g.nodes
-                                            .iter()
-                                            .skip(1)
-                                            .map(|n| (n.x * n.x + n.y * n.y).sqrt())
-                                            .sum::<f32>()
-                                            .max(1.0)
-                                            + 10.0
-                                    })
-                                    .unwrap_or(20.0);
-                                let sc = (prect.height() * 0.44) / reach;
-                                let cx = prect.center().x;
-                                let cy = prect.min.y + prect.height() * 0.5;
-                                let map = |(x, y): (f32, f32)| pos2(cx + x * sc, cy + y * sc);
-                                let stroke = Stroke::new(1.6, theme::pal().rotation_red);
-                                let mut prev: Option<Pos2> = None;
-                                for (i, &pt) in pts.iter().enumerate() {
-                                    let sp = map(pt);
-                                    if let Some(pr) = prev {
-                                        pp.line_segment([pr, sp], stroke);
-                                    }
-                                    if i == 0 {
-                                        pp.rect_filled(
-                                            Rect::from_center_size(sp, vec2(6.0, 6.0)),
-                                            1.0,
-                                            theme::pal().text,
-                                        );
-                                    } else {
-                                        pp.circle_filled(sp, 4.0, theme::pal().rotation_red);
-                                        pp.circle_stroke(
-                                            sp,
-                                            4.0,
-                                            Stroke::new(1.0, theme::pal().canvas_bg),
-                                        );
-                                    }
-                                    prev = Some(sp);
+                // (2) group row: pick, enable, add, duplicate, delete
+                ui.horizontal(|ui| {
+                    ui.label("Group:");
+                    let current = rig
+                        .groups
+                        .get(self.phys_sel)
+                        .map(|g| if g.name.is_empty() { g.id.clone() } else { g.name.clone() })
+                        .unwrap_or_else(|| "(none)".into());
+                    egui::ComboBox::from_id_salt("phys-group")
+                        .selected_text(truncate(&current, 20))
+                        .width(160.0)
+                        .show_ui(ui, |ui| {
+                            for (gi, g) in rig.groups.iter().enumerate() {
+                                let label = if g.name.is_empty() { &g.id } else { &g.name };
+                                if ui
+                                    .selectable_label(self.phys_sel == gi, truncate(label, 24))
+                                    .clicked()
+                                {
+                                    self.phys_sel = gi;
                                 }
                             }
-                            _ => {
-                                pp.text(
-                                    prect.center(),
-                                    Align2::CENTER_CENTER,
-                                    "no simulation",
-                                    FontId::proportional(10.5),
-                                    theme::pal().text_faint,
-                                );
-                            }
-                        }
-                        if !self.physics_on {
-                            pp.text(
-                                pos2(prect.center().x, prect.max.y - 10.0),
-                                Align2::CENTER_CENTER,
-                                "physics off",
-                                FontId::proportional(9.5),
-                                theme::pal().text_faint,
-                            );
-                        }
+                        });
+                    let mut on = group_enabled;
+                    if ui.checkbox(&mut on, "Enable").changed() {
+                        toggle_enable = true;
+                    }
+                    if ui.button("Add").clicked() {
+                        let n = rig.groups.len() + 1;
+                        rig.groups.push(default_physics_group(n));
+                        self.phys_sel = rig.groups.len() - 1;
+                        log::debug!("physics: group {n} added");
+                    }
+                    if ui.button("Duplicate").clicked()
+                        && let Some(g) = rig.groups.get(self.phys_sel).cloned()
+                    {
+                        let mut g = g;
+                        g.id = format!("{}Copy", g.id);
+                        g.name = format!("{} copy", g.name);
+                        rig.groups.push(g);
+                        self.phys_sel = rig.groups.len() - 1;
+                    }
+                    if ui.button("Delete").clicked() && self.phys_sel < rig.groups.len() {
+                        rig.groups.remove(self.phys_sel);
+                        self.phys_sel = self.phys_sel.min(rig.groups.len().saturating_sub(1));
+                    }
+                });
+                if let Some(g) = rig.groups.get_mut(self.phys_sel) {
+                    ui.horizontal(|ui| {
+                        ui.weak("Name");
+                        ui.add_sized(vec2(220.0, 18.0), egui::TextEdit::singleline(&mut g.name));
                     });
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.set_width(370.0);
-                        let param_ids: Vec<String> = self
-                            .session
-                            .as_ref()
-                            .map(|s| {
-                                s.puppet.model().parameters.iter().map(|p| p.id.clone()).collect()
-                            })
-                            .unwrap_or_default();
-                        let Some(g) = rig.groups.get_mut(self.phys_sel) else {
-                            ui.weak("Add a group to begin.");
-                            return;
-                        };
-                        ui.horizontal(|ui| {
-                            ui.weak("Name");
-                            ui.text_edit_singleline(&mut g.name);
-                        });
-                        ui.horizontal(|ui| {
-                            for (i, label) in
-                                ["Input", "Physical model", "Output"].iter().enumerate()
-                            {
-                                if ui.selectable_label(self.phys_tab == i, *label).clicked() {
-                                    self.phys_tab = i;
-                                }
+                }
+                ui.separator();
+
+                // (3)(4) the input / output settings tabs
+                ui.horizontal(|ui| {
+                    for (i, label) in ["Input settings", "Output Settings"].iter().enumerate() {
+                        if ui.selectable_label(self.phys_tab == i, *label).clicked() {
+                            self.phys_tab = i;
+                        }
+                    }
+                });
+                let reach = rig_groups_reach(&rig, self.phys_sel);
+                let Some(g) = rig.groups.get_mut(self.phys_sel) else {
+                    ui.weak("Add a group to begin.");
+                    return;
+                };
+                let combo = |ui: &mut Ui, salt: String, current: &mut String| {
+                    egui::ComboBox::from_id_salt(salt)
+                        .selected_text(truncate(current, 16))
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            for id in &param_ids {
+                                ui.selectable_value(current, id.clone(), id);
                             }
                         });
-                        ui.separator();
-                        let combo = |ui: &mut Ui, salt: String, current: &mut String| {
-                            egui::ComboBox::from_id_salt(salt)
-                                .selected_text(truncate(current, 18))
-                                .width(150.0)
-                                .show_ui(ui, |ui| {
-                                    for id in &param_ids {
-                                        ui.selectable_value(current, id.clone(), id);
+                };
+                match self.phys_tab {
+                    0 => {
+                        ui.horizontal_top(|ui| {
+                            // preset + normalization rail
+                            ui.vertical(|ui| {
+                                ui.set_width(210.0);
+                                ui.label("Preset");
+                                ui.horizontal(|ui| {
+                                    egui::ComboBox::from_id_salt("phys-in-preset")
+                                        .selected_text(
+                                            ["Head input", "Torso input", "Chest input"]
+                                                .get(self.phys_preset)
+                                                .copied()
+                                                .unwrap_or("Head input"),
+                                        )
+                                        .width(110.0)
+                                        .show_ui(ui, |ui| {
+                                            for (i, n) in
+                                                ["Head input", "Torso input", "Chest input"]
+                                                    .iter()
+                                                    .enumerate()
+                                            {
+                                                ui.selectable_value(&mut self.phys_preset, i, *n);
+                                            }
+                                        });
+                                    if ui.button("Import").clicked() {
+                                        g.inputs = input_preset(self.phys_preset);
+                                        log::debug!("physics: input preset imported");
                                     }
                                 });
-                        };
-                        ScrollArea::vertical().id_salt("phys-detail").max_height(220.0).show(
-                            ui,
-                            |ui| match self.phys_tab {
-                                0 => {
-                                    let mut kill = None;
-                                    for (i, inp) in g.inputs.iter_mut().enumerate() {
-                                        ui.horizontal(|ui| {
+                                ui.add_space(8.0);
+                                ui.label("Normalization of input");
+                                egui::Grid::new("phys-norm")
+                                    .num_columns(4)
+                                    .spacing([6.0, 4.0])
+                                    .show(ui, |ui| {
+                                        ui.weak("");
+                                        ui.weak("Min");
+                                        ui.weak("Center");
+                                        ui.weak("Max");
+                                        ui.end_row();
+                                        ui.weak("Angle");
+                                        ui.add(
+                                            egui::DragValue::new(&mut g.norm_angle.min).speed(0.5),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut g.norm_angle.default)
+                                                .speed(0.5),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut g.norm_angle.max).speed(0.5),
+                                        );
+                                        ui.end_row();
+                                        ui.weak("Position X");
+                                        ui.add(
+                                            egui::DragValue::new(&mut g.norm_position.min)
+                                                .speed(0.5),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut g.norm_position.default)
+                                                .speed(0.5),
+                                        );
+                                        ui.add(
+                                            egui::DragValue::new(&mut g.norm_position.max)
+                                                .speed(0.5),
+                                        );
+                                        ui.end_row();
+                                    });
+                            });
+                            ui.separator();
+                            ui.vertical(|ui| {
+                                if ui.button("Add…").clicked() {
+                                    g.inputs.push(ayatsuri_format::model::PhysicsInput {
+                                        param: param_ids.first().cloned().unwrap_or_default(),
+                                        weight: 100.0,
+                                        kind: ayatsuri_format::model::PhysicsIo::X,
+                                        reflect: false,
+                                    });
+                                }
+                                let mut kill = None;
+                                egui::Grid::new("phys-in").num_columns(5).spacing([8.0, 3.0]).show(
+                                    ui,
+                                    |ui| {
+                                        ui.weak("Input");
+                                        ui.weak("Type");
+                                        ui.weak("Effectiveness (%)");
+                                        ui.weak("Reflect");
+                                        ui.weak("");
+                                        ui.end_row();
+                                        for (i, inp) in g.inputs.iter_mut().enumerate() {
                                             combo(ui, format!("pi{i}"), &mut inp.param);
                                             egui::ComboBox::from_id_salt(format!("pit{i}"))
-                                                .selected_text(format!("{:?}", inp.kind))
-                                                .width(64.0)
-                                                .show_ui(ui, |ui| {
-                                                    for k in [
-                                                        ayatsuri_format::model::PhysicsIo::X,
-                                                        ayatsuri_format::model::PhysicsIo::Y,
-                                                        ayatsuri_format::model::PhysicsIo::Angle,
-                                                    ] {
-                                                        ui.selectable_value(
-                                                            &mut inp.kind,
-                                                            k,
-                                                            format!("{k:?}"),
-                                                        );
+                                                .selected_text(match inp.kind {
+                                                    ayatsuri_format::model::PhysicsIo::Angle => {
+                                                        "Angle"
                                                     }
+                                                    _ => "Position X",
+                                                })
+                                                .width(86.0)
+                                                .show_ui(ui, |ui| {
+                                                    ui.selectable_value(
+                                                        &mut inp.kind,
+                                                        ayatsuri_format::model::PhysicsIo::X,
+                                                        "Position X",
+                                                    );
+                                                    ui.selectable_value(
+                                                        &mut inp.kind,
+                                                        ayatsuri_format::model::PhysicsIo::Angle,
+                                                        "Angle",
+                                                    );
                                                 });
                                             ui.add(
                                                 egui::DragValue::new(&mut inp.weight)
-                                                    .range(0.0..=100.0)
-                                                    .suffix(" %"),
+                                                    .range(0.0..=100.0),
                                             );
-                                            ui.checkbox(&mut inp.reflect, "invert");
-                                            if ui.button(egui_phosphor::regular::X).clicked() {
+                                            ui.checkbox(&mut inp.reflect, "");
+                                            if ui
+                                                .button(egui_phosphor::regular::X)
+                                                .on_hover_text("Delete")
+                                                .clicked()
+                                            {
                                                 kill = Some(i);
                                             }
-                                        });
-                                    }
-                                    if let Some(i) = kill {
-                                        g.inputs.remove(i);
-                                    }
-                                    if ui.button("Add input").clicked() {
-                                        g.inputs.push(ayatsuri_format::model::PhysicsInput {
-                                            param: param_ids.first().cloned().unwrap_or_default(),
-                                            weight: 100.0,
-                                            kind: ayatsuri_format::model::PhysicsIo::X,
-                                            reflect: false,
-                                        });
-                                    }
-                                }
-                                1 => {
-                                    let mut kill = None;
-                                    egui::Grid::new("phys-nodes")
-                                        .num_columns(6)
-                                        .spacing([8.0, 3.0])
-                                        .show(ui, |ui| {
-                                            ui.weak("#");
-                                            ui.weak("Sway");
-                                            ui.weak("React");
-                                            ui.weak("Accel");
-                                            ui.weak("Length");
-                                            ui.weak("");
                                             ui.end_row();
-                                            let count = g.nodes.len();
-                                            for (i, n) in g.nodes.iter_mut().enumerate() {
-                                                ui.label(i.to_string());
-                                                ui.add(
-                                                    egui::DragValue::new(&mut n.mobility)
-                                                        .range(0.0..=1.0)
-                                                        .speed(0.005),
-                                                );
-                                                ui.add(
-                                                    egui::DragValue::new(&mut n.delay)
-                                                        .range(0.0..=10.0)
-                                                        .speed(0.01),
-                                                );
-                                                ui.add(
-                                                    egui::DragValue::new(&mut n.acceleration)
-                                                        .range(0.0..=10.0)
-                                                        .speed(0.01),
-                                                );
-                                                ui.add(
-                                                    egui::DragValue::new(&mut n.y)
-                                                        .range(0.0..=100.0)
-                                                        .speed(0.1),
-                                                );
-                                                if i > 0
-                                                    && count > 2
-                                                    && ui
-                                                        .button(egui_phosphor::regular::X)
-                                                        .clicked()
-                                                {
-                                                    kill = Some(i);
-                                                }
-                                                ui.end_row();
-                                            }
-                                        });
-                                    if let Some(i) = kill {
-                                        g.nodes.remove(i);
-                                        for o in &mut g.outputs {
-                                            if o.vertex as usize >= g.nodes.len() {
-                                                o.vertex = g.nodes.len().saturating_sub(1) as u32;
-                                            }
                                         }
-                                    }
-                                    if ui.button("Add pendulum node").clicked() {
-                                        let last = g.nodes.last().cloned().unwrap_or(
-                                            ayatsuri_format::model::PhysicsNode {
-                                                x: 0.0,
-                                                y: 5.0,
-                                                mobility: 0.95,
-                                                delay: 1.0,
-                                                acceleration: 1.0,
-                                                radius: 5.0,
-                                            },
-                                        );
-                                        g.nodes.push(last);
-                                    }
+                                    },
+                                );
+                                if let Some(i) = kill {
+                                    g.inputs.remove(i);
                                 }
-                                _ => {
-                                    let mut kill = None;
-                                    for (i, out) in g.outputs.iter_mut().enumerate() {
-                                        ui.horizontal(|ui| {
-                                            combo(ui, format!("po{i}"), &mut out.param);
-                                            ui.weak("node");
-                                            let max_v = 99;
+                            });
+                        });
+                    }
+                    _ => {
+                        ui.horizontal(|ui| {
+                            if ui.button("Add…").clicked() {
+                                g.outputs.push(ayatsuri_format::model::PhysicsOutput {
+                                    param: param_ids.first().cloned().unwrap_or_default(),
+                                    vertex: 1,
+                                    scale: 1.0,
+                                    weight: 100.0,
+                                    kind: ayatsuri_format::model::PhysicsIo::Angle,
+                                    reflect: false,
+                                });
+                            }
+                            ui.checkbox(&mut self.phys_auto_max, "Auto-update maximum of output");
+                        });
+                        ui.horizontal_top(|ui| {
+                            ui.vertical(|ui| {
+                                ui.set_width(430.0);
+                                let mut kill = None;
+                                egui::Grid::new("phys-out")
+                                    .num_columns(7)
+                                    .spacing([8.0, 3.0])
+                                    .show(ui, |ui| {
+                                        ui.weak("Pendulum No");
+                                        ui.weak("Output");
+                                        ui.weak("Effect. (%)");
+                                        ui.weak("Reflect");
+                                        ui.weak("Scale");
+                                        ui.weak("Output Max (%)");
+                                        ui.weak("");
+                                        ui.end_row();
+                                        for (i, out) in g.outputs.iter_mut().enumerate() {
                                             ui.add(
-                                                egui::DragValue::new(&mut out.vertex)
-                                                    .range(1..=max_v),
+                                                egui::DragValue::new(&mut out.vertex).range(1..=99),
                                             );
-                                            ui.weak("scale");
-                                            ui.add(egui::DragValue::new(&mut out.scale).speed(0.1));
+                                            combo(ui, format!("po{i}"), &mut out.param);
                                             ui.add(
                                                 egui::DragValue::new(&mut out.weight)
-                                                    .range(0.0..=100.0)
-                                                    .suffix(" %"),
+                                                    .range(0.0..=100.0),
                                             );
-                                            ui.checkbox(&mut out.reflect, "invert");
-                                            if ui.button(egui_phosphor::regular::X).clicked() {
+                                            ui.checkbox(&mut out.reflect, "");
+                                            ui.add(
+                                                egui::DragValue::new(&mut out.scale).speed(0.05),
+                                            );
+                                            let peak = live_peaks
+                                                .iter()
+                                                .find(|(oi, _)| *oi == i)
+                                                .map(|(_, p)| *p)
+                                                .unwrap_or(0.0);
+                                            ui.label(format!("{peak:.1}"));
+                                            if ui
+                                                .button(egui_phosphor::regular::X)
+                                                .on_hover_text("Delete")
+                                                .clicked()
+                                            {
                                                 kill = Some(i);
                                             }
-                                        });
+                                            ui.end_row();
+                                        }
+                                    });
+                                if let Some(i) = kill {
+                                    g.outputs.remove(i);
+                                }
+                            });
+                            ui.vertical(|ui| {
+                                let adjust =
+                                    |outs: &mut Vec<ayatsuri_format::model::PhysicsOutput>,
+                                     peaks: &[(usize, f32)],
+                                     up: bool| {
+                                        for (i, o) in outs.iter_mut().enumerate() {
+                                            let Some(&(_, peak)) =
+                                                peaks.iter().find(|(oi, _)| *oi == i)
+                                            else {
+                                                continue;
+                                            };
+                                            if peak > 1e-3
+                                                && ((up && peak < 100.0) || (!up && peak > 100.0))
+                                            {
+                                                o.scale *= 100.0 / peak;
+                                            }
+                                        }
+                                    };
+                                if ui.button("Increase Output").clicked() {
+                                    adjust(&mut g.outputs, &live_peaks, true);
+                                    reset_peaks = true;
+                                }
+                                if ui.button("Decrease Output").clicked() {
+                                    adjust(&mut g.outputs, &live_peaks, false);
+                                    reset_peaks = true;
+                                }
+                                if ui.button("Reset Magnification").clicked() {
+                                    for o in &mut g.outputs {
+                                        o.scale = 1.0;
                                     }
-                                    if let Some(i) = kill {
-                                        g.outputs.remove(i);
+                                }
+                                if ui.button("Reset Output Maximum").clicked() {
+                                    reset_peaks = true;
+                                }
+                            });
+                        });
+                        ui.weak(
+                            "Move the model (Follow helps) to collect Output Max, then adjust.",
+                        );
+                    }
+                }
+                ui.separator();
+
+                // (5)(6) physical model settings beside the pendulum preview
+                ui.label("Physics model settings");
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(380.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Add").clicked() {
+                                let last = g.nodes.last().cloned().unwrap_or(
+                                    ayatsuri_format::model::PhysicsNode {
+                                        x: 0.0,
+                                        y: 10.0,
+                                        mobility: 0.95,
+                                        delay: 1.0,
+                                        acceleration: 1.0,
+                                        radius: 10.0,
+                                    },
+                                );
+                                g.nodes.push(last);
+                            }
+                            let can_del = g.nodes.len() > 2;
+                            if ui.add_enabled(can_del, egui::Button::new("Delete")).clicked() {
+                                g.nodes.pop();
+                                for o in &mut g.outputs {
+                                    if o.vertex as usize >= g.nodes.len() {
+                                        o.vertex = g.nodes.len().saturating_sub(1) as u32;
                                     }
-                                    if ui.button("Add output").clicked() {
-                                        g.outputs.push(ayatsuri_format::model::PhysicsOutput {
-                                            param: param_ids.first().cloned().unwrap_or_default(),
-                                            vertex: 1,
-                                            scale: 1.0,
-                                            weight: 100.0,
-                                            kind: ayatsuri_format::model::PhysicsIo::Angle,
-                                            reflect: false,
-                                        });
+                                }
+                            }
+                        });
+                        egui::Grid::new("phys-nodes").num_columns(5).spacing([10.0, 3.0]).show(
+                            ui,
+                            |ui| {
+                                ui.weak("No");
+                                ui.weak("Duration");
+                                ui.weak("Shaking influence");
+                                ui.weak("Reaction time");
+                                ui.weak("Overall acceleration");
+                                ui.end_row();
+                                for (i, n) in g.nodes.iter_mut().enumerate().skip(1) {
+                                    ui.label(i.to_string());
+                                    // duration is the stage length; keep the
+                                    // authored direction, change the reach
+                                    let mut len = (n.x * n.x + n.y * n.y).sqrt();
+                                    let before = len;
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut len)
+                                                .range(0.1..=200.0)
+                                                .speed(0.1),
+                                        )
+                                        .changed()
+                                    {
+                                        if before > 1e-6 {
+                                            let f = len / before;
+                                            n.x *= f;
+                                            n.y *= f;
+                                        } else {
+                                            n.y = len;
+                                        }
+                                        n.radius = len;
                                     }
+                                    ui.add(
+                                        egui::DragValue::new(&mut n.mobility)
+                                            .range(0.0..=1.0)
+                                            .speed(0.005),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut n.delay)
+                                            .range(0.0..=10.0)
+                                            .speed(0.01),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut n.acceleration)
+                                            .range(0.0..=10.0)
+                                            .speed(0.01),
+                                    );
+                                    ui.end_row();
                                 }
                             },
                         );
+                    });
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        self.pendulum_preview(ui, reach);
                     });
                 });
                 ui.separator();
@@ -1628,29 +1791,137 @@ impl EditorUi {
                     ui.weak("Apply commits one undo step and rebuilds the simulation.");
                 });
             });
-        if reset_sim && let Some(s) = &mut self.session {
-            s.puppet.reset_physics();
+        if toggle_enable && let Some(s) = &mut self.session {
+            let now = !group_enabled;
+            s.puppet.set_physics_group_enabled(self.phys_sel, now);
             s.dirty = true;
+            log::debug!(
+                "physics: group {} {}",
+                self.phys_sel,
+                if now { "enabled" } else { "muted" }
+            );
         }
-        if apply {
-            let rig = self.phys_edit.clone();
-            if let (Some(s), Some(rig)) = (&mut self.session, rig) {
-                let keep = if rig.groups.is_empty() { None } else { Some(rig) };
-                if s.edit(|m| {
-                    m.physics = keep.clone();
-                    true
-                }) {
-                    log::info!("physics settings applied");
-                }
+        if reset_peaks && let Some(s) = &mut self.session {
+            s.puppet.reset_physics_output_peaks();
+            self.phys_peak_cache.clear();
+        }
+        if apply && let Some(s) = &mut self.session {
+            let keep = if rig.groups.is_empty() { None } else { Some(rig.clone()) };
+            if s.edit(|m| {
+                m.physics = keep.clone();
+                true
+            }) {
+                log::info!("physics settings applied");
             }
         }
         if revert {
-            self.phys_edit = None;
+            log::debug!("physics: working copy reverted");
+        } else {
+            self.phys_edit = Some(rig);
         }
         self.show_physics = open;
         if !self.show_physics {
             self.phys_edit = None;
+            if let Some(s) = &mut self.session {
+                let n = s.puppet.model().physics.as_ref().map(|r| r.groups.len()).unwrap_or(0);
+                for gi in 0..n {
+                    s.puppet.set_physics_group_enabled(gi, true);
+                }
+            }
         }
+    }
+
+    /// The live pendulum preview pane, grid and all.
+    fn pendulum_preview(&mut self, ui: &mut Ui, reach: f32) {
+        let (prect, presp) = ui.allocate_exact_size(vec2(170.0, 170.0), Sense::hover());
+        let pp = ui.painter_at(prect);
+        pp.rect_filled(prect, 4.0, theme::pal().canvas_bg);
+        pp.rect_stroke(prect, 4.0, Stroke::new(1.0, theme::pal().border), StrokeKind::Inside);
+        for f in [0.25f32, 0.5, 0.75] {
+            let x = prect.min.x + prect.width() * f;
+            let y = prect.min.y + prect.height() * f;
+            let grid = Stroke::new(
+                if f == 0.5 { 1.0 } else { 0.5 },
+                theme::pal().border.gamma_multiply(if f == 0.5 { 1.0 } else { 0.5 }),
+            );
+            pp.line_segment([pos2(x, prect.min.y), pos2(x, prect.max.y)], grid);
+            pp.line_segment([pos2(prect.min.x, y), pos2(prect.max.x, y)], grid);
+        }
+        // wheel zoom like the reference preview
+        if presp.hovered() {
+            let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                self.phys_zoom = (self.phys_zoom * (scroll * 0.002).exp()).clamp(0.2, 8.0);
+            }
+        }
+        let nodes = self.session.as_ref().and_then(|s| s.puppet.physics_group_nodes(self.phys_sel));
+        match nodes {
+            Some(pts) if !pts.is_empty() => {
+                let sc = (prect.height() * 0.44) / reach.max(1.0) * self.phys_zoom;
+                let cx = prect.center().x;
+                let cy = prect.min.y + prect.height() * 0.5;
+                let map = |(x, y): (f32, f32)| pos2(cx + x * sc, cy + y * sc);
+                let stroke = Stroke::new(1.6, theme::pal().rotation_red);
+                let mut prev: Option<Pos2> = None;
+                for (i, &pt) in pts.iter().enumerate() {
+                    let sp = map(pt);
+                    if let Some(pr) = prev {
+                        pp.line_segment([pr, sp], stroke);
+                    }
+                    if i == 0 {
+                        pp.rect_filled(
+                            Rect::from_center_size(sp, vec2(6.0, 6.0)),
+                            1.0,
+                            theme::pal().text,
+                        );
+                    } else {
+                        pp.circle_filled(sp, 4.0, theme::pal().rotation_red);
+                        pp.circle_stroke(sp, 4.0, Stroke::new(1.0, theme::pal().canvas_bg));
+                        pp.text(
+                            sp + vec2(8.0, 0.0),
+                            Align2::LEFT_CENTER,
+                            i.to_string(),
+                            FontId::proportional(9.0),
+                            theme::pal().text_faint,
+                        );
+                    }
+                    prev = Some(sp);
+                }
+            }
+            _ => {
+                pp.text(
+                    prect.center(),
+                    Align2::CENTER_CENTER,
+                    "no simulation",
+                    FontId::proportional(10.5),
+                    theme::pal().text_faint,
+                );
+            }
+        }
+        pp.text(
+            pos2(prect.min.x + 6.0, prect.min.y + 8.0),
+            Align2::LEFT_CENTER,
+            format!("Scale: {:.1}", self.phys_zoom),
+            FontId::proportional(9.0),
+            theme::pal().text_faint,
+        );
+        if !self.physics_on {
+            pp.text(
+                pos2(prect.center().x, prect.max.y - 10.0),
+                Align2::CENTER_CENTER,
+                "physics off",
+                FontId::proportional(9.5),
+                theme::pal().text_faint,
+            );
+        }
+        ui.horizontal(|ui| {
+            if ui.small_button("1:1").clicked() {
+                self.phys_zoom = 1.0;
+            }
+            if ui.small_button("All").clicked() {
+                self.phys_zoom = 1.0;
+            }
+        });
     }
 
     /// Cubism's Model Statistics dialog: object and geometry counts.
@@ -3370,11 +3641,14 @@ impl EditorUi {
             }
         }
 
+        // live stack positions, front-most last, for the right-hand column
+        let stack: std::collections::HashMap<usize, usize> =
+            s.puppet.drawables().enumerate().map(|(pos, d)| (d.mesh, pos + 1)).collect();
         ScrollArea::vertical().id_salt("parts").show(ui, |ui| {
             for (i, depth) in order {
-                let Some((id, parent, first_order)) = s.puppet.model().parts.get(i).map(|p| {
-                    (p.id.clone(), p.parent_part, p.draw_orders.first().copied().unwrap_or(500.0))
-                }) else {
+                let Some((id, parent)) =
+                    s.puppet.model().parts.get(i).map(|p| (p.id.clone(), p.parent_part))
+                else {
                     continue;
                 };
                 let name = s.part_names.get(i).cloned().unwrap_or(id);
@@ -3407,13 +3681,6 @@ impl EditorUi {
                     FontId::proportional(11.5),
                     theme::pal().text,
                 );
-                ui.painter().text(
-                    rect.right_center() - vec2(6.0, 0.0),
-                    Align2::RIGHT_CENTER,
-                    format!("{}", first_order as i32),
-                    FontId::proportional(10.5),
-                    theme::pal().text_faint,
-                );
                 if resp.clicked() {
                     self.selected = Some(Sel::Part(i));
                 }
@@ -3434,18 +3701,16 @@ impl EditorUi {
 
                 // the part's meshes, nested one level deeper
                 let part_effective = effective;
-                let meshes: Vec<(usize, String, f32)> = s
+                let meshes: Vec<(usize, String)> = s
                     .puppet
                     .model()
                     .art_meshes
                     .iter()
                     .enumerate()
                     .filter(|(_, m)| m.parent_part == Some(i as u32))
-                    .map(|(mi, m)| {
-                        (mi, m.id.clone(), m.draw_orders.first().copied().unwrap_or(500.0))
-                    })
+                    .map(|(mi, m)| (mi, m.id.clone()))
                     .collect();
-                for (mi, mid, order) in meshes {
+                for (mi, mid) in meshes {
                     let (rect, resp) =
                         ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
                     if self.selected == Some(Sel::Mesh(mi)) {
@@ -3476,10 +3741,13 @@ impl EditorUi {
                         FontId::proportional(10.5),
                         theme::pal().text,
                     );
+                    // the live stack position, what actually decides overlap
+                    let pos_label =
+                        stack.get(&mi).map(|p| format!("#{p}")).unwrap_or_else(|| "–".into());
                     ui.painter().text(
                         rect.right_center() - vec2(6.0, 0.0),
                         Align2::RIGHT_CENTER,
-                        format!("{}", order as i32),
+                        pos_label,
                         FontId::proportional(10.0),
                         theme::pal().text_faint,
                     );
@@ -5137,6 +5405,71 @@ fn parse_shortcut(text: &str) -> Option<egui::KeyboardShortcut> {
     key.map(|k| egui::KeyboardShortcut::new(mods, k))
 }
 
+/// A fresh pendulum group with the manual's example-ish defaults.
+fn default_physics_group(n: usize) -> ayatsuri_format::model::PhysicsGroup {
+    ayatsuri_format::model::PhysicsGroup {
+        id: format!("PhysicsSetting{n}"),
+        name: format!("Group {n}"),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        nodes: vec![
+            ayatsuri_format::model::PhysicsNode {
+                x: 0.0,
+                y: 0.0,
+                mobility: 1.0,
+                delay: 1.0,
+                acceleration: 1.0,
+                radius: 0.0,
+            },
+            ayatsuri_format::model::PhysicsNode {
+                x: 0.0,
+                y: 10.0,
+                mobility: 0.95,
+                delay: 0.8,
+                acceleration: 1.12,
+                radius: 10.0,
+            },
+        ],
+        norm_position: ayatsuri_format::model::PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
+        norm_angle: ayatsuri_format::model::PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
+    }
+}
+
+/// Cubism's three stock input presets, by their standard parameter ids.
+fn input_preset(which: usize) -> Vec<ayatsuri_format::model::PhysicsInput> {
+    use ayatsuri_format::model::{PhysicsInput, PhysicsIo};
+    let rows: &[(&str, PhysicsIo, f32)] = match which {
+        1 => {
+            &[("ParamBodyAngleX", PhysicsIo::X, 60.0), ("ParamBodyAngleZ", PhysicsIo::Angle, 60.0)]
+        }
+        2 => &[
+            ("ParamBodyAngleX", PhysicsIo::X, 40.0),
+            ("ParamBodyAngleZ", PhysicsIo::Angle, 40.0),
+            ("ParamBreath", PhysicsIo::Angle, 20.0),
+        ],
+        _ => &[
+            ("ParamAngleX", PhysicsIo::X, 60.0),
+            ("ParamAngleZ", PhysicsIo::Angle, 60.0),
+            ("ParamBodyAngleX", PhysicsIo::X, 40.0),
+            ("ParamBodyAngleZ", PhysicsIo::Angle, 40.0),
+        ],
+    };
+    rows.iter()
+        .map(|&(id, kind, weight)| PhysicsInput { param: id.into(), weight, kind, reflect: false })
+        .collect()
+}
+
+/// How far the selected group's chain reaches, for a stable preview scale.
+fn rig_groups_reach(rig: &ayatsuri_format::model::PhysicsRig, sel: usize) -> f32 {
+    rig.groups
+        .get(sel)
+        .map(|g| {
+            g.nodes.iter().skip(1).map(|n| (n.x * n.x + n.y * n.y).sqrt()).sum::<f32>().max(1.0)
+                + 10.0
+        })
+        .unwrap_or(20.0)
+}
+
 fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
@@ -5417,6 +5750,9 @@ fn parameter_row(
         if changed {
             s.puppet.set_value(pi, v);
             s.dirty = true;
+        }
+        if slider_resp.drag_stopped() {
+            log::debug!("parameter {display} dragged to {v:.3}");
         }
         slider_resp.context_menu(|ui| {
             if ui.add_enabled(can_edit, egui::Button::new("Add Single Keyform")).clicked() {

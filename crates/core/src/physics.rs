@@ -39,45 +39,55 @@ struct InputSim {
 
 struct OutputSim {
     param: usize,
+    /// Index of this output in the rig group, for the dialog's tables.
+    rig_output: usize,
     vertex: usize,
     scale: f32,
     weight: f32,
     kind: PhysicsIo,
     sign: f32,
+    /// The latest computed value (scaled, signed), re-applied on frames
+    /// where no fixed step ticks.
+    last: f32,
+    /// Peak |excursion| as a percentage of the parameter's half range,
+    /// the dialog's Output Maximum (%).
+    peak: f32,
 }
 
 struct GroupSim {
     /// Index of this group in the model's rig; some rig groups are skipped
     /// at build time, so the two sequences differ.
     rig_index: usize,
+    /// The dialog's per-group Valid checkbox; off skips the whole group.
+    enabled: bool,
     inputs: Vec<InputSim>,
     outputs: Vec<OutputSim>,
     nodes: Vec<NodeSim>,
-    /// The tilt applied on the latest step; outputs measure swing against
-    /// the rest pose rotated by this, so a held tilt settles back to zero.
-    last_rad: f32,
 }
 
 pub struct Physics {
     groups: Vec<GroupSim>,
     wind: V2,
-    /// Fixed step in seconds, accumulated render time, parameter deltas.
+    /// Fixed step in seconds and the accumulated render time.
     step: f32,
     acc: f32,
-    deltas: Vec<f32>,
-    touched: Vec<bool>,
+    /// Outputs exist to apply; false until the first full step.
+    primed: bool,
 }
 
-/// Map a parameter value into the group's normalized range, piecewise around
-/// the defaults the way the published spec describes normalization.
-fn normalize(value: f32, min: f32, max: f32, default: f32, norm: PhysicsRange) -> f32 {
-    if value >= default {
-        let span = max - default;
-        let t = if span.abs() < 1e-6 { 0.0 } else { (value - default) / span };
+/// Map a parameter value into the group's normalized range. Per the manual,
+/// the pivot is the midpoint of the parameter's definition, not its default:
+/// "the value halfway between the smallest and largest parameter definition
+/// is the center of normalization".
+fn normalize(value: f32, min: f32, max: f32, norm: PhysicsRange) -> f32 {
+    let mid = (min + max) * 0.5;
+    if value >= mid {
+        let span = max - mid;
+        let t = if span.abs() < 1e-6 { 0.0 } else { (value - mid) / span };
         norm.default + t.clamp(0.0, 1.0) * (norm.max - norm.default)
     } else {
-        let span = default - min;
-        let t = if span.abs() < 1e-6 { 0.0 } else { (default - value) / span };
+        let span = mid - min;
+        let t = if span.abs() < 1e-6 { 0.0 } else { (mid - value) / span };
         norm.default + t.clamp(0.0, 1.0) * (norm.min - norm.default)
     }
 }
@@ -139,20 +149,24 @@ impl Physics {
                 outputs: g
                     .outputs
                     .iter()
-                    .filter_map(|o| {
+                    .enumerate()
+                    .filter_map(|(rig_output, o)| {
                         let vertex = (o.vertex as usize).clamp(1, node_count - 1);
                         Some(OutputSim {
                             param: find(&o.param)?,
+                            rig_output,
                             vertex,
                             scale: o.scale,
                             weight: o.weight / 100.0,
                             kind: o.kind,
                             sign: if o.reflect { -1.0 } else { 1.0 },
+                            last: 0.0,
+                            peak: 0.0,
                         })
                     })
                     .collect(),
                 nodes,
-                last_rad: 0.0,
+                enabled: true,
             });
         }
         if groups.is_empty() {
@@ -164,8 +178,7 @@ impl Physics {
             wind: V2 { x: rig.wind_x, y: rig.wind_y },
             step: 1.0 / fps,
             acc: 0.0,
-            deltas: vec![0.0; model.parameters.len()],
-            touched: vec![false; model.parameters.len()],
+            primed: false,
         })
     }
 
@@ -174,6 +187,33 @@ impl Physics {
     pub fn group_nodes(&self, rig_group: usize) -> Option<Vec<(f32, f32)>> {
         let g = self.groups.iter().find(|g| g.rig_index == rig_group)?;
         Some(g.nodes.iter().map(|n| (n.pos.x, n.pos.y)).collect())
+    }
+
+    /// The dialog's per-group Valid checkbox: a disabled group neither
+    /// simulates nor writes its outputs. Resets to enabled on rebuild.
+    pub fn set_group_enabled(&mut self, rig_group: usize, on: bool) {
+        if let Some(g) = self.groups.iter_mut().find(|g| g.rig_index == rig_group) {
+            g.enabled = on;
+        }
+    }
+
+    pub fn group_enabled(&self, rig_group: usize) -> bool {
+        self.groups.iter().find(|g| g.rig_index == rig_group).is_none_or(|g| g.enabled)
+    }
+
+    /// Each output's Output Maximum (%) so far, keyed by its index in the
+    /// rig group's output list.
+    pub fn output_peaks(&self, rig_group: usize) -> Option<Vec<(usize, f32)>> {
+        let g = self.groups.iter().find(|g| g.rig_index == rig_group)?;
+        Some(g.outputs.iter().map(|o| (o.rig_output, o.peak)).collect())
+    }
+
+    pub fn reset_output_peaks(&mut self) {
+        for g in &mut self.groups {
+            for o in &mut g.outputs {
+                o.peak = 0.0;
+            }
+        }
     }
 
     /// Live wind override from the physics dialog.
@@ -213,6 +253,9 @@ impl Physics {
             self.acc -= self.step;
             steps += 1;
             for g in &mut self.groups {
+                if !g.enabled {
+                    continue;
+                }
                 // fold the inputs into an anchor translation and a tilt
                 let (mut tx, mut ty, mut ta) = (0.0f32, 0.0f32, 0.0f32);
                 for i in &g.inputs {
@@ -225,7 +268,6 @@ impl Physics {
                         values.get(i.param).copied().unwrap_or(default),
                         min,
                         max,
-                        default,
                         i.norm,
                     ) * i.sign
                         * i.weight;
@@ -236,7 +278,6 @@ impl Physics {
                     }
                 }
                 let rad = ta.to_radians();
-                g.last_rad = rad;
                 let (sin, cos) = rad.sin_cos();
                 if let Some(anchor) = g.nodes.first_mut() {
                     anchor.prev = anchor.pos;
@@ -281,61 +322,88 @@ impl Physics {
                 }
             }
         }
-        // a frame without a fixed step still re-applies the last outputs,
-        // or the raw app-written inputs leak through for one frame and the
-        // view flickers between the two
+        // computed values refresh on stepped frames; the application runs
+        // every frame regardless, or the raw app-written inputs leak through
+        // for one frame and the view flickers between the two
         if steps > 0 {
-            self.recompute_outputs();
+            self.primed = true;
+            for g in &mut self.groups {
+                if !g.enabled {
+                    continue;
+                }
+                for oi in 0..g.outputs.len() {
+                    let Some(o) = g.outputs.get(oi) else { break };
+                    let (node, parent) = match (g.nodes.get(o.vertex), g.nodes.get(o.vertex - 1)) {
+                        (Some(n), Some(p)) => (n, p),
+                        _ => continue,
+                    };
+                    let value = match o.kind {
+                        PhysicsIo::Angle => {
+                            // the manual: "the angle of the pendulum
+                            // (relative to the parent pendulum) ... in
+                            // radians", so each stage reads its bend
+                            // against the stage above, and stage one reads
+                            // against the suspension
+                            let dx = node.pos.x - parent.pos.x;
+                            let dy = node.pos.y - parent.pos.y;
+                            let cur = dy.atan2(dx);
+                            let rest = node.rest_dir.y.atan2(node.rest_dir.x);
+                            let reference = if o.vertex <= 1 {
+                                rest
+                            } else {
+                                let above = g
+                                    .nodes
+                                    .get(o.vertex - 2)
+                                    .map(|a| {
+                                        let px = parent.pos.x - a.pos.x;
+                                        let py = parent.pos.y - a.pos.y;
+                                        py.atan2(px)
+                                    })
+                                    .unwrap_or(rest);
+                                let parent_rest = parent.rest_dir.y.atan2(parent.rest_dir.x);
+                                above + (rest - parent_rest)
+                            };
+                            let mut diff = cur - reference;
+                            while diff > core::f32::consts::PI {
+                                diff -= core::f32::consts::TAU;
+                            }
+                            while diff < -core::f32::consts::PI {
+                                diff += core::f32::consts::TAU;
+                            }
+                            diff
+                        }
+                        PhysicsIo::X => node.pos.x - node.rest_abs.x,
+                        PhysicsIo::Y => node.pos.y - node.rest_abs.y,
+                    };
+                    if let Some(o) = g.outputs.get_mut(oi) {
+                        o.last = value * o.scale * o.sign;
+                    }
+                }
+            }
         }
+        if !self.primed {
+            return false;
+        }
+        // per the manual, each output blends into the current parameter
+        // value by its influence (overwrite at 100%), group by group in
+        // order, so later groups see what earlier ones wrote
         let mut any = false;
-        for (param, (&delta, &touched)) in self.deltas.iter().zip(self.touched.iter()).enumerate() {
-            if touched && let Some(slot) = values.get_mut(param) {
-                let (min, max, default) = meta_of(param);
-                *slot = (default + delta).clamp(min, max);
+        for g in &mut self.groups {
+            if !g.enabled {
+                continue;
+            }
+            for o in &mut g.outputs {
+                let Some(slot) = values.get_mut(o.param) else { continue };
+                let (min, max, default) = meta_of(o.param);
+                let target = (default + o.last).clamp(min, max);
+                *slot += (target - *slot) * o.weight;
+                let half = if o.last >= 0.0 { max - default } else { default - min };
+                if half > 1e-6 {
+                    o.peak = o.peak.max(o.last.abs() / half * 100.0);
+                }
                 any = true;
             }
         }
         any
-    }
-
-    /// Fold every group's pendulum state into per-parameter deltas.
-    fn recompute_outputs(&mut self) {
-        self.deltas.iter_mut().for_each(|d| *d = 0.0);
-        self.touched.iter_mut().for_each(|t| *t = false);
-        for g in &self.groups {
-            for o in &g.outputs {
-                let (node, parent) = match (g.nodes.get(o.vertex), g.nodes.get(o.vertex - 1)) {
-                    (Some(n), Some(p)) => (n, p),
-                    _ => continue,
-                };
-                let value = match o.kind {
-                    PhysicsIo::Angle => {
-                        // radians against the authored rest: a held tilt
-                        // keeps a proportional output, which is what the
-                        // scales on real rigs (8..40) are authored around
-                        let dx = node.pos.x - parent.pos.x;
-                        let dy = node.pos.y - parent.pos.y;
-                        let cur = dy.atan2(dx);
-                        let rest = node.rest_dir.y.atan2(node.rest_dir.x);
-                        let mut diff = cur - rest;
-                        while diff > core::f32::consts::PI {
-                            diff -= core::f32::consts::TAU;
-                        }
-                        while diff < -core::f32::consts::PI {
-                            diff += core::f32::consts::TAU;
-                        }
-                        diff
-                    }
-                    PhysicsIo::X => node.pos.x - node.rest_abs.x,
-                    PhysicsIo::Y => node.pos.y - node.rest_abs.y,
-                };
-                if let (Some(d), Some(t)) =
-                    (self.deltas.get_mut(o.param), self.touched.get_mut(o.param))
-                {
-                    *d += value * o.scale * o.sign * o.weight;
-                    *t = true;
-                }
-            }
-        }
     }
 }
