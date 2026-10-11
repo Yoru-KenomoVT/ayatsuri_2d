@@ -82,10 +82,9 @@ impl Tool {
 /// Per-tool options shown in the Tool Details palette.
 struct ToolOptions {
     brush_size: f32,
-    mesh_mode: usize,
-    mesh_snap: bool,
     auto_preset: usize,
     auto_spacing: f32,
+    auto_inner: f32,
     auto_margin: f32,
     warp_cols: u32,
     warp_rows: u32,
@@ -97,10 +96,9 @@ impl Default for ToolOptions {
     fn default() -> Self {
         Self {
             brush_size: 40.0,
-            mesh_mode: 0,
-            mesh_snap: true,
             auto_preset: 0,
             auto_spacing: 24.0,
+            auto_inner: 48.0,
             auto_margin: 8.0,
             warp_cols: 5,
             warp_rows: 5,
@@ -189,6 +187,8 @@ pub struct EditorUi {
     def_locked: std::collections::HashSet<usize>,
     /// A crash the shell caught this session, shown until dismissed.
     crash: Option<CrashShown>,
+    /// When unsaved work was last copied to the autosave file.
+    last_autosave: std::time::Instant,
     /// Folded folders in the Parts palette.
     part_collapsed: std::collections::HashSet<usize>,
     new_param: Option<ParamNew>,
@@ -215,7 +215,7 @@ pub struct EditorUi {
     /// Mesh edit mode: the mesh whose vertices are being edited, if any.
     mesh_edit: Option<usize>,
     mesh_drag: Option<MeshDrag>,
-    /// 0 move, 1 add vertices, 2 erase vertices, 3 connect/cut edges.
+    /// 0 move, 1 add vertices, 2 erase vertices, 3 connect points, 4 cut edges.
     mesh_mode: u8,
     /// New points close a face onto the nearest edge when on.
     mesh_autoconnect: bool,
@@ -413,6 +413,7 @@ impl Default for EditorUi {
             def_locked: std::collections::HashSet::new(),
             part_collapsed: std::collections::HashSet::new(),
             crash: None,
+            last_autosave: std::time::Instant::now(),
             new_param: None,
             new_folder: None,
             new_model: None,
@@ -663,6 +664,16 @@ impl EditorUi {
             self.on_crash();
         }
         self.crash_window(ui);
+        // render-time crashes skip the rescue save, so unsaved work also
+        // goes to an autosave file every couple of minutes
+        if self.last_autosave.elapsed().as_secs() >= 120 {
+            self.last_autosave = std::time::Instant::now();
+            if let Some(s) = &self.session
+                && s.modified
+            {
+                s.autosave();
+            }
+        }
         if !self.theme_applied {
             let ctx = ui.ctx().clone();
             if let Some([r, g, b]) = self.prefs.accent {
@@ -1568,8 +1579,9 @@ impl EditorUi {
                         (
                             3,
                             egui_phosphor::regular::LINE_SEGMENT,
-                            "Connect or cut edges (click two points)",
+                            "Connect two points (click one, then the other)",
                         ),
+                        (4, egui_phosphor::regular::SCISSORS, "Cut the edge between two points"),
                     ] {
                         if ui
                             .selectable_label(
@@ -1589,10 +1601,27 @@ impl EditorUi {
                 ui.separator();
                 ui.label("Auto mesh");
                 ui.horizontal(|ui| {
-                    ui.weak("Spacing");
+                    for (i, (name, outline, inner, margin)) in Self::AUTO_PRESETS.iter().enumerate()
+                    {
+                        if ui.selectable_label(self.tool_opts.auto_preset == i, *name).clicked() {
+                            self.tool_opts.auto_preset = i;
+                            self.tool_opts.auto_spacing = *outline;
+                            self.tool_opts.auto_inner = *inner;
+                            self.tool_opts.auto_margin = *margin;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.weak("Outline");
                     ui.add(
                         egui::DragValue::new(&mut self.tool_opts.auto_spacing)
                             .range(4.0..=256.0)
+                            .suffix(" px"),
+                    );
+                    ui.weak("Inner");
+                    ui.add(
+                        egui::DragValue::new(&mut self.tool_opts.auto_inner)
+                            .range(4.0..=512.0)
                             .suffix(" px"),
                     );
                 });
@@ -3618,23 +3647,28 @@ impl EditorUi {
 
     /// Rebuild the mesh as a regular grid over its texture alpha, the way
     /// Cubism's auto mesh presets do. Spacing and margin are texture pixels.
-    fn auto_mesh(&mut self, mi: usize) {
-        let spacing = self.tool_opts.auto_spacing.clamp(4.0, 256.0);
-        let margin = self.tool_opts.auto_margin.clamp(0.0, 128.0);
-        let Some(s) = &mut self.session else { return };
-        let Some(am) = s.puppet.model().art_meshes.get(mi) else { return };
-        let tex = am.texture as usize;
-        let Some(png) = s.texture_pngs.get(tex) else { return };
-        let img = match image::load_from_memory(png) {
-            Ok(i) => i.to_rgba8(),
-            Err(e) => {
-                log::error!("auto mesh: texture decode failed: {e}");
-                return;
-            }
+    /// Cubism's auto mesh presets: outline spacing, inner spacing, margin.
+    const AUTO_PRESETS: [(&'static str, f32, f32, f32); 3] =
+        [("Standard", 24.0, 48.0, 8.0), ("Deform", 14.0, 28.0, 6.0), ("Light", 40.0, 80.0, 10.0)];
+
+    /// One mesh's new triangulation from its texture's alpha, or why not.
+    fn auto_mesh_data(&self, mi: usize) -> Result<(Vec<f32>, Vec<u16>), String> {
+        let o = &self.tool_opts;
+        let params = ayatsuri_core::automesh::Params {
+            outline_spacing: o.auto_spacing.clamp(4.0, 256.0),
+            inner_spacing: o.auto_inner.clamp(4.0, 512.0),
+            margin: o.auto_margin.clamp(0.0, 128.0),
+            threshold: 8,
         };
+        let s = self.session.as_ref().ok_or("no model open")?;
+        let am = s.puppet.model().art_meshes.get(mi).ok_or("mesh is gone")?;
+        let png = s.texture_pngs.get(am.texture as usize).ok_or("mesh has no texture")?;
+        let img = image::load_from_memory(png)
+            .map_err(|e| format!("texture decode failed: {e}"))?
+            .to_rgba8();
         let (tw, th) = (img.width() as f32, img.height() as f32);
 
-        // the mesh's patch of the atlas, padded by the margin
+        // the mesh's patch of the atlas, padded so the margin has room
         let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         let (uvp, _) = am.uvs.as_chunks::<2>();
         for &[u, v] in uvp {
@@ -3644,114 +3678,74 @@ impl EditorUi {
             v1 = v1.max(v);
         }
         if u0 > u1 || v0 > v1 {
+            return Err("mesh has no extent".into());
+        }
+        let pad = params.margin + 2.0;
+        let x0 = (u0 * tw - pad).max(0.0).floor() as u32;
+        let y0 = (v0 * th - pad).max(0.0).floor() as u32;
+        let x1 = (u1 * tw + pad).min(tw).ceil() as u32;
+        let y1 = (v1 * th + pad).min(th).ceil() as u32;
+        let (w, h) = ((x1.saturating_sub(x0)) as usize, (y1.saturating_sub(y0)) as usize);
+        let mut alpha = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                if let (Some(px), Some(slot)) =
+                    (img.get_pixel_checked(x0 + x as u32, y0 + y as u32), alpha.get_mut(y * w + x))
+                {
+                    *slot = px.0[3];
+                }
+            }
+        }
+        let started = std::time::Instant::now();
+        let mesh = ayatsuri_core::automesh::generate(&alpha, w, h, &params);
+        log::debug!(
+            "auto mesh {mi}: {}x{} px region, {} points, {} triangles in {:.0} ms",
+            w,
+            h,
+            mesh.points.len(),
+            mesh.triangles.len(),
+            started.elapsed().as_secs_f32() * 1000.0
+        );
+        if mesh.triangles.is_empty() {
+            return Err("no opaque pixels under this mesh".into());
+        }
+        let uvs: Vec<f32> = mesh
+            .points
+            .iter()
+            .flat_map(|&(x, y)| [(x0 as f32 + x) / tw, (y0 as f32 + y) / th])
+            .collect();
+        let indices: Vec<u16> = mesh.triangles.iter().flat_map(|t| t.iter().copied()).collect();
+        Ok((uvs, indices))
+    }
+
+    /// Re-mesh every given mesh from its artwork, as a single undo step.
+    fn auto_mesh_many(&mut self, meshes: &[usize]) {
+        let mut jobs = Vec::new();
+        for &mi in meshes {
+            match self.auto_mesh_data(mi) {
+                Ok(job) => jobs.push((mi, job)),
+                Err(e) => log::warn!("auto mesh skipped mesh {mi}: {e}"),
+            }
+        }
+        if jobs.is_empty() {
             return;
         }
-        let x0 = (u0 * tw - margin).max(0.0);
-        let y0 = (v0 * th - margin).max(0.0);
-        let x1 = (u1 * tw + margin).min(tw);
-        let y1 = (v1 * th + margin).min(th);
+        let Some(s) = &mut self.session else { return };
+        let (verts, tris) =
+            jobs.iter().fold((0, 0), |(v, t), (_, (uv, ix))| (v + uv.len() / 2, t + ix.len() / 3));
+        if s.edit(|m| {
+            let mut any = false;
+            for (mi, (uvs, idx)) in &jobs {
+                any |= ayatsuri_core::edit::remesh(m, *mi, uvs, idx);
+            }
+            any
+        }) {
+            log::info!("auto mesh: {} mesh(es), {verts} vertices, {tris} triangles", jobs.len());
+        }
+    }
 
-        let cols = (((x1 - x0) / spacing).ceil() as usize).clamp(1, 512);
-        let rows = (((y1 - y0) / spacing).ceil() as usize).clamp(1, 512);
-
-        // a cell stays when any texel in it has alpha, dilated by the margin
-        let probe = (spacing / 6.0).max(1.0);
-        let mut covered = vec![false; cols * rows];
-        for (ci, slot) in covered.iter_mut().enumerate() {
-            let (cx, cy) = (ci % cols, ci / cols);
-            let px0 = x0 + cx as f32 * spacing;
-            let py0 = y0 + cy as f32 * spacing;
-            let mut y = py0;
-            'cell: while y < (py0 + spacing).min(y1) {
-                let mut x = px0;
-                while x < (px0 + spacing).min(x1) {
-                    let p = img.get_pixel(
-                        (x as u32).min(img.width() - 1),
-                        (y as u32).min(img.height() - 1),
-                    );
-                    if p.0[3] > 8 {
-                        *slot = true;
-                        break 'cell;
-                    }
-                    x += probe;
-                }
-                y += probe;
-            }
-        }
-        let rings = (margin / spacing).ceil() as i64;
-        if rings > 0 {
-            let src = covered.clone();
-            for (ci, slot) in covered.iter_mut().enumerate() {
-                if *slot {
-                    continue;
-                }
-                let (cx, cy) = ((ci % cols) as i64, (ci / cols) as i64);
-                'dilate: for dy in -rings..=rings {
-                    for dx in -rings..=rings {
-                        let (nx, ny) = (cx + dx, cy + dy);
-                        if nx >= 0
-                            && ny >= 0
-                            && (nx as usize) < cols
-                            && (ny as usize) < rows
-                            && src.get(ny as usize * cols + nx as usize) == Some(&true)
-                        {
-                            *slot = true;
-                            break 'dilate;
-                        }
-                    }
-                }
-            }
-        }
-
-        // shared grid corners become the vertices, two triangles per cell
-        let mut corner_ids: std::collections::HashMap<(usize, usize), u16> =
-            std::collections::HashMap::new();
-        let mut uvs: Vec<f32> = Vec::new();
-        let mut indices: Vec<u16> = Vec::new();
-        let vid = |corner_ids: &mut std::collections::HashMap<(usize, usize), u16>,
-                   uvs: &mut Vec<f32>,
-                   gx: usize,
-                   gy: usize|
-         -> Option<u16> {
-            if let Some(&id) = corner_ids.get(&(gx, gy)) {
-                return Some(id);
-            }
-            if uvs.len() / 2 >= u16::MAX as usize - 1 {
-                return None;
-            }
-            let id = (uvs.len() / 2) as u16;
-            uvs.push(((x0 + gx as f32 * spacing).min(x1)) / tw);
-            uvs.push(((y0 + gy as f32 * spacing).min(y1)) / th);
-            corner_ids.insert((gx, gy), id);
-            Some(id)
-        };
-        for (ci, &on) in covered.iter().enumerate() {
-            if !on {
-                continue;
-            }
-            let (cx, cy) = (ci % cols, ci / cols);
-            let (Some(a), Some(b), Some(c), Some(d)) = (
-                vid(&mut corner_ids, &mut uvs, cx, cy),
-                vid(&mut corner_ids, &mut uvs, cx + 1, cy),
-                vid(&mut corner_ids, &mut uvs, cx + 1, cy + 1),
-                vid(&mut corner_ids, &mut uvs, cx, cy + 1),
-            ) else {
-                log::error!("auto mesh: too many vertices, raise the spacing");
-                return;
-            };
-            indices.extend_from_slice(&[a, b, c, a, c, d]);
-        }
-        if indices.is_empty() {
-            log::warn!("auto mesh: no opaque texels found under this mesh");
-            return;
-        }
-        let verts = uvs.len() / 2;
-        if s.edit(|m| ayatsuri_core::edit::remesh(m, mi, &uvs, &indices)) {
-            log::info!(
-                "auto mesh: {verts} vertices, {} triangles at {spacing:.0}px spacing",
-                indices.len() / 3
-            );
-        }
+    fn auto_mesh(&mut self, mi: usize) {
+        self.auto_mesh_many(&[mi]);
     }
 
     fn delete_parameter(&mut self, pi: usize) {
@@ -4748,38 +4742,64 @@ impl EditorUi {
     fn tool_details_panel(&mut self, ui: &mut Ui) {
         ui.label(egui::RichText::new(self.tool.label()).size(12.0).strong());
         ui.add_space(4.0);
+        // read before the options borrow below; applied after it ends
+        let selection = self.selection_meshes();
+        let mut auto_targets: Option<Vec<usize>> = None;
         let o = &mut self.tool_opts;
         match self.tool {
             Tool::MeshManual => {
                 ui.horizontal(|ui| {
-                    for (i, m) in ["Select", "Add", "Erase"].iter().enumerate() {
-                        if ui.selectable_label(o.mesh_mode == i, *m).clicked() {
-                            o.mesh_mode = i;
+                    for (i, m) in ["Move", "Add", "Erase", "Connect", "Cut"].iter().enumerate() {
+                        if ui.selectable_label(self.mesh_mode as usize == i, *m).clicked() {
+                            self.mesh_mode = i as u8;
                         }
                     }
                 });
-                ui.checkbox(&mut o.mesh_snap, "Snap to nearby vertices");
-                ui.weak("Mesh editing lands with the modeling tools.");
+                ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points");
+                ui.weak("Double-click a mesh or press Ctrl+E to start editing it.");
             }
             Tool::MeshAuto => {
                 ui.horizontal(|ui| {
                     ui.label("Preset");
-                    for (i, m) in ["Standard", "Deform", "Light"].iter().enumerate() {
-                        if ui.selectable_label(o.auto_preset == i, *m).clicked() {
+                    for (i, (name, outline, inner, margin)) in Self::AUTO_PRESETS.iter().enumerate()
+                    {
+                        if ui.selectable_label(o.auto_preset == i, *name).clicked() {
                             o.auto_preset = i;
+                            o.auto_spacing = *outline;
+                            o.auto_inner = *inner;
+                            o.auto_margin = *margin;
                         }
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Point spacing");
-                    ui.add(egui::DragValue::new(&mut o.auto_spacing).range(4.0..=128.0));
+                    ui.label("Outline spacing");
+                    ui.add(
+                        egui::DragValue::new(&mut o.auto_spacing).range(4.0..=256.0).suffix(" px"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Inner spacing");
+                    ui.add(
+                        egui::DragValue::new(&mut o.auto_inner).range(4.0..=512.0).suffix(" px"),
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.label("Margin");
-                    ui.add(egui::DragValue::new(&mut o.auto_margin).range(0.0..=64.0));
+                    ui.add(
+                        egui::DragValue::new(&mut o.auto_margin).range(0.0..=128.0).suffix(" px"),
+                    );
                 });
-                let _ = ui.add_enabled(false, egui::Button::new("Generate"));
-                ui.weak("Automatic meshing is on the roadmap.");
+                let targets = selection.clone();
+                if ui
+                    .add_enabled(
+                        !targets.is_empty(),
+                        egui::Button::new(format!("Generate for {} mesh(es)", targets.len())),
+                    )
+                    .clicked()
+                {
+                    auto_targets = Some(targets);
+                }
+                ui.weak("Follows each mesh's outline; one undo step for the whole selection.");
             }
             Tool::Glue => {
                 ui.horizontal(|ui| {
@@ -4821,6 +4841,9 @@ impl EditorUi {
             Tool::DeformPath | Tool::ArtPath | Tool::TextureAtlas => {
                 ui.weak("No options yet for this tool.");
             }
+        }
+        if let Some(t) = auto_targets {
+            self.auto_mesh_many(&t);
         }
     }
 
@@ -5516,7 +5539,7 @@ impl EditorUi {
                     });
                 }
                 mesh.indices.extend(d.indices.iter().map(|&i| i as u32));
-                vp.add(egui::Shape::mesh(mesh));
+                add_mesh_shape(&vp, mesh);
             }
         }
 
@@ -6145,7 +6168,8 @@ impl EditorUi {
             Move(usize, usize, f32, f32),
             Add(usize, usize, [f32; 3]),
             AddFree(usize, usize, [f32; 3], Option<(u16, u16)>),
-            Edge(usize, u16, u16),
+            Connect(usize, u16, u16),
+            Cut(usize, u16, u16),
             Del(usize, usize),
         }
         let mut mesh_op: Option<MeshOp> = None;
@@ -6253,20 +6277,27 @@ impl EditorUi {
                         }
                     }
                 }
-                // the edge tool: pick two points; joined ones get cut,
-                // separate ones get joined
-                if !space && self.mesh_mode == 3 && resp.clicked() {
+                // connect and cut both work on a pair: first click picks a
+                // point, second click acts; clicking empty space resets
+                let pairing = matches!(self.mesh_mode, 3 | 4);
+                if !space && pairing && resp.clicked() {
                     match (near, self.edge_first) {
                         (Some((vi, _)), None) => self.edge_first = Some(vi),
                         (Some((vi, _)), Some(first)) if vi == first => self.edge_first = None,
                         (Some((vi, _)), Some(first)) => {
-                            mesh_op = Some(MeshOp::Edge(mi, first as u16, vi as u16));
-                            self.edge_first = None;
+                            mesh_op = Some(if self.mesh_mode == 3 {
+                                MeshOp::Connect(mi, first as u16, vi as u16)
+                            } else {
+                                MeshOp::Cut(mi, first as u16, vi as u16)
+                            });
+                            // connecting chains: the far point becomes the
+                            // next start, so an outline draws click by click
+                            self.edge_first = (self.mesh_mode == 3).then_some(vi);
                         }
                         (None, _) => self.edge_first = None,
                     }
                 }
-                if self.mesh_mode != 3 {
+                if !pairing {
                     self.edge_first = None;
                 }
                 if !space
@@ -6332,7 +6363,7 @@ impl EditorUi {
                     });
                 }
                 mesh.indices.extend(g.indices.iter().map(|&i| i as u32));
-                vp.add(egui::Shape::mesh(mesh));
+                add_mesh_shape(&vp, mesh);
 
                 let stroke = Stroke::new(1.2, theme::pal().accent);
                 let (tris, _) = g.indices.as_chunks::<3>();
@@ -6363,12 +6394,7 @@ impl EditorUi {
                     if let (Some(&px), Some(&py)) =
                         (screen_pts.get(x as usize), screen_pts.get(y as usize))
                     {
-                        vp.add(egui::Shape::dashed_line(
-                            &[px, py],
-                            Stroke::new(1.2, theme::pal().warp_green),
-                            4.0,
-                            3.0,
-                        ));
+                        vp.line_segment([px, py], Stroke::new(1.4, theme::pal().accent));
                     }
                 }
                 if let Some(first) = self.edge_first
@@ -6431,19 +6457,15 @@ impl EditorUi {
                 MeshOp::AddFree(mi, ti, w, connect) => s.edit(|m| {
                     ayatsuri_core::edit::add_free_vertex(m, mi, ti, w, connect).is_some()
                 }),
-                MeshOp::Edge(mi, a, b) => {
+                MeshOp::Connect(mi, a, b) => {
                     let key = (a.min(b), a.max(b));
-                    let pending = self.pending_edges.entry(mi).or_default();
-                    if let Some(at) = pending.iter().position(|&e| e == key) {
-                        // a pending line just goes away
-                        pending.remove(at);
-                        log::debug!("mesh {mi}: pending line {a}-{b} removed");
+                    if ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b)
+                        || self.pending_edges.get(&mi).is_some_and(|p| p.contains(&key))
+                    {
+                        log::debug!("mesh {mi}: {a} and {b} are already connected");
                         true
-                    } else if ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b) {
-                        log::debug!("mesh {mi}: edge {a}-{b} cut");
-                        s.edit(|m| ayatsuri_core::edit::remove_edge(m, mi, a, b))
                     } else {
-                        let lines = pending.clone();
+                        let lines = self.pending_edges.get(&mi).cloned().unwrap_or_default();
                         let closed = s.edit(|m| ayatsuri_core::edit::add_edge(m, mi, a, b, &lines));
                         let pending = self.pending_edges.entry(mi).or_default();
                         if closed {
@@ -6451,11 +6473,28 @@ impl EditorUi {
                             pending.retain(|&(x, y)| {
                                 !ayatsuri_core::edit::has_edge(s.puppet.model(), mi, x, y)
                             });
-                            log::debug!("mesh {mi}: edge {a}-{b} closed a face");
+                            log::debug!("mesh {mi}: connecting {a}-{b} closed a face");
                         } else {
                             pending.push(key);
-                            log::debug!("mesh {mi}: line {a}-{b} pending until a face closes");
+                            log::debug!(
+                                "mesh {mi}: line {a}-{b} drawn, fills once it closes a triangle"
+                            );
                         }
+                        true
+                    }
+                }
+                MeshOp::Cut(mi, a, b) => {
+                    let key = (a.min(b), a.max(b));
+                    let pending = self.pending_edges.entry(mi).or_default();
+                    if let Some(at) = pending.iter().position(|&e| e == key) {
+                        pending.remove(at);
+                        log::debug!("mesh {mi}: line {a}-{b} removed");
+                        true
+                    } else if ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b) {
+                        log::debug!("mesh {mi}: edge {a}-{b} cut");
+                        s.edit(|m| ayatsuri_core::edit::remove_edge(m, mi, a, b))
+                    } else {
+                        log::debug!("mesh {mi}: {a} and {b} were not connected");
                         true
                     }
                 }
@@ -6634,6 +6673,22 @@ fn rig_groups_reach(rig: &ayatsuri_format::model::PhysicsRig, sel: usize) -> f32
                 + 10.0
         })
         .unwrap_or(20.0)
+}
+
+/// Hand egui a mesh only when it has something to draw: egui-wgpu panics
+/// slicing an empty index buffer, and it does so while rendering, outside
+/// the frame guard. A mesh whose faces were all cut is exactly that case.
+fn add_mesh_shape(painter: &egui::Painter, mesh: egui::Mesh) {
+    if mesh.indices.is_empty() || mesh.vertices.is_empty() {
+        return;
+    }
+    // indices past the vertex list would be the next panic; drop the mesh
+    let n = mesh.vertices.len() as u32;
+    if mesh.indices.iter().any(|&i| i >= n) {
+        log::warn!("skipped drawing a mesh with out-of-range indices");
+        return;
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// One mesh row in the Parts palette: eye, dot, name, live stack position.

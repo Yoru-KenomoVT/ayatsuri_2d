@@ -625,6 +625,39 @@ impl Session {
         }
     }
 
+    /// The periodic safety copy: snapshot the payload here, then encode and
+    /// write it on a thread so the frame never waits on deflate. One file
+    /// per model, overwritten each time.
+    pub fn autosave(&self) {
+        let Some(dir) =
+            crate::logging::log_path().and_then(|p| p.parent().map(|d| d.join("recovery")))
+        else {
+            return;
+        };
+        let safe: String = self
+            .name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let payload = self.payload();
+        std::thread::spawn(move || {
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join(format!("{safe}-autosave.aom"));
+            let tmp = path.with_extension("aom.tmp");
+            match ayatsuri_format::write(&payload) {
+                Ok(bytes) => {
+                    if std::fs::write(&tmp, bytes)
+                        .and_then(|_| std::fs::rename(&tmp, &path))
+                        .is_ok()
+                    {
+                        debug!("autosaved to {}", path.display());
+                    }
+                }
+                Err(e) => warn!("autosave failed: {e}"),
+            }
+        });
+    }
+
     /// Write a recovery copy without touching the session's own path, so a
     /// crash never costs the user their work. Returns where it went.
     pub fn write_recovery(&self) -> Option<PathBuf> {
