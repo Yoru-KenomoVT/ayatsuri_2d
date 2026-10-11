@@ -10,7 +10,16 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.editor.ui(ui);
+        // a bug in one frame must never take the whole editor down: the
+        // panic hook has already logged it with a backtrace, the editor
+        // rescues the work and shows what happened
+        let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.editor.ui(ui);
+        }));
+        if frame.is_err() {
+            self.editor.on_crash();
+            ui.ctx().request_repaint();
+        }
     }
 }
 

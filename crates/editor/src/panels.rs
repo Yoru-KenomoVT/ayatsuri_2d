@@ -187,6 +187,8 @@ pub struct EditorUi {
     /// Collapsed rows in the Deformer palette, and canvas-locked deformers.
     def_collapsed: std::collections::HashSet<usize>,
     def_locked: std::collections::HashSet<usize>,
+    /// A crash the shell caught this session, shown until dismissed.
+    crash: Option<CrashShown>,
     /// Folded folders in the Parts palette.
     part_collapsed: std::collections::HashSet<usize>,
     new_param: Option<ParamNew>,
@@ -286,6 +288,14 @@ struct PathDrag {
     /// Accumulated drag in model units.
     mdx: f32,
     mdy: f32,
+}
+
+/// What the crash dialog shows, plus where the work was rescued to.
+struct CrashShown {
+    message: String,
+    location: String,
+    recovery: Option<PathBuf>,
+    count: u32,
 }
 
 /// The New Animation dialog's working copy.
@@ -402,6 +412,7 @@ impl Default for EditorUi {
             def_collapsed: std::collections::HashSet::new(),
             def_locked: std::collections::HashSet::new(),
             part_collapsed: std::collections::HashSet::new(),
+            crash: None,
             new_param: None,
             new_folder: None,
             new_model: None,
@@ -439,6 +450,115 @@ impl Default for EditorUi {
 impl EditorUi {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The app shell calls this after catching a panic out of `ui`: the
+    /// work gets rescued to a recovery file and the next frames show what
+    /// happened instead of the editor vanishing.
+    pub fn on_crash(&mut self) {
+        let info = logging::take_crash();
+        // stop whatever was mid-flight; it is the likeliest culprit
+        self.mesh_drag = None;
+        self.warp_drag = None;
+        self.rot_drag = None;
+        self.anim_playing = false;
+        let recovery = self.session.as_ref().and_then(|s| s.write_recovery());
+        match &recovery {
+            Some(p) => log::error!("work saved to {} after the crash", p.display()),
+            None if self.session.is_some() => log::error!("could not write a recovery copy"),
+            None => {}
+        }
+        let count = self.crash.as_ref().map_or(0, |c| c.count) + 1;
+        self.crash = Some(CrashShown {
+            message: info
+                .as_ref()
+                .map(|c| c.message.clone())
+                .unwrap_or_else(|| "unknown error".into()),
+            location: info.map(|c| c.location).unwrap_or_default(),
+            recovery,
+            count,
+        });
+    }
+
+    fn crash_window(&mut self, ui: &mut Ui) {
+        let Some(c) = &self.crash else { return };
+        let mut keep = true;
+        let mut copy = false;
+        let mut open_dir = false;
+        egui::Window::new("Something went wrong")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ui.ctx(), |ui| {
+                ui.set_width(440.0);
+                ui.label(
+                    egui::RichText::new(format!("{} {}", egui_phosphor::regular::WARNING, c.message))
+                        .color(theme::pal().accent)
+                        .strong(),
+                );
+                if !c.location.is_empty() {
+                    ui.weak(format!("at {}", c.location));
+                }
+                ui.add_space(6.0);
+                ui.label("The editor caught the error and kept running. The step that failed was undone where possible.");
+                match &c.recovery {
+                    Some(p) => {
+                        ui.label(format!("Your model was saved to {}", p.display()));
+                    }
+                    None => {
+                        ui.weak("No model was open, nothing needed rescuing.");
+                    }
+                }
+                if let Some(p) = logging::log_path() {
+                    ui.weak(format!("Full details, with a backtrace, are in {}", p.display()));
+                }
+                if c.count > 1 {
+                    ui.weak(format!("This has happened {} times this session.", c.count));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Copy details").clicked() {
+                        copy = true;
+                    }
+                    if ui.button("Open log folder").clicked() {
+                        open_dir = true;
+                    }
+                    if ui.button(egui::RichText::new("Keep working").strong()).clicked() {
+                        keep = false;
+                    }
+                });
+            });
+        if copy {
+            let tail = logging::lines(log::Level::Trace);
+            let start = tail.len().saturating_sub(80);
+            let report = format!(
+                "Ayatsuri2D {} on {} {}\n{} at {}\n\n{}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                c.message,
+                c.location,
+                tail.get(start..).unwrap_or(&[]).join("\n")
+            );
+            ui.ctx().copy_text(report);
+        }
+        if open_dir
+            && let Some(dir) = logging::log_path().and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        {
+            // the platform's file browser; failure here is harmless
+            let opener = if cfg!(target_os = "macos") {
+                "open"
+            } else if cfg!(target_os = "windows") {
+                "explorer"
+            } else {
+                "xdg-open"
+            };
+            let _ = std::process::Command::new(opener).arg(dir).spawn();
+        }
+        if !keep {
+            log::debug!("crash dialog dismissed, editing continues");
+            self.crash = None;
+        }
     }
 
     /// Import this model on the first frame (the CLI's `ayatsuri model.moc3`).
@@ -538,6 +658,11 @@ impl EditorUi {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
+        // a crash caught outside this frame (the GPU callback) surfaces here
+        if logging::has_crash() {
+            self.on_crash();
+        }
+        self.crash_window(ui);
         if !self.theme_applied {
             let ctx = ui.ctx().clone();
             if let Some([r, g, b]) = self.prefs.accent {

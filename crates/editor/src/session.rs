@@ -591,9 +591,9 @@ impl Session {
     }
 
     /// Save this session as `.aom`, atomically, and remember the path.
-    pub fn save_aom(&mut self, path: &Path) -> Result<(), String> {
-        let started = std::time::Instant::now();
-        let payload = AomPayload {
+    /// The model, textures, animations and display info as one payload.
+    fn payload(&self) -> AomPayload {
+        AomPayload {
             meta: Meta {
                 name: self.name.clone(),
                 author: self.author.clone(),
@@ -622,7 +622,32 @@ impl Session {
                     .map(|g| (g.name.clone(), g.params.iter().map(|&p| p as u32).collect()))
                     .collect(),
             }),
-        };
+        }
+    }
+
+    /// Write a recovery copy without touching the session's own path, so a
+    /// crash never costs the user their work. Returns where it went.
+    pub fn write_recovery(&self) -> Option<PathBuf> {
+        let dir = crate::logging::log_path()?.parent()?.join("recovery");
+        std::fs::create_dir_all(&dir).ok()?;
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let safe: String = self
+            .name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let path = dir.join(format!("{safe}-{secs}.aom"));
+        let bytes = ayatsuri_format::write(&self.payload()).ok()?;
+        std::fs::write(&path, bytes).ok()?;
+        Some(path)
+    }
+
+    pub fn save_aom(&mut self, path: &Path) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        let payload = self.payload();
         let bytes = ayatsuri_format::write(&payload).map_err(|e| e.to_string())?;
         let tmp = path.with_extension("aom.tmp");
         std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;

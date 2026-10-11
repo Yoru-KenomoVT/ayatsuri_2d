@@ -25,7 +25,15 @@ impl egui_wgpu::CallbackTrait for ModelPaint {
             && let Some(packet) = guard.take()
             && let Some(renderer) = resources.get_mut::<GpuRenderer>()
         {
-            renderer.prepare(device, queue, encoder, &packet);
+            // this runs inside eframe's render, outside the frame guard, so
+            // it gets its own: a bad frame skips drawing the model, the hook
+            // has logged why, and the editor reports it next frame
+            let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                renderer.prepare(device, queue, encoder, &packet);
+            }));
+            if ok.is_err() {
+                log::error!("model rendering failed this frame and was skipped");
+            }
         }
         Vec::new()
     }
@@ -37,7 +45,12 @@ impl egui_wgpu::CallbackTrait for ModelPaint {
         resources: &egui_wgpu::CallbackResources,
     ) {
         if let Some(renderer) = resources.get::<GpuRenderer>() {
-            renderer.paint(render_pass);
+            let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                renderer.paint(render_pass);
+            }));
+            if ok.is_err() {
+                log::error!("model painting failed this frame and was skipped");
+            }
         }
     }
 }

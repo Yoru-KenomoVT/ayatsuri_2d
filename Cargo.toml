@@ -60,3 +60,5 @@ opt-level = 2
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# line tables only: crash backtraces name file and line, binary stays lean
+debug = "line-tables-only"
