@@ -157,6 +157,11 @@ pub struct EditorUi {
     phys_peak_cache: Vec<(usize, f32)>,
     phys_preset: usize,
     phys_zoom: f32,
+    /// The dialog preview's own little pendulum: (pos, prev) per node plus
+    /// a hash of the settings that built it.
+    phys_prev: Vec<(f32, f32, f32, f32)>,
+    phys_prev_sig: u64,
+    phys_prev_drive: f32,
     /// The physics dialog's Valid checkbox: the rig only ticks while on.
     physics_on: bool,
     /// Drive the standard face/body/eye parameters from the cursor.
@@ -340,6 +345,9 @@ impl Default for EditorUi {
             phys_peak_cache: Vec::new(),
             phys_preset: 0,
             phys_zoom: 1.0,
+            phys_prev: Vec::new(),
+            phys_prev_sig: 0,
+            phys_prev_drive: 0.0,
             physics_on: true,
             follow_cursor: false,
             follow: Vec2::ZERO,
@@ -536,6 +544,15 @@ impl EditorUi {
             self.logged_tool = self.tool;
         }
 
+        // the title carries the unsaved marker, like every other editor
+        {
+            let title = match &self.session {
+                Some(s) if s.modified => format!("Ayatsuri2D · {} *", s.name),
+                Some(s) => format!("Ayatsuri2D · {}", s.name),
+                None => "Ayatsuri2D".into(),
+            };
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
         // closing with unsaved work stops at a dialog first
         if ui.ctx().input(|i| i.viewport().close_requested())
             && !self.force_close
@@ -1304,9 +1321,9 @@ impl EditorUi {
         }
     }
 
-    /// The physics dialog, laid out after Cubism's Physics tab: FPS and
-    /// group row up top, Input/Output settings tabs, the physical model
-    /// table beside the live pendulum preview, all on a working copy that
+    /// The physics dialog, Cubism's Physics tab squeezed into a compact
+    /// column: FPS and group rows, Input/Output tabs, then the pendulum
+    /// table beside the preview. Everything edits a working copy that
     /// Apply commits as one undoable change.
     fn physics_window(&mut self, ui: &mut Ui) {
         if !self.show_physics {
@@ -1355,15 +1372,17 @@ impl EditorUi {
         egui::Window::new("Physics Settings")
             .open(&mut open)
             .collapsible(false)
-            .default_width(620.0)
+            .resizable(true)
+            .default_width(400.0)
             .show(ui.ctx(), |ui| {
-                // (1) calculate fps, like the manual's composition
+                ui.spacing_mut().item_spacing = vec2(5.0, 4.0);
+                // fps, wind and the group picker share the first rows
                 ui.horizontal(|ui| {
-                    ui.label("Calculate FPS:");
+                    ui.label("FPS:");
                     let mut fps = if rig.fps > 0.0 { rig.fps } else { 60.0 };
                     egui::ComboBox::from_id_salt("phys-fps")
                         .selected_text(format!("{fps:.0}"))
-                        .width(60.0)
+                        .width(52.0)
                         .show_ui(ui, |ui| {
                             for v in [15.0f32, 30.0, 60.0, 120.0] {
                                 if ui.selectable_label(fps == v, format!("{v:.0}")).clicked() {
@@ -1372,23 +1391,29 @@ impl EditorUi {
                             }
                         });
                     rig.fps = fps;
-                    ui.separator();
                     ui.weak("Wind");
-                    ui.add(egui::DragValue::new(&mut rig.wind_x).speed(0.05).prefix("X "));
-                    ui.add(egui::DragValue::new(&mut rig.wind_y).speed(0.05).prefix("Y "));
+                    ui.add(
+                        egui::DragValue::new(&mut rig.wind_x)
+                            .speed(0.05)
+                            .prefix("X ")
+                            .update_while_editing(false),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut rig.wind_y)
+                            .speed(0.05)
+                            .prefix("Y ")
+                            .update_while_editing(false),
+                    );
                 });
-
-                // (2) group row: pick, enable, add, duplicate, delete
                 ui.horizontal(|ui| {
-                    ui.label("Group:");
                     let current = rig
                         .groups
                         .get(self.phys_sel)
                         .map(|g| if g.name.is_empty() { g.id.clone() } else { g.name.clone() })
                         .unwrap_or_else(|| "(none)".into());
                     egui::ComboBox::from_id_salt("phys-group")
-                        .selected_text(truncate(&current, 20))
-                        .width(160.0)
+                        .selected_text(truncate(&current, 16))
+                        .width(130.0)
                         .show_ui(ui, |ui| {
                             for (gi, g) in rig.groups.iter().enumerate() {
                                 let label = if g.name.is_empty() { &g.id } else { &g.name };
@@ -1404,13 +1429,17 @@ impl EditorUi {
                     if ui.checkbox(&mut on, "Enable").changed() {
                         toggle_enable = true;
                     }
-                    if ui.button("Add").clicked() {
+                    if ui.button(egui_phosphor::regular::PLUS).on_hover_text("Add group").clicked()
+                    {
                         let n = rig.groups.len() + 1;
                         rig.groups.push(default_physics_group(n));
                         self.phys_sel = rig.groups.len() - 1;
                         log::debug!("physics: group {n} added");
                     }
-                    if ui.button("Duplicate").clicked()
+                    if ui
+                        .button(egui_phosphor::regular::COPY)
+                        .on_hover_text("Duplicate group")
+                        .clicked()
                         && let Some(g) = rig.groups.get(self.phys_sel).cloned()
                     {
                         let mut g = g;
@@ -1419,22 +1448,26 @@ impl EditorUi {
                         rig.groups.push(g);
                         self.phys_sel = rig.groups.len() - 1;
                     }
-                    if ui.button("Delete").clicked() && self.phys_sel < rig.groups.len() {
+                    if ui
+                        .button(egui_phosphor::regular::TRASH)
+                        .on_hover_text("Delete group")
+                        .clicked()
+                        && self.phys_sel < rig.groups.len()
+                    {
                         rig.groups.remove(self.phys_sel);
                         self.phys_sel = self.phys_sel.min(rig.groups.len().saturating_sub(1));
                     }
+                    if let Some(g) = rig.groups.get_mut(self.phys_sel) {
+                        ui.add_sized(
+                            vec2(ui.available_width().max(60.0), 18.0),
+                            egui::TextEdit::singleline(&mut g.name),
+                        );
+                    }
                 });
-                if let Some(g) = rig.groups.get_mut(self.phys_sel) {
-                    ui.horizontal(|ui| {
-                        ui.weak("Name");
-                        ui.add_sized(vec2(220.0, 18.0), egui::TextEdit::singleline(&mut g.name));
-                    });
-                }
                 ui.separator();
 
-                // (3)(4) the input / output settings tabs
                 ui.horizontal(|ui| {
-                    for (i, label) in ["Input settings", "Output Settings"].iter().enumerate() {
+                    for (i, label) in ["Input", "Output"].iter().enumerate() {
                         if ui.selectable_label(self.phys_tab == i, *label).clicked() {
                             self.phys_tab = i;
                         }
@@ -1447,8 +1480,8 @@ impl EditorUi {
                 };
                 let combo = |ui: &mut Ui, salt: String, current: &mut String| {
                     egui::ComboBox::from_id_salt(salt)
-                        .selected_text(truncate(current, 16))
-                        .width(140.0)
+                        .selected_text(truncate(current, 14))
+                        .width(116.0)
                         .show_ui(ui, |ui| {
                             for id in &param_ids {
                                 ui.selectable_value(current, id.clone(), id);
@@ -1457,136 +1490,103 @@ impl EditorUi {
                 };
                 match self.phys_tab {
                     0 => {
-                        ui.horizontal_top(|ui| {
-                            // preset + normalization rail
-                            ui.vertical(|ui| {
-                                ui.set_width(210.0);
-                                ui.label("Preset");
-                                ui.horizontal(|ui| {
-                                    egui::ComboBox::from_id_salt("phys-in-preset")
-                                        .selected_text(
-                                            ["Head input", "Torso input", "Chest input"]
-                                                .get(self.phys_preset)
-                                                .copied()
-                                                .unwrap_or("Head input"),
-                                        )
-                                        .width(110.0)
-                                        .show_ui(ui, |ui| {
-                                            for (i, n) in
-                                                ["Head input", "Torso input", "Chest input"]
-                                                    .iter()
-                                                    .enumerate()
-                                            {
-                                                ui.selectable_value(&mut self.phys_preset, i, *n);
-                                            }
-                                        });
-                                    if ui.button("Import").clicked() {
-                                        g.inputs = input_preset(self.phys_preset);
-                                        log::debug!("physics: input preset imported");
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("phys-in-preset")
+                                .selected_text(
+                                    ["Head input", "Torso input", "Chest input"]
+                                        .get(self.phys_preset)
+                                        .copied()
+                                        .unwrap_or("Head input"),
+                                )
+                                .width(100.0)
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in ["Head input", "Torso input", "Chest input"]
+                                        .iter()
+                                        .enumerate()
+                                    {
+                                        ui.selectable_value(&mut self.phys_preset, i, *n);
                                     }
                                 });
-                                ui.add_space(8.0);
-                                ui.label("Normalization of input");
-                                egui::Grid::new("phys-norm")
-                                    .num_columns(4)
-                                    .spacing([6.0, 4.0])
-                                    .show(ui, |ui| {
-                                        ui.weak("");
-                                        ui.weak("Min");
-                                        ui.weak("Center");
-                                        ui.weak("Max");
-                                        ui.end_row();
-                                        ui.weak("Angle");
-                                        ui.add(
-                                            egui::DragValue::new(&mut g.norm_angle.min).speed(0.5),
-                                        );
-                                        ui.add(
-                                            egui::DragValue::new(&mut g.norm_angle.default)
-                                                .speed(0.5),
-                                        );
-                                        ui.add(
-                                            egui::DragValue::new(&mut g.norm_angle.max).speed(0.5),
-                                        );
-                                        ui.end_row();
-                                        ui.weak("Position X");
-                                        ui.add(
-                                            egui::DragValue::new(&mut g.norm_position.min)
-                                                .speed(0.5),
-                                        );
-                                        ui.add(
-                                            egui::DragValue::new(&mut g.norm_position.default)
-                                                .speed(0.5),
-                                        );
-                                        ui.add(
-                                            egui::DragValue::new(&mut g.norm_position.max)
-                                                .speed(0.5),
-                                        );
-                                        ui.end_row();
-                                    });
-                            });
-                            ui.separator();
-                            ui.vertical(|ui| {
-                                if ui.button("Add…").clicked() {
-                                    g.inputs.push(ayatsuri_format::model::PhysicsInput {
-                                        param: param_ids.first().cloned().unwrap_or_default(),
-                                        weight: 100.0,
-                                        kind: ayatsuri_format::model::PhysicsIo::X,
-                                        reflect: false,
-                                    });
-                                }
-                                let mut kill = None;
-                                egui::Grid::new("phys-in").num_columns(5).spacing([8.0, 3.0]).show(
-                                    ui,
-                                    |ui| {
-                                        ui.weak("Input");
-                                        ui.weak("Type");
-                                        ui.weak("Effectiveness (%)");
-                                        ui.weak("Reflect");
-                                        ui.weak("");
-                                        ui.end_row();
-                                        for (i, inp) in g.inputs.iter_mut().enumerate() {
-                                            combo(ui, format!("pi{i}"), &mut inp.param);
-                                            egui::ComboBox::from_id_salt(format!("pit{i}"))
-                                                .selected_text(match inp.kind {
-                                                    ayatsuri_format::model::PhysicsIo::Angle => {
-                                                        "Angle"
-                                                    }
-                                                    _ => "Position X",
-                                                })
-                                                .width(86.0)
-                                                .show_ui(ui, |ui| {
-                                                    ui.selectable_value(
-                                                        &mut inp.kind,
-                                                        ayatsuri_format::model::PhysicsIo::X,
-                                                        "Position X",
-                                                    );
-                                                    ui.selectable_value(
-                                                        &mut inp.kind,
-                                                        ayatsuri_format::model::PhysicsIo::Angle,
-                                                        "Angle",
-                                                    );
-                                                });
-                                            ui.add(
-                                                egui::DragValue::new(&mut inp.weight)
-                                                    .range(0.0..=100.0),
-                                            );
-                                            ui.checkbox(&mut inp.reflect, "");
-                                            if ui
-                                                .button(egui_phosphor::regular::X)
-                                                .on_hover_text("Delete")
-                                                .clicked()
-                                            {
-                                                kill = Some(i);
-                                            }
-                                            ui.end_row();
-                                        }
-                                    },
-                                );
-                                if let Some(i) = kill {
-                                    g.inputs.remove(i);
-                                }
-                            });
+                            if ui.button("Import").clicked() {
+                                g.inputs = input_preset(self.phys_preset);
+                                log::debug!("physics: input preset imported");
+                            }
+                            if ui.button("Add…").clicked() {
+                                g.inputs.push(ayatsuri_format::model::PhysicsInput {
+                                    param: param_ids.first().cloned().unwrap_or_default(),
+                                    weight: 100.0,
+                                    kind: ayatsuri_format::model::PhysicsIo::X,
+                                    reflect: false,
+                                });
+                            }
                         });
+                        let mut kill = None;
+                        egui::Grid::new("phys-in").num_columns(5).spacing([5.0, 2.0]).show(
+                            ui,
+                            |ui| {
+                                ui.weak("Input");
+                                ui.weak("Type");
+                                ui.weak("%").on_hover_text("Effectiveness");
+                                ui.weak("Flip");
+                                ui.weak("");
+                                ui.end_row();
+                                for (i, inp) in g.inputs.iter_mut().enumerate() {
+                                    combo(ui, format!("pi{i}"), &mut inp.param);
+                                    egui::ComboBox::from_id_salt(format!("pit{i}"))
+                                        .selected_text(match inp.kind {
+                                            ayatsuri_format::model::PhysicsIo::Angle => "Angle",
+                                            _ => "Pos X",
+                                        })
+                                        .width(70.0)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut inp.kind,
+                                                ayatsuri_format::model::PhysicsIo::X,
+                                                "Position X",
+                                            );
+                                            ui.selectable_value(
+                                                &mut inp.kind,
+                                                ayatsuri_format::model::PhysicsIo::Angle,
+                                                "Angle",
+                                            );
+                                        });
+                                    ui.add(
+                                        egui::DragValue::new(&mut inp.weight).range(0.0..=100.0),
+                                    );
+                                    ui.checkbox(&mut inp.reflect, "");
+                                    if ui
+                                        .button(egui_phosphor::regular::X)
+                                        .on_hover_text("Delete")
+                                        .clicked()
+                                    {
+                                        kill = Some(i);
+                                    }
+                                    ui.end_row();
+                                }
+                            },
+                        );
+                        if let Some(i) = kill {
+                            g.inputs.remove(i);
+                        }
+                        ui.add_space(2.0);
+                        ui.weak("Normalization  ·  min / center / max");
+                        egui::Grid::new("phys-norm").num_columns(4).spacing([5.0, 2.0]).show(
+                            ui,
+                            |ui| {
+                                ui.weak("Angle");
+                                ui.add(egui::DragValue::new(&mut g.norm_angle.min).speed(0.5));
+                                ui.add(egui::DragValue::new(&mut g.norm_angle.default).speed(0.5));
+                                ui.add(egui::DragValue::new(&mut g.norm_angle.max).speed(0.5));
+                                ui.end_row();
+                                ui.weak("Pos X");
+                                ui.add(egui::DragValue::new(&mut g.norm_position.min).speed(0.5));
+                                ui.add(
+                                    egui::DragValue::new(&mut g.norm_position.default).speed(0.5),
+                                );
+                                ui.add(egui::DragValue::new(&mut g.norm_position.max).speed(0.5));
+                                ui.end_row();
+                            },
+                        );
                     }
                     _ => {
                         ui.horizontal(|ui| {
@@ -1600,107 +1600,109 @@ impl EditorUi {
                                     reflect: false,
                                 });
                             }
-                            ui.checkbox(&mut self.phys_auto_max, "Auto-update maximum of output");
+                            ui.checkbox(&mut self.phys_auto_max, "Auto max")
+                                .on_hover_text("Auto-update maximum of output");
                         });
-                        ui.horizontal_top(|ui| {
-                            ui.vertical(|ui| {
-                                ui.set_width(430.0);
-                                let mut kill = None;
-                                egui::Grid::new("phys-out")
-                                    .num_columns(7)
-                                    .spacing([8.0, 3.0])
-                                    .show(ui, |ui| {
-                                        ui.weak("Pendulum No");
-                                        ui.weak("Output");
-                                        ui.weak("Effect. (%)");
-                                        ui.weak("Reflect");
-                                        ui.weak("Scale");
-                                        ui.weak("Output Max (%)");
-                                        ui.weak("");
-                                        ui.end_row();
-                                        for (i, out) in g.outputs.iter_mut().enumerate() {
-                                            ui.add(
-                                                egui::DragValue::new(&mut out.vertex).range(1..=99),
-                                            );
-                                            combo(ui, format!("po{i}"), &mut out.param);
-                                            ui.add(
-                                                egui::DragValue::new(&mut out.weight)
-                                                    .range(0.0..=100.0),
-                                            );
-                                            ui.checkbox(&mut out.reflect, "");
-                                            ui.add(
-                                                egui::DragValue::new(&mut out.scale).speed(0.05),
-                                            );
-                                            let peak = live_peaks
-                                                .iter()
-                                                .find(|(oi, _)| *oi == i)
-                                                .map(|(_, p)| *p)
-                                                .unwrap_or(0.0);
-                                            ui.label(format!("{peak:.1}"));
-                                            if ui
-                                                .button(egui_phosphor::regular::X)
-                                                .on_hover_text("Delete")
-                                                .clicked()
-                                            {
-                                                kill = Some(i);
-                                            }
-                                            ui.end_row();
-                                        }
-                                    });
-                                if let Some(i) = kill {
-                                    g.outputs.remove(i);
+                        let mut kill = None;
+                        egui::Grid::new("phys-out").num_columns(7).spacing([5.0, 2.0]).show(
+                            ui,
+                            |ui| {
+                                ui.weak("No").on_hover_text("Pendulum No");
+                                ui.weak("Output");
+                                ui.weak("%").on_hover_text("Effectiveness");
+                                ui.weak("Flip");
+                                ui.weak("Scale");
+                                ui.weak("Max%").on_hover_text("Output Maximum (%)");
+                                ui.weak("");
+                                ui.end_row();
+                                for (i, out) in g.outputs.iter_mut().enumerate() {
+                                    ui.add(egui::DragValue::new(&mut out.vertex).range(1..=99));
+                                    combo(ui, format!("po{i}"), &mut out.param);
+                                    ui.add(
+                                        egui::DragValue::new(&mut out.weight).range(0.0..=100.0),
+                                    );
+                                    ui.checkbox(&mut out.reflect, "");
+                                    ui.add(egui::DragValue::new(&mut out.scale).speed(0.05));
+                                    let peak = live_peaks
+                                        .iter()
+                                        .find(|(oi, _)| *oi == i)
+                                        .map(|(_, p)| *p)
+                                        .unwrap_or(0.0);
+                                    ui.label(format!("{peak:.0}"));
+                                    if ui
+                                        .button(egui_phosphor::regular::X)
+                                        .on_hover_text("Delete")
+                                        .clicked()
+                                    {
+                                        kill = Some(i);
+                                    }
+                                    ui.end_row();
                                 }
-                            });
-                            ui.vertical(|ui| {
-                                let adjust =
-                                    |outs: &mut Vec<ayatsuri_format::model::PhysicsOutput>,
-                                     peaks: &[(usize, f32)],
-                                     up: bool| {
-                                        for (i, o) in outs.iter_mut().enumerate() {
-                                            let Some(&(_, peak)) =
-                                                peaks.iter().find(|(oi, _)| *oi == i)
-                                            else {
-                                                continue;
-                                            };
-                                            if peak > 1e-3
-                                                && ((up && peak < 100.0) || (!up && peak > 100.0))
-                                            {
-                                                o.scale *= 100.0 / peak;
-                                            }
-                                        }
+                            },
+                        );
+                        if let Some(i) = kill {
+                            g.outputs.remove(i);
+                        }
+                        ui.horizontal(|ui| {
+                            let adjust = |outs: &mut Vec<ayatsuri_format::model::PhysicsOutput>,
+                                          peaks: &[(usize, f32)],
+                                          up: bool| {
+                                for (i, o) in outs.iter_mut().enumerate() {
+                                    let Some(&(_, peak)) = peaks.iter().find(|(oi, _)| *oi == i)
+                                    else {
+                                        continue;
                                     };
-                                if ui.button("Increase Output").clicked() {
-                                    adjust(&mut g.outputs, &live_peaks, true);
-                                    reset_peaks = true;
-                                }
-                                if ui.button("Decrease Output").clicked() {
-                                    adjust(&mut g.outputs, &live_peaks, false);
-                                    reset_peaks = true;
-                                }
-                                if ui.button("Reset Magnification").clicked() {
-                                    for o in &mut g.outputs {
-                                        o.scale = 1.0;
+                                    if peak > 1e-3
+                                        && ((up && peak < 100.0) || (!up && peak > 100.0))
+                                    {
+                                        o.scale *= 100.0 / peak;
                                     }
                                 }
-                                if ui.button("Reset Output Maximum").clicked() {
-                                    reset_peaks = true;
+                            };
+                            if ui
+                                .small_button("Output ↑")
+                                .on_hover_text("Increase Output")
+                                .clicked()
+                            {
+                                adjust(&mut g.outputs, &live_peaks, true);
+                                reset_peaks = true;
+                            }
+                            if ui
+                                .small_button("Output ↓")
+                                .on_hover_text("Decrease Output")
+                                .clicked()
+                            {
+                                adjust(&mut g.outputs, &live_peaks, false);
+                                reset_peaks = true;
+                            }
+                            if ui
+                                .small_button("Scale 1.0")
+                                .on_hover_text("Reset Magnification")
+                                .clicked()
+                            {
+                                for o in &mut g.outputs {
+                                    o.scale = 1.0;
                                 }
-                            });
+                            }
+                            if ui
+                                .small_button("Clear max")
+                                .on_hover_text("Reset Output Maximum")
+                                .clicked()
+                            {
+                                reset_peaks = true;
+                            }
                         });
-                        ui.weak(
-                            "Move the model (Follow helps) to collect Output Max, then adjust.",
-                        );
+                        ui.weak("Move the model (Follow helps) to collect Max%, then adjust.");
                     }
                 }
                 ui.separator();
 
-                // (5)(6) physical model settings beside the pendulum preview
-                ui.label("Physics model settings");
+                // the pendulum table beside the live preview
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
-                        ui.set_width(380.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Add").clicked() {
+                            ui.label("Pendulums");
+                            if ui.small_button(egui_phosphor::regular::PLUS).clicked() {
                                 let last = g.nodes.last().cloned().unwrap_or(
                                     ayatsuri_format::model::PhysicsNode {
                                         x: 0.0,
@@ -1714,7 +1716,13 @@ impl EditorUi {
                                 g.nodes.push(last);
                             }
                             let can_del = g.nodes.len() > 2;
-                            if ui.add_enabled(can_del, egui::Button::new("Delete")).clicked() {
+                            if ui
+                                .add_enabled(
+                                    can_del,
+                                    egui::Button::new(egui_phosphor::regular::MINUS).small(),
+                                )
+                                .clicked()
+                            {
                                 g.nodes.pop();
                                 for o in &mut g.outputs {
                                     if o.vertex as usize >= g.nodes.len() {
@@ -1723,19 +1731,17 @@ impl EditorUi {
                                 }
                             }
                         });
-                        egui::Grid::new("phys-nodes").num_columns(5).spacing([10.0, 3.0]).show(
+                        egui::Grid::new("phys-nodes").num_columns(5).spacing([5.0, 2.0]).show(
                             ui,
                             |ui| {
                                 ui.weak("No");
-                                ui.weak("Duration");
-                                ui.weak("Shaking influence");
-                                ui.weak("Reaction time");
-                                ui.weak("Overall acceleration");
+                                ui.weak("Len").on_hover_text("Duration (stage length)");
+                                ui.weak("Sway").on_hover_text("Shaking influence");
+                                ui.weak("React").on_hover_text("Reaction time");
+                                ui.weak("Accel").on_hover_text("Overall acceleration");
                                 ui.end_row();
                                 for (i, n) in g.nodes.iter_mut().enumerate().skip(1) {
                                     ui.label(i.to_string());
-                                    // duration is the stage length; keep the
-                                    // authored direction, change the reach
                                     let mut len = (n.x * n.x + n.y * n.y).sqrt();
                                     let before = len;
                                     if ui
@@ -1775,9 +1781,9 @@ impl EditorUi {
                             },
                         );
                     });
-                    ui.separator();
+                    let nodes_copy = g.nodes.clone();
                     ui.vertical(|ui| {
-                        self.pendulum_preview(ui, reach);
+                        self.pendulum_preview(ui, reach, &nodes_copy);
                     });
                 });
                 ui.separator();
@@ -1788,7 +1794,6 @@ impl EditorUi {
                     if ui.button("Revert").clicked() {
                         revert = true;
                     }
-                    ui.weak("Apply commits one undo step and rebuilds the simulation.");
                 });
             });
         if toggle_enable && let Some(s) = &mut self.session {
@@ -1831,9 +1836,16 @@ impl EditorUi {
         }
     }
 
-    /// The live pendulum preview pane, grid and all.
-    fn pendulum_preview(&mut self, ui: &mut Ui, reach: f32) {
-        let (prect, presp) = ui.allocate_exact_size(vec2(170.0, 170.0), Sense::hover());
+    /// The pendulum preview pane: its own tiny simulation of the working
+    /// copy's chain, the way Cubism previews the physical model without the
+    /// input and output wiring. Drag sideways to swing it.
+    fn pendulum_preview(
+        &mut self,
+        ui: &mut Ui,
+        reach: f32,
+        nodes: &[ayatsuri_format::model::PhysicsNode],
+    ) {
+        let (prect, presp) = ui.allocate_exact_size(vec2(126.0, 132.0), Sense::click_and_drag());
         let pp = ui.painter_at(prect);
         pp.rect_filled(prect, 4.0, theme::pal().canvas_bg);
         pp.rect_stroke(prect, 4.0, Stroke::new(1.0, theme::pal().border), StrokeKind::Inside);
@@ -1847,56 +1859,104 @@ impl EditorUi {
             pp.line_segment([pos2(x, prect.min.y), pos2(x, prect.max.y)], grid);
             pp.line_segment([pos2(prect.min.x, y), pos2(prect.max.x, y)], grid);
         }
-        // wheel zoom like the reference preview
         if presp.hovered() {
             let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 self.phys_zoom = (self.phys_zoom * (scroll * 0.002).exp()).clamp(0.2, 8.0);
             }
         }
-        let nodes = self.session.as_ref().and_then(|s| s.puppet.physics_group_nodes(self.phys_sel));
-        match nodes {
-            Some(pts) if !pts.is_empty() => {
-                let sc = (prect.height() * 0.44) / reach.max(1.0) * self.phys_zoom;
-                let cx = prect.center().x;
-                let cy = prect.min.y + prect.height() * 0.5;
-                let map = |(x, y): (f32, f32)| pos2(cx + x * sc, cy + y * sc);
-                let stroke = Stroke::new(1.6, theme::pal().rotation_red);
-                let mut prev: Option<Pos2> = None;
-                for (i, &pt) in pts.iter().enumerate() {
-                    let sp = map(pt);
-                    if let Some(pr) = prev {
-                        pp.line_segment([pr, sp], stroke);
-                    }
-                    if i == 0 {
-                        pp.rect_filled(
-                            Rect::from_center_size(sp, vec2(6.0, 6.0)),
-                            1.0,
-                            theme::pal().text,
-                        );
-                    } else {
-                        pp.circle_filled(sp, 4.0, theme::pal().rotation_red);
-                        pp.circle_stroke(sp, 4.0, Stroke::new(1.0, theme::pal().canvas_bg));
-                        pp.text(
-                            sp + vec2(8.0, 0.0),
-                            Align2::LEFT_CENTER,
-                            i.to_string(),
-                            FontId::proportional(9.0),
-                            theme::pal().text_faint,
-                        );
-                    }
-                    prev = Some(sp);
-                }
+
+        // rebuild the private sim whenever the settings change shape
+        let mut sig = 0u64;
+        for n in nodes {
+            for v in [n.x, n.y, n.mobility, n.delay, n.acceleration] {
+                sig = sig.wrapping_mul(31).wrapping_add(v.to_bits() as u64);
             }
-            _ => {
+        }
+        if sig != self.phys_prev_sig || self.phys_prev.len() != nodes.len() {
+            self.phys_prev_sig = sig;
+            self.phys_prev.clear();
+            let (mut ax, mut ay) = (0.0f32, 0.0f32);
+            for (i, n) in nodes.iter().enumerate() {
+                if i > 0 {
+                    ax += n.x;
+                    ay += n.y;
+                }
+                self.phys_prev.push((ax, ay, ax, ay));
+            }
+            self.phys_prev_drive = 0.0;
+        }
+
+        // dragging sideways pushes the anchor; it eases home on release
+        let sc_units = (prect.height() * 0.44) / reach.max(1.0) * self.phys_zoom;
+        if presp.dragged() {
+            self.phys_prev_drive += presp.drag_delta().x / sc_units.max(1e-3);
+        } else {
+            self.phys_prev_drive *= 0.9;
+        }
+
+        // the same integrator the runtime uses, one step per frame
+        let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.001, 0.05);
+        if let Some(anchor) = self.phys_prev.get_mut(0) {
+            anchor.2 = anchor.0;
+            anchor.3 = anchor.1;
+            anchor.0 = self.phys_prev_drive;
+            anchor.1 = 0.0;
+        }
+        for i in 1..self.phys_prev.len() {
+            let (px, py) = {
+                let p = self.phys_prev.get(i - 1).copied().unwrap_or_default();
+                (p.0, p.1)
+            };
+            let (Some(n), Some(slot)) = (nodes.get(i), self.phys_prev.get_mut(i)) else {
+                break;
+            };
+            let len = (n.x * n.x + n.y * n.y).sqrt().max(1e-3);
+            let (hx, hy) = (n.x / len, n.y / len);
+            let vel_x = (slot.0 - slot.2) * n.mobility;
+            let vel_y = (slot.1 - slot.3) * n.mobility;
+            let dtq = dt * n.delay.clamp(0.01, 10.0);
+            let grav = 1500.0 * n.acceleration;
+            slot.2 = slot.0;
+            slot.3 = slot.1;
+            let mut nx = slot.0 + vel_x + hx * grav * dtq * dtq;
+            let mut ny = slot.1 + vel_y + hy * grav * dtq * dtq;
+            let dx = nx - px;
+            let dy = ny - py;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > 1e-6 {
+                nx = px + dx / dist * len;
+                ny = py + dy / dist * len;
+            }
+            slot.0 = nx;
+            slot.1 = ny;
+        }
+        ui.ctx().request_repaint();
+
+        let cx = prect.center().x;
+        let cy = prect.min.y + prect.height() * 0.28;
+        let map = |x: f32, y: f32| pos2(cx + x * sc_units, cy + y * sc_units);
+        let stroke = Stroke::new(1.6, theme::pal().rotation_red);
+        let mut prev: Option<Pos2> = None;
+        for (i, &(x, y, ..)) in self.phys_prev.iter().enumerate() {
+            let sp = map(x, y);
+            if let Some(pr) = prev {
+                pp.line_segment([pr, sp], stroke);
+            }
+            if i == 0 {
+                pp.rect_filled(Rect::from_center_size(sp, vec2(6.0, 6.0)), 1.0, theme::pal().text);
+            } else {
+                pp.circle_filled(sp, 4.0, theme::pal().rotation_red);
+                pp.circle_stroke(sp, 4.0, Stroke::new(1.0, theme::pal().canvas_bg));
                 pp.text(
-                    prect.center(),
-                    Align2::CENTER_CENTER,
-                    "no simulation",
-                    FontId::proportional(10.5),
+                    sp + vec2(8.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    i.to_string(),
+                    FontId::proportional(9.0),
                     theme::pal().text_faint,
                 );
             }
+            prev = Some(sp);
         }
         pp.text(
             pos2(prect.min.x + 6.0, prect.min.y + 8.0),
@@ -1905,21 +1965,12 @@ impl EditorUi {
             FontId::proportional(9.0),
             theme::pal().text_faint,
         );
-        if !self.physics_on {
-            pp.text(
-                pos2(prect.center().x, prect.max.y - 10.0),
-                Align2::CENTER_CENTER,
-                "physics off",
-                FontId::proportional(9.5),
-                theme::pal().text_faint,
-            );
-        }
         ui.horizontal(|ui| {
             if ui.small_button("1:1").clicked() {
                 self.phys_zoom = 1.0;
             }
-            if ui.small_button("All").clicked() {
-                self.phys_zoom = 1.0;
+            if ui.small_button("Swing").clicked() {
+                self.phys_prev_drive = reach * 0.4;
             }
         });
     }
