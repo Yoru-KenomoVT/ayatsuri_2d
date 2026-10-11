@@ -20,6 +20,9 @@ struct NodeSim {
     prev: V2,
     /// Unit direction from the parent at rest, and the distance kept to it.
     rest_dir: V2,
+    /// Where this node sits in the untranslated rest chain; X/Y outputs
+    /// read displacement from here, which settles at the anchor shift.
+    rest_abs: V2,
     len: f32,
     mobility: f32,
     delay: f32,
@@ -63,13 +66,6 @@ pub struct Physics {
     acc: f32,
     deltas: Vec<f32>,
     touched: Vec<bool>,
-    /// What each output parameter was last set to by physics, NaN if never.
-    /// Rigs routinely feed an output back in as an input (soft follow); the
-    /// input has to see the app's intent, not our own write, or the loop is
-    /// unstable. When a param still holds exactly what we wrote, the cached
-    /// app value is used instead.
-    written: Vec<f32>,
-    cache: Vec<f32>,
 }
 
 /// Map a parameter value into the group's normalized range, piecewise around
@@ -114,6 +110,7 @@ impl Physics {
                     pos: at,
                     prev: at,
                     rest_dir,
+                    rest_abs: at,
                     len: if i == 0 { 0.0 } else { len.max(1e-3) },
                     mobility: n.mobility,
                     delay: n.delay,
@@ -169,8 +166,6 @@ impl Physics {
             acc: 0.0,
             deltas: vec![0.0; model.parameters.len()],
             touched: vec![false; model.parameters.len()],
-            written: vec![f32::NAN; model.parameters.len()],
-            cache: model.parameters.iter().map(|p| p.default).collect(),
         })
     }
 
@@ -213,14 +208,6 @@ impl Physics {
         meta_of: impl Fn(usize) -> (f32, f32, f32),
     ) -> bool {
         self.acc += dt.clamp(0.0, 0.25);
-        // settle which value each input actually sees this frame
-        for (p, slot) in self.cache.iter_mut().enumerate() {
-            let cur = values.get(p).copied().unwrap_or(0.0);
-            let ours = self.written.get(p).copied().unwrap_or(f32::NAN);
-            if !(ours.is_finite() && (cur - ours).abs() < 1e-5) {
-                *slot = cur;
-            }
-        }
         let mut steps = 0;
         while self.acc >= self.step && steps < 8 {
             self.acc -= self.step;
@@ -230,8 +217,12 @@ impl Physics {
                 let (mut tx, mut ty, mut ta) = (0.0f32, 0.0f32, 0.0f32);
                 for i in &g.inputs {
                     let (min, max, default) = meta_of(i.param);
+                    // rigs feed outputs back in as inputs on purpose (soft
+                    // follow); with radian outputs the loop gain stays under
+                    // one, so reading the live value decays instead of
+                    // blowing up
                     let v = normalize(
-                        self.cache.get(i.param).copied().unwrap_or(default),
+                        values.get(i.param).copied().unwrap_or(default),
                         min,
                         max,
                         default,
@@ -260,23 +251,22 @@ impl Physics {
                         y: n.rest_dir.x * sin + n.rest_dir.y * cos,
                     };
                     let target = V2 { x: parent.x + hang.x * n.len, y: parent.y + hang.y * n.len };
-                    // keep momentum by mobility, pull to the target by delay
-                    // and acceleration, then re-fix the distance. The pull is
-                    // deliberately strong: the reference feel is a tight
-                    // follow with a short soft lag, not a free pendulum.
+                    // a real constrained pendulum: gravity pulls along the
+                    // rotated hang direction, mobility keeps momentum, delay
+                    // stretches the node's personal clock, and the distance
+                    // constraint does the rest. The gravity constant makes a
+                    // ten-unit strand swing with a half-second-ish period,
+                    // which is the hair feel the reference has.
                     let vel = V2 {
-                        x: (n.pos.x - n.prev.x)
-                            * n.mobility
-                            * (1.0 - n.delay * 0.05).clamp(0.5, 1.0),
-                        y: (n.pos.y - n.prev.y)
-                            * n.mobility
-                            * (1.0 - n.delay * 0.05).clamp(0.5, 1.0),
+                        x: (n.pos.x - n.prev.x) * n.mobility,
+                        y: (n.pos.y - n.prev.y) * n.mobility,
                     };
-                    let k = (n.delay * n.acceleration * self.step * 30.0 * 0.55).clamp(0.0, 1.0);
+                    let dtq = self.step * n.delay.clamp(0.01, 10.0);
+                    let grav = 1500.0 * n.acceleration;
                     n.prev = n.pos;
                     let mut next = V2 {
-                        x: n.pos.x + vel.x + (target.x - n.pos.x) * k + self.wind.x * self.step,
-                        y: n.pos.y + vel.y + (target.y - n.pos.y) * k + self.wind.y * self.step,
+                        x: n.pos.x + vel.x + hang.x * grav * dtq * dtq + self.wind.x * dtq,
+                        y: n.pos.y + vel.y + hang.y * grav * dtq * dtq + self.wind.y * dtq,
                     };
                     let dx = next.x - parent.x;
                     let dy = next.y - parent.y;
@@ -291,12 +281,25 @@ impl Physics {
                 }
             }
         }
-        if steps == 0 {
-            return false;
+        // a frame without a fixed step still re-applies the last outputs,
+        // or the raw app-written inputs leak through for one frame and the
+        // view flickers between the two
+        if steps > 0 {
+            self.recompute_outputs();
         }
+        let mut any = false;
+        for (param, (&delta, &touched)) in self.deltas.iter().zip(self.touched.iter()).enumerate() {
+            if touched && let Some(slot) = values.get_mut(param) {
+                let (min, max, default) = meta_of(param);
+                *slot = (default + delta).clamp(min, max);
+                any = true;
+            }
+        }
+        any
+    }
 
-        // outputs: each driven parameter collects its weighted deltas, then
-        // lands at default + delta, clamped by set_value downstream
+    /// Fold every group's pendulum state into per-parameter deltas.
+    fn recompute_outputs(&mut self) {
         self.deltas.iter_mut().for_each(|d| *d = 0.0);
         self.touched.iter_mut().for_each(|t| *t = false);
         for g in &self.groups {
@@ -305,15 +308,15 @@ impl Physics {
                     (Some(n), Some(p)) => (n, p),
                     _ => continue,
                 };
-                let (sin, cos) = g.last_rad.sin_cos();
-                let hang_x = node.rest_dir.x * cos - node.rest_dir.y * sin;
-                let hang_y = node.rest_dir.x * sin + node.rest_dir.y * cos;
                 let value = match o.kind {
                     PhysicsIo::Angle => {
+                        // radians against the authored rest: a held tilt
+                        // keeps a proportional output, which is what the
+                        // scales on real rigs (8..40) are authored around
                         let dx = node.pos.x - parent.pos.x;
                         let dy = node.pos.y - parent.pos.y;
                         let cur = dy.atan2(dx);
-                        let rest = hang_y.atan2(hang_x);
+                        let rest = node.rest_dir.y.atan2(node.rest_dir.x);
                         let mut diff = cur - rest;
                         while diff > core::f32::consts::PI {
                             diff -= core::f32::consts::TAU;
@@ -321,10 +324,10 @@ impl Physics {
                         while diff < -core::f32::consts::PI {
                             diff += core::f32::consts::TAU;
                         }
-                        diff.to_degrees()
+                        diff
                     }
-                    PhysicsIo::X => node.pos.x - parent.pos.x - hang_x * node.len,
-                    PhysicsIo::Y => node.pos.y - parent.pos.y - hang_y * node.len,
+                    PhysicsIo::X => node.pos.x - node.rest_abs.x,
+                    PhysicsIo::Y => node.pos.y - node.rest_abs.y,
                 };
                 if let (Some(d), Some(t)) =
                     (self.deltas.get_mut(o.param), self.touched.get_mut(o.param))
@@ -334,17 +337,5 @@ impl Physics {
                 }
             }
         }
-        let mut any = false;
-        for (param, (&delta, &touched)) in self.deltas.iter().zip(self.touched.iter()).enumerate() {
-            if touched && let Some(slot) = values.get_mut(param) {
-                let (min, max, default) = meta_of(param);
-                *slot = (default + delta).clamp(min, max);
-                if let Some(w) = self.written.get_mut(param) {
-                    *w = *slot;
-                }
-                any = true;
-            }
-        }
-        any
     }
 }

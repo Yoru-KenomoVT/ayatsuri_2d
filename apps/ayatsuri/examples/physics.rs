@@ -5,6 +5,10 @@
 
 #![forbid(unsafe_code)]
 
+fn puppet_model_clone(p: &ayatsuri_core::Puppet) -> ayatsuri_format::Model {
+    p.model().clone()
+}
+
 fn main() -> Result<(), String> {
     let moc_path = std::env::args().nth(1).ok_or("usage: physics <model.moc3> [physics3.json]")?;
     let phys_path = std::env::args()
@@ -39,6 +43,26 @@ fn main() -> Result<(), String> {
     if !puppet.has_physics() {
         return Err("puppet built without physics".into());
     }
+    // idle first: nothing drives anything, nothing should move
+    {
+        let mut idle = ayatsuri_core::Puppet::new(puppet_model_clone(&puppet));
+        for _ in 0..600 {
+            idle.step_physics(1.0 / 60.0);
+        }
+        let mut worst = (0usize, 0.0f32);
+        for (i, p) in idle.model().parameters.iter().enumerate() {
+            let drift = (idle.value(i) - p.default).abs();
+            if drift > worst.1 {
+                worst = (i, drift);
+            }
+        }
+        let id = idle.model().parameters.get(worst.0).map(|p| p.id.clone()).unwrap_or_default();
+        println!("idle 10s: worst drift {id} = {:.4}", worst.1);
+        if worst.1 > 0.01 {
+            return Err(format!("idle drift on {id}: {}", worst.1));
+        }
+    }
+
     let dt = 1.0 / 60.0;
     let mut peak = 0.0f32;
     let mut moved = false;
@@ -58,6 +82,12 @@ fn main() -> Result<(), String> {
         if frame % 12 == 0 {
             println!("t={t:4.2}s  {watch_id} = {v:+.4}");
         }
+    }
+    // the self-feedback rigs (AngleX writes AngleX) must decay, not stick
+    let residual = angle.map(|a| puppet.value(a).abs()).unwrap_or(0.0);
+    println!("residual ParamAngleX after settling: {residual:.4}");
+    if residual > 0.5 {
+        return Err(format!("self-feedback did not decay (AngleX = {residual})"));
     }
     if moved && peak > 1e-3 {
         println!("PHYSICS OK (peak |{watch_id}| = {peak:.4})");

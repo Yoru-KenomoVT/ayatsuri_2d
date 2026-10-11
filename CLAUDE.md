@@ -127,10 +127,15 @@ Physics is in (docs/physics.md): PhysicsRig in ayatsuri-format (rides in
 schema), damped pendulum chains in crates/core/src/physics.rs. The
 integrator honours the published field semantics (mobility keeps momentum,
 delay/acceleration scale the pull, authored offsets give rest directions);
-outputs measure swing against the input-rotated rest so held tilts settle
-to zero, and inputs read a cached app value whenever a parameter still
-holds what physics itself wrote, because real rigs (ariu) feed outputs
-back in as inputs and the loop diverges otherwise. Toolbar has Physics and
+angle outputs are RADIANS measured against the authored rest (that is
+what real rigs' scales of 8..40 are authored around; degrees rail
+instantly), X/Y outputs are displacement from the rest chain so a held
+input holds a proportional output, and the self-feedback loops real rigs
+use (ariu writes ParamAngleZ from a group that also reads it) decay
+softly because the radian loop gain stays under one. Frames where the
+60 fps fixed step does not tick still re-apply the last outputs, or the
+raw app-written input leaks through for one frame and follow mode
+flickers. Toolbar has Physics and
 Follow (cursor drives the standard ParamAngle/Body/EyeBall set, smoothed);
 Modeling > Physics Settings shows groups, Valid, live wind, reset.
 examples/physics.rs is the headless smoke test.

@@ -808,8 +808,6 @@ impl EditorUi {
                         }
                     });
                     ui.separator();
-                    let _ = ui.add_enabled(false, egui::Button::new("Texture Atlas…"));
-                    let _ = ui.add_enabled(false, egui::Button::new("Model Template…"));
                     if ui
                         .add_enabled(self.session.is_some(), egui::Button::new("Physics Settings…"))
                         .clicked()
@@ -817,6 +815,9 @@ impl EditorUi {
                         self.show_physics = true;
                         ui.close();
                     }
+                    ui.separator();
+                    let _ = ui.add_enabled(false, egui::Button::new("Texture Atlas…"));
+                    let _ = ui.add_enabled(false, egui::Button::new("Model Template…"));
                 });
                 ui.menu_button("Animation", |ui| {
                     if ui.button("Animation Workspace").clicked() {
