@@ -1250,6 +1250,72 @@ pub fn add_free_vertex(
     Some(n)
 }
 
+/// Where a pasted point goes in the target mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PastedPoint {
+    /// It lands on this existing vertex and merges into it.
+    Existing(usize),
+    /// A new vertex placed from three of the mesh's points with these
+    /// weights, on every keyform; its texture coordinate is read the same way.
+    At([usize; 3], [f32; 3]),
+}
+
+/// Paste points into a mesh (Mesh Edit's Ctrl+V): new ones are placed as
+/// `add_free_vertex` places them, then `faces` (indices into `points`) are
+/// added between them, skipping any that collapse or already exist.
+/// Returns each point's vertex in the mesh, or None when a placement is
+/// out of range (nothing is changed then).
+pub fn paste_points(
+    model: &mut Model,
+    mesh: usize,
+    points: &[PastedPoint],
+    faces: &[[usize; 3]],
+) -> Option<Vec<usize>> {
+    let n = model.art_meshes.get(mesh)?.vertex_count as usize;
+    let valid = points.iter().all(|p| match *p {
+        PastedPoint::Existing(v) => v < n,
+        PastedPoint::At(c, _) => c.iter().all(|&x| x < n),
+    });
+    if !valid || n + points.len() >= u16::MAX as usize {
+        return None;
+    }
+    let mut out = Vec::with_capacity(points.len());
+    for p in points {
+        let v = match *p {
+            PastedPoint::Existing(v) => v,
+            PastedPoint::At(c, w) => add_free_vertex(model, mesh, c, w, None)?,
+        };
+        out.push(v);
+    }
+    let m = model.art_meshes.get_mut(mesh)?;
+    let mut have: std::collections::HashSet<[u16; 3]> = m
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| {
+            let mut k = *t;
+            k.sort_unstable();
+            k
+        })
+        .collect();
+    for f in faces {
+        let (Some(&a), Some(&b), Some(&c)) = (out.get(f[0]), out.get(f[1]), out.get(f[2])) else {
+            continue;
+        };
+        if a == b || b == c || a == c {
+            continue;
+        }
+        let tri = [a as u16, b as u16, c as u16];
+        let mut key = tri;
+        key.sort_unstable();
+        if have.insert(key) {
+            m.indices.extend_from_slice(&tri);
+        }
+    }
+    Some(out)
+}
+
 /// The vertices joined to both `a` and `b`, by a face edge or one of the
 /// editor's pending lines.
 fn common_neighbours(indices: &[u16], extra: &[(u16, u16)], a: u16, b: u16) -> Vec<u16> {
@@ -2776,6 +2842,43 @@ mod tests {
         assert_eq!(m.art_meshes[0].uvs, vec![0.3, 0.7]);
         assert!(!slide_vertex(&mut m, 0, 9, 0.1, 0.1, (0.0, 0.0)));
         assert!(!slide_vertex(&mut m, 0, 0, 0.1, 0.1, (f32::NAN, 0.0)));
+    }
+
+    #[test]
+    fn pasted_points_merge_place_and_join() {
+        let mut m = test_model();
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            // a unit square (two faces), two keyforms: the second moved +1 in x
+            am.vertex_count = 4;
+            am.uvs = vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
+            am.indices = vec![0, 1, 2, 0, 2, 3];
+            am.positions = vec![
+                0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 0.0, 2.0, 1.0, 1.0, 1.0,
+            ];
+        }
+        let centre = PastedPoint::At([0, 1, 2], [0.5, 0.0, 0.5]);
+        let pts = [PastedPoint::Existing(0), PastedPoint::Existing(1), centre];
+        let got = paste_points(&mut m, 0, &pts, &[[0, 1, 2], [0, 0, 1]]).unwrap();
+        assert_eq!(got, vec![0, 1, 4]);
+        let am = &m.art_meshes[0];
+        assert_eq!(am.vertex_count, 5);
+        // the new point sits at the middle on both keyforms, uv included
+        assert_eq!(&am.uvs[8..10], &[0.5, 0.5]);
+        assert_eq!(&am.positions[8..10], &[0.5, 0.5]);
+        assert_eq!(&am.positions[18..20], &[1.5, 0.5]);
+        // one face added, the collapsed one skipped
+        assert_eq!(am.indices.len(), 9);
+        // pasting the same again adds the point but not a repeated face
+        let again = paste_points(
+            &mut m,
+            0,
+            &[PastedPoint::Existing(0), PastedPoint::Existing(1), PastedPoint::Existing(4)],
+            &[[0, 1, 2]],
+        )
+        .unwrap();
+        assert_eq!(again, vec![0, 1, 4]);
+        assert_eq!(m.art_meshes[0].indices.len(), 9);
+        assert!(paste_points(&mut m, 0, &[PastedPoint::Existing(99)], &[]).is_none());
     }
 
     #[test]

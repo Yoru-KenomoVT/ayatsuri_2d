@@ -282,10 +282,19 @@ pub struct EditorUi {
     mesh_edit: Option<usize>,
     mesh_drag: Option<MeshDrag>,
     /// 0 move, 1 add vertices, 2 erase vertices, 3 connect points, 4 cut
-    /// edges, 5 erase brush.
+    /// edges, 5 erase brush, 6 select points (lasso, copy and paste).
     mesh_mode: u8,
     /// Points the erase brush has swept over during the current stroke.
     erase_marked: std::collections::BTreeSet<usize>,
+    /// Mesh Edit's picked points (Select points mode), on `mesh_picked_on`.
+    mesh_picked: std::collections::BTreeSet<usize>,
+    mesh_picked_on: Option<usize>,
+    /// The Select points lasso being drawn, in screen points.
+    mesh_lasso: Vec<Pos2>,
+    /// Points copied in Mesh Edit, ready to paste into any mesh.
+    point_clip: Option<PointClip>,
+    /// Edit > Copy (true) or Paste (false) asked for from the menu.
+    point_clip_cmd: Option<bool>,
     /// How close (screen px) a click must be to pick a point.
     pick_radius: f32,
     /// Auto connect's options: redo every face, and keep faces off empty
@@ -349,6 +358,36 @@ pub struct EditorUi {
 
 /// One vertex being dragged in mesh edit mode. The parent-space offset is
 /// banked as the pointer moves and applied as a single edit on release.
+/// Points copied in Mesh Edit: where they were on the canvas (model units,
+/// as drawn) and the faces among them, by index into `points`.
+struct PointClip {
+    points: Vec<Pos2>,
+    faces: Vec<[usize; 3]>,
+    from: String,
+}
+
+/// Three points of `pts` around `p` that are not in a line, with `p`'s
+/// weights on them: how a point is placed on a mesh with no faces.
+fn basis_weights(pts: &[Pos2], p: Pos2) -> Option<([usize; 3], [f32; 3])> {
+    let mut order: Vec<usize> = (0..pts.len()).collect();
+    order.sort_by(|&a, &b| {
+        let da = pts.get(a).map_or(f32::MAX, |q| q.distance(p));
+        let db = pts.get(b).map_or(f32::MAX, |q| q.distance(p));
+        da.total_cmp(&db)
+    });
+    let (&a, &b) = (order.first()?, order.get(1)?);
+    order.iter().skip(2).find_map(|&c| {
+        let (s0, s1, s2) = (*pts.get(a)?, *pts.get(b)?, *pts.get(c)?);
+        let den = (s1.y - s2.y) * (s0.x - s2.x) + (s2.x - s1.x) * (s0.y - s2.y);
+        if den.abs() < 1e-9 {
+            return None;
+        }
+        let w0 = ((s1.y - s2.y) * (p.x - s2.x) + (s2.x - s1.x) * (p.y - s2.y)) / den;
+        let w1 = ((s2.y - s0.y) * (p.x - s2.x) + (s0.x - s2.x) * (p.y - s2.y)) / den;
+        Some(([a, b, c], [w0, w1, 1.0 - w0 - w1]))
+    })
+}
+
 /// Mesh Edit's art, captured on entry and drawn unchanged until it ends.
 struct MeshArt {
     mesh: usize,
@@ -818,6 +857,11 @@ impl Default for EditorUi {
             mesh_edit: None,
             mesh_drag: None,
             mesh_mode: 0,
+            mesh_picked: std::collections::BTreeSet::new(),
+            mesh_picked_on: None,
+            mesh_lasso: Vec::new(),
+            point_clip: None,
+            point_clip_cmd: None,
             mesh_autoconnect: true,
             erase_marked: std::collections::BTreeSet::new(),
             pick_radius: 8.0,
@@ -1792,8 +1836,28 @@ impl EditorUi {
                     }
                     ui.separator();
                     let _ = ui.add_enabled(false, egui::Button::new("Cut"));
-                    let _ = ui.add_enabled(false, egui::Button::new("Copy"));
-                    let _ = ui.add_enabled(false, egui::Button::new("Paste"));
+                    // in Mesh Edit these copy and paste the picked points
+                    let editing = self.mesh_edit.is_some();
+                    if ui
+                        .add_enabled(
+                            editing && !self.mesh_picked.is_empty(),
+                            egui::Button::new("Copy").shortcut_text("Ctrl+C"),
+                        )
+                        .clicked()
+                    {
+                        self.point_clip_cmd = Some(true);
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            editing && self.point_clip.is_some(),
+                            egui::Button::new("Paste").shortcut_text("Ctrl+V"),
+                        )
+                        .clicked()
+                    {
+                        self.point_clip_cmd = Some(false);
+                        ui.close();
+                    }
                 });
                 ui.menu_button("Show", |ui| {
                     let has = self.session.is_some();
@@ -2546,6 +2610,12 @@ impl EditorUi {
                             egui_phosphor::regular::PAINT_BRUSH_BROAD,
                             "Erase brush: drag over points to remove them ([ and ] resize)",
                         ),
+                        (
+                            6,
+                            egui_phosphor::regular::LASSO,
+                            "Select points: drag a lasso (Shift adds), then Ctrl+C to copy and \
+                             Ctrl+V to paste into any mesh",
+                        ),
                     ] {
                         if ui
                             .selectable_label(
@@ -2560,6 +2630,21 @@ impl EditorUi {
                     }
                 });
                 ui.separator();
+                if self.mesh_mode == 6 || self.point_clip.is_some() {
+                    let picked = self.mesh_picked.len();
+                    ui.weak(format!(
+                        "{picked} point(s) picked. Ctrl+C copies, Delete removes them."
+                    ));
+                    match &self.point_clip {
+                        Some(c) => ui.weak(format!(
+                            "{} point(s) from {} on the clipboard: Ctrl+V pastes them into the \
+                             mesh being edited.",
+                            c.points.len(),
+                            truncate(&c.from, 20)
+                        )),
+                        None => ui.weak("Nothing copied yet."),
+                    };
+                }
                 if self.mesh_mode == 5 {
                     ui.horizontal(|ui| {
                         ui.weak("Brush");
@@ -7732,6 +7817,7 @@ impl EditorUi {
             Cut(usize, u16, u16),
             EraseMany(usize, Vec<usize>),
             Del(usize, usize),
+            Paste(usize, Vec<ayatsuri_core::edit::PastedPoint>, Vec<[usize; 3]>),
         }
         let mut mesh_op: Option<MeshOp> = None;
         if self.mesh_edit.is_none() {
@@ -7962,6 +8048,151 @@ impl EditorUi {
                 {
                     mesh_op = Some(MeshOp::Del(mi, vi));
                 }
+                // Select points: the picks belong to this mesh only
+                if self.mesh_picked_on != Some(mi) {
+                    self.mesh_picked.clear();
+                    self.mesh_lasso.clear();
+                    self.mesh_picked_on = Some(mi);
+                }
+                self.mesh_picked.retain(|&v| v < screen_pts.len());
+                if !space && self.mesh_mode == 6 {
+                    let add = ui.ctx().input(|i| i.modifiers.shift);
+                    if resp.drag_started()
+                        && let Some(p) = resp.interact_pointer_pos()
+                    {
+                        self.mesh_lasso = vec![p];
+                    }
+                    if resp.dragged()
+                        && let Some(p) = resp.interact_pointer_pos()
+                        && self.mesh_lasso.last().is_none_or(|q| q.distance(p) > 2.0)
+                    {
+                        self.mesh_lasso.push(p);
+                    }
+                    if resp.drag_stopped() {
+                        let lasso = std::mem::take(&mut self.mesh_lasso);
+                        if !add {
+                            self.mesh_picked.clear();
+                        }
+                        if lasso.len() >= 3 {
+                            for (vi, sp) in screen_pts.iter().enumerate() {
+                                if crate::point_edit::point_in_polygon(*sp, &lasso) {
+                                    self.mesh_picked.insert(vi);
+                                }
+                            }
+                        }
+                    }
+                    if resp.clicked() {
+                        match near {
+                            Some((vi, _)) if add => {
+                                if !self.mesh_picked.remove(&vi) {
+                                    self.mesh_picked.insert(vi);
+                                }
+                            }
+                            Some((vi, _)) => {
+                                self.mesh_picked.clear();
+                                self.mesh_picked.insert(vi);
+                            }
+                            None if !add => self.mesh_picked.clear(),
+                            None => {}
+                        }
+                    }
+                    if self.mesh_lasso.len() > 1 {
+                        let mut ring = self.mesh_lasso.clone();
+                        if let Some(&first) = ring.first() {
+                            ring.push(first);
+                        }
+                        vp.add(egui::Shape::dashed_line(
+                            &ring,
+                            Stroke::new(1.2, theme::pal().accent),
+                            5.0,
+                            3.0,
+                        ));
+                    }
+                    if ptr.is_some() && near.is_none() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                    }
+                } else {
+                    self.mesh_lasso.clear();
+                }
+                // copy, paste and delete for picked points, in any mode
+                let typing = ui.ctx().egui_wants_keyboard_input();
+                let (copy_key, paste_key, delete_key) = ui.ctx().input(|i| {
+                    let cmd = i.modifiers.command;
+                    (
+                        i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                            || (cmd && i.key_pressed(egui::Key::C)),
+                        i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+                            || (cmd && i.key_pressed(egui::Key::V)),
+                        i.key_pressed(egui::Key::Delete),
+                    )
+                });
+                let menu = self.point_clip_cmd.take();
+                let copy = menu == Some(true) || (!typing && copy_key);
+                let paste = menu == Some(false) || (!typing && paste_key);
+                let (model_pts, _) = g.positions.as_chunks::<2>();
+                let model_pts: Vec<Pos2> = model_pts.iter().map(|p| pos2(p[0], p[1])).collect();
+                if copy {
+                    if self.mesh_picked.is_empty() {
+                        log::warn!("copy points: pick some with Select points first");
+                    } else {
+                        let picked: Vec<usize> = self.mesh_picked.iter().copied().collect();
+                        let slot = |v: u16| picked.iter().position(|&p| p == v as usize);
+                        let faces: Vec<[usize; 3]> = g
+                            .indices
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .filter_map(|t| Some([slot(t[0])?, slot(t[1])?, slot(t[2])?]))
+                            .collect();
+                        let points: Vec<Pos2> =
+                            picked.iter().filter_map(|&v| model_pts.get(v).copied()).collect();
+                        log::info!(
+                            "copied {} point(s) and {} face(s) from {}",
+                            points.len(),
+                            faces.len(),
+                            s.mesh_name(mi)
+                        );
+                        self.point_clip = Some(PointClip { points, faces, from: s.mesh_name(mi) });
+                    }
+                }
+                if paste && let Some(clip) = &self.point_clip {
+                    // a pasted point on an existing one (within 3 screen px)
+                    // merges into it, so the meshes line up for glue
+                    let merge = 3.0 / (scale * c.pixels_per_unit).max(1e-6);
+                    let mut placed = Vec::with_capacity(clip.points.len());
+                    for &p in &clip.points {
+                        let nearest = model_pts
+                            .iter()
+                            .enumerate()
+                            .map(|(v, q)| (v, q.distance(p)))
+                            .min_by(|a, b| a.1.total_cmp(&b.1));
+                        let point = match nearest {
+                            Some((v, d)) if d <= merge => {
+                                Some(ayatsuri_core::edit::PastedPoint::Existing(v))
+                            }
+                            _ => (!g.indices.is_empty())
+                                .then(|| mesh_weights(&model_pts, g.indices, p))
+                                .flatten()
+                                .or_else(|| basis_weights(&model_pts, p))
+                                .map(|(c, w)| ayatsuri_core::edit::PastedPoint::At(c, w)),
+                        };
+                        match point {
+                            Some(pp) => placed.push(pp),
+                            None => break,
+                        }
+                    }
+                    if placed.len() == clip.points.len() {
+                        mesh_op = Some(MeshOp::Paste(mi, placed, clip.faces.clone()));
+                    } else {
+                        log::warn!(
+                            "paste points: this mesh needs three points not in a line to place them"
+                        );
+                    }
+                }
+                if !typing && delete_key && !self.mesh_picked.is_empty() && mesh_op.is_none() {
+                    mesh_op =
+                        Some(MeshOp::EraseMany(mi, self.mesh_picked.iter().copied().collect()));
+                }
                 if !space && self.mesh_mode == 0 {
                     if resp.drag_started()
                         && let Some((vi, _)) = near
@@ -8065,6 +8296,8 @@ impl EditorUi {
                     let hot = drag_vi == Some(vi) || (drag_vi.is_none() && hover_vi == Some(vi));
                     let (r, fill) = if self.erase_marked.contains(&vi) {
                         (4.0, theme::pal().rotation_red)
+                    } else if self.mesh_picked.contains(&vi) {
+                        (4.2, theme::pal().accent)
                     } else if hot && self.mesh_mode != 5 {
                         (4.0, theme::pal().accent)
                     } else {
@@ -8175,6 +8408,7 @@ impl EditorUi {
                 }
                 MeshOp::EraseMany(mi, marked) => {
                     self.pending_edges.remove(&mi);
+                    self.mesh_picked.clear();
                     let n = marked.len();
                     let done = s.edit(|m| ayatsuri_core::edit::delete_vertices(m, mi, &marked));
                     if done {
@@ -8187,7 +8421,30 @@ impl EditorUi {
                 MeshOp::Del(mi, vi) => {
                     // indices shift on delete, so pending lines can't survive it
                     self.pending_edges.remove(&mi);
+                    self.mesh_picked.clear();
                     s.edit(|m| ayatsuri_core::edit::delete_vertex(m, mi, vi))
+                }
+                MeshOp::Paste(mi, points, faces) => {
+                    let mut got = None;
+                    let done = s.edit(|m| {
+                        got = ayatsuri_core::edit::paste_points(m, mi, &points, &faces);
+                        got.is_some()
+                    });
+                    if let Some(verts) = got {
+                        let merged = points
+                            .iter()
+                            .filter(|p| matches!(p, ayatsuri_core::edit::PastedPoint::Existing(_)))
+                            .count();
+                        log::info!(
+                            "pasted {} point(s) into {} ({merged} merged with points already there)",
+                            verts.len(),
+                            s.mesh_name(mi)
+                        );
+                        // the pasted points come out picked, ready to move
+                        self.mesh_picked = verts.into_iter().collect();
+                        self.mesh_picked_on = Some(mi);
+                    }
+                    done
                 }
             };
             if !applied {
@@ -9886,5 +10143,22 @@ mod key_cmd_tests {
         let mut ed = editor();
         ed.run_param_cmd(ParamCmd::Reflect(0));
         assert_eq!(ed.pmenu.reflect, Some((0, 0.0, None)));
+    }
+}
+
+#[cfg(test)]
+mod point_paste_tests {
+    use super::*;
+
+    #[test]
+    fn basis_weights_skip_points_in_a_line() {
+        // the two nearest and the third are in a line; the fourth is not
+        let pts = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(2.0, 0.0), pos2(0.0, 3.0)];
+        let (c, w) = basis_weights(&pts, pos2(0.5, 0.5)).unwrap();
+        assert_eq!(c, [0, 1, 3]);
+        let x: f32 = c.iter().zip(w).map(|(&i, wi)| pts[i].x * wi).sum();
+        let y: f32 = c.iter().zip(w).map(|(&i, wi)| pts[i].y * wi).sum();
+        assert!((x - 0.5).abs() < 1e-5 && (y - 0.5).abs() < 1e-5, "{x},{y}");
+        assert!(basis_weights(&pts[..3], pos2(0.5, 0.5)).is_none());
     }
 }
