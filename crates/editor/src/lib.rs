@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod api;
 mod discord;
 pub mod dock;
 mod export;

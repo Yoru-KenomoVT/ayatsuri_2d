@@ -92,12 +92,26 @@ impl EditorUi {
             expressions: dlg.expressions,
         };
         match crate::export::export(s, dir, &opt) {
-            Ok(files) => log::info!(
-                "exported {} files (moc3 {}) to {}",
-                files.len(),
-                version.label(),
-                dir.display()
-            ),
+            Ok(files) => {
+                log::info!(
+                    "exported {} files (moc3 {}) to {}",
+                    files.len(),
+                    version.label(),
+                    dir.display()
+                );
+                // apps watching for exports (VTube Studio) pick it up
+                let moc = files.iter().find(|f| f.extension().is_some_and(|e| e == "moc3"));
+                let model_file =
+                    s.aom_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+                self.api_notify(
+                    "NotifyMocFileExported",
+                    serde_json::json!({
+                        "Path": moc.map(|p| p.display().to_string()).unwrap_or_default(),
+                        "ModelFilePath": model_file,
+                        "Files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(),
+                    }),
+                );
+            }
             Err(e) => log::error!("export failed: {e}"),
         }
     }

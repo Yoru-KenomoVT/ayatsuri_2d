@@ -60,6 +60,12 @@ pub struct Prefs {
     /// Physics page splitters as the user left them: settings column
     /// width, parameter rail width, tabs height, model panel width.
     pub physics_layout: Option<[f32; 4]>,
+    /// The Ayatsuri API (Cubism's external integration API): on/off, port
+    /// (0 is Cubism's 22033), network access, and the apps the user allowed.
+    pub api_enabled: bool,
+    pub api_port: u16,
+    pub api_remote: bool,
+    pub api_clients: Vec<crate::api::protocol::Client>,
 }
 
 /// The arrow tool's display settings, RGBA.

@@ -11,6 +11,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+tungstenite = "0.30"
 ayatsuri-core = { workspace = true }
 ayatsuri-format = { workspace = true }
 ayatsuri-render = { workspace = true }

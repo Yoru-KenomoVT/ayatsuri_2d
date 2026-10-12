@@ -10,6 +10,7 @@ use egui::{
 use crate::dock::{self, DockAction, DockNode, PanelKind};
 use crate::point_edit;
 
+mod api_bar;
 mod deformer_dialog;
 mod param_menu;
 mod physics_page;
@@ -240,6 +241,8 @@ pub struct EditorUi {
     pub(crate) settings_pos: Option<egui::Pos2>,
     /// Undo depth at the start of the frame; see `on_crash`.
     frame_undo_depth: usize,
+    /// The Ayatsuri API server and its editor-side state.
+    pub(crate) api: api_bar::ApiState,
     pub(crate) recovery: crate::windows::recovery::RecoveryState,
     /// A recovery file being opened: it loads as unsaved work.
     pub(crate) recovering: Option<PathBuf>,
@@ -571,6 +574,7 @@ impl Default for EditorUi {
             settings_tab: 0,
             settings_pos: None,
             frame_undo_depth: 0,
+            api: Default::default(),
             recovery: Default::default(),
             recovering: None,
             tool_opts: ToolOptions::default(),
@@ -1127,6 +1131,9 @@ impl EditorUi {
         self.update_presence();
         self.poll_background(&ui.ctx().clone());
         self.loading_overlay(ui);
+        // apps driving parameters through the API go first, so what they
+        // hold is kept off physics below
+        self.api_frame();
         // whatever slider was held last frame is kept off physics this frame,
         // so a physics-driven parameter can be dragged by hand
         if let Some(s) = &mut self.session {
@@ -1168,6 +1175,7 @@ impl EditorUi {
         }
         self.crash_window(ui);
         self.recovery_window(ui);
+        self.api_prompt_window(&ui.ctx().clone());
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
         if self.last_autosave.elapsed().as_secs() >= 120 {
@@ -1864,6 +1872,8 @@ impl EditorUi {
                 if let Some(w) = pick {
                     self.set_workspace(w);
                 }
+                ui.separator();
+                self.api_bar(ui);
                 ui.separator();
                 ui.weak("Edit Level:");
                 for lvl in 1..=3u8 {

@@ -33,7 +33,7 @@ fn section(ui: &mut Ui, title: &str) {
 }
 
 /// One setting: label (and a faint hint) left, the control right-aligned.
-fn row(ui: &mut Ui, label: &str, hint: &str, control: impl FnOnce(&mut Ui)) {
+pub(crate) fn row(ui: &mut Ui, label: &str, hint: &str, control: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_width(220.0);
@@ -228,6 +228,9 @@ impl EditorUi {
                 )
                 .changed();
         });
+
+        section(ui, "AYATSURI API");
+        save |= self.api_settings_rows(ui);
 
         section(ui, "FILES");
         let n = self.prefs.recents.len();
