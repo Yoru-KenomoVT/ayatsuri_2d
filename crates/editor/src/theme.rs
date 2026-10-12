@@ -155,6 +155,10 @@ pub fn install(ctx: &Context) {
     v.widgets.hovered.fg_stroke.color = if dark { Color32::WHITE } else { Color32::BLACK };
     v.widgets.active.fg_stroke.color = if dark { Color32::WHITE } else { Color32::BLACK };
     v.override_text_color = Some(p.text);
+    // labels are not selectable: dragging a window or a slider across
+    // text kept highlighting it; text boxes still select as normal
+    style.interaction.selectable_labels = false;
+    style.interaction.multi_widget_text_select = false;
     let look = look();
     let d = look.density.clamp(0.8, 2.0);
     style.spacing.item_spacing = egui::vec2(6.0 * d, 4.0 * d);

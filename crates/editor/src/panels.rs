@@ -631,11 +631,7 @@ impl EditorUi {
         let mut keep = true;
         let mut copy = false;
         let mut open_dir = false;
-        egui::Window::new("Something went wrong")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ui.ctx(), |ui| {
+        crate::windows::Dialog::new("Something went wrong").show(ui.ctx(), |ui| {
                 ui.set_width(440.0);
                 ui.label(
                     egui::RichText::new(format!("{} {}", egui_phosphor::regular::WARNING, c.message))
@@ -922,6 +918,10 @@ impl EditorUi {
                 self.show_settings = true;
                 self.settings_tab = page.to_string_lossy().parse().unwrap_or(0);
             }
+            // developer hook for screenshots: AYATSURI_SHOW_DIALOG=new
+            if std::env::var_os("AYATSURI_SHOW_DIALOG").is_some_and(|d| d == "new") {
+                self.new_model = Some(ModelNew::default());
+            }
             // developer hook for screenshots: AYATSURI_SHOW_ABOUT=credits
             if let Some(tab) = std::env::var_os("AYATSURI_SHOW_ABOUT") {
                 self.show_about = true;
@@ -1200,7 +1200,7 @@ impl EditorUi {
                     }
                     if ui.button("Keyboard Shortcuts…").clicked() {
                         self.show_settings = true;
-                        self.settings_tab = 4;
+                        self.settings_tab = 3;
                         ui.close();
                     }
                     ui.separator();
@@ -1957,10 +1957,10 @@ impl EditorUi {
         let mut cancel = false;
         let mut auto = false;
         let mut dialog_action: Option<MeshAction> = None;
-        egui::Window::new("Edit Mesh")
-            .collapsible(false)
-            .resizable(false)
-            .default_width(220.0)
+        crate::windows::Dialog::new("Edit Mesh")
+            .width(260.0)
+            // beside the canvas, not over the mesh being edited
+            .at(ui.ctx().content_rect().right_top() + vec2(-200.0, 220.0))
             .show(ui.ctx(), |ui| {
                 ui.label(truncate(&id, 28));
                 ui.weak(format!("{verts} vertices · {tris} triangles"));
@@ -2320,55 +2320,48 @@ impl EditorUi {
     fn workspace_windows(&mut self, ui: &mut Ui) {
         let mut open = self.show_ws_save;
         let mut saved = false;
-        egui::Window::new("Save Workspace")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut self.ws_name);
-                if ui.button("Save").clicked() && !self.ws_name.trim().is_empty() {
-                    let name = self.ws_name.trim().to_string();
-                    self.prefs.custom_workspaces.push((name, self.layout.clone()));
-                    let idx = self.prefs.custom_workspaces.len() - 1;
-                    self.workspace = Workspace::Custom(idx);
-                    self.prefs.save();
-                    self.ws_name.clear();
-                    saved = true;
-                }
-            });
+        crate::windows::Dialog::new("Save Workspace").open(&mut open).show(ui.ctx(), |ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut self.ws_name);
+            if ui.button("Save").clicked() && !self.ws_name.trim().is_empty() {
+                let name = self.ws_name.trim().to_string();
+                self.prefs.custom_workspaces.push((name, self.layout.clone()));
+                let idx = self.prefs.custom_workspaces.len() - 1;
+                self.workspace = Workspace::Custom(idx);
+                self.prefs.save();
+                self.ws_name.clear();
+                saved = true;
+            }
+        });
         self.show_ws_save = open && !saved;
 
         let mut open = self.show_ws_manage;
-        egui::Window::new("Workspaces").open(&mut open).collapsible(false).resizable(false).show(
-            ui.ctx(),
-            |ui| {
-                let mut delete: Option<usize> = None;
-                if self.prefs.custom_workspaces.is_empty() {
-                    ui.weak("No custom workspaces yet.");
-                }
-                for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(name);
-                        if ui.small_button("Delete").clicked() {
-                            delete = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = delete {
-                    self.prefs.custom_workspaces.remove(i);
-                    if self.workspace == Workspace::Custom(i) {
-                        self.workspace = Workspace::Modeling;
-                        self.layout = self
-                            .prefs
-                            .workspace_modeling
-                            .clone()
-                            .unwrap_or_else(dock::default_workspace);
+        crate::windows::Dialog::new("Workspaces").open(&mut open).show(ui.ctx(), |ui| {
+            let mut delete: Option<usize> = None;
+            if self.prefs.custom_workspaces.is_empty() {
+                ui.weak("No custom workspaces yet.");
+            }
+            for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(name);
+                    if ui.small_button("Delete").clicked() {
+                        delete = Some(i);
                     }
-                    self.prefs.save();
+                });
+            }
+            if let Some(i) = delete {
+                self.prefs.custom_workspaces.remove(i);
+                if self.workspace == Workspace::Custom(i) {
+                    self.workspace = Workspace::Modeling;
+                    self.layout = self
+                        .prefs
+                        .workspace_modeling
+                        .clone()
+                        .unwrap_or_else(dock::default_workspace);
                 }
-            },
-        );
+                self.prefs.save();
+            }
+        });
         self.show_ws_manage = open;
     }
 
@@ -2619,32 +2612,27 @@ impl EditorUi {
         let Some((path, mut name)) = self.home_rename.take() else { return };
         let mut keep = true;
         let mut commit = false;
-        egui::Window::new("Rename")
-            .collapsible(false)
-            .resizable(false)
-            .pivot(Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(220.0));
-                    if !edit.has_focus() && !edit.lost_focus() {
-                        edit.request_focus();
-                    }
-                    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        commit = true;
-                    }
-                    ui.weak(full_extension(&path));
-                });
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Rename").clicked() {
-                        commit = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        keep = false;
-                    }
-                });
+        crate::windows::Dialog::new("Rename").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(220.0));
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                }
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    commit = true;
+                }
+                ui.weak(full_extension(&path));
             });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Rename").clicked() {
+                    commit = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    keep = false;
+                }
+            });
+        });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             keep = false;
         }
@@ -3033,35 +3021,31 @@ impl EditorUi {
         let Some(new) = &mut self.new_anim else { return };
         let mut open = true;
         let mut create = false;
-        egui::Window::new("New Animation")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                egui::Grid::new("anew").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut new.name);
-                    ui.end_row();
-                    ui.label("FPS");
-                    ui.add(egui::DragValue::new(&mut new.fps).range(1.0..=120.0));
-                    ui.end_row();
-                    ui.label("Length");
-                    ui.add(
-                        egui::DragValue::new(&mut new.duration)
-                            .range(0.1..=600.0)
-                            .speed(0.05)
-                            .suffix(" s"),
-                    );
-                    ui.end_row();
-                    ui.label("Loop");
-                    ui.checkbox(&mut new.looped, "");
-                    ui.end_row();
-                });
-                ui.weak("Saved inside the .aom; exported as motions/<name>.motion3.json.");
-                if ui.button("Create").clicked() {
-                    create = true;
-                }
+        crate::windows::Dialog::new("New Animation").open(&mut open).show(ui.ctx(), |ui| {
+            crate::windows::form(ui, "anew", |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut new.name);
+                ui.end_row();
+                ui.label("FPS");
+                ui.add(egui::DragValue::new(&mut new.fps).range(1.0..=120.0));
+                ui.end_row();
+                ui.label("Length");
+                ui.add(
+                    egui::DragValue::new(&mut new.duration)
+                        .range(0.1..=600.0)
+                        .speed(0.05)
+                        .suffix(" s"),
+                );
+                ui.end_row();
+                ui.label("Loop");
+                ui.checkbox(&mut new.looped, "");
+                ui.end_row();
             });
+            ui.weak("Saved inside the .aom; exported as motions/<name>.motion3.json.");
+            if ui.button("Create").clicked() {
+                create = true;
+            }
+        });
         if create {
             if let (Some(n), Some(s)) = (self.new_anim.take(), &mut self.session) {
                 let name = if n.name.trim().is_empty() { "motion".into() } else { n.name };
@@ -3446,39 +3430,32 @@ impl EditorUi {
         let Some(new) = &mut self.new_model else { return };
         let mut open = true;
         let mut create = false;
-        egui::Window::new("New Model").open(&mut open).collapsible(false).resizable(false).show(
-            ui.ctx(),
-            |ui| {
-                ui.set_width(300.0);
-                egui::Grid::new("mnew").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut new.name);
-                    ui.end_row();
-                    ui.label("Author");
-                    ui.text_edit_singleline(&mut new.author);
-                    ui.end_row();
-                    ui.label("Canvas width");
-                    ui.add(
-                        egui::DragValue::new(&mut new.width).range(64.0..=16384.0).suffix(" px"),
-                    );
-                    ui.end_row();
-                    ui.label("Canvas height");
-                    ui.add(
-                        egui::DragValue::new(&mut new.height).range(64.0..=16384.0).suffix(" px"),
-                    );
-                    ui.end_row();
-                    ui.label("Pixels per unit");
-                    ui.add(egui::DragValue::new(&mut new.ppu).range(1.0..=8192.0));
-                    ui.end_row();
-                });
-                ui.checkbox(&mut new.std_params, "Start with the standard parameter set");
-                ui.weak("Angle, eyes, mouth, body and breath, the ids trackers expect.");
-                ui.add_space(6.0);
-                if ui.button("Create").clicked() {
-                    create = true;
-                }
-            },
-        );
+        crate::windows::Dialog::new("New Model").open(&mut open).show(ui.ctx(), |ui| {
+            ui.set_width(300.0);
+            crate::windows::form(ui, "mnew", |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut new.name);
+                ui.end_row();
+                ui.label("Author");
+                ui.text_edit_singleline(&mut new.author);
+                ui.end_row();
+                ui.label("Canvas width");
+                ui.add(egui::DragValue::new(&mut new.width).range(64.0..=16384.0).suffix(" px"));
+                ui.end_row();
+                ui.label("Canvas height");
+                ui.add(egui::DragValue::new(&mut new.height).range(64.0..=16384.0).suffix(" px"));
+                ui.end_row();
+                ui.label("Pixels per unit");
+                ui.add(egui::DragValue::new(&mut new.ppu).range(1.0..=8192.0));
+                ui.end_row();
+            });
+            ui.checkbox(&mut new.std_params, "Start with the standard parameter set");
+            ui.weak("Angle, eyes, mouth, body and breath, the ids trackers expect.");
+            ui.add_space(6.0);
+            if ui.button("Create").clicked() {
+                create = true;
+            }
+        });
         if create {
             let Some(new) = self.new_model.take() else { return };
             let mut model = Model::new();
@@ -3547,43 +3524,39 @@ impl EditorUi {
                     .collect()
             })
             .unwrap_or_default();
-        egui::Window::new("New Parameter")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                ui.set_width(280.0);
-                egui::Grid::new("pnew").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut new.name);
-                    ui.end_row();
-                    ui.label("ID");
-                    ui.text_edit_singleline(&mut new.id);
-                    ui.end_row();
-                    ui.label("Minimum");
-                    ui.add(egui::DragValue::new(&mut new.min).speed(0.1));
-                    ui.end_row();
-                    ui.label("Default");
-                    ui.add(egui::DragValue::new(&mut new.default).speed(0.1));
-                    ui.end_row();
-                    ui.label("Maximum");
-                    ui.add(egui::DragValue::new(&mut new.max).speed(0.1));
-                    ui.end_row();
-                    ui.label("Folder");
-                    egui::ComboBox::from_id_salt("pnew-group")
-                        .selected_text(group_names.get(new.group).cloned().unwrap_or_default())
-                        .show_ui(ui, |ui| {
-                            for (i, n) in group_names.iter().enumerate() {
-                                ui.selectable_value(&mut new.group, i, n);
-                            }
-                        });
-                    ui.end_row();
-                });
-                ui.add_space(6.0);
-                if ui.button("Create").clicked() {
-                    create = true;
-                }
+        crate::windows::Dialog::new("New Parameter").open(&mut open).show(ui.ctx(), |ui| {
+            ui.set_width(280.0);
+            crate::windows::form(ui, "pnew", |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut new.name);
+                ui.end_row();
+                ui.label("ID");
+                ui.text_edit_singleline(&mut new.id);
+                ui.end_row();
+                ui.label("Minimum");
+                ui.add(egui::DragValue::new(&mut new.min).speed(0.1));
+                ui.end_row();
+                ui.label("Default");
+                ui.add(egui::DragValue::new(&mut new.default).speed(0.1));
+                ui.end_row();
+                ui.label("Maximum");
+                ui.add(egui::DragValue::new(&mut new.max).speed(0.1));
+                ui.end_row();
+                ui.label("Folder");
+                egui::ComboBox::from_id_salt("pnew-group")
+                    .selected_text(group_names.get(new.group).cloned().unwrap_or_default())
+                    .show_ui(ui, |ui| {
+                        for (i, n) in group_names.iter().enumerate() {
+                            ui.selectable_value(&mut new.group, i, n);
+                        }
+                    });
+                ui.end_row();
             });
+            ui.add_space(6.0);
+            if ui.button("Create").clicked() {
+                create = true;
+            }
+        });
         if create {
             let (name, id, min, default, max, group) = {
                 let n = self.new_param.take();
@@ -3628,16 +3601,13 @@ impl EditorUi {
         let Some(name) = &mut self.new_folder else { return };
         let mut open = true;
         let mut create = false;
-        egui::Window::new("New Folder").open(&mut open).collapsible(false).resizable(false).show(
-            ui.ctx(),
-            |ui| {
-                ui.set_width(220.0);
-                ui.text_edit_singleline(name);
-                if ui.button("Create").clicked() {
-                    create = true;
-                }
-            },
-        );
+        crate::windows::Dialog::new("New Folder").open(&mut open).show(ui.ctx(), |ui| {
+            ui.set_width(220.0);
+            ui.text_edit_singleline(name);
+            if ui.button("Create").clicked() {
+                create = true;
+            }
+        });
         if create {
             if let (Some(s), Some(name)) = (&mut self.session, self.new_folder.take()) {
                 let name = if name.is_empty() { "Folder".into() } else { name };
@@ -3673,26 +3643,22 @@ impl EditorUi {
         let Some(action) = self.confirm_close else { return };
         let name = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let mut choice: Option<u8> = None; // 0 cancel, 1 save, 2 discard
-        egui::Window::new("Unsaved Changes")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ui.ctx(), |ui| {
-                ui.set_width(300.0);
-                ui.label(format!("Save changes to {name} before closing?"));
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("Save").strong()).clicked() {
-                        choice = Some(1);
-                    }
-                    if ui.button("Don't Save").clicked() {
-                        choice = Some(2);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(0);
-                    }
-                });
+        crate::windows::Dialog::new("Unsaved Changes").show(ui.ctx(), |ui| {
+            ui.set_width(300.0);
+            ui.label(format!("Save changes to {name} before closing?"));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button(egui::RichText::new("Save").strong()).clicked() {
+                    choice = Some(1);
+                }
+                if ui.button("Don't Save").clicked() {
+                    choice = Some(2);
+                }
+                if ui.button("Cancel").clicked() {
+                    choice = Some(0);
+                }
             });
+        });
         match choice {
             Some(0) => self.confirm_close = None,
             Some(1) => {
@@ -3759,7 +3725,7 @@ impl EditorUi {
             }
             "shortcuts" => {
                 self.show_settings = true;
-                self.settings_tab = 4;
+                self.settings_tab = 3;
             }
             "undo" => {
                 if let Some(s) = &mut self.session {
@@ -4239,39 +4205,35 @@ impl EditorUi {
         let Some(edit) = &mut self.param_edit else { return };
         let mut open = true;
         let mut apply = false;
-        egui::Window::new("Edit Parameter")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                ui.set_width(280.0);
-                egui::Grid::new("pedit").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut edit.name);
-                    ui.end_row();
-                    ui.label("ID");
-                    ui.text_edit_singleline(&mut edit.id);
-                    ui.end_row();
-                    ui.label("Minimum");
-                    ui.add(egui::DragValue::new(&mut edit.min).speed(0.1));
-                    ui.end_row();
-                    ui.label("Default");
-                    ui.add(egui::DragValue::new(&mut edit.default).speed(0.1));
-                    ui.end_row();
-                    ui.label("Maximum");
-                    ui.add(egui::DragValue::new(&mut edit.max).speed(0.1));
-                    ui.end_row();
-                    ui.label("Repeat");
-                    ui.checkbox(&mut edit.repeat, "");
-                    ui.end_row();
-                });
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        apply = true;
-                    }
-                });
+        crate::windows::Dialog::new("Edit Parameter").open(&mut open).show(ui.ctx(), |ui| {
+            ui.set_width(280.0);
+            crate::windows::form(ui, "pedit", |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut edit.name);
+                ui.end_row();
+                ui.label("ID");
+                ui.text_edit_singleline(&mut edit.id);
+                ui.end_row();
+                ui.label("Minimum");
+                ui.add(egui::DragValue::new(&mut edit.min).speed(0.1));
+                ui.end_row();
+                ui.label("Default");
+                ui.add(egui::DragValue::new(&mut edit.default).speed(0.1));
+                ui.end_row();
+                ui.label("Maximum");
+                ui.add(egui::DragValue::new(&mut edit.max).speed(0.1));
+                ui.end_row();
+                ui.label("Repeat");
+                ui.checkbox(&mut edit.repeat, "");
+                ui.end_row();
             });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() {
+                    apply = true;
+                }
+            });
+        });
         if apply {
             let Some(edit) = self.param_edit.take() else { return };
             if let Some(s) = &mut self.session {
@@ -4908,7 +4870,7 @@ impl EditorUi {
         {
             let mesh = |i: u32| s.mesh_name(i as usize);
             let (name_a, name_b) = (mesh(g.art_mesh_a), mesh(g.art_mesh_b));
-            egui::Grid::new("glue-props").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            crate::windows::form(ui, "glue-props", |ui| {
                 ui.weak("Glue");
                 ui.label(&g.id);
                 ui.end_row();

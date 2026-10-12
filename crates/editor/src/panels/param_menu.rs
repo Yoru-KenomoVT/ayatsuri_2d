@@ -658,19 +658,15 @@ impl EditorUi {
         if let Some((gi, name)) = &mut self.pmenu.rename {
             let mut open = true;
             let mut ok = false;
-            egui::Window::new("Rename Folder")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .show(&ctx, |ui| {
-                    let r = ui.text_edit_singleline(name);
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        ok = true;
-                    }
-                    if ui.button("OK").clicked() {
-                        ok = true;
-                    }
-                });
+            crate::windows::Dialog::new("Rename Folder").open(&mut open).show(&ctx, |ui| {
+                let r = ui.text_edit_singleline(name);
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    ok = true;
+                }
+                if ui.button("OK").clicked() {
+                    ok = true;
+                }
+            });
             if ok {
                 let (gi, name) = (*gi, name.trim().to_string());
                 self.pmenu.rename = None;
@@ -705,12 +701,8 @@ impl EditorUi {
         if let Some(c) = &mut self.pmenu.corners {
             let mut open = true;
             let mut run = false;
-            egui::Window::new("Automatic Generation of Four Corner Forms")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .show(&ctx, |ui| {
-                    egui::Grid::new("corners").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+            crate::windows::Dialog::new("Automatic Generation of Four Corner Forms").open(&mut open).show(&ctx, |ui| {
+                    crate::windows::form(ui, "corners", |ui| {
                         ui.label("Parameter 1 (left/right)");
                         pick(ui, "c-pa", &mut c.pa);
                         ui.end_row();
@@ -784,10 +776,10 @@ impl EditorUi {
         if let Some(mi) = &mut self.pmenu.mirror {
             let mut open = true;
             let mut run = false;
-            egui::Window::new("Motion Mirroring").open(&mut open).collapsible(false).resizable(false).show(
+            crate::windows::Dialog::new("Motion Mirroring").open(&mut open).show(
                 &ctx,
                 |ui| {
-                    egui::Grid::new("mirror").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    crate::windows::form(ui, "mirror", |ui| {
                         ui.label("Parameter");
                         pick(ui, "m-p", &mut mi.param);
                         ui.end_row();
@@ -841,25 +833,21 @@ impl EditorUi {
         if let Some((p, from, to)) = &mut self.pmenu.adjust {
             let mut open = true;
             let mut ok = false;
-            egui::Window::new("Adjust Value")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .show(&ctx, |ui| {
-                    ui.label(names.get(*p).cloned().unwrap_or_default());
-                    egui::Grid::new("p-adjust").num_columns(2).show(ui, |ui| {
-                        ui.label("Key value");
-                        ui.add(egui::DragValue::new(from).speed(0.1));
-                        ui.end_row();
-                        ui.label("New value");
-                        ui.add(egui::DragValue::new(to).speed(0.1));
-                        ui.end_row();
-                    });
-                    ui.weak("Moves the key (on the selected objects) keeping its form.");
-                    if ui.button("OK").clicked() {
-                        ok = true;
-                    }
+            crate::windows::Dialog::new("Adjust Value").open(&mut open).show(&ctx, |ui| {
+                ui.label(names.get(*p).cloned().unwrap_or_default());
+                crate::windows::form(ui, "p-adjust", |ui| {
+                    ui.label("Key value");
+                    ui.add(egui::DragValue::new(from).speed(0.1));
+                    ui.end_row();
+                    ui.label("New value");
+                    ui.add(egui::DragValue::new(to).speed(0.1));
+                    ui.end_row();
                 });
+                ui.weak("Moves the key (on the selected objects) keeping its form.");
+                if ui.button("OK").clicked() {
+                    ok = true;
+                }
+            });
             if ok {
                 let (p, from, to) = (*p, *from, *to);
                 self.pmenu.adjust = None;
@@ -886,26 +874,22 @@ impl EditorUi {
         if let Some((from, to)) = &mut self.pmenu.change {
             let mut open = true;
             let mut ok = false;
-            egui::Window::new("Change Parameters")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .show(&ctx, |ui| {
-                    ui.label(format!(
-                        "Move the keys of {} to:",
-                        names.get(*from).cloned().unwrap_or_default()
-                    ));
-                    egui::ComboBox::from_id_salt("p-change")
-                        .selected_text(names.get(*to).cloned().unwrap_or_default())
-                        .show_ui(ui, |ui| {
-                            for (i, n) in names.iter().enumerate() {
-                                ui.selectable_value(to, i, n);
-                            }
-                        });
-                    if ui.button("OK").clicked() {
-                        ok = true;
-                    }
-                });
+            crate::windows::Dialog::new("Change Parameters").open(&mut open).show(&ctx, |ui| {
+                ui.label(format!(
+                    "Move the keys of {} to:",
+                    names.get(*from).cloned().unwrap_or_default()
+                ));
+                egui::ComboBox::from_id_salt("p-change")
+                    .selected_text(names.get(*to).cloned().unwrap_or_default())
+                    .show_ui(ui, |ui| {
+                        for (i, n) in names.iter().enumerate() {
+                            ui.selectable_value(to, i, n);
+                        }
+                    });
+                if ui.button("OK").clicked() {
+                    ok = true;
+                }
+            });
             if ok {
                 let (from, to) = (*from, *to);
                 self.pmenu.change = None;

@@ -1109,24 +1109,20 @@ impl EditorUi {
         let Some((name, id)) = &mut self.phys_page.group_edit else { return };
         let mut open = true;
         let (mut ok, mut delete) = (false, false);
-        egui::Window::new("Group editing")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                egui::Grid::new("pg-edit").num_columns(2).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(name);
-                    ui.end_row();
-                    ui.label("ID");
-                    ui.text_edit_singleline(id);
-                    ui.end_row();
-                });
-                ui.horizontal(|ui| {
-                    ok = ui.button("OK").clicked();
-                    delete = ui.button("Delete group").clicked();
-                });
+        crate::windows::Dialog::new("Group editing").open(&mut open).show(ui.ctx(), |ui| {
+            crate::windows::form(ui, "pg-edit", |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(name);
+                ui.end_row();
+                ui.label("ID");
+                ui.text_edit_singleline(id);
+                ui.end_row();
             });
+            ui.horizontal(|ui| {
+                ok = ui.button("OK").clicked();
+                delete = ui.button("Delete group").clicked();
+            });
+        });
         if ok || delete {
             let (name, id) = (name.clone(), id.clone());
             self.phys_page.group_edit = None;

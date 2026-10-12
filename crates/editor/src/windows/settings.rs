@@ -13,7 +13,7 @@ use crate::theme;
 const W: f32 = 760.0;
 const H: f32 = 520.0;
 const RAIL: f32 = 170.0;
-const PAGES: [&str; 5] = ["General", "Appearance", "View", "Performance", "Keyboard"];
+const PAGES: [&str; 4] = ["General", "Appearance", "Performance", "Keyboard"];
 
 /// Primary colour presets: the logo orange first.
 const SWATCHES: [(&str, [u8; 3]); 7] = [
@@ -163,8 +163,7 @@ impl EditorUi {
                         match self.settings_tab {
                             0 => self.settings_general(ui),
                             1 => self.settings_appearance(ui),
-                            2 => self.settings_view(ui),
-                            3 => self.settings_performance(ui),
+                            2 => self.settings_performance(ui),
                             _ => self.settings_keyboard(ui),
                         }
                     });
@@ -367,7 +366,13 @@ impl EditorUi {
             theme::set_look(&ctx, look);
             save = true;
         }
-        ui.add_space(8.0);
+        if save {
+            self.prefs.save();
+            save = false;
+        }
+        // what used to be the View page: the canvas and its overlays
+        self.settings_canvas(ui);
+        ui.add_space(12.0);
         if ui.button("Reset appearance").clicked() {
             self.prefs.follow_system = false;
             self.prefs.dark = Some(true);
@@ -388,7 +393,7 @@ impl EditorUi {
         }
     }
 
-    fn settings_view(&mut self, ui: &mut Ui) {
+    fn settings_canvas(&mut self, ui: &mut Ui) {
         let mut save = false;
         section(ui, "CANVAS");
         row(ui, "Background", "Behind the model's canvas", |ui| {

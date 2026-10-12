@@ -81,102 +81,91 @@ impl EditorUi {
         let title = if dlg.warp { "New Warp Deformer" } else { "New Rotation Deformer" };
         let mut open = true;
         let (mut create, mut keep_open, mut close) = (false, false, false);
-        egui::Window::new(title).open(&mut open).collapsible(false).resizable(false).show(
-            ui.ctx(),
-            |ui| {
-                ui.set_width(330.0);
-                egui::Grid::new("newdef").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label("Destination Part");
-                    egui::ComboBox::from_id_salt("newdef-part")
-                        .width(200.0)
-                        .selected_text(dlg.part.map_or("(none)".into(), |p| part_label(p as usize)))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut dlg.part, None, "(none)");
-                            for i in 0..model.parts.len() {
-                                ui.selectable_value(&mut dlg.part, Some(i as u32), part_label(i));
-                            }
-                        });
+        crate::windows::Dialog::new(title).open(&mut open).show(ui.ctx(), |ui| {
+            ui.set_width(330.0);
+            crate::windows::form(ui, "newdef", |ui| {
+                ui.label("Destination Part");
+                egui::ComboBox::from_id_salt("newdef-part")
+                    .width(200.0)
+                    .selected_text(dlg.part.map_or("(none)".into(), |p| part_label(p as usize)))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut dlg.part, None, "(none)");
+                        for i in 0..model.parts.len() {
+                            ui.selectable_value(&mut dlg.part, Some(i as u32), part_label(i));
+                        }
+                    });
+                ui.end_row();
+                ui.label("Name");
+                ui.add(egui::TextEdit::singleline(&mut dlg.name).desired_width(200.0));
+                ui.end_row();
+                if dlg.warp {
+                    ui.label("Conversion divisions");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut dlg.cols).range(1..=32).prefix("W "));
+                        ui.add(egui::DragValue::new(&mut dlg.rows).range(1..=32).prefix("H "));
+                    });
                     ui.end_row();
-                    ui.label("Name");
-                    ui.add(egui::TextEdit::singleline(&mut dlg.name).desired_width(200.0));
-                    ui.end_row();
-                    if dlg.warp {
-                        ui.label("Conversion divisions");
-                        ui.horizontal(|ui| {
-                            ui.add(egui::DragValue::new(&mut dlg.cols).range(1..=32).prefix("W "));
-                            ui.add(egui::DragValue::new(&mut dlg.rows).range(1..=32).prefix("H "));
-                        });
-                        ui.end_row();
-                    }
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Add");
-                    ui.add_space(14.0);
-                    ui.vertical(|ui| {
-                        ui.add_enabled_ui(has_selection, |ui| {
-                            ui.radio_value(
-                                &mut dlg.placement,
-                                Placement::ParentOfSelection,
-                                "As Parent of Selected Object",
-                            );
-                        });
-                        ui.add_enabled_ui(deformer_selected, |ui| {
-                            ui.radio_value(
-                                &mut dlg.placement,
-                                Placement::ChildOfSelection,
-                                "As Child of Selected Object",
-                            );
-                        });
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Add");
+                ui.add_space(14.0);
+                ui.vertical(|ui| {
+                    ui.add_enabled_ui(has_selection, |ui| {
                         ui.radio_value(
                             &mut dlg.placement,
-                            Placement::Manual,
-                            "Set Parent Manually",
+                            Placement::ParentOfSelection,
+                            "As Parent of Selected Object",
                         );
-                        ui.add_enabled_ui(dlg.placement == Placement::Manual, |ui| {
-                            let label = |p: Option<u32>| {
-                                p.and_then(|i| model.deformers.get(i as usize))
-                                    .map_or("Root Deformer".to_string(), |d| d.id.clone())
-                            };
-                            egui::ComboBox::from_id_salt("newdef-parent")
-                                .width(180.0)
-                                .selected_text(label(dlg.manual_parent))
-                                .show_ui(ui, |ui| {
+                    });
+                    ui.add_enabled_ui(deformer_selected, |ui| {
+                        ui.radio_value(
+                            &mut dlg.placement,
+                            Placement::ChildOfSelection,
+                            "As Child of Selected Object",
+                        );
+                    });
+                    ui.radio_value(&mut dlg.placement, Placement::Manual, "Set Parent Manually");
+                    ui.add_enabled_ui(dlg.placement == Placement::Manual, |ui| {
+                        let label = |p: Option<u32>| {
+                            p.and_then(|i| model.deformers.get(i as usize))
+                                .map_or("Root Deformer".to_string(), |d| d.id.clone())
+                        };
+                        egui::ComboBox::from_id_salt("newdef-parent")
+                            .width(180.0)
+                            .selected_text(label(dlg.manual_parent))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut dlg.manual_parent, None, "Root Deformer");
+                                for (i, d) in model.deformers.iter().enumerate() {
                                     ui.selectable_value(
                                         &mut dlg.manual_parent,
-                                        None,
-                                        "Root Deformer",
+                                        Some(i as u32),
+                                        &d.id,
                                     );
-                                    for (i, d) in model.deformers.iter().enumerate() {
-                                        ui.selectable_value(
-                                            &mut dlg.manual_parent,
-                                            Some(i as u32),
-                                            &d.id,
-                                        );
-                                    }
-                                });
-                        });
+                                }
+                            });
                     });
                 });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("Continuous creation")
-                        .on_hover_text("Create, and keep this dialog open for the next one")
-                        .clicked()
-                    {
-                        create = true;
-                        keep_open = true;
-                    }
-                    if ui.button("Create").clicked() {
-                        create = true;
-                    }
-                    if ui.button("Close").clicked() {
-                        close = true;
-                    }
-                });
-            },
-        );
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Continuous creation")
+                    .on_hover_text("Create, and keep this dialog open for the next one")
+                    .clicked()
+                {
+                    create = true;
+                    keep_open = true;
+                }
+                if ui.button("Create").clicked() {
+                    create = true;
+                }
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        });
         if create {
             self.create_from_dialog();
             if keep_open {
