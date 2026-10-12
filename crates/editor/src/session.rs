@@ -630,6 +630,27 @@ impl Session {
         !self.redo.is_empty()
     }
 
+    /// How many steps undo holds; the crash handler compares this against
+    /// the start of the frame to find an edit the crash interrupted.
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// After a crash: roll back the edit made this frame (and drop its redo,
+    /// since it may be what crashed), or with no edit, rebuild the runtime
+    /// from the model so half-applied previews are gone.
+    pub fn crash_rollback(&mut self, depth_at_frame_start: usize) {
+        if self.undo.len() > depth_at_frame_start {
+            self.undo();
+            self.redo.clear();
+            log::warn!("rolled back the edit that was running when it crashed");
+        } else {
+            let model = self.puppet.model().clone();
+            self.rebuild_from(model);
+            log::warn!("rebuilt the model runtime after the crash");
+        }
+    }
+
     pub fn undo(&mut self) {
         if let Some(previous) = self.undo.pop() {
             self.redo.push(self.puppet.model().clone());
@@ -912,5 +933,52 @@ mod send_check {
     #[test]
     fn session_can_cross_threads() {
         is_send::<super::Session>();
+    }
+}
+
+#[cfg(test)]
+mod crash_tests {
+    use super::*;
+
+    fn session() -> Session {
+        Session::create(&egui::Context::default(), "t".into(), String::new(), Model::new()).unwrap()
+    }
+
+    fn add_param(s: &mut Session, id: &str) {
+        s.edit(|m| {
+            m.parameters.push(ayatsuri_format::model::Parameter {
+                id: id.into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                repeat: false,
+                decimals: 3,
+            });
+            true
+        });
+    }
+
+    #[test]
+    fn crash_rolls_back_the_frames_edit_only() {
+        let mut s = session();
+        add_param(&mut s, "Kept");
+        // the frame that crashes starts here
+        let depth = s.undo_depth();
+        add_param(&mut s, "Crashed");
+        s.crash_rollback(depth);
+        let ids: Vec<_> = s.puppet.model().parameters.iter().map(|p| p.id.clone()).collect();
+        assert_eq!(ids, vec!["Kept"]);
+        // the crashed edit is not offered for redo
+        assert!(!s.can_redo());
+    }
+
+    #[test]
+    fn crash_without_an_edit_keeps_the_model() {
+        let mut s = session();
+        add_param(&mut s, "Kept");
+        let depth = s.undo_depth();
+        s.crash_rollback(depth);
+        assert_eq!(s.puppet.model().parameters.len(), 1);
+        assert!(s.can_undo());
     }
 }

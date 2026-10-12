@@ -23,6 +23,37 @@ impl eframe::App for App {
     }
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        // dropped while unwinding means eframe itself panicked past the
+        // per-frame guard: keep the work for the relaunch
+        if std::thread::panicking() {
+            self.editor.emergency_save();
+        }
+    }
+}
+
+/// eframe went down with a panic: log it and start the editor again on the
+/// recovery copy, at most twice in a row so a bad file cannot loop.
+fn relaunch_after_crash() {
+    let restarts: u32 =
+        std::env::var("AYATSURI_RESTARTS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    if restarts >= 2 {
+        log::error!("crashed again after {restarts} restarts; not restarting");
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.env("AYATSURI_RESTARTS", (restarts + 1).to_string());
+    if let Some(p) = ayatsuri_editor::last_recovery() {
+        cmd.arg(p);
+    }
+    match cmd.spawn() {
+        Ok(_) => log::error!("the editor crashed and was restarted"),
+        Err(e) => log::error!("could not restart after the crash: {e}"),
+    }
+}
+
 fn main() -> eframe::Result {
     ayatsuri_editor::logging::init(log::LevelFilter::Info);
     let options = eframe::NativeOptions {
@@ -48,26 +79,36 @@ fn main() -> eframe::Result {
         }
         let _ = std::fs::remove_file(&go);
     }
-    eframe::run_native(
-        "ayatsuri2d",
-        options,
-        Box::new(move |cc| {
-            ayatsuri_editor::theme::install(&cc.egui_ctx);
-            let mut editor = editor.take().unwrap_or_default();
-            if let Some(rs) = &cc.wgpu_render_state {
-                let renderer = ayatsuri_render::GpuRenderer::with_samples(
-                    &rs.device,
-                    &rs.queue,
-                    rs.target_format,
-                    ayatsuri_editor::startup_msaa(),
-                );
-                rs.renderer.write().callback_resources.insert(renderer);
-                editor.set_gpu_available(true);
-            }
-            if let Some(path) = open {
-                editor.open_on_start(path);
-            }
-            Ok(Box::new(App { editor }))
-        }),
-    )
+    // every frame is already guarded; this catches eframe itself
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        eframe::run_native(
+            "ayatsuri2d",
+            options,
+            Box::new(move |cc| {
+                ayatsuri_editor::theme::install(&cc.egui_ctx);
+                let mut editor = editor.take().unwrap_or_default();
+                if let Some(rs) = &cc.wgpu_render_state {
+                    let renderer = ayatsuri_render::GpuRenderer::with_samples(
+                        &rs.device,
+                        &rs.queue,
+                        rs.target_format,
+                        ayatsuri_editor::startup_msaa(),
+                    );
+                    rs.renderer.write().callback_resources.insert(renderer);
+                    editor.set_gpu_available(true);
+                }
+                if let Some(path) = open {
+                    editor.open_on_start(path);
+                }
+                Ok(Box::new(App { editor }))
+            }),
+        )
+    }));
+    match run {
+        Ok(result) => result,
+        Err(_) => {
+            relaunch_after_crash();
+            Ok(())
+        }
+    }
 }

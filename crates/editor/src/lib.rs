@@ -30,3 +30,17 @@ pub fn startup_msaa() -> u32 {
         _ => 4,
     }
 }
+
+static LAST_RECOVERY: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// The newest recovery copy written after a crash, for the relaunch.
+pub(crate) fn remember_recovery(path: std::path::PathBuf) {
+    if let Ok(mut g) = LAST_RECOVERY.lock() {
+        *g = Some(path);
+    }
+}
+
+/// The recovery copy to reopen if the app has to restart itself.
+pub fn last_recovery() -> Option<std::path::PathBuf> {
+    LAST_RECOVERY.lock().ok().and_then(|g| g.clone())
+}

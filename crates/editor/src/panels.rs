@@ -238,6 +238,8 @@ pub struct EditorUi {
     pub(crate) settings_tab: usize,
     /// Where the Settings window sits (its centre) once dragged.
     pub(crate) settings_pos: Option<egui::Pos2>,
+    /// Undo depth at the start of the frame; see `on_crash`.
+    frame_undo_depth: usize,
     tool_opts: ToolOptions,
     lasso: Vec<Pos2>,
     /// The parameter rows' own selection, independent of object selection.
@@ -563,6 +565,7 @@ impl Default for EditorUi {
             show_ws_manage: false,
             settings_tab: 0,
             settings_pos: None,
+            frame_undo_depth: 0,
             tool_opts: ToolOptions::default(),
             lasso: Vec::new(),
             sel_param: None,
@@ -621,6 +624,19 @@ impl EditorUi {
     /// The app shell calls this after catching a panic out of `ui`: the
     /// work gets rescued to a recovery file and the next frames show what
     /// happened instead of the editor vanishing.
+    /// Last line of defence: the app is going down past every guard (eframe
+    /// itself panicked). Keep any unsaved work in a recovery file the
+    /// relaunch can open.
+    pub fn emergency_save(&mut self) {
+        if let Some(s) = &self.session
+            && s.modified
+            && let Some(p) = s.write_recovery()
+        {
+            log::error!("unsaved work kept in {}", p.display());
+            crate::remember_recovery(p);
+        }
+    }
+
     pub fn on_crash(&mut self) {
         let info = logging::take_crash();
         // stop whatever was mid-flight; it is the likeliest culprit
@@ -628,7 +644,22 @@ impl EditorUi {
         self.pts.clear();
         self.rot_drag = None;
         self.anim_playing = false;
+        // undo what the crashed frame did to the model before saving a copy,
+        // so the recovery holds the last good state; the rollback itself is
+        // guarded, a second failure is logged and the model left as it is
+        let depth = self.frame_undo_depth;
+        if let Some(s) = &mut self.session {
+            let rolled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                s.crash_rollback(depth);
+            }));
+            if rolled.is_err() {
+                log::error!("the rollback after the crash failed too; keeping the model as is");
+            }
+        }
         let recovery = self.session.as_ref().and_then(|s| s.write_recovery());
+        if let Some(p) = &recovery {
+            crate::remember_recovery(p.clone());
+        }
         match &recovery {
             Some(p) => log::error!("work saved to {} after the crash", p.display()),
             None if self.session.is_some() => log::error!("could not write a recovery copy"),
@@ -1032,6 +1063,8 @@ impl EditorUi {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
+        // where undo stood when this frame began, for the crash rollback
+        self.frame_undo_depth = self.session.as_ref().map_or(0, |s| s.undo_depth());
         // overlay colours: saved choices, else the theme, so mesh lines follow
         // a primary colour changed in Settings
         self.disp = tool_details::DisplayOpts::from_prefs(&self.prefs.overlay);
