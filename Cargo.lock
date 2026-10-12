@@ -125,7 +125,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "ayatsuri"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ayatsuri-core",
  "ayatsuri-editor",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "ayatsuri-capi"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ayatsuri-core",
  "ayatsuri-format",
@@ -153,14 +153,14 @@ dependencies = [
 
 [[package]]
 name = "ayatsuri-core"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ayatsuri-format",
 ]
 
 [[package]]
 name = "ayatsuri-editor"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ayatsuri-core",
  "ayatsuri-format",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "ayatsuri-format"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bytemuck",
  "miniz_oxide 0.9.1",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "ayatsuri-import"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ayatsuri-core",
  "ayatsuri-format",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "ayatsuri-launcher"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "eframe",
  "egui",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "ayatsuri-render"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ayatsuri-core",
  "bytemuck",
@@ -3913,7 +3913,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "serde_json",
  "toml",

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.3 beta (2026-10-12)
+
+### Added
+
+- **Import PSD into an open model.** File > Import PSD… adds a Photoshop
+  or Krita file's folders and layers to the model you have open, as new
+  parts and meshes on new texture pages. Start from File > New Model and
+  import your art, or bring in more art later. A model with no art yet
+  takes the file's canvas; otherwise layers line up from the top-left.
+  Models opened from a moc3 get the new meshes in their draw order.
+  Names, animations, expressions and parameter folders stay, and one
+  undo takes the import back out.
+- **Lasso select, copy and paste for mesh points.** Mesh Edit has a Lasso
+  select mode: drag around points (Shift adds, click picks one). Ctrl+C
+  copies them with the faces between them, and Ctrl+V pastes them into
+  the mesh being edited at the same canvas spots. Points landing on
+  existing ones merge into them, so two meshes line up for glue. New
+  points take the art under them and follow the mesh in every pose.
+  Delete removes the picked points. Edit > Copy and Paste work too.
+
+### Changed
+
+- The Edit Mesh popup now shows the same controls as Tool Details' mesh
+  section, so both always match.
+- The Lasso in Tool Details now works (it was a placeholder), and the
+  unbuilt "Add more vertices" paint button is gone.
+
 ## 0.5.2 beta (2026-10-12)
 
 ### Added
