@@ -1,6 +1,5 @@
 /target
 **/target
-Cargo.lock
 *.rar
 *.zip
 *.7z
@@ -25,3 +24,6 @@ CLAUDE.md
 
 # release artifacts from packaging/
 /dist/
+
+# only the workspace lockfile is committed
+crates/*/Cargo.lock

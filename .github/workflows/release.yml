@@ -1,0 +1,103 @@
+name: Release
+
+# Push a tag like v0.5.1 (or run by hand) to build every platform and put
+# the packages on a DRAFT pre-release. Nothing is public until someone
+# opens the draft on GitHub and presses Publish.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux x86_64 (tar.gz, deb, rpm, AppImage)
+    # oldest supported runner, so the binaries run on newer glibc too
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev desktop-file-utils
+          curl -fsSL -o nfpm.deb https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_amd64.deb
+          sudo dpkg -i nfpm.deb
+      - name: Package
+        env:
+          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: packaging/linux/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 (setup.exe, zip)
+    # cross-built with mingw, the same way as on a Linux dev box
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Packaging tools
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 nsis zip
+      - name: Package
+        run: packaging/windows/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/release/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal (dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Package
+        run: packaging/macos/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: Draft pre-release
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create or update the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in v*) ;; *) TAG="v$(awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p&&$1=="version"{gsub(/[" ]/,"",$3);print $3;exit}' Cargo.toml)" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --draft --prerelease \
+              --title "Ayatsuri2D ${TAG#v} beta" --generate-notes --target "$GITHUB_SHA"
+          fi

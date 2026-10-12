@@ -77,6 +77,20 @@ still missing        glue, masking, blend shapes, physics, animation,
 Nothing here is usable yet. The [documentation](docs/) is ahead of the code on
 purpose: the decisions that are expensive to reverse were made first.
 
+## Install
+
+Packages are on the [releases page](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases).
+
+```
+Windows   ayatsuri2d-<version>-windows-x64-setup.exe   installer
+          ayatsuri2d-<version>-windows-x64.zip         portable, unzip and run
+macOS     ayatsuri2d-<version>-macos-universal.dmg     Apple Silicon and Intel
+Linux     .deb, .rpm, .AppImage, or the .tar.gz with install.sh
+```
+
+The macOS app is not notarized: the first time, right-click it and choose
+Open. To build the packages yourself, see `packaging/`.
+
 ## Layout
 
 ```

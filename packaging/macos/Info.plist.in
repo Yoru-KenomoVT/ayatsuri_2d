@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Ayatsuri2D</string>
+	<key>CFBundleDisplayName</key>
+	<string>Ayatsuri2D</string>
+	<key>CFBundleIdentifier</key>
+	<string>@APP_ID@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleExecutable</key>
+	<string>ayatsuri-launcher</string>
+	<key>CFBundleIconFile</key>
+	<string>ayatsuri2d</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.graphics-design</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Yoru_KenomoVT, GPL-3.0</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>@APP_ID@.model</string>
+			<key>UTTypeDescription</key>
+			<string>Ayatsuri2D model</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.data</string></array>
+			<key>UTTypeIconFile</key>
+			<string>ayatsuri2d</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array><string>aom</string></array>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Ayatsuri2D model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array><string>@APP_ID@.model</string></array>
+		</dict>
+	</array>
+</dict>
+</plist>
