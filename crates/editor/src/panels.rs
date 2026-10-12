@@ -241,6 +241,14 @@ pub struct EditorUi {
     pub(crate) settings_tab: usize,
     /// Where the Settings window sits (its centre) once dragged.
     pub(crate) settings_pos: Option<egui::Pos2>,
+    /// The deformer dev hook has run, and has logged its grid.
+    dev_def_done: bool,
+    dev_def_logged: bool,
+    /// The art Mesh Edit shows, frozen on entry.
+    mesh_art: Option<MeshArt>,
+    /// The Mesh Edit dev hook has run, and has logged its vertices.
+    dev_mesh_done: bool,
+    dev_mesh_logged: bool,
     /// A mesh or warp point drag being shown live on the model.
     live_drag: Option<LiveDrag>,
     /// A rotation being turned live: the deformer and its angles as they were.
@@ -338,6 +346,15 @@ pub struct EditorUi {
 
 /// One vertex being dragged in mesh edit mode. The parent-space offset is
 /// banked as the pointer moves and applied as a single edit on release.
+/// Mesh Edit's art, captured on entry and drawn unchanged until it ends.
+struct MeshArt {
+    mesh: usize,
+    /// Canvas-space positions, so it follows zoom and pan.
+    positions: Vec<f32>,
+    uvs: Vec<f32>,
+    indices: Vec<u16>,
+}
+
 struct MeshDrag {
     vertex: usize,
     /// Blended parent-space positions captured when the drag began.
@@ -345,13 +362,11 @@ struct MeshDrag {
     dx: f32,
     dy: f32,
     /// The mesh on screen when the drag began, its triangles, and its
-    /// texture coordinates as the model stores them and as they are drawn:
-    /// the art under any point is read off this, so the vertex slides over
-    /// the picture instead of pulling it along.
+    /// texture coordinates as the model stores them: the art under the drop
+    /// point is read off this, so the vertex slides over the picture.
     start: Vec<Pos2>,
     indices: Vec<u16>,
     model_uvs: Vec<f32>,
-    draw_uvs: Vec<f32>,
 }
 
 /// Where `p` falls on a mesh as (triangle corners, weights): inside the
@@ -767,6 +782,11 @@ impl Default for EditorUi {
             def_rename: None,
             toolbar_reset: false,
             live_drag: None,
+            dev_mesh_done: false,
+            dev_def_done: false,
+            dev_def_logged: false,
+            mesh_art: None,
+            dev_mesh_logged: false,
             rot_live: None,
             api: Default::default(),
             recovery: Default::default(),
@@ -1355,6 +1375,30 @@ impl EditorUi {
                 self.show_about = true;
                 self.about.open_tab(&tab.to_string_lossy());
             }
+        }
+        // developer hook for testing deformer drags: AYATSURI_DEV_DEFORMER=<i>
+        // selects that deformer once a model is loaded
+        if let Some(s) = &self.session
+            && !self.dev_def_done
+            && let Some(di) =
+                std::env::var("AYATSURI_DEV_DEFORMER").ok().and_then(|v| v.parse::<usize>().ok())
+            && di < s.puppet.model().deformers.len()
+        {
+            self.dev_def_done = true;
+            self.selected = Some(Sel::Deformer(di));
+        }
+        // developer hook for testing Mesh Edit: AYATSURI_DEV_MESHEDIT=<mesh>
+        // opens that mesh in Mesh Edit once a model is loaded
+        if let Some(s) = &self.session
+            && !self.dev_mesh_done
+            && let Some(mi) =
+                std::env::var("AYATSURI_DEV_MESHEDIT").ok().and_then(|v| v.parse::<usize>().ok())
+            && mi < s.puppet.model().art_meshes.len()
+        {
+            self.dev_mesh_done = true;
+            self.selected = Some(Sel::Mesh(mi));
+            self.mesh_edit = Some(mi);
+            self.mesh_snapshot = Some(s.puppet.model().clone());
         }
         // developer hook for screenshots: AYATSURI_SHOW_PHYSICS=1 opens the
         // physics page once, as soon as a model is loaded
@@ -6845,6 +6889,32 @@ impl EditorUi {
                         .map(|d| d.from.clone());
                     let live_target = (self.bez_drag.is_some() || point_drag.is_some())
                         .then_some(LiveTarget::Warp(di));
+                    if std::env::var_os("AYATSURI_DEV_DEFORMER").is_some() {
+                        if !self.dev_def_logged {
+                            self.dev_def_logged = true;
+                            let ppp = ui.ctx().pixels_per_point();
+                            for (gi, sp) in screen_pts.iter().enumerate() {
+                                log::info!(
+                                    "dev warp point {gi} at {:.0} {:.0}",
+                                    sp.x * ppp,
+                                    sp.y * ppp
+                                );
+                            }
+                        }
+                        if live_target.is_some() {
+                            log::debug!(
+                                "dev warp live: bez_drag {} point_drag {} bez_grid {} live {}",
+                                self.bez_drag.is_some(),
+                                point_drag.is_some(),
+                                bez_grid.as_ref().map_or(0, Vec::len),
+                                self.live_drag.as_ref().map_or("none".to_string(), |l| format!(
+                                    "{:?} base {}",
+                                    l.target,
+                                    l.base.len()
+                                ))
+                            );
+                        }
+                    }
                     let was_live = self.live_drag.is_some();
                     live_for(&mut self.live_drag, &mut s.puppet, live_target);
                     if let Some(l) = &self.live_drag {
@@ -7449,6 +7519,9 @@ impl EditorUi {
             Del(usize, usize),
         }
         let mut mesh_op: Option<MeshOp> = None;
+        if self.mesh_edit.is_none() {
+            self.mesh_art = None;
+        }
         if let Some(mi) = self.mesh_edit {
             vp.rect_filled(view, 0.0, Color32::from_black_alpha(150));
             let ptr = ui.ctx().input(|i| i.pointer.latest_pos());
@@ -7463,7 +7536,29 @@ impl EditorUi {
                 let (pairs, _) = g.positions.as_chunks::<2>();
                 let mut screen_pts: Vec<Pos2> =
                     pairs.iter().map(|xy| to_screen(xy[0], xy[1])).collect();
+                // the art is shown as it was on entering Mesh Edit and stays
+                // put; only the nodes and lines move over it (Cubism's way)
+                if self.mesh_art.as_ref().is_none_or(|a| a.mesh != mi) {
+                    self.mesh_art = Some(MeshArt {
+                        mesh: mi,
+                        positions: g.positions.to_vec(),
+                        uvs: g.uvs.to_vec(),
+                        indices: g.indices.to_vec(),
+                    });
+                }
 
+                // dev: where the vertices are in window points, for scripted drags
+                if !self.dev_mesh_logged && std::env::var_os("AYATSURI_DEV_MESHEDIT").is_some() {
+                    self.dev_mesh_logged = true;
+                    let ppp = ui.ctx().pixels_per_point();
+                    for (vi, sp) in screen_pts.iter().enumerate().take(64) {
+                        log::info!(
+                            "dev mesh edit vertex {vi} at {:.0} {:.0}",
+                            sp.x * ppp,
+                            sp.y * ppp
+                        );
+                    }
+                }
                 // the nearest vertex within reach, for hover and drag start
                 let mut near: Option<(usize, f32)> = None;
                 let reach = self.pick_radius.clamp(2.0, 40.0);
@@ -7672,7 +7767,6 @@ impl EditorUi {
                             start: screen_pts.clone(),
                             indices: g.indices.to_vec(),
                             model_uvs: m_uvs,
-                            draw_uvs: g.uvs.to_vec(),
                         });
                     }
                     if resp.dragged()
@@ -7705,41 +7799,36 @@ impl EditorUi {
                     }
                 }
 
-                // live preview: the dragged vertex follows the pointer and
-                // shows the art that was under it, so the picture holds still
-                let mut slide_uv: Option<(usize, (f32, f32))> = None;
+                // live preview: the dragged vertex follows the pointer
                 if let (Some(d), Some(ptr)) = (&self.mesh_drag, ptr)
                     && let Some(sp) = screen_pts.get_mut(d.vertex)
                 {
                     *sp = ptr;
-                    slide_uv = mesh_weights(&d.start, &d.indices, ptr)
-                        .and_then(|(t, w)| mix_uv(&d.draw_uvs, t, w))
-                        .map(|uv| (d.vertex, uv));
                 }
 
-                // the mesh itself, textured, above the scrim
-                let mut mesh = match tex_id {
-                    Some(id) => egui::Mesh::with_texture(id),
-                    None => egui::Mesh::default(),
-                };
-                let (uv_pairs, _) = g.uvs.as_chunks::<2>();
-                let mut uvs = uv_pairs.iter();
-                for (vi, sp) in screen_pts.iter().enumerate() {
-                    let uv = match (tex_id, uvs.next()) {
-                        (Some(_), _) if slide_uv.is_some_and(|(v, _)| v == vi) => {
-                            slide_uv.map_or(egui::epaint::WHITE_UV, |(_, (u, v))| pos2(u, v))
-                        }
-                        (Some(_), Some(&[u, v])) => pos2(u, v),
-                        _ => egui::epaint::WHITE_UV,
+                // the art above the scrim, frozen as it was on entry: moving,
+                // adding or erasing nodes never re-cuts or stretches it
+                if let Some(art) = &self.mesh_art {
+                    let mut mesh = match tex_id {
+                        Some(id) => egui::Mesh::with_texture(id),
+                        None => egui::Mesh::default(),
                     };
-                    mesh.vertices.push(egui::epaint::Vertex {
-                        pos: *sp,
-                        uv,
-                        color: Color32::WHITE,
-                    });
+                    let (pos_pairs, _) = art.positions.as_chunks::<2>();
+                    let (uv_pairs, _) = art.uvs.as_chunks::<2>();
+                    for (i, p) in pos_pairs.iter().enumerate() {
+                        let uv = match (tex_id, uv_pairs.get(i)) {
+                            (Some(_), Some(&[u, v])) => pos2(u, v),
+                            _ => egui::epaint::WHITE_UV,
+                        };
+                        mesh.vertices.push(egui::epaint::Vertex {
+                            pos: to_screen(p[0], p[1]),
+                            uv,
+                            color: Color32::WHITE,
+                        });
+                    }
+                    mesh.indices.extend(art.indices.iter().map(|&i| i as u32));
+                    add_mesh_shape(&vp, mesh);
                 }
-                mesh.indices.extend(g.indices.iter().map(|&i| i as u32));
-                add_mesh_shape(&vp, mesh);
 
                 let stroke = Stroke::new(1.2, theme::pal().accent);
                 let (tris, _) = g.indices.as_chunks::<3>();
@@ -9303,6 +9392,23 @@ mod drag_tests {
         let mut p = ayatsuri_core::Puppet::new(m);
         p.update();
         p
+    }
+
+    #[test]
+    fn a_live_warp_drag_moves_the_mesh_before_release() {
+        let mut puppet = bent_rig();
+        let before = puppet.drawables().next().map(|d| d.positions.to_vec()).unwrap();
+        let live = LiveDrag::start(&mut puppet, LiveTarget::Warp(0)).expect("live drag starts");
+        // the whole grid shifted right, as a Bezier drag would hand it over
+        let grid: Vec<f32> = live.local.chunks(2).flat_map(|p| [p[0] + 0.1, p[1]]).collect();
+        live.show_local(&mut puppet, &grid);
+        puppet.update();
+        let during = puppet.drawables().next().map(|d| d.positions.to_vec()).unwrap();
+        assert!((during[0] - before[0] - 0.1).abs() < 1e-3, "{before:?} -> {during:?}");
+        live.restore(&mut puppet);
+        puppet.update();
+        let after = puppet.drawables().next().map(|d| d.positions.to_vec()).unwrap();
+        assert_eq!(after, before);
     }
 
     #[test]
