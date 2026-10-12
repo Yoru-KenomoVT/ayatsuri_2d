@@ -5839,6 +5839,19 @@ impl EditorUi {
         {
             let ux = ((ptr.x - origin.x) / scale - c.origin_x) / c.pixels_per_unit;
             let uy = ((ptr.y - origin.y) / scale - c.origin_y) / c.pixels_per_unit;
+            // nothing selected: the deformer holds the mesh under the click,
+            // instead of quietly coming out empty and moving nothing
+            // (the selection read by hand: the session is borrowed here)
+            let nothing = self.multi_sel.is_empty()
+                && !matches!(self.selected, Some(Sel::Mesh(_)) | Some(Sel::Deformer(_)));
+            if nothing
+                && let Some(mi) = hit_mesh(&s.puppet, ux, uy, &|m| {
+                    self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
+                })
+            {
+                self.selected = Some(Sel::Mesh(mi));
+                self.multi_sel = vec![mi];
+            }
             self.pending_create = Some((self.tool == Tool::WarpCreate, Some((ux, uy))));
         }
 

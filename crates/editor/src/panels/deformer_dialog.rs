@@ -83,6 +83,18 @@ impl EditorUi {
         let (mut create, mut keep_open, mut close) = (false, false, false);
         crate::windows::Dialog::new(title).open(&mut open).show(ui.ctx(), |ui| {
             ui.set_width(330.0);
+            if !has_selection {
+                // an empty deformer moves nothing until something is under it
+                ui.label(
+                    egui::RichText::new(
+                        "Nothing is selected, so this deformer will hold nothing and moving it \
+                         won't move the model. Select meshes (or click one) first.",
+                    )
+                    .size(11.0)
+                    .color(crate::theme::pal().accent),
+                );
+                ui.add_space(6.0);
+            }
             crate::windows::form(ui, "newdef", |ui| {
                 ui.label("Destination Part");
                 egui::ComboBox::from_id_salt("newdef-part")
