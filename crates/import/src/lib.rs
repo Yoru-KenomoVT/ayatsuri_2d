@@ -33,7 +33,7 @@ pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
 
 pub use moc3::from_moc3;
 pub use moc3_export::{ExportVersion, export_warnings, to_moc3};
-pub use physics3::{from_physics3, to_motion3, to_physics3};
+pub use physics3::{cubism_json, from_physics3, to_motion3, to_physics3};
 
 use thiserror::Error;
 

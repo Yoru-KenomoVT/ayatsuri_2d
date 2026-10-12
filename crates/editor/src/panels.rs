@@ -1376,7 +1376,7 @@ impl EditorUi {
                             self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
                         self.export_dlg = Some(ExportDlg {
                             name,
-                            version: ayatsuri_import::ExportVersion::ALL.len() - 1,
+                            version: ayatsuri_import::ExportVersion::default_index(),
                             physics: true,
                             motions: true,
                         });
@@ -3978,7 +3978,7 @@ impl EditorUi {
                 let name = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
                 self.export_dlg = Some(ExportDlg {
                     name,
-                    version: ayatsuri_import::ExportVersion::ALL.len() - 1,
+                    version: ayatsuri_import::ExportVersion::default_index(),
                     physics: true,
                     motions: true,
                 });

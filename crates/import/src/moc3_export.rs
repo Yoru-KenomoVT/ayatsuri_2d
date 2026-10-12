@@ -27,6 +27,17 @@ pub enum ExportVersion {
 }
 
 impl ExportVersion {
+    /// What a new export starts on: the newest revision the apps people
+    /// load models into can read. 5.3 grew the offset table to 0x16C0,
+    /// past what OpenVT's reader will skip (0x1000), and VTube Studio's
+    /// Core predates it.
+    pub const DEFAULT: ExportVersion = ExportVersion::V5_00;
+
+    /// `DEFAULT`'s place in `ALL`, for pickers.
+    pub fn default_index() -> usize {
+        Self::ALL.iter().position(|v| *v == Self::DEFAULT).unwrap_or(0)
+    }
+
     pub const ALL: [ExportVersion; 6] = [
         ExportVersion::V3_00,
         ExportVersion::V3_03,
@@ -100,6 +111,13 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
                  store; they will interpolate as triangles"
             ));
         }
+    }
+    if version.max_slot() >= 152 {
+        out.push(
+            "5.3 needs the newest Cubism runtimes; OpenVT and VTube Studio cannot \
+             open it yet, so pick 5.0 for those"
+                .into(),
+        );
     }
     if model.physics.is_some() {
         // physics never lives in the moc3 itself; noted so nobody hunts for it
@@ -854,8 +872,10 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         }
     }
     // reference cores require 8-byte alignment on every offset, the
-    // end-of-file markers included
-    while !file.len().is_multiple_of(32) {
+    // end-of-file markers included, and the official Core's consistency
+    // check rejects a file whose size is not a multiple of its 64-byte moc
+    // alignment ("size" is invalid); every real file measured ends on 64
+    while !file.len().is_multiple_of(64) {
         file.push(0);
     }
     let flen = file.len() as u32;
@@ -871,4 +891,37 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         }
     }
     Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_version_ends_on_64_bytes() {
+        let model = Model::new();
+        for v in ExportVersion::ALL {
+            let file = to_moc3(&model, v).unwrap();
+            // the official Core's consistency check calls anything else an
+            // invalid size; measured Cubism files all end on 64
+            assert_eq!(file.len() % 64, 0, "{} is {} bytes", v.label(), file.len());
+            let first = u32::from_le_bytes(file[HEADER..HEADER + 4].try_into().unwrap()) as usize;
+            let table = (first - HEADER) / 4;
+            let max = (0..table)
+                .map(|i| {
+                    let at = HEADER + i * 4;
+                    u32::from_le_bytes(file[at..at + 4].try_into().unwrap()) as usize
+                })
+                .max()
+                .unwrap();
+            assert!(max <= file.len(), "{}: offset past the end", v.label());
+        }
+    }
+
+    #[test]
+    fn default_is_readable_by_common_apps() {
+        // 5.3's offset table runs to 0x16C0, past what OpenVT will skip
+        assert!(ExportVersion::DEFAULT.sot_entries() * 4 + HEADER <= 0x2a0 + 0x1000);
+        assert_eq!(ExportVersion::ALL[ExportVersion::default_index()], ExportVersion::V5_00);
+    }
 }

@@ -24,7 +24,9 @@ openmoc3 = { path = "crates/openmoc3" }
 
 # foundation
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: written Cubism JSON keeps its keys in the published order
+# (Version first) instead of sorted, which strict loaders expect
+serde_json = { version = "1", features = ["preserve_order"] }
 serde_bytes = "0.11"
 rmp-serde = "1.3"
 bytemuck = { version = "1", features = ["derive"] }

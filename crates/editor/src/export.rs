@@ -98,11 +98,7 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
         }).collect::<Vec<_>>(),
     });
     let cdi_file = format!("{name}.cdi3.json");
-    write(
-        &dir.join(&cdi_file),
-        &serde_json::to_vec_pretty(&cdi).map_err(|e| e.to_string())?,
-        &mut written,
-    )?;
+    write(&dir.join(&cdi_file), &ayatsuri_import::cubism_json(&cdi), &mut written)?;
     refs.insert("DisplayInfo".into(), json!(cdi_file));
 
     if opt.motions && !s.animations.is_empty() {
@@ -128,7 +124,7 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     });
     write(
         &dir.join(format!("{name}.model3.json")),
-        &serde_json::to_vec_pretty(&model3).map_err(|e| e.to_string())?,
+        &ayatsuri_import::cubism_json(&model3),
         &mut written,
     )?;
     Ok(written)

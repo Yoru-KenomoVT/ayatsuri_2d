@@ -211,7 +211,39 @@ pub fn to_physics3(rig: &ayatsuri_format::model::PhysicsRig) -> Vec<u8> {
         },
         "PhysicsSettings": settings,
     });
-    serde_json::to_vec_pretty(&doc).unwrap_or_default()
+    cubism_json(&doc)
+}
+
+/// Write JSON the way Cubism's own exporter does: whole numbers as
+/// integers (`60`, not `60.0`), tab indents, keys in the order written.
+/// Strict typed loaders (Unity's JsonUtility among them) refuse `60.0`
+/// where the schema has an integer, and then the whole bundle reads as
+/// unrecognized.
+pub fn cubism_json(doc: &serde_json::Value) -> Vec<u8> {
+    use serde::Serialize;
+    fn ints(v: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        match v {
+            Value::Number(n) => match n.as_f64() {
+                Some(f) if n.is_f64() && f.fract() == 0.0 && f.abs() < 9.0e15 => {
+                    Value::from(f as i64)
+                }
+                _ => v.clone(),
+            },
+            Value::Array(a) => Value::Array(a.iter().map(ints).collect()),
+            Value::Object(o) => {
+                Value::Object(o.iter().map(|(k, x)| (k.clone(), ints(x))).collect())
+            }
+            _ => v.clone(),
+        }
+    }
+    let mut out = Vec::new();
+    let fmt = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+    let mut ser = serde_json::Serializer::with_formatter(&mut out, fmt);
+    if ints(doc).serialize(&mut ser).is_err() {
+        return Vec::new();
+    }
+    out
 }
 
 /// Serialize an animation as motion3.json: linear segments only, which is
@@ -257,7 +289,7 @@ pub fn to_motion3(anim: &ayatsuri_format::Animation) -> Vec<u8> {
         },
         "Curves": curves,
     });
-    serde_json::to_vec_pretty(&doc).unwrap_or_default()
+    cubism_json(&doc)
 }
 
 /// Parse a physics3.json file into the native rig.
@@ -341,4 +373,39 @@ pub fn from_physics3(bytes: &[u8]) -> Result<PhysicsRig, ImportError> {
         wind_y: finite(wind.y, 0.0),
         groups,
     })
+}
+
+#[cfg(test)]
+mod cubism_json_tests {
+    use super::*;
+
+    #[test]
+    fn whole_numbers_are_integers_and_order_is_kept() {
+        let doc = serde_json::json!({
+            "Version": 3,
+            "Meta": { "Fps": 60.0, "Gravity": { "X": 0.0, "Y": -1.0 }, "Duration": 2.5 },
+        });
+        let text = String::from_utf8(cubism_json(&doc)).unwrap();
+        assert!(text.contains("\"Fps\": 60,"), "{text}");
+        assert!(text.contains("\"Y\": -1"), "{text}");
+        assert!(text.contains("\"Duration\": 2.5"), "{text}");
+        // Version first, as written, and tab indents
+        assert!(text.starts_with("{\n\t\"Version\": 3"), "{text}");
+    }
+
+    #[test]
+    fn physics_export_matches_cubism_number_style() {
+        let src = br#"{"Version":3,"Meta":{"Fps":60,"EffectiveForces":{"Gravity":{"X":0,"Y":-1},"Wind":{"X":0,"Y":0}}},
+            "PhysicsSettings":[{"Id":"P1",
+              "Input":[{"Source":{"Target":"Parameter","Id":"ParamAngleX"},"Weight":100,"Type":"X","Reflect":false}],
+              "Output":[{"Destination":{"Target":"Parameter","Id":"ParamHair"},"VertexIndex":1,"Scale":8,"Weight":100,"Type":"Angle","Reflect":false}],
+              "Vertices":[{"Position":{"X":0,"Y":0},"Mobility":1,"Delay":1,"Acceleration":1,"Radius":0},
+                          {"Position":{"X":0,"Y":10},"Mobility":0.9,"Delay":0.6,"Acceleration":1.5,"Radius":10}],
+              "Normalization":{"Position":{"Minimum":-10,"Default":0,"Maximum":10},"Angle":{"Minimum":-10,"Default":0,"Maximum":10}}}]}"#;
+        let rig = from_physics3(src).unwrap();
+        let text = String::from_utf8(to_physics3(&rig)).unwrap();
+        assert!(!text.contains("\"Weight\": 100.0"), "{text}");
+        let first_key = text.find("\"Version\"").unwrap();
+        assert!(first_key < text.find("\"Meta\"").unwrap());
+    }
 }

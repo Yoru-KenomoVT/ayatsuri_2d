@@ -78,7 +78,7 @@ impl EditorUi {
         let version = ayatsuri_import::ExportVersion::ALL
             .get(dlg.version)
             .copied()
-            .unwrap_or(ayatsuri_import::ExportVersion::V5_03);
+            .unwrap_or(ayatsuri_import::ExportVersion::DEFAULT);
         let Some(s) = &self.session else { return };
         let opt = crate::export::Options {
             name: dlg.name.clone(),
