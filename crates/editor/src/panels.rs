@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use ayatsuri_core::edit::Child;
 use ayatsuri_format::Model;
 use ayatsuri_format::model::DeformerKind;
 use egui::{
@@ -384,6 +385,8 @@ enum DefCmd {
     CreateForSelection(bool),
     Rename(usize),
     Delete(usize),
+    /// Move this object under that deformer (None: under no deformer).
+    Reparent(Child, Option<usize>),
 }
 
 /// What a native file dialog running on its own thread was opened for;
@@ -5077,10 +5080,27 @@ impl EditorUi {
         let ctx = ui.ctx().clone();
         ScrollArea::vertical().id_salt("deformers").show(ui, |ui| {
             for (i, dep, id, is_warp, has_kids) in rows {
-                let (rect, resp) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
+                let (rect, resp) = ui
+                    .allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click_and_drag());
                 if self.selected == Some(Sel::Deformer(i)) {
                     ui.painter().rect_filled(rect, 0.0, theme::pal().select);
+                }
+                // drag a row onto a deformer to make it the parent
+                if resp.drag_started() && !self.def_locked.contains(&i) {
+                    resp.dnd_set_drag_payload(Child::Deformer(i));
+                }
+                if let Some(p) = resp.dnd_hover_payload::<Child>()
+                    && *p != Child::Deformer(i)
+                {
+                    ui.painter().rect_stroke(
+                        rect.shrink(1.0),
+                        3.0,
+                        Stroke::new(1.5, theme::pal().accent),
+                        StrokeKind::Inside,
+                    );
+                }
+                if let Some(p) = resp.dnd_release_payload::<Child>() {
+                    def_cmd = Some(DefCmd::Reparent(*p, Some(i)));
                 }
                 let shown = s.deformer_shown.get(i).copied().unwrap_or(true);
                 let eye = Rect::from_min_size(rect.min, vec2(18.0, 18.0));
@@ -5256,8 +5276,17 @@ impl EditorUi {
                     .map(|(mi, _)| (mi, s.mesh_name(mi)))
                     .collect();
                 for (mi, mid) in meshes {
-                    let (rect, resp) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 15.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(
+                        vec2(ui.available_width(), 15.0),
+                        Sense::click_and_drag(),
+                    );
+                    if resp.drag_started() {
+                        resp.dnd_set_drag_payload(Child::Mesh(mi));
+                    }
+                    // dropping on a mesh row means its deformer
+                    if let Some(p) = resp.dnd_release_payload::<Child>() {
+                        def_cmd = Some(DefCmd::Reparent(*p, Some(i)));
+                    }
                     if self.selected == Some(Sel::Mesh(mi)) {
                         ui.painter().rect_filled(rect, 0.0, theme::pal().select);
                     }
@@ -5291,7 +5320,20 @@ impl EditorUi {
             }
             // the empty space under the rows: create around the selection
             let rest = ui.available_height().max(40.0);
-            let (_, bg) = ui.allocate_exact_size(vec2(ui.available_width(), rest), Sense::click());
+            let (bg_rect, bg) =
+                ui.allocate_exact_size(vec2(ui.available_width(), rest), Sense::click());
+            // dropped on the empty space: out of every deformer
+            if bg.dnd_hover_payload::<Child>().is_some() {
+                ui.painter().rect_stroke(
+                    bg_rect.shrink(2.0),
+                    3.0,
+                    Stroke::new(1.0, theme::pal().accent.gamma_multiply(0.6)),
+                    StrokeKind::Inside,
+                );
+            }
+            if let Some(p) = bg.dnd_release_payload::<Child>() {
+                def_cmd = Some(DefCmd::Reparent(*p, None));
+            }
             bg.context_menu(|ui| {
                 if ui.button("Create Warp Deformer…").clicked() {
                     def_cmd = Some(DefCmd::CreateForSelection(true));
@@ -5303,6 +5345,26 @@ impl EditorUi {
                 }
             });
         });
+        // what is being dragged follows the pointer
+        if let Some(p) = egui::DragAndDrop::payload::<Child>(&ctx)
+            && let Some(at) = ctx.pointer_latest_pos()
+            && let Some(s) = &self.session
+        {
+            let name = match *p {
+                Child::Deformer(d) => {
+                    s.puppet.model().deformers.get(d).map(|d| d.id.clone()).unwrap_or_default()
+                }
+                Child::Mesh(m) => s.mesh_name(m),
+            };
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("def-drag")))
+                .text(
+                    at + vec2(14.0, 4.0),
+                    Align2::LEFT_CENTER,
+                    name,
+                    FontId::proportional(11.0),
+                    theme::pal().accent,
+                );
+        }
         if let Some(cmd) = def_cmd {
             self.run_def_cmd(cmd);
         }
@@ -5327,6 +5389,33 @@ impl EditorUi {
                     .map(|d| d.id.clone())
                     .unwrap_or_default();
                 self.def_rename = Some((i, id));
+            }
+            DefCmd::Reparent(child, parent) => {
+                let Some(s) = &mut self.session else { return };
+                // the palette's per-row state is by index, and a re-parent
+                // can re-sort deformers; carry it over by id
+                let ids: Vec<String> =
+                    s.puppet.model().deformers.iter().map(|d| d.id.clone()).collect();
+                let id_of = |i: &usize| ids.get(*i).cloned();
+                let locked: Vec<String> = self.def_locked.iter().filter_map(id_of).collect();
+                let folded: Vec<String> = self.def_collapsed.iter().filter_map(id_of).collect();
+                let picked = match self.selected {
+                    Some(Sel::Deformer(d)) => ids.get(d).cloned(),
+                    _ => None,
+                };
+                if s.edit(|m| ayatsuri_core::edit::set_parent(m, child, parent).is_some()) {
+                    let now: Vec<String> =
+                        s.puppet.model().deformers.iter().map(|d| d.id.clone()).collect();
+                    let index_of = |id: &String| now.iter().position(|n| n == id);
+                    self.def_locked = locked.iter().filter_map(index_of).collect();
+                    self.def_collapsed = folded.iter().filter_map(index_of).collect();
+                    if let Some(id) = picked {
+                        self.selected = index_of(&id).map(Sel::Deformer);
+                    }
+                    log::info!("re-parented {child:?} under {parent:?}");
+                } else {
+                    log::warn!("can't move a deformer under itself or its own children");
+                }
             }
             DefCmd::Delete(i) => {
                 let Some(s) = &mut self.session else { return };

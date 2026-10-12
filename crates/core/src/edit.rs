@@ -740,54 +740,174 @@ fn to_local(puppet: &crate::Puppet, deformer: Option<usize>, world: (f32, f32)) 
     p
 }
 
-/// Delete a deformer. Its meshes and child deformers move up to its parent
-/// and keep their shape: each point goes out through the deleted deformer
-/// at the default pose and back in through the parent. Only the deleted
-/// deformer's own motion goes with it. References past it shift down.
-pub fn delete_deformer(model: &mut Model, deformer: usize) -> bool {
-    let Some(gone) = model.deformers.get(deformer) else { return false };
-    let parent = gone.parent_deformer.map(|p| p as usize);
-    // evaluate at the default pose to read both transforms
+/// A puppet of `model` evaluated at every parameter's default.
+fn rest_puppet(model: &Model) -> crate::Puppet {
     let mut puppet = crate::Puppet::new(model.clone());
     for (i, p) in model.parameters.iter().enumerate() {
         puppet.set_value(i, p.default);
     }
     puppet.update();
-    let remap = |x: f32, y: f32| {
-        let w = puppet.deformer_point(deformer, x, y);
-        to_local(&puppet, parent, w)
+    puppet
+}
+
+/// Put deformers back in "parents first" order (the evaluator and moc3
+/// both need it), keeping everything else in its current order, and
+/// renumber every reference. Returns old index -> new index.
+fn sort_parents_first(model: &mut Model) -> Vec<usize> {
+    let n = model.deformers.len();
+    let mut placed = vec![false; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    // repeatedly take, in index order, every deformer whose parent is placed
+    while order.len() < n {
+        let before = order.len();
+        for i in 0..n {
+            if placed.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            let ready = match model.deformers.get(i).and_then(|d| d.parent_deformer) {
+                None => true,
+                Some(p) => placed.get(p as usize).copied().unwrap_or(true),
+            };
+            if ready {
+                if let Some(f) = placed.get_mut(i) {
+                    *f = true;
+                }
+                order.push(i);
+            }
+        }
+        if order.len() == before {
+            // a cycle (never made by these edits): keep the rest as it was
+            order.extend((0..n).filter(|&i| !placed.get(i).copied().unwrap_or(true)));
+            break;
+        }
+    }
+    let mut new_of = vec![0usize; n];
+    for (new, &old) in order.iter().enumerate() {
+        if let Some(slot) = new_of.get_mut(old) {
+            *slot = new;
+        }
+    }
+    if order.iter().enumerate().all(|(new, &old)| new == old) {
+        return new_of;
+    }
+    let mut old = core::mem::take(&mut model.deformers).into_iter().map(Some).collect::<Vec<_>>();
+    for &i in &order {
+        if let Some(d) = old.get_mut(i).and_then(Option::take) {
+            model.deformers.push(d);
+        }
+    }
+    let remap = |r: &mut Option<u32>| {
+        if let Some(x) = r {
+            *x = new_of.get(*x as usize).copied().unwrap_or(*x as usize) as u32;
+        }
     };
-    let children: Vec<Child> = model
+    for m in &mut model.art_meshes {
+        remap(&mut m.parent_deformer);
+    }
+    for d in &mut model.deformers {
+        remap(&mut d.parent_deformer);
+    }
+    new_of
+}
+
+/// Give `child` a new parent deformer (None: no deformer) without moving
+/// it on screen. Its points go out through the old parent at the default
+/// pose and back in through the new one; a rotation deformer also keeps
+/// its angle and scale, which it would otherwise inherit differently. A
+/// deformer can't move under itself or its own descendants. Deformers are
+/// re-sorted parents-first when needed; returns the child's new index.
+pub fn set_parent(model: &mut Model, child: Child, new_parent: Option<usize>) -> Option<Child> {
+    let old_parent = parent_of(model, child)?;
+    if new_parent.is_some_and(|p| model.deformers.get(p).is_none()) {
+        return None;
+    }
+    if let (Child::Deformer(d), Some(p)) = (child, new_parent)
+        && deformer_under(model, p, d)
+    {
+        return None;
+    }
+    if old_parent.map(|p| p as usize) == new_parent {
+        return Some(child);
+    }
+    let before = rest_puppet(model);
+    let old_frame = match child {
+        Child::Deformer(d) => before.rotation_state(d).map(|r| (r.angle, r.scale)),
+        Child::Mesh(_) => None,
+    };
+    let remap = |x: f32, y: f32| {
+        let world = match old_parent {
+            Some(p) => before.deformer_point(p as usize, x, y),
+            None => (x, y),
+        };
+        to_local(&before, new_parent, world)
+    };
+    map_child(model, child, &remap);
+    let np = new_parent.map(|p| p as u32);
+    match child {
+        Child::Mesh(i) => {
+            if let Some(m) = model.art_meshes.get_mut(i) {
+                m.parent_deformer = np;
+            }
+        }
+        Child::Deformer(i) => {
+            if let Some(d) = model.deformers.get_mut(i) {
+                d.parent_deformer = np;
+            }
+        }
+    }
+    let new_of = sort_parents_first(model);
+    let child = match child {
+        Child::Deformer(d) => Child::Deformer(new_of.get(d).copied().unwrap_or(d)),
+        m => m,
+    };
+    // a rotation reads its parents' turn and scale; give back the difference
+    if let (Child::Deformer(d), Some((old_angle, old_scale))) = (child, old_frame) {
+        let after = rest_puppet(model);
+        if let (Some(now), Some(def)) = (after.rotation_state(d), model.deformers.get_mut(d))
+            && let DeformerKind::Rotation(r) = &mut def.kind
+        {
+            r.base_angle += old_angle - now.angle;
+            if now.scale.abs() > 1e-6 && old_scale.is_finite() {
+                let ratio = old_scale / now.scale;
+                for s in &mut r.scales {
+                    *s *= ratio;
+                }
+            }
+        }
+    }
+    Some(child)
+}
+
+/// Delete a deformer. Its meshes and child deformers move up to its parent
+/// and keep their shape (see `set_parent`); only the deleted deformer's own
+/// motion goes with it. References past it shift down.
+pub fn delete_deformer(model: &mut Model, deformer: usize) -> bool {
+    let Some(gone) = model.deformers.get(deformer) else { return false };
+    let parent = gone.parent_deformer.map(|p| p as usize);
+    let meshes: Vec<usize> = model
         .art_meshes
         .iter()
         .enumerate()
         .filter(|(_, m)| m.parent_deformer == Some(deformer as u32))
-        .map(|(i, _)| Child::Mesh(i))
-        .chain(
-            model
-                .deformers
-                .iter()
-                .enumerate()
-                .filter(|(_, d)| d.parent_deformer == Some(deformer as u32))
-                .map(|(i, _)| Child::Deformer(i)),
-        )
+        .map(|(i, _)| i)
         .collect();
-    for &c in &children {
-        map_child(model, c, &remap);
+    for i in meshes {
+        set_parent(model, Child::Mesh(i), parent);
     }
-    // children of a rotation deformer that move under a warp (or back) keep
-    // their reading only if their own rotation origins went through the map
-    // too, which map_child does; now rewire and drop the deformer
-    let new_parent = parent.map(|p| p as u32);
-    for m in &mut model.art_meshes {
-        if m.parent_deformer == Some(deformer as u32) {
-            m.parent_deformer = new_parent;
-        }
+    // a deformer's parent comes before it, and the deleted one's parent
+    // comes before the deleted one, so moving children up never re-sorts
+    let kids: Vec<usize> = model
+        .deformers
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.parent_deformer == Some(deformer as u32))
+        .map(|(i, _)| i)
+        .collect();
+    for i in kids {
+        set_parent(model, Child::Deformer(i), parent);
     }
-    for d in &mut model.deformers {
-        if d.parent_deformer == Some(deformer as u32) {
-            d.parent_deformer = new_parent;
-        }
+    if model.deformers.get(deformer).is_none() {
+        return false;
     }
     model.deformers.remove(deformer);
     let shift = |r: &mut Option<u32>| {
@@ -2408,6 +2528,100 @@ mod tests {
             assert!(err < tol, "{p:?}: ({x},{y}) -> ({nx},{ny}), off by {err}");
         }
         assert!(!move_rotation_pivot(&mut m, r, &[(0.0, 0.0)], (0.0, 0.0)));
+    }
+
+    /// The mesh vertex on the canvas at the default pose.
+    fn mesh_xy(m: &Model) -> (f32, f32) {
+        let mut p = Puppet::new(m.clone());
+        p.update();
+        p.drawables().next().map(|d| (d.positions[0], d.positions[1])).unwrap()
+    }
+
+    /// A mesh under rotation "inner" (30 deg) under rotation "outer"
+    /// (25 deg, scale 1.5), plus a free warp at the end of the list.
+    fn turned_rig() -> Model {
+        let mut m = test_model();
+        let mk = |m: &mut Model, kind, kids: &[Child], id: &str| {
+            create_deformer(m, kind, kids, None, (0.0, 0.0, 1.0, 1.0), None, id.into()).unwrap()
+        };
+        let inner = mk(
+            &mut m,
+            NewDeformer::Rotation { origin: Some((0.4, 0.2)) },
+            &[Child::Mesh(0)],
+            "inner",
+        );
+        let outer = mk(
+            &mut m,
+            NewDeformer::Rotation { origin: Some((0.1, -0.3)) },
+            &[Child::Deformer(inner)],
+            "outer",
+        );
+        mk(&mut m, NewDeformer::Warp { rows: 2, cols: 2 }, &[], "free");
+        let turn = |m: &mut Model, id: &str, deg: f32, scale: f32| {
+            let d = m.deformers.iter_mut().find(|d| d.id == id).unwrap();
+            let DeformerKind::Rotation(r) = &mut d.kind else { panic!() };
+            r.base_angle = deg;
+            r.scales = vec![scale];
+        };
+        turn(&mut m, "inner", 30.0, 1.0);
+        turn(&mut m, "outer", 25.0, 1.5);
+        let _ = outer;
+        m
+    }
+
+    fn idx(m: &Model, id: &str) -> usize {
+        m.deformers.iter().position(|d| d.id == id).unwrap()
+    }
+
+    fn parents_first(m: &Model) -> bool {
+        m.deformers
+            .iter()
+            .enumerate()
+            .all(|(i, d)| d.parent_deformer.is_none_or(|p| (p as usize) < i))
+    }
+
+    fn same(a: (f32, f32), b: (f32, f32), step: &str) {
+        assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3, "{step}: {a:?} -> {b:?}");
+    }
+
+    #[test]
+    fn reparenting_keeps_the_mesh_still() {
+        let m0 = turned_rig();
+        let at = mesh_xy(&m0);
+        // the turned inner rotation out to the top level
+        let mut m = m0.clone();
+        let inner = idx(&m, "inner");
+        set_parent(&mut m, Child::Deformer(inner), None).unwrap();
+        same(at, mesh_xy(&m), "inner to top");
+        // the mesh itself out of both rotations
+        let mut m = m0.clone();
+        set_parent(&mut m, Child::Mesh(0), None).unwrap();
+        same(at, mesh_xy(&m), "mesh to top");
+        assert_eq!(m.art_meshes[0].parent_deformer, None);
+        // under the warp that sits last: the list re-sorts, parents first
+        let mut m = m0.clone();
+        let (inner, free) = (idx(&m, "inner"), idx(&m, "free"));
+        assert!(free > inner);
+        let moved = set_parent(&mut m, Child::Deformer(inner), Some(free)).unwrap();
+        assert!(parents_first(&m));
+        assert_eq!(moved, Child::Deformer(idx(&m, "inner")));
+        assert_eq!(m.deformers[idx(&m, "inner")].parent_deformer, Some(idx(&m, "free") as u32));
+        same(at, mesh_xy(&m), "inner under the warp");
+        // never under itself or its own child
+        let mut m = m0.clone();
+        let (inner, outer) = (idx(&m, "inner"), idx(&m, "outer"));
+        assert!(set_parent(&mut m, Child::Deformer(outer), Some(inner)).is_none());
+        assert!(set_parent(&mut m, Child::Deformer(outer), Some(outer)).is_none());
+    }
+
+    #[test]
+    fn deleting_a_turned_parent_keeps_the_mesh_still() {
+        let mut m = turned_rig();
+        let at = mesh_xy(&m);
+        let outer = idx(&m, "outer");
+        assert!(delete_deformer(&mut m, outer));
+        same(at, mesh_xy(&m), "outer deleted");
+        assert!(parents_first(&m));
     }
 
     #[test]
