@@ -240,6 +240,10 @@ pub struct EditorUi {
     pub(crate) settings_tab: usize,
     /// Where the Settings window sits (its centre) once dragged.
     pub(crate) settings_pos: Option<egui::Pos2>,
+    /// Set by "Reset Toolbar Position": put the floating bar back next frame.
+    toolbar_reset: bool,
+    /// The Rename Deformer dialog: which deformer and the name typed.
+    def_rename: Option<(usize, String)>,
     /// Undo depth at the start of the frame; see `on_crash`.
     frame_undo_depth: usize,
     /// The Ayatsuri API server and its editor-side state.
@@ -357,6 +361,9 @@ struct RotDrag {
     local_origin: (f32, f32),
     dx: f32,
     dy: f32,
+    /// The origin drag so far in canvas units, for the pivot move.
+    wx: f32,
+    wy: f32,
     degrees: f32,
     last_ptr: Pos2,
 }
@@ -370,6 +377,15 @@ struct PathPin {
 }
 
 /// Results coming back from background threads.
+/// A Deformer palette menu choice, run once the palette is drawn.
+enum DefCmd {
+    /// Create a warp (true) or rotation deformer around this object.
+    Create(bool, Sel),
+    CreateForSelection(bool),
+    Rename(usize),
+    Delete(usize),
+}
+
 /// What a native file dialog running on its own thread was opened for;
 /// the frame loop finishes the job when the path comes back.
 pub(crate) enum PickFor {
@@ -576,6 +592,8 @@ impl Default for EditorUi {
             settings_tab: 0,
             settings_pos: None,
             frame_undo_depth: 0,
+            def_rename: None,
+            toolbar_reset: false,
             api: Default::default(),
             recovery: Default::default(),
             recovering: None,
@@ -1181,6 +1199,7 @@ impl EditorUi {
         self.recovery_window(ui);
         self.api_prompt_window(&ui.ctx().clone());
         self.api_window(ui);
+        self.def_rename_window(&ui.ctx().clone());
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
         if self.last_autosave.elapsed().as_secs() >= 120 {
@@ -1921,31 +1940,43 @@ impl EditorUi {
         // the floating tool bar; right-click any tool to dock it instead
         if self.session.is_some() && !self.prefs.toolbar_docked {
             let default_pos = self.prefs.toolbar_pos.unwrap_or([320.0, 92.0]);
-            let area = egui::Area::new(egui::Id::new("tools-float"))
+            let mut area = egui::Area::new(egui::Id::new("tools-float"))
                 .default_pos(default_pos)
-                .movable(true)
-                .show(ui.ctx(), |ui| {
-                    egui::Frame::new()
-                        .fill(theme::pal().panel_bg)
-                        .stroke(Stroke::new(1.0, theme::pal().border))
-                        .corner_radius(6.0)
-                        .inner_margin(egui::Margin::symmetric(6, 4))
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
-                            ui.horizontal(|ui| {
-                                let (grip, _) =
-                                    ui.allocate_exact_size(vec2(10.0, 26.0), Sense::hover());
-                                for dy in [-5.0, 0.0, 5.0] {
-                                    ui.painter().circle_filled(
-                                        grip.center() + vec2(0.0, dy),
-                                        1.2,
-                                        theme::pal().text_faint,
-                                    );
-                                }
-                                self.tool_strip(ui);
-                            });
+                .movable(true);
+            if std::mem::take(&mut self.toolbar_reset) {
+                area = area.current_pos(default_pos);
+            }
+            let card_id = egui::Id::new("tools-float-card");
+            let card = ui.ctx().data(|d| d.get_temp::<Rect>(card_id));
+            let area = area.show(ui.ctx(), |ui| {
+                // the whole card answers a right-click, under the buttons
+                // (registered first, so they still win where they are)
+                if let Some(card) = card {
+                    ui.interact(card, card_id, Sense::click())
+                        .context_menu(|ui| self.toolbar_menu(ui));
+                }
+                egui::Frame::new()
+                    .fill(theme::pal().panel_bg)
+                    .stroke(Stroke::new(1.0, theme::pal().border))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(6, 4))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
+                        ui.horizontal(|ui| {
+                            let (grip, _) =
+                                ui.allocate_exact_size(vec2(10.0, 26.0), Sense::hover());
+                            for dy in [-5.0, 0.0, 5.0] {
+                                ui.painter().circle_filled(
+                                    grip.center() + vec2(0.0, dy),
+                                    1.2,
+                                    theme::pal().text_faint,
+                                );
+                            }
+                            self.tool_strip(ui);
                         });
-                });
+                    });
+            });
+            ui.ctx().data_mut(|d| d.insert_temp(card_id, area.response.rect));
             let at = area.response.rect.min;
             let settled = !ui.ctx().input(|i| i.pointer.any_down());
             let moved = self
@@ -2976,6 +3007,9 @@ impl EditorUi {
             if self.prefs.toolbar_docked && self.session.is_some() {
                 let bar = Rect::from_min_size(content.min, vec2(content.width(), 34.0));
                 view = Rect::from_min_max(pos2(content.min.x, bar.max.y), content.max);
+                // the whole bar, blank space included, takes the right-click
+                ui.interact(bar, ui.id().with("tools-docked-bar"), Sense::click())
+                    .context_menu(|ui| self.toolbar_menu(ui));
                 ui.painter().rect_filled(bar, 0.0, theme::pal().panel_bg);
                 ui.painter().line_segment(
                     [bar.left_bottom(), bar.right_bottom()],
@@ -4898,6 +4932,22 @@ impl EditorUi {
             }
         });
     }
+    /// The toolbar's right-click menu, wherever on the bar it opens.
+    fn toolbar_menu(&mut self, ui: &mut Ui) {
+        let docked = self.prefs.toolbar_docked;
+        if ui.button(if docked { "Float Toolbar" } else { "Dock Toolbar" }).clicked() {
+            self.prefs.toolbar_docked = !docked;
+            self.prefs.save();
+            ui.close();
+        }
+        if !docked && ui.button("Reset Toolbar Position").clicked() {
+            self.prefs.toolbar_pos = None;
+            self.toolbar_reset = true;
+            self.prefs.save();
+            ui.close();
+        }
+    }
+
     fn tool_strip(&mut self, ui: &mut Ui) {
         // fixed-width name slot first, so switching tools never resizes the bar
         if !self.prefs.toolbar_docked {
@@ -4944,14 +4994,7 @@ impl EditorUi {
                         icon_color,
                     );
                 }
-                let docked = self.prefs.toolbar_docked;
-                resp.context_menu(|ui| {
-                    if ui.button(if docked { "Float toolbar" } else { "Dock toolbar" }).clicked() {
-                        self.prefs.toolbar_docked = !docked;
-                        self.prefs.save();
-                        ui.close();
-                    }
-                });
+                resp.context_menu(|ui| self.toolbar_menu(ui));
                 let resp = resp.on_hover_text(t.label());
                 if resp.clicked() {
                     self.tool = t;
@@ -4961,6 +5004,7 @@ impl EditorUi {
     }
 
     fn deformers_panel(&mut self, ui: &mut Ui) {
+        let mut def_cmd: Option<DefCmd> = None;
         let Some(s) = &mut self.session else {
             ui.weak("No model loaded.");
             return;
@@ -5151,6 +5195,36 @@ impl EditorUi {
                     self.selected = Some(Sel::Deformer(i));
                 }
                 resp.context_menu(|ui| {
+                    if ui
+                        .button("Create Warp Deformer…")
+                        .on_hover_text("Around this deformer")
+                        .clicked()
+                    {
+                        def_cmd = Some(DefCmd::Create(true, Sel::Deformer(i)));
+                        ui.close();
+                    }
+                    if ui
+                        .button("Create Rotation Deformer…")
+                        .on_hover_text("Around this deformer")
+                        .clicked()
+                    {
+                        def_cmd = Some(DefCmd::Create(false, Sel::Deformer(i)));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Rename…").clicked() {
+                        def_cmd = Some(DefCmd::Rename(i));
+                        ui.close();
+                    }
+                    if ui
+                        .button("Delete")
+                        .on_hover_text("Its meshes and deformers move up to its parent, unchanged")
+                        .clicked()
+                    {
+                        def_cmd = Some(DefCmd::Delete(i));
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button("Select children").clicked() {
                         self.multi_sel = s
                             .puppet
@@ -5203,9 +5277,106 @@ impl EditorUi {
                     if resp.clicked() {
                         self.selected = Some(Sel::Mesh(mi));
                     }
+                    resp.context_menu(|ui| {
+                        if ui.button("Create Warp Deformer…").clicked() {
+                            def_cmd = Some(DefCmd::Create(true, Sel::Mesh(mi)));
+                            ui.close();
+                        }
+                        if ui.button("Create Rotation Deformer…").clicked() {
+                            def_cmd = Some(DefCmd::Create(false, Sel::Mesh(mi)));
+                            ui.close();
+                        }
+                    });
                 }
             }
+            // the empty space under the rows: create around the selection
+            let rest = ui.available_height().max(40.0);
+            let (_, bg) = ui.allocate_exact_size(vec2(ui.available_width(), rest), Sense::click());
+            bg.context_menu(|ui| {
+                if ui.button("Create Warp Deformer…").clicked() {
+                    def_cmd = Some(DefCmd::CreateForSelection(true));
+                    ui.close();
+                }
+                if ui.button("Create Rotation Deformer…").clicked() {
+                    def_cmd = Some(DefCmd::CreateForSelection(false));
+                    ui.close();
+                }
+            });
         });
+        if let Some(cmd) = def_cmd {
+            self.run_def_cmd(cmd);
+        }
+    }
+
+    fn run_def_cmd(&mut self, cmd: DefCmd) {
+        match cmd {
+            DefCmd::Create(warp, target) => {
+                self.selected = Some(target);
+                self.multi_sel = match target {
+                    Sel::Mesh(mi) => vec![mi],
+                    _ => Vec::new(),
+                };
+                self.pending_create = Some((warp, None));
+            }
+            DefCmd::CreateForSelection(warp) => self.pending_create = Some((warp, None)),
+            DefCmd::Rename(i) => {
+                let id = self
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.puppet.model().deformers.get(i))
+                    .map(|d| d.id.clone())
+                    .unwrap_or_default();
+                self.def_rename = Some((i, id));
+            }
+            DefCmd::Delete(i) => {
+                let Some(s) = &mut self.session else { return };
+                let name =
+                    s.puppet.model().deformers.get(i).map(|d| d.id.clone()).unwrap_or_default();
+                if s.edit(|m| ayatsuri_core::edit::delete_deformer(m, i)) {
+                    log::info!("deleted deformer {name}");
+                    // indices past it moved down one
+                    let fix = |set: &mut std::collections::HashSet<usize>| {
+                        *set = set
+                            .iter()
+                            .filter(|&&d| d != i)
+                            .map(|&d| if d > i { d - 1 } else { d })
+                            .collect();
+                    };
+                    fix(&mut self.def_collapsed);
+                    fix(&mut self.def_locked);
+                    if matches!(self.selected, Some(Sel::Deformer(_))) {
+                        self.selected = None;
+                    }
+                }
+            }
+        }
+    }
+
+    fn def_rename_window(&mut self, ctx: &egui::Context) {
+        let Some((i, name)) = &mut self.def_rename else { return };
+        let (i, mut open, mut ok) = (*i, true, false);
+        crate::windows::Dialog::new("Rename Deformer").open(&mut open).show(ctx, |ui| {
+            let edit = ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
+            if !edit.has_focus() && !edit.lost_focus() {
+                edit.request_focus();
+            }
+            ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
+            ui.add_space(6.0);
+            ok |= ui.button("Rename").clicked();
+        });
+        if ok {
+            let name = name.clone();
+            if let Some(s) = &mut self.session {
+                if s.edit(|m| ayatsuri_core::edit::rename_deformer(m, i, &name)) {
+                    log::info!("deformer {i} renamed to {}", name.trim());
+                } else {
+                    log::warn!("rename refused: the name is empty or already used");
+                }
+            }
+            self.def_rename = None;
+        } else if !open {
+            self.def_rename = None;
+        }
     }
     fn inspector_panel(&mut self, ui: &mut Ui) {
         ScrollArea::vertical().id_salt("props").show(ui, |ui| self.inspector_contents(ui));
@@ -6548,6 +6719,8 @@ impl EditorUi {
                                 local_origin: local,
                                 dx: 0.0,
                                 dy: 0.0,
+                                wx: 0.0,
+                                wy: 0.0,
                                 degrees: 0.0,
                                 last_ptr: ptr,
                             });
@@ -6586,6 +6759,8 @@ impl EditorUi {
                                 let (ldx, ldy) = parent_delta(&s.puppet, parent, px, py, mdx, mdy);
                                 d.dx += ldx;
                                 d.dy += ldy;
+                                d.wx += mdx;
+                                d.wy += mdy;
                             }
                         }
                         if resp.drag_stopped()
@@ -6597,12 +6772,26 @@ impl EditorUi {
                                 if s.edit(|m| ayatsuri_core::edit::rotate_rotation(m, dfm, deg)) {
                                     log::debug!("rotation {dfm} turned {deg:.2} deg");
                                 }
-                            } else if !d.turning && (d.dx != 0.0 || d.dy != 0.0) {
-                                let (dx, dy, dfm) = (d.dx, d.dy, d.deformer);
-                                if s.edit(|m| {
-                                    ayatsuri_core::edit::move_rotation_origin(m, dfm, dx, dy)
-                                }) {
-                                    log::debug!("rotation {dfm} origin moved ({dx:.3}, {dy:.3})");
+                            } else if !d.turning && (d.wx != 0.0 || d.wy != 0.0) {
+                                // the centre is the pivot: it moves, the mesh stays
+                                match pivot_move(&s.puppet, d.deformer, d.wx, d.wy) {
+                                    Some((deltas, child)) => {
+                                        let dfm = d.deformer;
+                                        if s.edit(|m| {
+                                            ayatsuri_core::edit::move_rotation_pivot(
+                                                m, dfm, &deltas, child,
+                                            )
+                                        }) {
+                                            log::debug!(
+                                                "rotation {dfm} pivot moved ({:.3}, {:.3})",
+                                                d.wx,
+                                                d.wy
+                                            );
+                                        }
+                                    }
+                                    None => log::warn!(
+                                        "the parameters are between keys: move them onto a key to move this pivot"
+                                    ),
                                 }
                             }
                         }
@@ -7558,6 +7747,65 @@ fn draw_weights(vp: &egui::Painter, pts: &[Pos2], w: Option<&Vec<f32>>, col: Col
             vp.circle_filled(*p, 3.0 + 3.0 * wt, col.gamma_multiply(wt.clamp(0.0, 1.0)));
         }
     }
+}
+
+/// What a pivot drag changes: each keyform's origin shift (parent space),
+/// and the one offset every child takes (the deformer's local space).
+type PivotMove = (Vec<(f32, f32)>, (f32, f32));
+
+/// A rotation deformer pivot drag of (drag_x, drag_y) canvas units, worked
+/// out at the current pose: the offset every child takes so nothing moves
+/// now, and each keyform's origin shift that keeps the pivot on the same
+/// spot of the mesh in that keyform. A keyform is one stored pose of the
+/// deformer (its angle, origin and scale at one parameter value). None when
+/// the parameters sit between keyforms, where there is no single one to
+/// anchor to.
+fn pivot_move(
+    puppet: &ayatsuri_core::Puppet,
+    deformer: usize,
+    drag_x: f32,
+    drag_y: f32,
+) -> Option<PivotMove> {
+    use ayatsuri_format::model::DeformerKind;
+    let model = puppet.model();
+    let def = model.deformers.get(deformer)?;
+    let DeformerKind::Rotation(rot) = &def.kind else { return None };
+    let values: Vec<f32> = (0..model.parameters.len()).map(|i| puppet.value(i)).collect();
+    // the keyform the parameters sit on right now
+    let current = ayatsuri_core::keyform::keyform_at(
+        model,
+        ayatsuri_core::edit::Target::Deformer(deformer),
+        &values,
+    )?;
+    let state = puppet.rotation_state(deformer)?;
+    // children satisfy world = origin + M * child, M = scale * turn(angle) *
+    // flip; the child offset that cancels the drag is -(M^-1 * drag)
+    let (sin, cos) = state.angle.to_radians().sin_cos();
+    let flip_x = if state.reflect_x { -1.0 } else { 1.0 };
+    let flip_y = if state.reflect_y { -1.0 } else { 1.0 };
+    let scale = if state.scale.abs() > 1e-6 { state.scale } else { 1.0 };
+    let child = (
+        -(flip_x * (cos * drag_x + sin * drag_y)) / scale,
+        -(flip_y * (-sin * drag_x + cos * drag_y)) / scale,
+    );
+    // every other keyform's origin moves by the drag, turned and scaled by
+    // how that keyform differs from the current one
+    let current_angle = rot.angles.get(current).copied()?;
+    let current_scale = rot.scales.get(current).copied().filter(|v| v.abs() > 1e-6).unwrap_or(1.0);
+    let parent = def.parent_deformer;
+    let mut deltas = Vec::with_capacity(rot.angles.len());
+    for keyform in 0..rot.angles.len() {
+        let angle = rot.angles.get(keyform).copied().unwrap_or(current_angle);
+        let turn = (angle - current_angle).to_radians();
+        let scale_ratio = rot.scales.get(keyform).copied().unwrap_or(1.0) / current_scale;
+        let (turn_sin, turn_cos) = turn.sin_cos();
+        let shift_x = scale_ratio * (turn_cos * drag_x - turn_sin * drag_y);
+        let shift_y = scale_ratio * (turn_sin * drag_x + turn_cos * drag_y);
+        let origin_x = rot.origins_x.get(keyform).copied().unwrap_or(0.0);
+        let origin_y = rot.origins_y.get(keyform).copied().unwrap_or(0.0);
+        deltas.push(parent_delta(puppet, parent, origin_x, origin_y, shift_x, shift_y));
+    }
+    Some((deltas, child))
 }
 
 fn parent_delta(

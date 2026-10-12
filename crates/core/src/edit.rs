@@ -706,6 +706,122 @@ pub fn create_deformer(
     Some(di)
 }
 
+/// Where a point in `deformer`'s local space lands on the canvas, and the
+/// inverse: a canvas point back into the local space of `deformer` (or the
+/// canvas itself for None). Newton steps on the forward map with a finite
+/// difference jacobian; rotations are affine and land in one step, warps in
+/// a handful.
+fn to_local(puppet: &crate::Puppet, deformer: Option<usize>, world: (f32, f32)) -> (f32, f32) {
+    let Some(d) = deformer else { return world };
+    let fwd = |x: f32, y: f32| puppet.deformer_point(d, x, y);
+    // a warp's local space is its unit square; a rotation's is canvas-like
+    let mut p = match puppet.model().deformers.get(d).map(|d| &d.kind) {
+        Some(DeformerKind::Warp(_)) => (0.5, 0.5),
+        _ => (0.0, 0.0),
+    };
+    for _ in 0..40 {
+        let (fx, fy) = fwd(p.0, p.1);
+        let (ex, ey) = (world.0 - fx, world.1 - fy);
+        if ex.abs() + ey.abs() < 1e-6 {
+            break;
+        }
+        let h = 1e-3;
+        let (ax, ay) = fwd(p.0 + h, p.1);
+        let (bx, by) = fwd(p.0, p.1 + h);
+        let (j00, j10, j01, j11) = ((ax - fx) / h, (ay - fy) / h, (bx - fx) / h, (by - fy) / h);
+        let det = j00 * j11 - j01 * j10;
+        if det.abs() < 1e-12 || !det.is_finite() {
+            break;
+        }
+        let dx = (j11 * ex - j01 * ey) / det;
+        let dy = (-j10 * ex + j00 * ey) / det;
+        p = (p.0 + dx, p.1 + dy);
+    }
+    p
+}
+
+/// Delete a deformer. Its meshes and child deformers move up to its parent
+/// and keep their shape: each point goes out through the deleted deformer
+/// at the default pose and back in through the parent. Only the deleted
+/// deformer's own motion goes with it. References past it shift down.
+pub fn delete_deformer(model: &mut Model, deformer: usize) -> bool {
+    let Some(gone) = model.deformers.get(deformer) else { return false };
+    let parent = gone.parent_deformer.map(|p| p as usize);
+    // evaluate at the default pose to read both transforms
+    let mut puppet = crate::Puppet::new(model.clone());
+    for (i, p) in model.parameters.iter().enumerate() {
+        puppet.set_value(i, p.default);
+    }
+    puppet.update();
+    let remap = |x: f32, y: f32| {
+        let w = puppet.deformer_point(deformer, x, y);
+        to_local(&puppet, parent, w)
+    };
+    let children: Vec<Child> = model
+        .art_meshes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.parent_deformer == Some(deformer as u32))
+        .map(|(i, _)| Child::Mesh(i))
+        .chain(
+            model
+                .deformers
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.parent_deformer == Some(deformer as u32))
+                .map(|(i, _)| Child::Deformer(i)),
+        )
+        .collect();
+    for &c in &children {
+        map_child(model, c, &remap);
+    }
+    // children of a rotation deformer that move under a warp (or back) keep
+    // their reading only if their own rotation origins went through the map
+    // too, which map_child does; now rewire and drop the deformer
+    let new_parent = parent.map(|p| p as u32);
+    for m in &mut model.art_meshes {
+        if m.parent_deformer == Some(deformer as u32) {
+            m.parent_deformer = new_parent;
+        }
+    }
+    for d in &mut model.deformers {
+        if d.parent_deformer == Some(deformer as u32) {
+            d.parent_deformer = new_parent;
+        }
+    }
+    model.deformers.remove(deformer);
+    let shift = |r: &mut Option<u32>| {
+        if let Some(x) = r
+            && *x as usize > deformer
+        {
+            *x -= 1;
+        }
+    };
+    for m in &mut model.art_meshes {
+        shift(&mut m.parent_deformer);
+    }
+    for d in &mut model.deformers {
+        shift(&mut d.parent_deformer);
+    }
+    true
+}
+
+/// Rename a deformer's id; refused when another deformer already has it.
+pub fn rename_deformer(model: &mut Model, deformer: usize, id: &str) -> bool {
+    let id = id.trim();
+    if id.is_empty() || model.deformers.iter().enumerate().any(|(i, d)| i != deformer && d.id == id)
+    {
+        return false;
+    }
+    match model.deformers.get_mut(deformer) {
+        Some(d) => {
+            d.id = id.to_string();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Shift one vertex by (dx, dy) in the mesh's parent space, across every
 /// keyform. Blending is affine, so the evaluated vertex moves by exactly the
 /// same amount whatever the current pose.
@@ -1393,6 +1509,49 @@ pub fn move_rotation_origin(model: &mut Model, deformer: usize, dx: f32, dy: f32
         *y += dy;
     }
     !r.origins_x.is_empty()
+}
+
+/// Move a rotation deformer's pivot without moving what it holds: keyform
+/// k's origin shifts by `origin_deltas[k]` (parent space) while every child
+/// shifts by `child` (the deformer's local space). The caller picks them so
+/// the pivot stays on the same spot of the mesh in every keyform; see the
+/// editor's origin drag.
+pub fn move_rotation_pivot(
+    model: &mut Model,
+    deformer: usize,
+    origin_deltas: &[(f32, f32)],
+    child: (f32, f32),
+) -> bool {
+    let Some(d) = model.deformers.get_mut(deformer) else { return false };
+    let DeformerKind::Rotation(r) = &mut d.kind else { return false };
+    if origin_deltas.len() != r.origins_x.len() || r.origins_x.len() != r.origins_y.len() {
+        return false;
+    }
+    for ((x, y), (dx, dy)) in r.origins_x.iter_mut().zip(r.origins_y.iter_mut()).zip(origin_deltas)
+    {
+        *x += dx;
+        *y += dy;
+    }
+    let shift = |x: f32, y: f32| (x + child.0, y + child.1);
+    let kids: Vec<Child> = model
+        .art_meshes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.parent_deformer == Some(deformer as u32))
+        .map(|(i, _)| Child::Mesh(i))
+        .chain(
+            model
+                .deformers
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.parent_deformer == Some(deformer as u32))
+                .map(|(i, _)| Child::Deformer(i)),
+        )
+        .collect();
+    for c in kids {
+        map_child(model, c, &shift);
+    }
+    true
 }
 
 /// Turn a rotation deformer by `degrees` on every keyform.
@@ -2151,6 +2310,133 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m.deformers[e].parent_deformer, Some(r2 as u32));
+    }
+
+    #[test]
+    fn deleting_deformers_keeps_the_pose() {
+        // the same nesting as above, then take it apart in an awkward order:
+        // the middle warp, the outer rotation, the inner rotation
+        let mut m = test_model();
+        let at = |m: &Model| (0..=4).map(|i| x_at(m, i as f32 / 4.0, 0.0)).collect::<Vec<f32>>();
+        let before = at(&m);
+        let mk = |m: &mut Model, kind, child| {
+            create_deformer(m, kind, &[child], None, (0.0, 0.0, 1.0, 1.0), None, "D".into())
+                .unwrap()
+        };
+        let r = mk(&mut m, NewDeformer::Rotation { origin: Some((0.3, 0.1)) }, Child::Mesh(0));
+        let w = mk(&mut m, NewDeformer::Warp { rows: 2, cols: 2 }, Child::Deformer(r));
+        let r2 = mk(&mut m, NewDeformer::Rotation { origin: None }, Child::Deformer(w));
+        assert_eq!(m.deformers.len(), 3);
+        let close = |m: &Model, step: &str| {
+            for (x, y) in before.iter().zip(&at(m)) {
+                assert!((x - y).abs() < 2e-3, "{step}: {before:?} vs {:?}", at(m));
+            }
+        };
+        // order is r2, w, r; the warp sits in the middle
+        let w = m.deformers.iter().position(|d| matches!(d.kind, DeformerKind::Warp(_))).unwrap();
+        assert!(delete_deformer(&mut m, w));
+        close(&m, "warp deleted");
+        assert_eq!(m.deformers.len(), 2);
+        // the inner rotation now hangs off the outer one
+        assert_eq!(m.deformers[1].parent_deformer, Some(0));
+        let _ = r2;
+        assert!(delete_deformer(&mut m, 0));
+        close(&m, "outer rotation deleted");
+        assert_eq!(m.deformers[0].parent_deformer, None);
+        assert!(delete_deformer(&mut m, 0));
+        close(&m, "last rotation deleted");
+        assert!(m.deformers.is_empty());
+        assert_eq!(m.art_meshes[0].parent_deformer, None);
+        assert!(!delete_deformer(&mut m, 0));
+    }
+
+    #[test]
+    fn pivot_moves_without_moving_the_mesh() {
+        // a rotation that turns 0 -> 40 degrees over parameter B; dragging
+        // its pivot must leave the mesh where it is in every pose
+        let mut m = test_model();
+        let r = create_deformer(
+            &mut m,
+            NewDeformer::Rotation { origin: Some((0.3, 0.1)) },
+            &[Child::Mesh(0)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "R".into(),
+        )
+        .unwrap();
+        let DeformerKind::Rotation(rot) = &mut m.deformers[r].kind else { panic!() };
+        rot.angles = vec![0.0, 40.0];
+        rot.origins_x = vec![0.3, 0.3];
+        rot.origins_y = vec![0.1, 0.1];
+        rot.scales = vec![1.0, 1.0];
+        rot.reflect_x = vec![false, false];
+        rot.reflect_y = vec![false, false];
+        rot.opacities = vec![1.0, 1.0];
+        m.deformers[r].binding =
+            Binding { axes: vec![BindingAxis { parameter: 1, keys: vec![0.0, 1.0] }] };
+        let xy = |m: &Model, a: f32, b: f32| {
+            let mut p = Puppet::new(m.clone());
+            p.set_value(0, a);
+            p.set_value(1, b);
+            p.update();
+            p.drawables().next().map(|d| (d.positions[0], d.positions[1])).unwrap()
+        };
+        let poses = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)];
+        let before: Vec<_> = poses.iter().map(|&(a, b)| xy(&m, a, b)).collect();
+        // drag the pivot by D at keyform 0 (no turn, root parent): the child
+        // offset is -D and keyform k's origin moves by Rot(angle_k) D
+        let d = (0.2f32, -0.1f32);
+        let deltas: Vec<(f32, f32)> = [0.0f32, 40.0]
+            .iter()
+            .map(|deg| {
+                let (s, c) = deg.to_radians().sin_cos();
+                (c * d.0 - s * d.1, s * d.0 + c * d.1)
+            })
+            .collect();
+        assert!(move_rotation_pivot(&mut m, r, &deltas, (-d.0, -d.1)));
+        let DeformerKind::Rotation(rot) = &m.deformers[r].kind else { panic!() };
+        assert!((rot.origins_x[0] - 0.5).abs() < 1e-6);
+        for (p, (x, y)) in poses.iter().zip(&before) {
+            let (nx, ny) = xy(&m, p.0, p.1);
+            // exact on the keyforms; between them the origin blends along a
+            // chord while the angle sweeps an arc, so it may stray by up to
+            // |D| (1 - cos(half the turn)), as in any keyform rig
+            let on_key = p.1 == 0.0 || p.1 == 1.0;
+            let tol = if on_key { 1e-4 } else { 0.25 * (1.0 - 20f32.to_radians().cos()) + 1e-4 };
+            let err = ((nx - x).powi(2) + (ny - y).powi(2)).sqrt();
+            assert!(err < tol, "{p:?}: ({x},{y}) -> ({nx},{ny}), off by {err}");
+        }
+        assert!(!move_rotation_pivot(&mut m, r, &[(0.0, 0.0)], (0.0, 0.0)));
+    }
+
+    #[test]
+    fn deformer_ids_stay_unique() {
+        let mut m = test_model();
+        let a = create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 1, cols: 1 },
+            &[],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "A".into(),
+        )
+        .unwrap();
+        let b = create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 1, cols: 1 },
+            &[],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "B".into(),
+        )
+        .unwrap();
+        assert!(!rename_deformer(&mut m, b, "A"));
+        assert!(!rename_deformer(&mut m, b, "  "));
+        assert!(rename_deformer(&mut m, a, " Face "));
+        assert_eq!(m.deformers[a].id, "Face");
     }
 
     #[test]
