@@ -1,0 +1,47 @@
+# .deb and .rpm (nfpm: https://nfpm.goreleaser.com). package.sh stages the tree, puts its path
+# where ${STAGE} is (nfpm does not expand env vars in `src`) and exports VERSION and NFPM_ARCH.
+name: ayatsuri2d
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+# semver: 0.5.0-beta becomes 0.5.0~beta, so pre-releases sort before the release
+version_schema: semver
+release: 1
+section: graphics
+priority: optional
+maintainer: Yoru_KenomoVT <berrychace1@gmail.com>
+vendor: Yoru_KenomoVT
+homepage: https://github.com/Yoru-KenomoVT/ayatsuri_2d
+license: GPL-3.0-only AND MIT AND Apache-2.0
+description: |-
+  Open 2D puppet studio for Live2D-style models.
+  Import PSD or Krita artwork, mesh and rig it with warp and rotation
+  deformers, add physics, expressions and animation, and export
+  Cubism-compatible moc3 models for VTube Studio and other apps.
+
+# the binaries link only glibc and libgcc_s; windowing (X11/Wayland, xkbcommon) and the GPU
+# (Vulkan, or EGL/GL) are loaded at runtime, so they are dependencies here, not ELF NEEDED
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      - libgcc-s1
+      - libxkbcommon0
+      - libvulkan1 | libegl1
+    recommends:
+      - libwayland-client0
+      - libx11-6
+      - libxcursor1
+      - libxi6
+      - libxrandr2
+      - mesa-vulkan-drivers
+      - xdg-desktop-portal
+  rpm:
+    depends:
+      - libxkbcommon
+      - (vulkan-loader or libglvnd-egl)
+
+contents:
+  - src: ${STAGE}/usr/
+    dst: /usr/
+    type: tree

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Yoru_KenomoVT.Ayatsuri2D</id>
+  <name>Ayatsuri2D</name>
+  <summary>Rig, animate and run Live2D-style 2D models</summary>
+  <developer id="io.github.yoru_kenomovt">
+    <name>Yoru_KenomoVT</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only AND MIT AND Apache-2.0</project_license>
+  <description>
+    <p>
+      Ayatsuri2D is an open, native 2D puppet studio: import artwork from
+      Photoshop or Krita, mesh and rig it with warp and rotation deformers,
+      add physics and expressions, animate it, and export Cubism-compatible
+      moc3 models for apps like VTube Studio.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.Yoru_KenomoVT.Ayatsuri2D.desktop</launchable>
+  <url type="homepage">https://github.com/Yoru-KenomoVT/ayatsuri_2d</url>
+  <url type="bugtracker">https://github.com/Yoru-KenomoVT/ayatsuri_2d/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@" type="development"/>
+  </releases>
+</component>

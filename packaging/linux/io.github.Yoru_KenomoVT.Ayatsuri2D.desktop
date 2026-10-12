@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Ayatsuri2D
+GenericName=2D Puppet Studio
+Comment=Rig, animate and run Live2D-style 2D models
+Exec=ayatsuri-launcher %f
+Icon=ayatsuri2d
+Terminal=false
+Categories=Graphics;2DGraphics;
+Keywords=live2d;vtuber;puppet;rigging;moc3;animation;
+MimeType=application/x-ayatsuri-model;
+StartupWMClass=ayatsuri2d
+StartupNotify=true

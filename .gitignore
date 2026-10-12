@@ -22,3 +22,6 @@ Cargo.lock
 # agent notes stay local, never in the repo
 CLAUDE.md
 .claude/
+
+# release artifacts from packaging/
+/dist/
