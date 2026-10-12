@@ -74,10 +74,18 @@ impl EditorUi {
             .fixed_size(vec2(W, H))
             .frame(egui::Frame::window(ui.style()).inner_margin(0.0).stroke(egui::Stroke::NONE))
             .pivot(Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
+            .current_pos(self.settings_pos.unwrap_or(ctx.content_rect().center()))
             .show(&ctx, |ui| {
                 ui.set_min_size(vec2(W, H));
                 let full = ui.max_rect();
+                // the whole top strip moves the window; tabs and the close
+                // button sit on top of it and still take their clicks
+                let handle = Rect::from_min_size(full.min, vec2(W, 44.0));
+                let drag = ui.interact(handle, ui.id().with("settings-drag"), Sense::drag());
+                if drag.dragged() {
+                    let at = self.settings_pos.unwrap_or(ctx.content_rect().center());
+                    self.settings_pos = Some(at + drag.drag_delta());
+                }
                 let rail = Rect::from_min_size(full.min, vec2(RAIL, H));
                 ui.painter().rect_filled(rail, 0.0, theme::pal().panel_bg);
                 ui.painter().text(
@@ -463,11 +471,6 @@ impl EditorUi {
     }
 
     fn settings_keyboard(&mut self, ui: &mut Ui) {
-        ui.heading("Keyboard");
-        ui.add_space(6.0);
-        ui.weak("Click a binding, then press the new keys. Esc cancels.");
-        ui.add_space(4.0);
-
         // an armed row eats the next real key press
         if let Some(action) = self.rebind {
             let captured = ui.ctx().input(|i| {
@@ -494,78 +497,109 @@ impl EditorUi {
             }
         }
 
-        // a binding used twice gets flagged, so clashes are easy to spot
-        let texts: Vec<String> =
-            KEY_ACTIONS.iter().map(|a| format_shortcut(&self.bound(a.1))).collect();
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(egui_phosphor::regular::MAGNIFYING_GLASS);
             ui.add(
                 egui::TextEdit::singleline(&mut self.key_filter)
-                    .hint_text("Search actions or keys")
-                    .desired_width(260.0),
+                    .hint_text(format!(
+                        "{}  Search actions or keys",
+                        egui_phosphor::regular::MAGNIFYING_GLASS
+                    ))
+                    .desired_width(280.0),
             );
             if !self.key_filter.is_empty() && ui.small_button("Clear").clicked() {
                 self.key_filter.clear();
             }
-        });
-        ui.add_space(4.0);
-        let needle = self.key_filter.to_lowercase();
-        let mut current = "";
-        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-            egui::Grid::new("keys").num_columns(3).spacing([24.0, 5.0]).show(ui, |ui| {
-                for (n, &(cat, action, label, _, _)) in KEY_ACTIONS.iter().enumerate() {
-                    // the search matches the action, its category or its keys
-                    if !needle.is_empty() {
-                        let keys = texts.get(n).map(|t| t.to_lowercase()).unwrap_or_default();
-                        let hit = label.to_lowercase().contains(&needle)
-                            || cat.to_lowercase().contains(&needle)
-                            || keys.contains(&needle);
-                        if !hit {
-                            continue;
-                        }
-                    }
-                    if cat != current {
-                        current = cat;
-                        ui.label(egui::RichText::new(cat).strong().color(theme::pal().text_faint));
-                        ui.end_row();
-                    }
-                    ui.label(label);
-                    let armed = self.rebind == Some(action);
-                    let text = texts.get(n).cloned().unwrap_or_default();
-                    let clash = texts.iter().filter(|t| **t == text).count() > 1;
-                    let shown = if armed { "press keys…".to_string() } else { text };
-                    let rich = if armed {
-                        egui::RichText::new(shown).color(theme::pal().accent)
-                    } else if clash {
-                        egui::RichText::new(shown).color(theme::pal().rotation_red)
-                    } else {
-                        egui::RichText::new(shown)
-                    };
-                    let btn = ui.add_sized(vec2(150.0, 20.0), egui::Button::new(rich));
-                    let btn =
-                        if clash { btn.on_hover_text("Also used by another action") } else { btn };
-                    if btn.clicked() {
-                        self.rebind = Some(action);
-                    }
-                    if self.prefs.keybinds.iter().any(|(a, _)| a == action) {
-                        if ui.small_button("Reset").clicked() {
-                            self.prefs.keybinds.retain(|(a, _)| a != action);
-                            self.prefs.save();
-                        }
-                    } else {
-                        ui.label("");
-                    }
-                    ui.end_row();
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_enabled(!self.prefs.keybinds.is_empty(), egui::Button::new("Reset all"))
+                    .clicked()
+                {
+                    self.prefs.keybinds.clear();
+                    self.prefs.save();
                 }
             });
         });
-        ui.add_space(8.0);
-        if !self.prefs.keybinds.is_empty() && ui.button("Reset all to defaults").clicked() {
-            self.prefs.keybinds.clear();
-            self.prefs.save();
+        ui.label(
+            RichText::new("Click a shortcut, then press the new keys. Esc cancels.")
+                .size(10.5)
+                .color(theme::pal().text_faint),
+        );
+
+        // a binding used twice gets flagged, so clashes are easy to spot
+        let texts: Vec<String> =
+            KEY_ACTIONS.iter().map(|a| format_shortcut(&self.bound(a.1))).collect();
+        let needle = self.key_filter.to_lowercase();
+        let matches = |cat: &str, label: &str, keys: &str| {
+            needle.is_empty()
+                || label.to_lowercase().contains(&needle)
+                || cat.to_lowercase().contains(&needle)
+                || keys.to_lowercase().contains(&needle)
+        };
+        let mut current = "";
+        for (n, &(cat, action, label, _, _)) in KEY_ACTIONS.iter().enumerate() {
+            let text = texts.get(n).cloned().unwrap_or_default();
+            if !matches(cat, label, &text) {
+                continue;
+            }
+            if cat != current {
+                current = cat;
+                section(ui, &cat.to_uppercase());
+            }
+            let armed = self.rebind == Some(action);
+            let clash = texts.iter().filter(|t| **t == text).count() > 1;
+            let changed = self.prefs.keybinds.iter().any(|(a, _)| a == action);
+            row(ui, label, "", |ui| {
+                if changed && ui.small_button("Reset").clicked() {
+                    self.prefs.keybinds.retain(|(a, _)| a != action);
+                    self.prefs.save();
+                }
+                let shown = if armed { "press keys…".to_string() } else { text };
+                let rich = if armed {
+                    RichText::new(shown).color(theme::pal().accent)
+                } else if clash {
+                    RichText::new(shown).color(theme::pal().rotation_red)
+                } else {
+                    RichText::new(shown)
+                };
+                let btn = ui.add_sized(vec2(150.0, 20.0), egui::Button::new(rich));
+                let btn =
+                    if clash { btn.on_hover_text("Also used by another action") } else { btn };
+                if btn.clicked() {
+                    self.rebind = Some(action);
+                }
+            });
         }
-        ui.add_space(8.0);
-        ui.separator();
-        ui.weak("Built in: Space+drag pans, scroll zooms, Alt+click walks up deformers, Esc cancels or clears, Delete removes, [ and ] size brushes, B+drag sizes the selection brush, K keys the selected parameter.");
+
+        // fixed gestures, listed for reference but not rebindable
+        let mut header = false;
+        for (label, keys) in BUILT_IN {
+            if !matches("Built in", label, keys) {
+                continue;
+            }
+            if !header {
+                header = true;
+                section(ui, "BUILT IN");
+            }
+            row(ui, label, "", |ui| {
+                ui.add_enabled_ui(false, |ui| {
+                    ui.add_sized(vec2(150.0, 20.0), egui::Button::new(*keys));
+                })
+                .response
+                .on_disabled_hover_text("Built in, can't be changed");
+            });
+        }
     }
 }
+
+/// Gestures handled directly by the canvas and palettes.
+const BUILT_IN: &[(&str, &str)] = &[
+    ("Pan the canvas", "Space+Drag"),
+    ("Zoom the canvas", "Scroll"),
+    ("Walk up the deformer chain", "Alt+Click"),
+    ("Cancel or clear selection", "Esc"),
+    ("Delete the selection", "Delete"),
+    ("Smaller / larger brush", "[  /  ]"),
+    ("Size the selection brush", "B+Drag"),
+    ("Key the selected parameter", "K"),
+];

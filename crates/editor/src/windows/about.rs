@@ -32,6 +32,8 @@ pub(crate) struct AboutState {
     tab: Tab,
     search: String,
     wash: Option<(WashKey, egui::TextureHandle)>,
+    /// Where the window sits (its centre) once dragged by the header.
+    pos: Option<egui::Pos2>,
 }
 
 impl AboutState {
@@ -136,11 +138,18 @@ impl EditorUi {
             .fixed_size(vec2(W, H))
             .frame(egui::Frame::window(ui.style()).inner_margin(0.0).stroke(Stroke::NONE))
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
+            .current_pos(self.about.pos.unwrap_or(ctx.content_rect().center()))
             .show(&ctx, |ui| {
                 ui.set_min_size(vec2(W, H));
                 let full = ui.max_rect();
                 let header = Rect::from_min_size(full.min, vec2(W, HEADER));
+                // the branded header is the handle; the close button sits
+                // on top of it and still takes its click
+                let drag = ui.interact(header, ui.id().with("about-drag"), Sense::drag());
+                if drag.dragged() {
+                    let at = self.about.pos.unwrap_or(ctx.content_rect().center());
+                    self.about.pos = Some(at + drag.drag_delta());
+                }
                 self.about_header(ui, header, logo, logo_size, &mut open);
 
                 let body = Rect::from_min_max(pos2(full.min.x, header.max.y), full.max);

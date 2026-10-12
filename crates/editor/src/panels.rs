@@ -232,6 +232,8 @@ pub struct EditorUi {
     ws_name: String,
     show_ws_manage: bool,
     pub(crate) settings_tab: usize,
+    /// Where the Settings window sits (its centre) once dragged.
+    pub(crate) settings_pos: Option<egui::Pos2>,
     tool_opts: ToolOptions,
     lasso: Vec<Pos2>,
     /// The parameter rows' own selection, independent of object selection.
@@ -540,6 +542,7 @@ impl Default for EditorUi {
             ws_name: String::new(),
             show_ws_manage: false,
             settings_tab: 0,
+            settings_pos: None,
             tool_opts: ToolOptions::default(),
             lasso: Vec::new(),
             sel_param: None,
@@ -1517,29 +1520,37 @@ impl EditorUi {
                     ui.checkbox(&mut self.anim_autokey, "Auto key");
                 });
                 ui.menu_button("Window", |ui| {
+                    // one checkbox per palette; the menu stays open so several
+                    // can be toggled in one go
                     for p in PanelKind::ALL {
-                        let open = self.layout.contains(p);
-                        if ui.selectable_label(open, p.title()).clicked() {
-                            if open {
+                        let was = self.layout.contains(p);
+                        let mut open = was;
+                        if ui.checkbox(&mut open, p.title()).changed() {
+                            if was {
                                 self.layout.close(p);
                             } else {
                                 self.layout.open_near(p, PanelKind::Viewport);
                             }
-                            ui.close();
+                            self.save_layout();
                         }
                     }
                     ui.separator();
+                    if ui.button("Settings…").clicked() {
+                        self.show_settings = true;
+                        ui.close();
+                    }
+                    ui.separator();
                     ui.menu_button("Workspace", |ui| {
-                        if ui.button("Save as new workspace…").clicked() {
+                        if ui.button("Save as New Workspace…").clicked() {
                             self.show_ws_save = true;
                             ui.close();
                         }
-                        if ui.button("Manage workspaces…").clicked() {
+                        if ui.button("Manage Workspaces…").clicked() {
                             self.show_ws_manage = true;
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Export current layout…").clicked() {
+                        if ui.button("Export Current Layout…").clicked() {
                             ui.close();
                             let picked = rfd::FileDialog::new()
                                 .add_filter("Workspace", &["json"])
@@ -1558,7 +1569,7 @@ impl EditorUi {
                                 }
                             }
                         }
-                        if ui.button("Import layout…").clicked() {
+                        if ui.button("Import Layout…").clicked() {
                             ui.close();
                             let picked = rfd::FileDialog::new()
                                 .add_filter("Workspace", &["json"])
@@ -1580,7 +1591,7 @@ impl EditorUi {
                             }
                         }
                     });
-                    if ui.button("Reset current layout").clicked() {
+                    if ui.button("Reset Current Layout").clicked() {
                         self.reset_workspace();
                         ui.close();
                     }
