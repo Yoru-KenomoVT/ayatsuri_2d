@@ -23,6 +23,8 @@ fn main() -> Result<(), String> {
         Ok("3.0") => ayatsuri_import::ExportVersion::V3_00,
         Ok("3.3") => ayatsuri_import::ExportVersion::V3_03,
         Ok("4.0") => ayatsuri_import::ExportVersion::V4_00,
+        Ok("5.0") => ayatsuri_import::ExportVersion::V5_00,
+        Ok("5.3") => ayatsuri_import::ExportVersion::V5_03,
         _ => ayatsuri_import::ExportVersion::V4_02,
     };
     let out = ayatsuri_import::to_moc3(&model, version).map_err(|e| e.to_string())?;

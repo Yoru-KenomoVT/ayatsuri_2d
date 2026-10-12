@@ -57,8 +57,11 @@ pub struct Packet {
     pub to_ndc: [f32; 4],
     pub width: u32,
     pub height: u32,
-    // present on the first frame after a model loads
-    pub textures: Option<Vec<TexData>>,
+    // present until the renderer has taken them: egui skips a callback
+    // whose area isn't drawn that frame, so a one-shot hand-off can be lost
+    // and the model would never show. The flag says they arrived.
+    pub textures: Option<std::sync::Arc<Vec<TexData>>>,
+    pub uploaded: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 const SHADER: &str = r#"
@@ -652,6 +655,9 @@ impl GpuRenderer {
     ) {
         if let Some(images) = &packet.textures {
             self.set_textures(device, queue, images);
+            if let Some(flag) = &packet.uploaded {
+                flag.store(true, std::sync::atomic::Ordering::Release);
+            }
         }
         self.ensure_offscreen(device, packet.width, packet.height);
         let uni: [f32; 8] = [

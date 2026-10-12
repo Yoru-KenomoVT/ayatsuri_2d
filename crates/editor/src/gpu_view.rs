@@ -85,7 +85,8 @@ fn push_mesh(
 pub fn callback(
     rect: egui::Rect,
     puppet: &Puppet,
-    textures: Option<Vec<TexData>>,
+    textures: Option<std::sync::Arc<Vec<TexData>>>,
+    uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // canvas px -> screen points: screen = screen_origin + px * scale
     screen_origin: egui::Pos2,
     scale: f32,
@@ -156,6 +157,7 @@ pub fn callback(
         width: w,
         height: h,
         textures,
+        uploaded: Some(uploaded),
     };
     egui_wgpu::Callback::new_paint_callback(rect, ModelPaint { packet: Mutex::new(Some(packet)) })
 }

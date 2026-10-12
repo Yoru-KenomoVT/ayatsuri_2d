@@ -64,4 +64,10 @@ pub struct DisplayInfo {
     pub param_colors: Vec<i32>,
     /// Folder name plus the parameter indices inside, palette order.
     pub groups: Vec<(String, Vec<u32>)>,
+    /// 0xRRGGBB per folder, -1 for none; empty in older files.
+    pub group_colors: Vec<i32>,
+    /// Display names of parts and art meshes (PSD layer and group names);
+    /// empty in older files, which fall back to IDs.
+    pub part_names: Vec<String>,
+    pub mesh_names: Vec<String>,
 }

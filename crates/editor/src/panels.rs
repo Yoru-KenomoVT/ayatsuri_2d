@@ -8,10 +8,16 @@ use egui::{
 };
 
 use crate::dock::{self, DockAction, DockNode, PanelKind};
+use crate::point_edit;
+
+mod deformer_dialog;
+mod param_menu;
+mod tool_details;
 use crate::logging;
 use crate::prefs::Prefs;
 use crate::session::{Sel, Session};
 use crate::theme;
+use param_menu::ParamCmd;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
@@ -88,7 +94,6 @@ struct ToolOptions {
     auto_margin: f32,
     warp_cols: u32,
     warp_rows: u32,
-    sequential: bool,
 }
 
 impl Default for ToolOptions {
@@ -101,7 +106,6 @@ impl Default for ToolOptions {
             auto_margin: 8.0,
             warp_cols: 5,
             warp_rows: 5,
-            sequential: false,
         }
     }
 }
@@ -206,6 +210,8 @@ pub struct EditorUi {
     /// The parameter rows' own selection, independent of object selection.
     sel_param: Option<usize>,
     param_edit: Option<ParamEdit>,
+    pmenu: param_menu::ParamMenuState,
+    deformer_dialog: Option<deformer_dialog::DeformerDialog>,
     /// Extra meshes picked by the lasso, beyond `selected`.
     multi_sel: Vec<usize>,
     /// A deformer creation requested from inside a borrow (canvas, tool pane).
@@ -242,7 +248,24 @@ pub struct EditorUi {
     /// The model as it was when mesh editing began, for Cancel.
     mesh_snapshot: Option<Model>,
     deform_path: Option<PathDeform>,
-    warp_drag: Option<WarpDrag>,
+    /// Grid point picking and the transform box for the selected warp.
+    pts: point_edit::PointState,
+    /// Warps edit through Bezier control points (Cubism's default) or the
+    /// division points directly.
+    warp_bezier: bool,
+    /// The arrow tool's display settings (line widths and colours).
+    disp: tool_details::DisplayOpts,
+    /// Brush selection weights per object: (1, mesh) or (2, warp).
+    brush_w: std::collections::HashMap<(u8, usize), Vec<f32>>,
+    /// How much one brush pass adds, 0..1.
+    brush_weight: f32,
+    /// Where the last brush dab landed, for spacing dabs by distance.
+    brush_last: Option<Pos2>,
+
+    /// Bezier divisions per warp, columns by rows.
+    bezier_div: std::collections::HashMap<usize, (usize, usize)>,
+    bez_drag: Option<BezierDrag>,
+
     rot_drag: Option<RotDrag>,
     /// 1 = quit the app, 2 = close the session, shown while unsaved work
     /// would be lost.
@@ -261,15 +284,15 @@ struct MeshDrag {
     dy: f32,
 }
 
-/// A warp grid control point mid-drag, banked and applied on release the
-/// same way mesh vertex drags are.
-struct WarpDrag {
+/// A Bezier control point of a warp mid-drag: the lattice fitted when the
+/// grab began, and the grid it was fitted to (parent space).
+struct BezierDrag {
     deformer: usize,
-    point: usize,
-    /// Blended parent-space grid captured at drag start.
+    idx: usize,
+    start: Pos2,
+    ptr: Pos2,
+    lattice: ayatsuri_core::bezier::Lattice,
     local: Vec<f32>,
-    dx: f32,
-    dy: f32,
 }
 
 /// A rotation deformer grab: either the origin sliding or the handle
@@ -332,7 +355,7 @@ struct AnimNew {
     looped: bool,
 }
 
-/// The Export for Embedded Use dialog's working copy.
+/// The Export as moc3 dialog's working copy.
 struct ExportDlg {
     name: String,
     version: usize,
@@ -455,6 +478,8 @@ impl Default for EditorUi {
             lasso: Vec::new(),
             sel_param: None,
             param_edit: None,
+            pmenu: param_menu::ParamMenuState::default(),
+            deformer_dialog: None,
             multi_sel: Vec::new(),
             pending_create: None,
             mesh_edit: None,
@@ -475,7 +500,16 @@ impl Default for EditorUi {
             pending_edges: std::collections::HashMap::new(),
             mesh_snapshot: None,
             deform_path: None,
-            warp_drag: None,
+            pts: point_edit::PointState::default(),
+            warp_bezier: true,
+            disp: tool_details::DisplayOpts::default(),
+            brush_w: std::collections::HashMap::new(),
+            brush_weight: 0.11,
+            brush_last: None,
+
+            bezier_div: std::collections::HashMap::new(),
+            bez_drag: None,
+
             rot_drag: None,
             confirm_close: None,
             force_close: false,
@@ -496,7 +530,7 @@ impl EditorUi {
         let info = logging::take_crash();
         // stop whatever was mid-flight; it is the likeliest culprit
         self.mesh_drag = None;
-        self.warp_drag = None;
+        self.pts.clear();
         self.rot_drag = None;
         self.anim_playing = false;
         let recovery = self.session.as_ref().and_then(|s| s.write_recovery());
@@ -695,6 +729,13 @@ impl EditorUi {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
+        // overlay colours: saved choices, else the theme, so mesh lines follow
+        // a primary colour changed in Settings
+        self.disp = tool_details::DisplayOpts::from_prefs(&self.prefs.overlay);
+        // the edit level decides how warps are edited, as in Cubism: level 1
+        // division points only, 2 the Bezier control points, 3 a 1x1 Bezier
+        // on the outer frame
+        self.warp_bezier = self.edit_level >= 2;
         // a crash caught outside this frame (the GPU callback) surfaces here
         if logging::has_crash() {
             self.on_crash();
@@ -730,10 +771,7 @@ impl EditorUi {
             if let Some(s) = &self.session {
                 let m = s.puppet.model();
                 let what = match self.selected {
-                    Some(Sel::Mesh(i)) => format!(
-                        "mesh {i} ({})",
-                        m.art_meshes.get(i).map(|a| a.id.as_str()).unwrap_or("?")
-                    ),
+                    Some(Sel::Mesh(i)) => format!("mesh {i} ({})", s.mesh_name(i)),
                     Some(Sel::Deformer(i)) => format!(
                         "deformer {i} ({})",
                         m.deformers.get(i).map(|d| d.id.as_str()).unwrap_or("?")
@@ -786,41 +824,31 @@ impl EditorUi {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm_close = Some(1);
         }
-        let undo_sc = self.bound("undo");
-        let redo_sc = self.bound("redo");
-        // redo first: its modifier set is a superset of undo's
-        if ui.ctx().input_mut(|i| i.consume_shortcut(&redo_sc)) {
-            if let Some(s) = &mut self.session {
-                s.redo();
+        // shortcuts: the more modifiers a binding has, the earlier it gets a
+        // look, so Ctrl+Shift+Z is taken before Ctrl+Z and Ctrl+1 before 1.
+        // Plain-key bindings stay quiet while a text field has the keyboard,
+        // and everything waits while Settings is capturing a new binding.
+        if self.rebind.is_none() {
+            let typing = ui.ctx().egui_wants_keyboard_input();
+            let weight = |m: egui::Modifiers| {
+                usize::from(m.command || m.ctrl) + usize::from(m.shift) + usize::from(m.alt)
+            };
+            let mut fired: Vec<&'static str> = Vec::new();
+            let mut bound: Vec<(&'static str, egui::KeyboardShortcut)> =
+                KEY_ACTIONS.iter().map(|a| (a.1, self.bound(a.1))).collect();
+            bound.sort_by_key(|(_, sc)| std::cmp::Reverse(weight(sc.modifiers)));
+            for (id, sc) in bound {
+                if typing && weight(sc.modifiers) == 0 {
+                    continue;
+                }
+                if ui.ctx().input_mut(|i| i.consume_shortcut(&sc)) {
+                    fired.push(id);
+                }
             }
-        } else if ui.ctx().input_mut(|i| i.consume_shortcut(&undo_sc))
-            && let Some(s) = &mut self.session
-        {
-            s.undo();
-        }
-        let save_sc = self.bound("save");
-        if ui.ctx().input_mut(|i| i.consume_shortcut(&save_sc)) {
-            self.save_session(false);
-        }
-        let export_sc = self.bound("export-image");
-        if ui.ctx().input_mut(|i| i.consume_shortcut(&export_sc)) {
-            self.export_image();
-        }
-        // Ctrl+E toggles mesh edit mode on the selected mesh, like Cubism
-        let mesh_sc = self.bound("mesh-edit");
-        if ui.ctx().input_mut(|i| i.consume_shortcut(&mesh_sc)) {
-            if self.mesh_edit.is_some() {
-                self.mesh_edit = None;
-                self.mesh_drag = None;
-            } else if let Some(Sel::Mesh(mi)) = self.selected {
-                self.mesh_edit = Some(mi);
-                self.mesh_snapshot = self.session.as_ref().map(|s| s.puppet.model().clone());
+            for id in fired {
+                log::debug!("shortcut: {id}");
+                self.run_key_action(&ui.ctx().clone(), id);
             }
-        }
-        // Ctrl+G binds glue between the two selected meshes, as in Cubism
-        let glue_sc = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::G);
-        if ui.ctx().input_mut(|i| i.consume_shortcut(&glue_sc)) {
-            self.run_mesh_action(MeshAction::Bind);
         }
         if let Some(gi) = self.selected_glue
             && self.mesh_edit.is_none()
@@ -834,16 +862,7 @@ impl EditorUi {
             log::info!("glue {gi} deleted");
             self.selected_glue = None;
         }
-        // Ctrl+1 resets every parameter to its default, Ctrl+3 toggles the
-        // selected meshes' visibility, both straight from Cubism
-        let reset_sc = self.bound("reset-params");
-        if ui.ctx().input_mut(|i| i.consume_shortcut(&reset_sc)) {
-            self.reset_parameters();
-        }
-        let hide_sc = self.bound("toggle-visible");
-        if ui.ctx().input_mut(|i| i.consume_shortcut(&hide_sc)) {
-            self.toggle_selected_visibility();
-        }
+
         let dropped: Vec<PathBuf> = ui
             .ctx()
             .input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -911,17 +930,18 @@ impl EditorUi {
                         self.export_image();
                     }
                     if ui
-                        .add_enabled(
-                            self.session.is_some(),
-                            egui::Button::new("Export for Embedded Use (moc3)…"),
-                        )
+                        .add_enabled(self.session.is_some(), egui::Button::new("Export as moc3…"))
                         .clicked()
                     {
                         ui.close();
                         let name =
                             self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
-                        self.export_dlg =
-                            Some(ExportDlg { name, version: 3, physics: true, motions: true });
+                        self.export_dlg = Some(ExportDlg {
+                            name,
+                            version: ayatsuri_import::ExportVersion::ALL.len() - 1,
+                            physics: true,
+                            motions: true,
+                        });
                     }
                     ui.separator();
                     if ui
@@ -1589,8 +1609,9 @@ impl EditorUi {
         }
 
         if let Some((warp, origin)) = self.pending_create.take() {
-            self.create_deformer(warp, origin);
+            self.open_deformer_dialog(warp, origin);
         }
+        self.deformer_dialog_window(ui);
 
         self.about_window(ui);
         self.settings_window(ui);
@@ -1605,6 +1626,7 @@ impl EditorUi {
         self.close_confirm_window(ui);
         self.workspace_windows(ui);
         self.param_edit_window(ui);
+        self.param_menu_windows(ui);
     }
 
     /// Cubism's Edit Mesh dialog, shown while mesh edit mode is live: the
@@ -3013,6 +3035,11 @@ impl EditorUi {
         });
         ui.add_space(6.0);
         ui.weak("Anti-aliasing: 4x MSAA on the model, mipmapped textures.");
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Canvas overlays");
+        ui.set_max_width(360.0);
+        self.overlay_settings(ui);
     }
 
     fn settings_performance(&mut self, ui: &mut Ui) {
@@ -3099,38 +3126,47 @@ impl EditorUi {
             }
         }
 
-        egui::Grid::new("keys").num_columns(3).spacing([24.0, 5.0]).show(ui, |ui| {
-            for (action, label, m, k) in KEY_ACTIONS {
-                ui.label(label);
-                let armed = self.rebind == Some(action);
-                let text = if armed {
-                    "press keys…".to_string()
-                } else {
-                    format_shortcut(&self.bound(action))
-                };
-                let btn = ui.add_sized(
-                    vec2(130.0, 20.0),
-                    egui::Button::new(if armed {
-                        egui::RichText::new(text).color(theme::pal().accent)
-                    } else {
-                        egui::RichText::new(text)
-                    }),
-                );
-                if btn.clicked() {
-                    self.rebind = Some(action);
-                }
-                let custom = self.prefs.keybinds.iter().any(|(a, _)| a == action);
-                if custom {
-                    if ui.small_button("Reset").clicked() {
-                        self.prefs.keybinds.retain(|(a, _)| a != action);
-                        self.prefs.save();
+        // a binding used twice gets flagged, so clashes are easy to spot
+        let texts: Vec<String> =
+            KEY_ACTIONS.iter().map(|a| format_shortcut(&self.bound(a.1))).collect();
+        let mut current = "";
+        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+            egui::Grid::new("keys").num_columns(3).spacing([24.0, 5.0]).show(ui, |ui| {
+                for (n, &(cat, action, label, _, _)) in KEY_ACTIONS.iter().enumerate() {
+                    if cat != current {
+                        current = cat;
+                        ui.label(egui::RichText::new(cat).strong().color(theme::pal().text_faint));
+                        ui.end_row();
                     }
-                } else {
-                    let _ = egui::KeyboardShortcut::new(m, k);
-                    ui.label("");
+                    ui.label(label);
+                    let armed = self.rebind == Some(action);
+                    let text = texts.get(n).cloned().unwrap_or_default();
+                    let clash = texts.iter().filter(|t| **t == text).count() > 1;
+                    let shown = if armed { "press keys…".to_string() } else { text };
+                    let rich = if armed {
+                        egui::RichText::new(shown).color(theme::pal().accent)
+                    } else if clash {
+                        egui::RichText::new(shown).color(theme::pal().rotation_red)
+                    } else {
+                        egui::RichText::new(shown)
+                    };
+                    let btn = ui.add_sized(vec2(150.0, 20.0), egui::Button::new(rich));
+                    let btn =
+                        if clash { btn.on_hover_text("Also used by another action") } else { btn };
+                    if btn.clicked() {
+                        self.rebind = Some(action);
+                    }
+                    if self.prefs.keybinds.iter().any(|(a, _)| a == action) {
+                        if ui.small_button("Reset").clicked() {
+                            self.prefs.keybinds.retain(|(a, _)| a != action);
+                            self.prefs.save();
+                        }
+                    } else {
+                        ui.label("");
+                    }
+                    ui.end_row();
                 }
-                ui.end_row();
-            }
+            });
         });
         ui.add_space(8.0);
         if !self.prefs.keybinds.is_empty() && ui.button("Reset all to defaults").clicked() {
@@ -3139,7 +3175,7 @@ impl EditorUi {
         }
         ui.add_space(8.0);
         ui.separator();
-        ui.weak("Built in: Space+drag pans, scroll zooms, Alt+click walks up deformers.");
+        ui.weak("Built in: Space+drag pans, scroll zooms, Alt+click walks up deformers, Esc cancels or clears, Delete removes, [ and ] size brushes, B+drag sizes the selection brush, K keys the selected parameter.");
     }
 
     fn panel_contents(&mut self, ui: &mut Ui, p: PanelKind, content: Rect) {
@@ -3520,7 +3556,7 @@ impl EditorUi {
         let Some(dlg) = &mut self.export_dlg else { return };
         let mut open = true;
         let mut go = false;
-        egui::Window::new("Export for Embedded Use")
+        egui::Window::new("Export as moc3")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -3587,7 +3623,7 @@ impl EditorUi {
             let version = ayatsuri_import::ExportVersion::ALL
                 .get(dlg.version)
                 .copied()
-                .unwrap_or(ayatsuri_import::ExportVersion::V4_02);
+                .unwrap_or(ayatsuri_import::ExportVersion::V5_03);
             if let Some(s) = &self.session {
                 let opt = crate::export::Options {
                     name: dlg.name.clone(),
@@ -3615,10 +3651,7 @@ impl EditorUi {
     fn edit_target(&self) -> Option<(ayatsuri_core::edit::Target, String)> {
         let s = self.session.as_ref()?;
         match self.selected? {
-            Sel::Mesh(i) => Some((
-                ayatsuri_core::edit::Target::ArtMesh(i),
-                s.puppet.model().art_meshes.get(i).map(|m| m.id.clone()).unwrap_or_default(),
-            )),
+            Sel::Mesh(i) => Some((ayatsuri_core::edit::Target::ArtMesh(i), s.mesh_name(i))),
             Sel::Deformer(i) => Some((
                 ayatsuri_core::edit::Target::Deformer(i),
                 s.puppet.model().deformers.get(i).map(|d| d.id.clone()).unwrap_or_default(),
@@ -3704,8 +3737,8 @@ impl EditorUi {
         }
         KEY_ACTIONS
             .iter()
-            .find(|(a, ..)| *a == action)
-            .map(|(_, _, m, k)| egui::KeyboardShortcut::new(*m, *k))
+            .find(|(_, a, ..)| *a == action)
+            .map(|(_, _, _, m, k)| egui::KeyboardShortcut::new(*m, *k))
             .unwrap_or(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F35))
     }
 
@@ -3908,56 +3941,33 @@ impl EditorUi {
         let img = image::load_from_memory(png)
             .map_err(|e| format!("texture decode failed: {e}"))?
             .to_rgba8();
-        let (tw, th) = (img.width() as f32, img.height() as f32);
-
-        // the mesh's patch of the atlas, padded so the margin has room
-        let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        let (uvp, _) = am.uvs.as_chunks::<2>();
-        for &[u, v] in uvp {
-            u0 = u0.min(u);
-            v0 = v0.min(v);
-            u1 = u1.max(u);
-            v1 = v1.max(v);
-        }
+        let (u0, v0, u1, v1) = am
+            .uvs
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(a, b, c, d), &[u, v]| {
+                (a.min(u), b.min(v), c.max(u), d.max(v))
+            });
         if u0 > u1 || v0 > v1 {
             return Err("mesh has no extent".into());
         }
-        let pad = params.margin + 2.0;
-        let x0 = (u0 * tw - pad).max(0.0).floor() as u32;
-        let y0 = (v0 * th - pad).max(0.0).floor() as u32;
-        let x1 = (u1 * tw + pad).min(tw).ceil() as u32;
-        let y1 = (v1 * th + pad).min(th).ceil() as u32;
-        let (w, h) = ((x1.saturating_sub(x0)) as usize, (y1.saturating_sub(y0)) as usize);
-        let mut alpha = vec![0u8; w * h];
-        for y in 0..h {
-            for x in 0..w {
-                if let (Some(px), Some(slot)) =
-                    (img.get_pixel_checked(x0 + x as u32, y0 + y as u32), alpha.get_mut(y * w + x))
-                {
-                    *slot = px.0[3];
-                }
-            }
-        }
         let started = std::time::Instant::now();
-        let mesh = ayatsuri_core::automesh::generate(&alpha, w, h, &params);
+        let alpha_at = |x: u32, y: u32| img.get_pixel_checked(x, y).map_or(0, |p| p.0[3]);
+        let out = ayatsuri_core::automesh::for_patch(
+            &alpha_at,
+            (img.width(), img.height()),
+            (u0, v0, u1, v1),
+            &params,
+        )
+        .ok_or("no opaque pixels under this mesh")?;
         log::debug!(
-            "auto mesh {mi}: {}x{} px region, {} points, {} triangles in {:.0} ms",
-            w,
-            h,
-            mesh.points.len(),
-            mesh.triangles.len(),
+            "auto mesh {mi}: {} points, {} triangles in {:.0} ms",
+            out.0.len() / 2,
+            out.1.len() / 3,
             started.elapsed().as_secs_f32() * 1000.0
         );
-        if mesh.triangles.is_empty() {
-            return Err("no opaque pixels under this mesh".into());
-        }
-        let uvs: Vec<f32> = mesh
-            .points
-            .iter()
-            .flat_map(|&(x, y)| [(x0 as f32 + x) / tw, (y0 as f32 + y) / th])
-            .collect();
-        let indices: Vec<u16> = mesh.triangles.iter().flat_map(|t| t.iter().copied()).collect();
-        Ok((uvs, indices))
+        Ok(out)
     }
 
     /// Re-mesh every given mesh from its artwork, as a single undo step.
@@ -4214,6 +4224,17 @@ impl EditorUi {
                 }) {
                     let pi = s.puppet.model().parameters.len() - 1;
                     s.param_names.push(if name.is_empty() { id.clone() } else { name });
+                    s.param_colors.push(None);
+                    // a model with no folders yet (any fresh import) gets a
+                    // top-level group, or the parameter would exist unseen
+                    if s.groups.is_empty() {
+                        s.groups.push(crate::session::ParamGroup {
+                            name: String::new(),
+                            params: Vec::new(),
+                            open: true,
+                            color: None,
+                        });
+                    }
                     let slot = group.min(s.groups.len().saturating_sub(1));
                     if let Some(g) = s.groups.get_mut(slot) {
                         g.params.push(pi);
@@ -4246,7 +4267,12 @@ impl EditorUi {
         if create {
             if let (Some(s), Some(name)) = (&mut self.session, self.new_folder.take()) {
                 let name = if name.is_empty() { "Folder".into() } else { name };
-                s.groups.push(crate::session::ParamGroup { name, params: Vec::new(), open: true });
+                s.groups.push(crate::session::ParamGroup {
+                    name,
+                    params: Vec::new(),
+                    open: true,
+                    color: None,
+                });
             }
         } else if !open {
             self.new_folder = None;
@@ -4262,7 +4288,7 @@ impl EditorUi {
         self.mesh_drag = None;
         self.mesh_snapshot = None;
         self.deform_path = None;
-        self.warp_drag = None;
+        self.pts.clear();
         self.rot_drag = None;
     }
 
@@ -4330,6 +4356,107 @@ impl EditorUi {
         }
     }
 
+    fn run_key_action(&mut self, ctx: &egui::Context, id: &str) {
+        let have = self.session.is_some();
+        match id {
+            "new-model" => self.new_model = Some(ModelNew::default()),
+            "open" => self.import_dialog(ctx),
+            "save" if have => self.save_session(false),
+            "save-as" if have => self.save_session(true),
+            "close" if have => {
+                if self.session.as_ref().is_some_and(|s| s.modified) {
+                    self.confirm_close = Some(2);
+                } else {
+                    self.close_session();
+                }
+            }
+            "export-image" if have => self.export_image(),
+            "export-moc3" if have => {
+                let name = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+                self.export_dlg = Some(ExportDlg {
+                    name,
+                    version: ayatsuri_import::ExportVersion::ALL.len() - 1,
+                    physics: true,
+                    motions: true,
+                });
+            }
+            "shortcuts" => {
+                self.show_settings = true;
+                self.settings_tab = 4;
+            }
+            "undo" => {
+                if let Some(s) = &mut self.session {
+                    s.undo();
+                }
+            }
+            "redo" | "redo-alt" => {
+                if let Some(s) = &mut self.session {
+                    s.redo();
+                }
+            }
+            "select-parent" => self.select_parent(),
+            "mesh-edit" => {
+                if self.mesh_edit.is_some() {
+                    self.mesh_edit = None;
+                    self.mesh_drag = None;
+                } else if let Some(Sel::Mesh(mi)) = self.selected {
+                    self.mesh_edit = Some(mi);
+                    self.mesh_snapshot = self.session.as_ref().map(|s| s.puppet.model().clone());
+                }
+            }
+            "auto-mesh" if have => self.run_mesh_action(MeshAction::AutoMesh),
+            "auto-connect" if have => self.run_mesh_action(MeshAction::AutoConnect),
+            "glue-bind" if have => self.run_mesh_action(MeshAction::Bind),
+            "glue-unbind" if have => self.run_mesh_action(MeshAction::Unbind),
+            "reset-params" => self.reset_parameters(),
+            "four-corners" if have => self.four_corner_forms(),
+            "toggle-visible" => self.toggle_selected_visibility(),
+            "hide-unselected" => self.set_unselected_visible(false),
+            "show-all" => self.set_unselected_visible(true),
+            "tool-arrow" => self.tool = Tool::Arrow,
+            "tool-lasso" => self.tool = Tool::Lasso,
+            "tool-brush" => self.tool = Tool::BrushSelect,
+            "tool-path" => self.tool = Tool::DeformPath,
+            "level-1" => self.edit_level = 1,
+            "level-2" => self.edit_level = 2,
+            "level-3" => self.edit_level = 3,
+            "display-all" => {
+                self.view_zoom = 1.0;
+                self.view_pan = Vec2::ZERO;
+            }
+            _ => {}
+        }
+    }
+
+    /// Ctrl+D: the selection's parent deformer.
+    fn select_parent(&mut self) {
+        let Some(s) = &self.session else { return };
+        let m = s.puppet.model();
+        let parent = match self.selected {
+            Some(Sel::Mesh(mi)) => m.art_meshes.get(mi).and_then(|a| a.parent_deformer),
+            Some(Sel::Deformer(d)) => m.deformers.get(d).and_then(|x| x.parent_deformer),
+            _ => None,
+        };
+        if let Some(p) = parent {
+            self.selected = Some(Sel::Deformer(p as usize));
+            self.multi_sel.clear();
+        }
+    }
+
+    /// Hide everything but the selection, or show everything again.
+    fn set_unselected_visible(&mut self, show_all: bool) {
+        let keep = self.selection_meshes();
+        let Some(s) = &mut self.session else { return };
+        for mi in 0..s.puppet.model().art_meshes.len() {
+            let on = show_all || keep.contains(&mi);
+            if let Some(f) = s.mesh_shown.get_mut(mi) {
+                *f = on;
+            }
+            s.puppet.set_mesh_visible(mi, on);
+        }
+        s.dirty = true;
+    }
+
     fn toggle_selected_visibility(&mut self) {
         let meshes = self.selection_meshes();
         if let Some(s) = &mut self.session {
@@ -4375,63 +4502,6 @@ impl EditorUi {
                 Err(e) => log::error!("image export: {e}"),
             },
             None => log::error!("image export: buffer size mismatch"),
-        }
-    }
-
-    fn create_deformer(&mut self, warp: bool, click_origin: Option<(f32, f32)>) {
-        let meshes = self.selection_meshes();
-        if meshes.is_empty() {
-            log::warn!("select the meshes the deformer should hold first");
-            return;
-        }
-        let Some(s) = &mut self.session else { return };
-        // the click lands in model space; the deformer stores its origin in
-        // parent space, so nested parents invert through the local jacobian
-        // around the first mesh's centroid
-        let at_root = meshes.iter().all(|&mi| {
-            s.puppet.model().art_meshes.get(mi).is_some_and(|m| m.parent_deformer.is_none())
-        });
-        let origin = match (click_origin, at_root) {
-            (Some(o), true) => Some(o),
-            (Some((mx, my)), false) => meshes.first().and_then(|&mi| {
-                let parent = s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_deformer);
-                let local = s.puppet.mesh_local_positions(mi)?;
-                let (lp, _) = local.as_chunks::<2>();
-                let n = lp.len().max(1) as f32;
-                let (clx, cly) =
-                    lp.iter().fold((0.0, 0.0), |(x, y), q| (x + q[0] / n, y + q[1] / n));
-                let (cmx, cmy) = {
-                    let g = s.puppet.mesh_geometry(mi)?;
-                    let (gp, _) = g.positions.as_chunks::<2>();
-                    let n = gp.len().max(1) as f32;
-                    gp.iter().fold((0.0, 0.0), |(x, y), q| (x + q[0] / n, y + q[1] / n))
-                };
-                let (dx, dy) = parent_delta(&s.puppet, parent, clx, cly, mx - cmx, my - cmy);
-                Some((clx + dx, cly + dy))
-            }),
-            _ => None,
-        };
-        let new_index = s.puppet.model().deformers.len();
-        let (cols, rows) = (self.tool_opts.warp_cols, self.tool_opts.warp_rows);
-        let id = if warp { format!("Warp{new_index}") } else { format!("Rotation{new_index}") };
-        let made = s.edit(|m| {
-            if warp {
-                ayatsuri_core::edit::create_warp_deformer(m, &meshes, rows, cols, id.clone())
-                    .is_some()
-            } else {
-                ayatsuri_core::edit::create_rotation_deformer(m, &meshes, origin, id.clone())
-                    .is_some()
-            }
-        });
-        if made {
-            log::info!(
-                "created {} around {} mesh(es)",
-                if warp { "warp deformer" } else { "rotation deformer" },
-                meshes.len()
-            );
-            self.selected = Some(Sel::Deformer(new_index));
-        } else {
-            log::warn!("could not create deformer: meshes must share one parent deformer");
         }
     }
 
@@ -4506,56 +4576,134 @@ impl EditorUi {
 
         // rows borrow the session hard, so it steps out of self for a moment
         let Some(mut s) = self.session.take() else { return };
+        // a parameter in no folder would never be drawn: file it at the top
+        // level (the unnamed group), making one if needed
+        let n_params = s.puppet.model().parameters.len();
+        let mut grouped = vec![false; n_params];
+        for g in &s.groups {
+            for &p in &g.params {
+                if let Some(f) = grouped.get_mut(p) {
+                    *f = true;
+                }
+            }
+        }
+        let loose: Vec<usize> =
+            (0..n_params).filter(|&p| !grouped.get(p).copied().unwrap_or(true)).collect();
+        if !loose.is_empty() {
+            match s.groups.iter_mut().find(|g| g.name.is_empty()) {
+                Some(g) => g.params.extend(loose),
+                None => s.groups.insert(
+                    0,
+                    crate::session::ParamGroup {
+                        name: String::new(),
+                        params: loose,
+                        open: true,
+                        color: None,
+                    },
+                ),
+            }
+        }
         let can_edit = matches!(
             self.selected,
             Some(Sel::Mesh(_)) | Some(Sel::Deformer(_)) | Some(Sel::Part(_))
         );
         let mut actions: Vec<ParamAction> = Vec::new();
+        let subject = self.pmenu.subject;
 
         let pad_partner: std::collections::HashMap<usize, usize> =
             s.combined.iter().map(|&(a, b)| (a, b)).collect();
         let pad_skip: std::collections::HashSet<usize> =
             s.combined.iter().map(|&(_, b)| b).collect();
 
-        ScrollArea::vertical().id_salt("params").show(ui, |ui| {
-            for gi in 0..s.groups.len() {
-                let (name, open, params) = {
-                    let Some(g) = s.groups.get(gi) else { break };
-                    (g.name.clone(), g.open, g.params.clone())
-                };
-                if !name.is_empty() {
-                    let (rect, resp) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
-                    ui.painter().rect_filled(rect, 2.0, theme::pal().header);
-                    let arrow = if open { "⏷" } else { "⏵" };
-                    ui.painter().text(
-                        rect.left_center() + vec2(4.0, 0.0),
-                        Align2::LEFT_CENTER,
-                        format!("{arrow} {name}"),
-                        FontId::proportional(11.0),
-                        theme::pal().text,
-                    );
-                    if resp.clicked()
-                        && let Some(g) = s.groups.get_mut(gi)
-                    {
-                        g.open = !g.open;
+        // the list takes everything but the footer, so the footer sits at
+        // the bottom of the palette however few parameters there are
+        let footer_h = 40.0;
+        let list_h = (ui.available_height() - footer_h).max(24.0);
+        ScrollArea::vertical()
+            .id_salt("params")
+            .max_height(list_h)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for gi in 0..s.groups.len() {
+                    let (name, open, params) = {
+                        let Some(g) = s.groups.get(gi) else { break };
+                        (g.name.clone(), g.open, g.params.clone())
+                    };
+                    if !name.is_empty() {
+                        let (rect, resp) = ui
+                            .allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
+                        ui.painter().rect_filled(rect, 2.0, theme::pal().header);
+                        let color = s.groups.get(gi).and_then(|g| g.color);
+                        if let Some([r, g, b]) = color {
+                            ui.painter().rect_filled(
+                                Rect::from_min_size(rect.min, vec2(3.0, rect.height())),
+                                1.0,
+                                Color32::from_rgb(r, g, b),
+                            );
+                        }
+                        let arrow = if open { "⏷" } else { "⏵" };
+                        ui.painter().text(
+                            rect.left_center() + vec2(6.0, 0.0),
+                            Align2::LEFT_CENTER,
+                            format!("{arrow} {name}"),
+                            FontId::proportional(11.0),
+                            theme::pal().text,
+                        );
+                        if resp.double_clicked() {
+                            actions.push(ParamAction::Cmd(ParamCmd::RenameGroup(gi)));
+                        } else if resp.clicked()
+                            && let Some(g) = s.groups.get_mut(gi)
+                        {
+                            g.open = !g.open;
+                        }
+                        resp.context_menu(|ui| {
+                            if let Some(c) = param_menu::group_menu(ui, &mut s, gi, subject) {
+                                actions.push(ParamAction::Cmd(c));
+                            }
+                        });
+                        if !open {
+                            continue;
+                        }
                     }
-                    if !open {
-                        continue;
+                    for &pi in &params {
+                        if pad_skip.contains(&pi) {
+                            continue;
+                        }
+                        if let Some(&partner) = pad_partner.get(&pi) {
+                            combined_pad(
+                                ui,
+                                &mut s,
+                                pi,
+                                partner,
+                                &mut self.sel_param,
+                                can_edit,
+                                subject,
+                                &mut actions,
+                            );
+                            continue;
+                        }
+                        parameter_row(
+                            ui,
+                            &mut s,
+                            pi,
+                            &mut self.sel_param,
+                            can_edit,
+                            subject,
+                            &mut actions,
+                        );
                     }
                 }
-                for &pi in &params {
-                    if pad_skip.contains(&pi) {
-                        continue;
+                // the empty space under the rows takes the palette's own
+                // right-click menu (create parameter or folder and so on)
+                let rest = ui.available_height().clamp(40.0, list_h.max(40.0));
+                let (_, bg) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), rest), Sense::click());
+                bg.context_menu(|ui| {
+                    if let Some(c) = param_menu::panel_menu(ui, &mut s) {
+                        actions.push(ParamAction::Cmd(c));
                     }
-                    if let Some(&partner) = pad_partner.get(&pi) {
-                        combined_pad(ui, &mut s, pi, partner, &mut self.sel_param, &mut actions);
-                        continue;
-                    }
-                    parameter_row(ui, &mut s, pi, &mut self.sel_param, can_edit, &mut actions);
-                }
-            }
-        });
+                });
+            });
         self.session = Some(s);
 
         // the footer: new parameters and folders live here, like Cubism
@@ -4592,6 +4740,7 @@ impl EditorUi {
                 self.delete_parameter(pi);
             }
         });
+        ui.add_space(8.0);
 
         for action in actions {
             match action {
@@ -4599,29 +4748,7 @@ impl EditorUi {
                     self.sel_param = Some(pi);
                     self.selected = Some(Sel::Parameter(pi));
                 }
-                ParamAction::AddSingle(pi, v) => {
-                    self.sel_param = Some(pi);
-                    self.add_keys_to_selection(vec![v]);
-                }
-                ParamAction::DeleteKey(pi) => {
-                    self.sel_param = Some(pi);
-                    self.delete_key_on_selection();
-                }
-                ParamAction::OpenEdit(pi) => {
-                    if let Some(s) = &self.session
-                        && let Some(meta) = s.puppet.model().parameters.get(pi)
-                    {
-                        self.param_edit = Some(ParamEdit {
-                            index: pi,
-                            name: s.param_names.get(pi).cloned().unwrap_or_default(),
-                            id: meta.id.clone(),
-                            min: meta.min,
-                            default: meta.default,
-                            max: meta.max,
-                            repeat: meta.repeat,
-                        });
-                    }
-                }
+                ParamAction::Cmd(c) => self.run_param_cmd(c),
             }
         }
     }
@@ -4896,7 +5023,7 @@ impl EditorUi {
                     .iter()
                     .enumerate()
                     .filter(|(_, m)| m.parent_part == Some(i as u32))
-                    .map(|(mi, m)| (mi, m.id.clone()))
+                    .map(|(mi, _)| (mi, s.mesh_name(mi)))
                     .collect();
                 for (mi, mid) in meshes {
                     let x_off = 66.0 + depth as f32 * 14.0;
@@ -4912,7 +5039,7 @@ impl EditorUi {
                 .iter()
                 .enumerate()
                 .filter(|(_, m)| m.parent_part.is_none())
-                .map(|(mi, m)| (mi, m.id.clone()))
+                .map(|(mi, _)| (mi, s.mesh_name(mi)))
                 .collect();
             for (mi, mid) in loose {
                 parts_mesh_row(ui, s, &mut self.selected, mi, &mid, 30.0, true, &stack);
@@ -4925,14 +5052,7 @@ impl EditorUi {
                 .iter()
                 .enumerate()
                 .map(|(gi, g)| {
-                    let name = |i: u32| {
-                        s.puppet
-                            .model()
-                            .art_meshes
-                            .get(i as usize)
-                            .map(|m| m.id.clone())
-                            .unwrap_or_default()
-                    };
+                    let name = |i: u32| s.mesh_name(i as usize);
                     (gi, g.id.clone(), name(g.art_mesh_a), name(g.art_mesh_b))
                 })
                 .collect();
@@ -5040,263 +5160,6 @@ impl EditorUi {
                     self.tool = t;
                 }
             }
-        }
-    }
-
-    fn tool_details_panel(&mut self, ui: &mut Ui) {
-        ui.label(egui::RichText::new(self.tool.label()).size(12.0).strong());
-        ui.add_space(4.0);
-        let mut action: Option<MeshAction> = None;
-        let section = |ui: &mut Ui, title: &str| {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(title).size(11.0).color(theme::pal().text_faint));
-        };
-        match self.tool {
-            Tool::MeshManual | Tool::MeshAuto => {
-                // the manual's Edit Mesh manually section, in its order
-                section(ui, "Edit mesh");
-                ui.horizontal_wrapped(|ui| {
-                    for (i, (icon, tip)) in [
-                        (egui_phosphor::regular::CURSOR, "Select / Edit"),
-                        (egui_phosphor::regular::PLUS_CIRCLE, "Add points"),
-                        (egui_phosphor::regular::ERASER, "Delete vertex"),
-                        (egui_phosphor::regular::LINE_SEGMENT, "Connect points"),
-                        (egui_phosphor::regular::SCISSORS, "Cut edge"),
-                        (egui_phosphor::regular::PAINT_BRUSH_BROAD, "Eraser brush"),
-                    ]
-                    .iter()
-                    .enumerate()
-                    {
-                        if ui
-                            .selectable_label(
-                                self.mesh_mode as usize == i,
-                                egui::RichText::new(*icon).size(15.0),
-                            )
-                            .on_hover_text(*tip)
-                            .clicked()
-                        {
-                            self.mesh_mode = i as u8;
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Automatic mesh generator").clicked() {
-                        action = Some(MeshAction::AutoMesh);
-                    }
-                    if ui
-                        .button("Reset mesh")
-                        .on_hover_text("Back to the mesh as the file had it")
-                        .clicked()
-                    {
-                        action = Some(MeshAction::Reset);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("Auto connect")
-                        .on_hover_text("Triangulate the points you placed")
-                        .clicked()
-                    {
-                        action = Some(MeshAction::AutoConnect);
-                    }
-                    ui.checkbox(&mut self.connect_rebuild, "Mesh reconstruction").on_hover_text(
-                        "On: redo every face from the points. Off: keep the lines you built",
-                    );
-                });
-                ui.checkbox(&mut self.connect_protect, "Protect edge exterior").on_hover_text(
-                    "No faces over empty texture, so hair and lashes don't get bridged",
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("Mesh 4 division").clicked() {
-                        action = Some(MeshAction::Divide);
-                    }
-                    if ui.button("Bind glue").on_hover_text("Ctrl+G").clicked() {
-                        action = Some(MeshAction::Bind);
-                    }
-                    if ui.button("Unbind glue").clicked() {
-                        action = Some(MeshAction::Unbind);
-                    }
-                });
-                ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points");
-                ui.horizontal(|ui| {
-                    ui.label("Selection range on click");
-                    ui.add(
-                        egui::DragValue::new(&mut self.pick_radius).range(2.0..=40.0).suffix(" px"),
-                    );
-                });
-                if self.mesh_mode == 5 {
-                    section(ui, "Eraser");
-                    ui.horizontal(|ui| {
-                        ui.label("Size");
-                        ui.add(
-                            egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
-                                .logarithmic(true)
-                                .suffix(" px"),
-                        );
-                    });
-                }
-                section(ui, "Automatic mesh");
-                let o = &mut self.tool_opts;
-                ui.horizontal(|ui| {
-                    for (i, (name, outline, inner, margin)) in Self::AUTO_PRESETS.iter().enumerate()
-                    {
-                        if ui.selectable_label(o.auto_preset == i, *name).clicked() {
-                            o.auto_preset = i;
-                            o.auto_spacing = *outline;
-                            o.auto_inner = *inner;
-                            o.auto_margin = *margin;
-                        }
-                    }
-                });
-                egui::Grid::new("td-auto").num_columns(2).spacing([8.0, 3.0]).show(ui, |ui| {
-                    ui.label("Outline spacing");
-                    ui.add(
-                        egui::DragValue::new(&mut o.auto_spacing).range(4.0..=256.0).suffix(" px"),
-                    );
-                    ui.end_row();
-                    ui.label("Inner spacing");
-                    ui.add(
-                        egui::DragValue::new(&mut o.auto_inner).range(4.0..=512.0).suffix(" px"),
-                    );
-                    ui.end_row();
-                    ui.label("Margin");
-                    ui.add(
-                        egui::DragValue::new(&mut o.auto_margin).range(0.0..=128.0).suffix(" px"),
-                    );
-                    ui.end_row();
-                });
-                ui.weak("Mesh actions work on the mesh being edited, or the selection.");
-            }
-            Tool::Glue => {
-                section(ui, "Edit glue");
-                ui.horizontal_wrapped(|ui| {
-                    for (i, (label, tip)) in [
-                        ("A:B", "Drag: favour red A. Shift+drag: favour green B"),
-                        ("A", "Strengthen only red A, pulling its points free"),
-                        ("B", "Strengthen only green B, pulling its points free"),
-                        ("Re-merge", "Rejoin points the A or B brush separated"),
-                    ]
-                    .iter()
-                    .enumerate()
-                    {
-                        if ui
-                            .selectable_label(self.glue_mode as usize == i, *label)
-                            .on_hover_text(*tip)
-                            .clicked()
-                        {
-                            self.glue_mode = i as u8;
-                        }
-                    }
-                });
-                egui::Grid::new("td-glue").num_columns(2).spacing([8.0, 3.0]).show(ui, |ui| {
-                    ui.label("Weight");
-                    ui.add(
-                        egui::Slider::new(&mut self.glue_strength, 0.01..=1.0)
-                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-                    );
-                    ui.end_row();
-                    ui.label("Size");
-                    ui.add(
-                        egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
-                            .logarithmic(true)
-                            .suffix(" px"),
-                    );
-                    ui.end_row();
-                    ui.label("Bind distance");
-                    ui.add(
-                        egui::DragValue::new(&mut self.glue_tolerance)
-                            .range(0.1..=64.0)
-                            .suffix(" px"),
-                    )
-                    .on_hover_text("How close two points must be to bind");
-                    ui.end_row();
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Bind glue").on_hover_text("Ctrl+G, two meshes selected").clicked()
-                    {
-                        action = Some(MeshAction::Bind);
-                    }
-                    if ui.button("Unbind glue").clicked() {
-                        action = Some(MeshAction::Unbind);
-                    }
-                });
-                match self.selected_glue {
-                    Some(gi) => {
-                        ui.weak(format!(
-                            "Editing Glue{gi}. Drag over the points to adjust weights."
-                        ));
-                    }
-                    None => {
-                        ui.weak("Select two meshes and bind, or pick a glue in the Part palette.");
-                    }
-                }
-            }
-            Tool::WarpCreate => {
-                let o = &mut self.tool_opts;
-                ui.horizontal(|ui| {
-                    ui.label("Columns");
-                    ui.add(egui::DragValue::new(&mut o.warp_cols).range(1..=32));
-                    ui.label("Rows");
-                    ui.add(egui::DragValue::new(&mut o.warp_rows).range(1..=32));
-                });
-                ui.checkbox(&mut o.sequential, "Sequential creation");
-                if ui.button("Create around selection").clicked() {
-                    self.pending_create = Some((true, None));
-                }
-                ui.weak("Or click the canvas with meshes selected.");
-            }
-            Tool::RotationCreate => {
-                ui.checkbox(&mut self.tool_opts.sequential, "Sequential creation");
-                if ui.button("Create at selection center").clicked() {
-                    self.pending_create = Some((false, None));
-                }
-                ui.weak("Or click the canvas to place the origin.");
-            }
-            Tool::DeformPath => {
-                section(ui, "Deform path edit");
-                ui.weak("Click to add a control point; drag one to bend the mesh.");
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("Delete control point")
-                        .on_hover_text("The last one placed (Backspace)")
-                        .clicked()
-                        && let Some(p) = &mut self.deform_path
-                    {
-                        p.points.pop();
-                    }
-                    if ui.button("Delete path").clicked() {
-                        self.deform_path = None;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Falloff size");
-                    ui.add(
-                        egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
-                            .logarithmic(true)
-                            .suffix(" px"),
-                    );
-                });
-            }
-            Tool::BrushSelect | Tool::DeformBrush => {
-                section(ui, "Brush");
-                ui.horizontal(|ui| {
-                    ui.label("Size");
-                    ui.add(
-                        egui::Slider::new(&mut self.tool_opts.brush_size, 2.0..=400.0)
-                            .logarithmic(true),
-                    );
-                });
-                ui.weak("Brush selection and deform brushes are the next tools to land.");
-            }
-            Tool::Arrow | Tool::Lasso => {
-                ui.weak("Click selects; Alt+click walks up the deformer chain; lasso adds to the selection.");
-            }
-            Tool::ArtPath | Tool::TextureAtlas => {
-                ui.weak("No options yet for this tool.");
-            }
-        }
-        if let Some(a) = action {
-            self.run_mesh_action(a);
         }
     }
 
@@ -5519,7 +5382,7 @@ impl EditorUi {
                     .iter()
                     .enumerate()
                     .filter(|(_, m)| m.parent_deformer == Some(i as u32))
-                    .map(|(mi, m)| (mi, m.id.clone()))
+                    .map(|(mi, _)| (mi, s.mesh_name(mi)))
                     .collect();
                 for (mi, mid) in meshes {
                     let (rect, resp) =
@@ -5561,14 +5424,7 @@ impl EditorUi {
         if let Some(gi) = self.selected_glue
             && let Some(g) = s.puppet.model().glues.get(gi).cloned()
         {
-            let mesh = |i: u32| {
-                s.puppet
-                    .model()
-                    .art_meshes
-                    .get(i as usize)
-                    .map(|m| m.id.clone())
-                    .unwrap_or_default()
-            };
+            let mesh = |i: u32| s.mesh_name(i as usize);
             let (name_a, name_b) = (mesh(g.art_mesh_a), mesh(g.art_mesh_b));
             egui::Grid::new("glue-props").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
                 ui.weak("Glue");
@@ -5618,6 +5474,7 @@ impl EditorUi {
         match self.selected {
             Some(Sel::Mesh(i)) => {
                 let Some(m) = s.puppet.model().art_meshes.get(i).cloned() else { return };
+                row(ui, "Name", s.mesh_name(i));
                 row(ui, "ID", m.id.clone());
                 row(
                     ui,
@@ -6004,10 +5861,17 @@ impl EditorUi {
         };
 
         if self.gpu {
+            // keep offering the textures until the renderer has them
+            if s.gpu_pending.is_some() && s.gpu_uploaded.load(std::sync::atomic::Ordering::Acquire)
+            {
+                s.gpu_pending = None;
+                log::debug!("textures are on the GPU");
+            }
             let cb = crate::gpu_view::callback(
                 view,
                 &s.puppet,
-                s.gpu_pending.take(),
+                s.gpu_pending.clone(),
+                s.gpu_uploaded.clone(),
                 pos2(origin.x, origin.y),
                 scale,
                 ui.ctx().pixels_per_point(),
@@ -6084,7 +5948,10 @@ impl EditorUi {
                     vp.line_segment([s2, s0], stroke);
                 }
             }
+            // a click on the selected warp's points or box handles belongs
+            // to warp editing, not to picking the mesh underneath
             if resp.clicked()
+                && !self.pts.hot
                 && let Some(ptr) = resp.interact_pointer_pos()
             {
                 let (ux, uy) = unit_of(ptr);
@@ -6232,98 +6099,353 @@ impl EditorUi {
         }
 
         // overlays for whatever is selected
+        let mut warp_hot = false;
         match self.selected {
             Some(Sel::Mesh(mi)) => {
-                if let Some(g) = s.puppet.mesh_geometry(mi) {
-                    let (pos, _) = g.positions.as_chunks::<2>();
-                    let (tris, _) = g.indices.as_chunks::<3>();
-                    let stroke = Stroke::new(1.0, theme::pal().accent);
+                if let Some((gpos, gidx)) =
+                    s.puppet.mesh_geometry(mi).map(|g| (g.positions.to_vec(), g.indices.to_vec()))
+                {
+                    let (pos, _) = gpos.as_chunks::<2>();
+                    let mut pts: Vec<Pos2> = pos.iter().map(|xy| to_screen(xy[0], xy[1])).collect();
+                    // the arrow tool edits the mesh's current keyform: the box
+                    // moves, scales and rotates it all, picked points get their
+                    // own box, and a brush selection moves by its weights
+                    let editable = self.tool == Tool::Arrow && !space && self.mesh_edit.is_none();
+                    let mut grab_hot = None;
+                    let mut hover_pt = None;
+                    if editable {
+                        self.pts.bind((1, mi));
+                        self.pts.weights = self.brush_w.get(&(1, mi)).cloned().unwrap_or_default();
+                        let inp = point_edit::PtInput::read(ui, &resp);
+                        let opts = point_edit::PtOpts {
+                            whole_box: true,
+                            marquee: true,
+                            reach: 7.0,
+                            pad: 0.0,
+                        };
+                        let out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                        warp_hot = self.pts.hot;
+                        grab_hot = out.hover_grab;
+                        hover_pt = out.hover;
+                        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.pts.picked.clear();
+                        }
+                        if let Some(moved) = out.commit
+                            && let Some(local) = s.puppet.mesh_local_positions(mi)
+                        {
+                            let parent =
+                                s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_deformer);
+                            let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                            let moves: Vec<(usize, f32, f32)> = moved
+                                .iter()
+                                .map(|&(vi, d)| {
+                                    let px = local.get(vi * 2).copied().unwrap_or(0.0);
+                                    let py = local.get(vi * 2 + 1).copied().unwrap_or(0.0);
+                                    let (dx, dy) = parent_delta(
+                                        &s.puppet,
+                                        parent,
+                                        px,
+                                        py,
+                                        d.x * k_unit,
+                                        d.y * k_unit,
+                                    );
+                                    (vi, dx, dy)
+                                })
+                                .collect();
+                            let values: Vec<f32> = (0..s.puppet.model().parameters.len())
+                                .map(|i| s.puppet.value(i))
+                                .collect();
+                            let target = ayatsuri_core::edit::Target::ArtMesh(mi);
+                            match ayatsuri_core::keyform::keyform_at(
+                                s.puppet.model(),
+                                target,
+                                &values,
+                            ) {
+                                Some(k) => {
+                                    if s.edit(|m| {
+                                        ayatsuri_core::edit::move_vertices_in(
+                                            m,
+                                            mi,
+                                            Some(k),
+                                            &moves,
+                                        )
+                                    }) {
+                                        log::debug!(
+                                            "mesh {mi}: {} point(s) moved in keyform {k}",
+                                            moves.len()
+                                        );
+                                    }
+                                }
+                                None => log::warn!(
+                                    "the parameters are between keys: move them onto a key to edit this mesh"
+                                ),
+                            }
+                        }
+                        if hover_pt.is_some() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                    }
+                    let (tris, _) = gidx.as_chunks::<3>();
+                    let stroke = Stroke::new(self.disp.mesh_width, self.disp.mesh_color);
                     for &[a, b, cx] in tris {
-                        let (Some(p0), Some(p1), Some(p2)) =
-                            (pos.get(a as usize), pos.get(b as usize), pos.get(cx as usize))
+                        let (Some(&s0), Some(&s1), Some(&s2)) =
+                            (pts.get(a as usize), pts.get(b as usize), pts.get(cx as usize))
                         else {
                             continue;
                         };
-                        let s0 = to_screen(p0[0], p0[1]);
-                        let s1 = to_screen(p1[0], p1[1]);
-                        let s2 = to_screen(p2[0], p2[1]);
                         vp.line_segment([s0, s1], stroke);
                         vp.line_segment([s1, s2], stroke);
                         vp.line_segment([s2, s0], stroke);
                     }
-                    for xy in pos {
-                        vp.circle_filled(to_screen(xy[0], xy[1]), 1.6, theme::pal().accent);
+                    for (vi, p) in pts.iter().enumerate() {
+                        let r =
+                            if hover_pt == Some(vi) && self.pts.drag.is_none() { 4.0 } else { 1.8 };
+                        vp.circle_filled(*p, r, self.disp.mesh_color);
+                    }
+                    draw_weights(&vp, &pts, self.brush_w.get(&(1, mi)), self.disp.weight_color);
+                    if editable {
+                        point_edit::draw_overlay(&self.pts, &vp, &pts, true, 0.0, grab_hot);
                     }
                 }
             }
             Some(Sel::Deformer(di)) => {
                 if let Some((grid, rows, cols)) = s.puppet.warp_grid(di) {
+                    // Cubism's warp editing: the box around the grid moves,
+                    // scales (red dots; Shift keeps the aspect, Alt from the
+                    // centre) and rotates (just outside) the whole warp; click,
+                    // Shift+click or drag a rectangle to pick grid points and
+                    // the box works on those. Edits land in the keyform the
+                    // parameters sit on, as one undo step per drag.
                     let stride = cols as usize + 1;
-                    let total = (rows as usize + 1) * stride;
-                    let mut screen_pts: Vec<Pos2> = Vec::with_capacity(total);
-                    {
-                        let (pts, _) = grid.as_chunks::<2>();
-                        for p in pts {
-                            screen_pts.push(to_screen(p[0], p[1]));
+                    let (gp, _) = grid.as_chunks::<2>();
+                    let mut screen_pts: Vec<Pos2> =
+                        gp.iter().map(|p| to_screen(p[0], p[1])).collect();
+                    let mut warp_commit: Option<Vec<(usize, f32, f32)>> = None;
+                    let mut warp_commit_screen = false;
+                    let editable =
+                        self.tool == Tool::Arrow && !space && !self.def_locked.contains(&di);
+                    let mut grab_hot = None;
+                    let mut hover_pt = None;
+                    // the Bezier control lattice, fitted to the grid in the
+                    // warp's parent space and drawn through the parent
+                    let parent =
+                        s.puppet.model().deformers.get(di).and_then(|de| de.parent_deformer);
+                    let to_scr = |x: f32, y: f32| match parent {
+                        Some(p) => {
+                            let (mx, my) = s.puppet.deformer_point(p as usize, x, y);
+                            to_screen(mx, my)
                         }
-                    }
-
-                    // grid points drag like mesh vertices: grab, bank the
-                    // parent-space delta, apply one edit on release
-                    let ptr = ui.ctx().input(|i| i.pointer.latest_pos());
-                    let mut near: Option<(usize, f32)> = None;
-                    if !space && let Some(ptr) = ptr {
-                        for (gi, sp) in screen_pts.iter().enumerate() {
-                            let d = sp.distance(ptr);
-                            if d < 8.0 && near.is_none_or(|(_, nd)| d < nd) {
-                                near = Some((gi, d));
+                        None => to_screen(x, y),
+                    };
+                    let bez_mode = editable && self.warp_bezier;
+                    let mut bez: Option<(ayatsuri_core::bezier::Lattice, Vec<Pos2>)> = None;
+                    let mut bez_hover: Option<usize> = None;
+                    let mut bez_busy = false;
+                    if bez_mode && let Some(local) = s.puppet.warp_local_grid(di) {
+                        let (bw, bh) = if self.edit_level >= 3 {
+                            (1, 1)
+                        } else {
+                            self.bezier_div
+                                .get(&di)
+                                .copied()
+                                .unwrap_or((2.min(cols as usize), 2.min(rows as usize)))
+                        };
+                        let inp = point_edit::PtInput::read(ui, &resp);
+                        let mut lat = match &self.bez_drag {
+                            Some(d) if d.deformer == di => d.lattice.clone(),
+                            _ => ayatsuri_core::bezier::Lattice::fit(
+                                &local,
+                                cols as usize,
+                                rows as usize,
+                                bw,
+                                bh,
+                            ),
+                        };
+                        let net_s: Vec<Pos2> = lat.net.iter().map(|&(x, y)| to_scr(x, y)).collect();
+                        // a drag decides its grab where the button went down
+                        let probe = if inp.drag_started { inp.origin.or(inp.ptr) } else { inp.ptr };
+                        bez_hover = probe.and_then(|p| {
+                            net_s
+                                .iter()
+                                .enumerate()
+                                .filter(|(i, _)| {
+                                    lat.kind(*i) != ayatsuri_core::bezier::NetPoint::Inner
+                                })
+                                .map(|(i, q)| (i, q.distance(p)))
+                                .filter(|(_, d)| *d < 8.0)
+                                .min_by(|a, b| a.1.total_cmp(&b.1))
+                                .map(|(i, _)| i)
+                        });
+                        if inp.drag_started
+                            && self.bez_drag.is_none()
+                            && let (Some(idx), Some(start)) =
+                                (bez_hover, inp.origin.or(inp.press).or(inp.ptr))
+                        {
+                            self.bez_drag = Some(BezierDrag {
+                                deformer: di,
+                                idx,
+                                start,
+                                ptr: start,
+                                lattice: lat.clone(),
+                                local: local.clone(),
+                            });
+                        }
+                        if let Some(d) = &mut self.bez_drag
+                            && d.deformer == di
+                        {
+                            bez_busy = true;
+                            if let Some(p) = inp.ptr {
+                                d.ptr = p;
+                            }
+                            // screen motion to the warp's parent space, through
+                            // the parent's local jacobian at the grabbed point
+                            let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                            let at = d.lattice.net.get(d.idx).copied().unwrap_or((0.0, 0.0));
+                            let sd = d.ptr - d.start;
+                            let (dx, dy) = parent_delta(
+                                &s.puppet,
+                                parent,
+                                at.0,
+                                at.1,
+                                sd.x * k_unit,
+                                sd.y * k_unit,
+                            );
+                            lat = d.lattice.clone();
+                            let mut moving = vec![d.idx];
+                            if lat.kind(d.idx) == ayatsuri_core::bezier::NetPoint::Anchor {
+                                moving.extend(lat.handles_of(d.idx));
+                            }
+                            for i in moving {
+                                if let Some(q) = lat.net.get_mut(i) {
+                                    q.0 += dx;
+                                    q.1 += dy;
+                                }
+                            }
+                            lat.derive_inner();
+                            let new_grid = lat.to_grid(cols as usize, rows as usize);
+                            let (ng, _) = new_grid.as_chunks::<2>();
+                            for (sp, &[x, y]) in screen_pts.iter_mut().zip(ng) {
+                                *sp = to_scr(x, y);
+                            }
+                            if inp.drag_stopped || !inp.any_down {
+                                let (old, _) = d.local.as_chunks::<2>();
+                                let moves: Vec<(usize, f32, f32)> = ng
+                                    .iter()
+                                    .zip(old)
+                                    .enumerate()
+                                    .map(|(gi, (&[nx, ny], &[ox, oy]))| (gi, nx - ox, ny - oy))
+                                    .filter(|(_, x, y)| x.abs() > 1e-7 || y.abs() > 1e-7)
+                                    .collect();
+                                self.bez_drag = None;
+                                bez_busy = false;
+                                warp_commit = Some(moves);
                             }
                         }
+                        let net_now: Vec<Pos2> =
+                            lat.net.iter().map(|&(x, y)| to_scr(x, y)).collect();
+                        bez = Some((lat, net_now));
                     }
-                    if !space {
-                        if resp.drag_started()
-                            && !self.def_locked.contains(&di)
-                            && let Some((gi, _)) = near
-                            && let Some(local) = s.puppet.warp_local_grid(di)
-                        {
-                            self.warp_drag =
-                                Some(WarpDrag { deformer: di, point: gi, local, dx: 0.0, dy: 0.0 });
+                    if bez_hover.is_some() || bez_busy {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if editable && !bez_busy && bez_hover.is_none() {
+                        self.pts.bind((2, di));
+                        // a brush selection drives division points, not handles
+                        self.pts.weights = if self.warp_bezier {
+                            Vec::new()
+                        } else {
+                            self.brush_w.get(&(2, di)).cloned().unwrap_or_default()
+                        };
+                        let inp = point_edit::PtInput::read(ui, &resp);
+                        let reach = if self.warp_bezier { 0.0 } else { 8.0 };
+                        // in Bezier mode the box stands off the grid so its dots
+                        // don't sit on the outer anchors
+                        let opts = point_edit::PtOpts {
+                            whole_box: true,
+                            marquee: !self.warp_bezier,
+                            reach,
+                            pad: if self.warp_bezier { 16.0 } else { 0.0 },
+                        };
+                        let out =
+                            point_edit::point_tool(&mut self.pts, &inp, &mut screen_pts, &opts);
+                        warp_hot = self.pts.hot;
+                        if let Some(m) = out.commit {
+                            warp_commit =
+                                Some(m.into_iter().map(|(gi, d)| (gi, d.x, d.y)).collect());
+                            warp_commit_screen = true;
                         }
-                        if resp.dragged()
-                            && let Some(d) = &mut self.warp_drag
-                        {
-                            let parent = s
-                                .puppet
-                                .model()
-                                .deformers
-                                .get(di)
-                                .and_then(|de| de.parent_deformer);
-                            let delta = resp.drag_delta();
-                            let mdx = delta.x / (scale * c.pixels_per_unit);
-                            let mdy = delta.y / (scale * c.pixels_per_unit);
-                            let at = d.point * 2;
-                            let px = d.local.get(at).copied().unwrap_or(0.0) + d.dx;
-                            let py = d.local.get(at + 1).copied().unwrap_or(0.0) + d.dy;
-                            let (ldx, ldy) = parent_delta(&s.puppet, parent, px, py, mdx, mdy);
-                            d.dx += ldx;
-                            d.dy += ldy;
+                        grab_hot = out.hover_grab;
+                        hover_pt = out.hover;
+                        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.pts.picked.clear();
                         }
-                        if near.is_some() {
+                        if hover_pt.is_some() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                     }
-                    // the dragged point rides the pointer while the grab lasts
-                    if let (Some(d), Some(ptr)) = (&self.warp_drag, ptr)
-                        && d.deformer == di
-                        && resp.dragged()
-                        && let Some(sp) = screen_pts.get_mut(d.point)
-                    {
-                        *sp = ptr;
+                    warp_hot |= bez_hover.is_some() || bez_busy;
+                    // land the edit in the keyform the parameters sit on. Box
+                    // and point drags hand back screen offsets; Bezier drags
+                    // hand back parent-space ones already
+                    if let Some(moved) = warp_commit.take() {
+                        let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                        let moves: Vec<(usize, f32, f32)> = if warp_commit_screen {
+                            let local = s.puppet.warp_local_grid(di).unwrap_or_default();
+                            moved
+                                .iter()
+                                .map(|&(gi, sx, sy)| {
+                                    let px = local.get(gi * 2).copied().unwrap_or(0.0);
+                                    let py = local.get(gi * 2 + 1).copied().unwrap_or(0.0);
+                                    let (dx, dy) = parent_delta(
+                                        &s.puppet,
+                                        parent,
+                                        px,
+                                        py,
+                                        sx * k_unit,
+                                        sy * k_unit,
+                                    );
+                                    (gi, dx, dy)
+                                })
+                                .collect()
+                        } else {
+                            moved
+                        };
+                        let values: Vec<f32> = (0..s.puppet.model().parameters.len())
+                            .map(|i| s.puppet.value(i))
+                            .collect();
+                        let target = ayatsuri_core::edit::Target::Deformer(di);
+                        match ayatsuri_core::keyform::keyform_at(s.puppet.model(), target, &values)
+                        {
+                            Some(k) => {
+                                if !moves.is_empty()
+                                    && s.edit(|m| {
+                                        ayatsuri_core::edit::move_warp_points(
+                                            m,
+                                            di,
+                                            Some(k),
+                                            &moves,
+                                        )
+                                    })
+                                {
+                                    log::debug!(
+                                        "warp {di}: {} grid point(s) moved in keyform {k}",
+                                        moves.len()
+                                    );
+                                }
+                            }
+                            None => log::warn!(
+                                "the parameters are between keys: move them onto a key to edit this warp"
+                            ),
+                        }
                     }
 
-                    let stroke = Stroke::new(1.0, theme::pal().warp_green);
-                    let drag_pt = self.warp_drag.as_ref().map(|d| d.point);
-                    let hover_pt = near.map(|(gi, _)| gi);
+                    // in Bezier mode the division points are only a readout: grey
+                    let grid_col = if bez.is_some() {
+                        Color32::from_gray(150).gamma_multiply(0.6)
+                    } else {
+                        self.disp.warp_color
+                    };
+                    let stroke = Stroke::new(1.0, grid_col);
                     for r in 0..=rows as usize {
                         for q in 0..=cols as usize {
                             let gi = r * stride + q;
@@ -6338,19 +6460,58 @@ impl EditorUi {
                             {
                                 vp.line_segment([pa, b], stroke);
                             }
-                            let hot =
-                                drag_pt == Some(gi) || (drag_pt.is_none() && hover_pt == Some(gi));
-                            if hot {
+                            if hover_pt == Some(gi) && self.pts.drag.is_none() {
                                 vp.circle(
                                     pa,
                                     4.0,
                                     theme::pal().accent,
                                     Stroke::new(1.0, theme::pal().warp_green),
                                 );
+                            } else if bez.is_some() {
+                                vp.circle_filled(pa, 1.3, grid_col);
                             } else {
-                                vp.circle_filled(pa, 1.8, theme::pal().warp_green);
+                                vp.circle_filled(pa, 2.2, grid_col);
                             }
                         }
+                    }
+                    draw_weights(
+                        &vp,
+                        &screen_pts,
+                        self.brush_w.get(&(2, di)),
+                        self.disp.weight_color,
+                    );
+                    if let Some((lat, net_s)) = &bez {
+                        let green = self.disp.warp_color;
+                        for (i, &p) in net_s.iter().enumerate() {
+                            if lat.kind(i) != ayatsuri_core::bezier::NetPoint::Anchor {
+                                continue;
+                            }
+                            for h in lat.handles_of(i) {
+                                if let Some(&hp) = net_s.get(h) {
+                                    vp.line_segment([p, hp], Stroke::new(1.2, green));
+                                    let hot = bez_hover == Some(h);
+                                    let col = if hot { theme::pal().accent } else { green };
+                                    vp.circle_filled(hp, if hot { 4.0 } else { 2.6 }, col);
+                                }
+                            }
+                            let hot = bez_hover == Some(i);
+                            vp.circle(
+                                p,
+                                if hot { 5.5 } else { 4.2 },
+                                if hot { theme::pal().accent } else { green },
+                                Stroke::new(1.0, Color32::WHITE),
+                            );
+                        }
+                    }
+                    if editable && !bez_busy {
+                        point_edit::draw_overlay(
+                            &self.pts,
+                            &vp,
+                            &screen_pts,
+                            true,
+                            if self.warp_bezier { 16.0 } else { 0.0 },
+                            grab_hot,
+                        );
                     }
                 } else if let Some(rot) = s.puppet.rotation_state(di) {
                     let mut o = to_screen(rot.origin.x, rot.origin.y);
@@ -6454,23 +6615,108 @@ impl EditorUi {
                         }
                     }
 
-                    let stroke = Stroke::new(1.4, theme::pal().rotation_red);
+                    let stroke = Stroke::new(1.4, self.disp.rotation_color);
                     vp.circle_stroke(o, 26.0, stroke);
                     vp.line_segment([o, tip], stroke);
                     let turning = self.rot_drag.as_ref().is_some_and(|d| d.turning);
                     if near_tip || turning {
                         vp.circle(tip, 4.5, theme::pal().accent, stroke);
                     } else {
-                        vp.circle_filled(tip, 3.0, theme::pal().rotation_red);
+                        vp.circle_filled(tip, 3.0, self.disp.rotation_color);
                     }
                     if near_origin || self.rot_drag.as_ref().is_some_and(|d| !d.turning) {
                         vp.circle(o, 4.5, theme::pal().accent, stroke);
                     } else {
-                        vp.circle_filled(o, 2.5, theme::pal().rotation_red);
+                        vp.circle_filled(o, 2.5, self.disp.rotation_color);
                     }
                 }
             }
             _ => {}
+        }
+
+        self.pts.hot = warp_hot;
+
+        // Brush Selection: paint a soft selection onto the selected meshes' or
+        // warp's points. Drag adds weight (Alt takes it away), dabs spaced
+        // by distance so the speed of the stroke doesn't matter; B + drag
+        // sizes the brush; Esc clears. The arrow tool then moves every
+        // painted point by its weight.
+        if self.tool == Tool::BrushSelect && !space && self.mesh_edit.is_none() {
+            let (ptr, alt, b_down, esc, delta) = ui.ctx().input(|i| {
+                (
+                    i.pointer.latest_pos(),
+                    i.modifiers.alt,
+                    i.key_down(egui::Key::B),
+                    i.key_pressed(egui::Key::Escape),
+                    i.pointer.delta(),
+                )
+            });
+            let mut targets: Vec<((u8, usize), Vec<Pos2>)> = Vec::new();
+            if let Some(Sel::Deformer(di)) = self.selected
+                && let Some((grid, _, _)) = s.puppet.warp_grid(di)
+            {
+                let (gp, _) = grid.as_chunks::<2>();
+                targets.push(((2, di), gp.iter().map(|p| to_screen(p[0], p[1])).collect()));
+            }
+            let mut meshes = self.multi_sel.clone();
+            if let Some(Sel::Mesh(mi)) = self.selected
+                && !meshes.contains(&mi)
+            {
+                meshes.push(mi);
+            }
+            for mi in meshes {
+                if let Some(g) = s.puppet.mesh_geometry(mi) {
+                    let (gp, _) = g.positions.as_chunks::<2>();
+                    targets.push(((1, mi), gp.iter().map(|p| to_screen(p[0], p[1])).collect()));
+                }
+            }
+            let r = self.tool_opts.brush_size.clamp(2.0, 400.0);
+            if esc {
+                self.brush_w.clear();
+                log::debug!("brush selection cleared");
+            }
+            if b_down && resp.dragged() {
+                self.tool_opts.brush_size = (self.tool_opts.brush_size + delta.x).clamp(2.0, 400.0);
+            } else if let Some(p) = ptr
+                && (resp.drag_started() || resp.clicked() || resp.dragged())
+            {
+                let dab = resp.drag_started()
+                    || resp.clicked()
+                    || self.brush_last.is_none_or(|l| l.distance(p) >= r * 0.15);
+                if dab {
+                    self.brush_last = Some(p);
+                    let sign = if alt { -1.0 } else { 1.0 };
+                    for (key, pts) in &targets {
+                        let w = self.brush_w.entry(*key).or_default();
+                        if w.len() != pts.len() {
+                            w.resize(pts.len(), 0.0);
+                        }
+                        for (q, wt) in pts.iter().zip(w.iter_mut()) {
+                            let d = q.distance(p);
+                            if d < r {
+                                let t = 1.0 - d / r;
+                                let f = t * t * (3.0 - 2.0 * t);
+                                *wt = (*wt + sign * self.brush_weight * f).clamp(0.0, 1.0);
+                            }
+                        }
+                    }
+                }
+            }
+            if resp.drag_stopped() {
+                self.brush_last = None;
+                // an object painted back to nothing has no selection
+                self.brush_w.retain(|_, w| w.iter().any(|x| *x > 1e-3));
+            }
+            for (key, pts) in &targets {
+                draw_weights(&vp, pts, self.brush_w.get(key), self.disp.weight_color);
+            }
+            if let Some(p) = ptr
+                && resp.hovered()
+            {
+                let col = if alt { theme::pal().text_faint } else { self.disp.weight_color };
+                vp.circle_stroke(p, r, Stroke::new(1.2, col.gamma_multiply(2.0)));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
         }
 
         // the deform path tool: lay control points over the selected mesh,
@@ -6678,7 +6924,7 @@ impl EditorUi {
         if let Some(mi) = self.mesh_edit {
             vp.rect_filled(view, 0.0, Color32::from_black_alpha(150));
             let ptr = ui.ctx().input(|i| i.pointer.latest_pos());
-            let mesh_id = s.puppet.model().art_meshes.get(mi).map(|m| m.id.clone());
+            let mesh_id = Some(s.mesh_name(mi));
             let parent = s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_deformer);
             let tex_slot =
                 s.puppet.model().art_meshes.get(mi).map(|m| m.texture as usize).unwrap_or(0);
@@ -7259,6 +7505,17 @@ impl EditorUi {
 
 /// Convert a model-space delta to a point's parent space by probing the
 /// parent deformer's local jacobian with finite differences.
+/// A brush selection's weights: each painted point in the weight colour,
+/// as strong as its weight.
+fn draw_weights(vp: &egui::Painter, pts: &[Pos2], w: Option<&Vec<f32>>, col: Color32) {
+    let Some(w) = w else { return };
+    for (p, &wt) in pts.iter().zip(w) {
+        if wt > 1e-3 {
+            vp.circle_filled(*p, 3.0 + 3.0 * wt, col.gamma_multiply(wt.clamp(0.0, 1.0)));
+        }
+    }
+}
+
 fn parent_delta(
     puppet: &ayatsuri_core::Puppet,
     parent: Option<u32>,
@@ -7286,20 +7543,49 @@ fn parent_delta(
 }
 
 /// Everything a shortcut can be rebound to, with Cubism-flavoured defaults.
-const KEY_ACTIONS: [(&str, &str, egui::Modifiers, egui::Key); 7] = [
-    ("undo", "Undo", egui::Modifiers::COMMAND, egui::Key::Z),
-    ("redo", "Redo", egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Z),
-    ("save", "Save", egui::Modifiers::COMMAND, egui::Key::S),
-    ("mesh-edit", "Edit Mesh", egui::Modifiers::COMMAND, egui::Key::E),
-    ("reset-params", "Reset Parameters", egui::Modifiers::COMMAND, egui::Key::Num1),
-    ("toggle-visible", "Show/Hide Selected", egui::Modifiers::COMMAND, egui::Key::Num3),
-    (
-        "export-image",
-        "Export Image",
-        egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-        egui::Key::E,
-    ),
-];
+/// Every shortcut, with Cubism's defaults (docs.live2d.com shortcut list):
+/// (category, action id, label, modifiers, key). Rebindable in Settings.
+const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] = {
+    use egui::Key as K;
+    use egui::Modifiers as M;
+    const C: M = M::COMMAND;
+    const CS: M = M::COMMAND.plus(M::SHIFT);
+    const CA: M = M::COMMAND.plus(M::ALT);
+    const CAS: M = M::COMMAND.plus(M::ALT).plus(M::SHIFT);
+    const N: M = M::NONE;
+    &[
+        ("File", "new-model", "New model", C, K::N),
+        ("File", "open", "Open", C, K::O),
+        ("File", "save", "Save", C, K::S),
+        ("File", "save-as", "Save as", CS, K::S),
+        ("File", "close", "Close", C, K::W),
+        ("File", "export-image", "Export image", C, K::I),
+        ("File", "export-moc3", "Export as moc3", CA, K::S),
+        ("File", "shortcuts", "Keyboard shortcuts", CAS, K::K),
+        ("Edit", "undo", "Undo", C, K::Z),
+        ("Edit", "redo", "Redo", CS, K::Z),
+        ("Edit", "redo-alt", "Redo (alternate)", C, K::Y),
+        ("Edit", "select-parent", "Select deformer for parent", C, K::D),
+        ("Modeling", "mesh-edit", "Edit mesh", C, K::E),
+        ("Modeling", "auto-mesh", "Automatic mesh generator", CS, K::A),
+        ("Modeling", "auto-connect", "Auto connect edges", C, K::R),
+        ("Modeling", "glue-bind", "Bind glue", C, K::G),
+        ("Modeling", "glue-unbind", "Unbind glue", CS, K::G),
+        ("Modeling", "reset-params", "Reset parameters to default", C, K::Num1),
+        ("Modeling", "four-corners", "Generate four corner forms", C, K::Num4),
+        ("Modeling", "toggle-visible", "Show/hide selected", C, K::Num3),
+        ("Modeling", "hide-unselected", "Hide unselected", CS, K::Num3),
+        ("Modeling", "show-all", "Show all", CA, K::Num3),
+        ("Tools", "tool-arrow", "Arrow tool", N, K::A),
+        ("Tools", "tool-lasso", "Lasso tool", N, K::L),
+        ("Tools", "tool-brush", "Brush selection tool", N, K::B),
+        ("Tools", "tool-path", "Deform path tool", N, K::P),
+        ("Tools", "level-1", "Edit level 1", N, K::Num1),
+        ("Tools", "level-2", "Edit level 2", N, K::Num2),
+        ("Tools", "level-3", "Edit level 3", N, K::Num3),
+        ("View", "display-all", "Display all (fit)", C, K::Num0),
+    ]
+};
 
 fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
     let mut out = String::new();
@@ -7690,9 +7976,7 @@ fn ancestors_shown(s: &Session, mut parent: Option<u32>) -> bool {
 
 enum ParamAction {
     Select(usize),
-    AddSingle(usize, f32),
-    DeleteKey(usize),
-    OpenEdit(usize),
+    Cmd(ParamCmd),
 }
 
 fn parameter_row(
@@ -7701,6 +7985,7 @@ fn parameter_row(
     pi: usize,
     sel_param: &mut Option<usize>,
     can_edit: bool,
+    subject: Option<param_menu::Moving>,
     actions: &mut Vec<ParamAction>,
 ) {
     let Some((min, max, default, decimals)) =
@@ -7739,43 +8024,9 @@ fn parameter_row(
             s.dirty = true;
         }
         nresp.context_menu(|ui| {
-            if ui.button("Edit Parameter…").clicked() {
-                actions.push(ParamAction::OpenEdit(pi));
-                ui.close();
+            if let Some(c) = param_menu::name_menu(ui, s, pi, subject) {
+                actions.push(ParamAction::Cmd(c));
             }
-            if ui.button("Reset to default").clicked() {
-                s.puppet.set_value(pi, default);
-                s.dirty = true;
-                ui.close();
-            }
-            ui.menu_button("Label color", |ui| {
-                ui.horizontal(|ui| {
-                    for c in [
-                        [0xE5u8, 0x48, 0x48],
-                        [0xF0, 0x8E, 0x1E],
-                        [0xE8, 0xC6, 0x3B],
-                        [0x5F, 0xB3, 0x5F],
-                        [0x4E, 0x8F, 0xD9],
-                        [0x9B, 0x6B, 0xD3],
-                    ] {
-                        let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
-                        ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(c[0], c[1], c[2]));
-                        if resp.clicked() {
-                            if let Some(slot) = s.param_colors.get_mut(pi) {
-                                *slot = Some(c);
-                                s.dirty = true;
-                            }
-                            ui.close();
-                        }
-                    }
-                });
-                if ui.button("Clear").clicked() {
-                    if let Some(slot) = s.param_colors.get_mut(pi) {
-                        *slot = None;
-                    }
-                    ui.close();
-                }
-            });
         });
         let slider_w = (ui.available_width() - 68.0).max(40.0);
         let (changed, slider_resp) = param_slider(ui, slider_w, &mut v, min, max, default, &keys);
@@ -7787,13 +8038,8 @@ fn parameter_row(
             log::debug!("parameter {display} dragged to {v:.3}");
         }
         slider_resp.context_menu(|ui| {
-            if ui.add_enabled(can_edit, egui::Button::new("Add Single Keyform")).clicked() {
-                actions.push(ParamAction::AddSingle(pi, v));
-                ui.close();
-            }
-            if ui.add_enabled(can_edit, egui::Button::new("Delete Keyform")).clicked() {
-                actions.push(ParamAction::DeleteKey(pi));
-                ui.close();
+            if let Some(c) = param_menu::slider_menu(ui, pi, v, can_edit) {
+                actions.push(ParamAction::Cmd(c));
             }
         });
         let dec = decimals.clamp(1, 4) as usize;
@@ -7824,6 +8070,8 @@ fn combined_pad(
     pa: usize,
     pb: usize,
     sel_param: &mut Option<usize>,
+    can_edit: bool,
+    subject: Option<param_menu::Moving>,
     actions: &mut Vec<ParamAction>,
 ) {
     let Some((amin, amax, adec)) =
@@ -7871,9 +8119,11 @@ fn combined_pad(
         if nresp.clicked() {
             actions.push(ParamAction::Select(p));
         }
-        if nresp.secondary_clicked() {
-            actions.push(ParamAction::OpenEdit(p));
-        }
+        nresp.context_menu(|ui| {
+            if let Some(c) = param_menu::name_menu(ui, s, p, subject) {
+                actions.push(ParamAction::Cmd(c));
+            }
+        });
     }
 
     // the pad, centered in the slider column
@@ -7935,6 +8185,18 @@ fn combined_pad(
         s.dirty = true;
     }
     resp.context_menu(|ui| {
+        // the slider popup for each of the pad's two parameters
+        ui.menu_button(truncate(&name_a, 18), |ui| {
+            if let Some(c) = param_menu::slider_menu(ui, pa, va, can_edit) {
+                actions.push(ParamAction::Cmd(c));
+            }
+        });
+        ui.menu_button(truncate(&name_b, 18), |ui| {
+            if let Some(c) = param_menu::slider_menu(ui, pb, vb, can_edit) {
+                actions.push(ParamAction::Cmd(c));
+            }
+        });
+        ui.separator();
         if ui.button("Reset both").clicked() {
             let da = s.puppet.model().parameters.get(pa).map(|p| p.default).unwrap_or(0.0);
             let db = s.puppet.model().parameters.get(pb).map(|p| p.default).unwrap_or(0.0);

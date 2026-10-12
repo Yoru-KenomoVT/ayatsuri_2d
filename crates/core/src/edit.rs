@@ -15,27 +15,27 @@ pub enum Target {
 
 /// Where each key of a changed axis takes its data from.
 #[derive(Clone, Copy)]
-enum KeySrc {
+pub(crate) enum KeySrc {
     Copy(usize),
     Lerp(usize, usize, f32),
 }
 
-enum Channel<'a> {
+pub(crate) enum Channel<'a> {
     F32 { elems: usize, data: &'a mut Vec<f32> },
     Bool { data: &'a mut Vec<bool> },
 }
 
-fn axis_lens(binding: &Binding) -> Vec<usize> {
+pub(crate) fn axis_lens(binding: &Binding) -> Vec<usize> {
     binding.axes.iter().map(|a| a.keys.len().max(1)).collect()
 }
 
-fn product(lens: &[usize]) -> usize {
+pub(crate) fn product(lens: &[usize]) -> usize {
     lens.iter().product::<usize>().max(1)
 }
 
 // Walk every keyform of the new product and pull its data from the old one
 // through `map` on the changed axis.
-fn remap(old_lens: &[usize], axis: usize, map: &[KeySrc], channel: &mut Channel<'_>) {
+pub(crate) fn remap(old_lens: &[usize], axis: usize, map: &[KeySrc], channel: &mut Channel<'_>) {
     let mut new_lens = old_lens.to_vec();
     if let Some(l) = new_lens.get_mut(axis) {
         *l = map.len().max(1);
@@ -130,7 +130,7 @@ fn tile(channel: &mut Channel<'_>, k: usize) {
     }
 }
 
-fn with_object<R>(
+pub(crate) fn with_object<R>(
     model: &mut Model,
     target: Target,
     f: impl FnOnce(&mut Binding, Vec<Channel<'_>>) -> R,
@@ -455,6 +455,253 @@ pub fn create_rotation_deformer(
             p[1] -= oy;
         }
         m.parent_deformer = Some(di as u32);
+    }
+    Some(di)
+}
+
+/// Re-expresses a parent-space point in a new deformer's space.
+type PointMap = dyn Fn(f32, f32) -> (f32, f32);
+
+/// What a new deformer is.
+#[derive(Clone, Copy, Debug)]
+pub enum NewDeformer {
+    Warp {
+        rows: u32,
+        cols: u32,
+    },
+    /// Origin in the parent's space; None centres it on the children.
+    Rotation {
+        origin: Option<(f32, f32)>,
+    },
+}
+
+/// One object a new deformer takes over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Child {
+    Mesh(usize),
+    Deformer(usize),
+}
+
+/// The parent deformer of a mesh or deformer.
+fn parent_of(model: &Model, c: Child) -> Option<Option<u32>> {
+    match c {
+        Child::Mesh(i) => model.art_meshes.get(i).map(|m| m.parent_deformer),
+        Child::Deformer(i) => model.deformers.get(i).map(|d| d.parent_deformer),
+    }
+}
+
+/// Every point a child stores in its parent's space, all keyforms.
+fn child_points(model: &Model, c: Child) -> Vec<(f32, f32)> {
+    let pairs = |v: &[f32]| v.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
+    match c {
+        Child::Mesh(i) => model.art_meshes.get(i).map(|m| pairs(&m.positions)).unwrap_or_default(),
+        Child::Deformer(i) => match model.deformers.get(i).map(|d| &d.kind) {
+            Some(DeformerKind::Warp(w)) => pairs(&w.positions),
+            Some(DeformerKind::Rotation(r)) => {
+                r.origins_x.iter().zip(&r.origins_y).map(|(&x, &y)| (x, y)).collect()
+            }
+            None => Vec::new(),
+        },
+    }
+}
+
+/// Re-express a child's parent-space points through `f`.
+fn map_child(model: &mut Model, c: Child, f: &dyn Fn(f32, f32) -> (f32, f32)) {
+    let map_pairs = |v: &mut Vec<f32>| {
+        let (pairs, _) = v.as_chunks_mut::<2>();
+        for p in pairs {
+            let (x, y) = f(p[0], p[1]);
+            p[0] = x;
+            p[1] = y;
+        }
+    };
+    match c {
+        Child::Mesh(i) => {
+            if let Some(m) = model.art_meshes.get_mut(i) {
+                map_pairs(&mut m.positions);
+            }
+        }
+        Child::Deformer(i) => match model.deformers.get_mut(i).map(|d| &mut d.kind) {
+            Some(DeformerKind::Warp(w)) => map_pairs(&mut w.positions),
+            Some(DeformerKind::Rotation(r)) => {
+                for (x, y) in r.origins_x.iter_mut().zip(r.origins_y.iter_mut()) {
+                    let (nx, ny) = f(*x, *y);
+                    *x = nx;
+                    *y = ny;
+                }
+            }
+            None => {}
+        },
+    }
+}
+
+/// Whether `d` is `target` or sits somewhere under it.
+fn deformer_under(model: &Model, d: usize, target: usize) -> bool {
+    let mut cur = Some(d as u32);
+    let mut hops = 0;
+    while let Some(c) = cur {
+        if c as usize == target {
+            return true;
+        }
+        cur = model.deformers.get(c as usize).and_then(|x| x.parent_deformer);
+        hops += 1;
+        if hops > 1024 {
+            break;
+        }
+    }
+    false
+}
+
+/// Cubism's deformer creation. With children, the new deformer takes their
+/// shared parent and wraps them, every child re-expressed in its space so
+/// nothing moves (As Parent of Selected Object; As Child of a deformer is
+/// the same call with that deformer's children). With no children it is
+/// created empty under `empty_parent` (Set Parent Manually), sized to
+/// `empty_extent` in that parent's space. Returns the new index.
+pub fn create_deformer(
+    model: &mut Model,
+    kind: NewDeformer,
+    children: &[Child],
+    empty_parent: Option<u32>,
+    empty_extent: (f32, f32, f32, f32),
+    part: Option<u32>,
+    id: String,
+) -> Option<usize> {
+    let parent = match children.first() {
+        Some(&first) => {
+            let p = parent_of(model, first)?;
+            if children.iter().any(|&c| parent_of(model, c) != Some(p)) {
+                return None;
+            }
+            p
+        }
+        None => empty_parent,
+    };
+    // the extent the deformer covers, in the parent's space
+    let (x0, y0, x1, y1) = if children.is_empty() {
+        empty_extent
+    } else {
+        children
+            .iter()
+            .flat_map(|&c| child_points(model, c))
+            .fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(a, b, c, d), (x, y)| {
+                (a.min(x), b.min(y), c.max(x), d.max(y))
+            })
+    };
+    if !(x0 <= x1 && y0 <= y1) {
+        return None;
+    }
+    let span = (x1 - x0).max(y1 - y0).max(1e-3);
+    let (deformer_kind, map): (DeformerKind, Box<PointMap>) = match kind {
+        NewDeformer::Warp { rows, cols } => {
+            // a little margin so edge points sit inside the grid
+            let (w, h) = ((x1 - x0).max(span * 0.05), (y1 - y0).max(span * 0.05));
+            let (gx, gy, gw, gh) = (x0 - w * 0.05, y0 - h * 0.05, w * 1.1, h * 1.1);
+            let (rows, cols) = (rows.clamp(1, 64), cols.clamp(1, 64));
+            let mut grid = Vec::with_capacity(((rows + 1) * (cols + 1) * 2) as usize);
+            for r in 0..=rows {
+                for c in 0..=cols {
+                    grid.push(gx + gw * (c as f32 / cols as f32));
+                    grid.push(gy + gh * (r as f32 / rows as f32));
+                }
+            }
+            (
+                DeformerKind::Warp(ayatsuri_format::model::WarpData {
+                    rows,
+                    cols,
+                    quad: true,
+                    opacities: alloc_one(),
+                    positions: grid,
+                }),
+                Box::new(move |x, y| ((x - gx) / gw, (y - gy) / gh)),
+            )
+        }
+        NewDeformer::Rotation { origin } => {
+            let (ox, oy) = origin.unwrap_or(((x0 + x1) * 0.5, (y0 + y1) * 0.5));
+            (
+                DeformerKind::Rotation(ayatsuri_format::model::RotationData {
+                    base_angle: 0.0,
+                    opacities: alloc_one(),
+                    angles: vec![0.0],
+                    origins_x: vec![ox],
+                    origins_y: vec![oy],
+                    scales: vec![1.0],
+                    reflect_x: vec![false],
+                    reflect_y: vec![false],
+                }),
+                Box::new(move |x, y| (x - ox, y - oy)),
+            )
+        }
+    };
+    if let Some(p) = parent
+        && model.deformers.get(p as usize).is_none()
+    {
+        return None;
+    }
+    // deformers evaluate in index order, parents first (the moc3 rule too),
+    // so a new parent of existing deformers goes in just before the first
+    // of them and every deformer reference past that point shifts up one
+    let di = children
+        .iter()
+        .filter_map(|&c| if let Child::Deformer(d) = c { Some(d) } else { None })
+        .min()
+        .unwrap_or(model.deformers.len())
+        .min(model.deformers.len());
+    let bump = |r: &mut Option<u32>| {
+        if let Some(x) = r
+            && *x as usize >= di
+        {
+            *x += 1;
+        }
+    };
+    for m in &mut model.art_meshes {
+        bump(&mut m.parent_deformer);
+    }
+    for d in &mut model.deformers {
+        bump(&mut d.parent_deformer);
+    }
+    let shift = |i: usize| if i >= di { i + 1 } else { i };
+    let children: Vec<Child> = children
+        .iter()
+        .map(|&c| match c {
+            Child::Deformer(d) => Child::Deformer(shift(d)),
+            m => m,
+        })
+        .collect();
+    let mut parent = parent;
+    bump(&mut parent);
+    model.deformers.insert(
+        di,
+        ayatsuri_format::model::Deformer {
+            id,
+            parent_part: part,
+            parent_deformer: parent,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            kind: deformer_kind,
+        },
+    );
+    for &c in &children {
+        // a deformer can't become a child of its own descendant
+        if let Child::Deformer(d) = c
+            && parent.is_some_and(|p| deformer_under(model, p as usize, d))
+        {
+            continue;
+        }
+        map_child(model, c, &*map);
+        match c {
+            Child::Mesh(i) => {
+                if let Some(m) = model.art_meshes.get_mut(i) {
+                    m.parent_deformer = Some(di as u32);
+                }
+            }
+            Child::Deformer(i) => {
+                if let Some(d) = model.deformers.get_mut(i) {
+                    d.parent_deformer = Some(di as u32);
+                }
+            }
+        }
     }
     Some(di)
 }
@@ -1033,6 +1280,71 @@ pub fn move_warp_point(model: &mut Model, deformer: usize, point: usize, dx: f32
         if let Some(y) = form.get_mut(at + 1) {
             *y += dy;
             touched = true;
+        }
+    }
+    touched
+}
+
+/// Move mesh vertices, each by its own parent-space offset, in one keyform
+/// (form editing with the arrow tool) or in all of them (None).
+pub fn move_vertices_in(
+    model: &mut Model,
+    mesh: usize,
+    keyform: Option<usize>,
+    moves: &[(usize, f32, f32)],
+) -> bool {
+    let Some(k) = keyform else { return move_vertices(model, mesh, moves) };
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    let count = m.vertex_count as usize;
+    let stride = count.saturating_mul(2);
+    let Some(form) = m.positions.get_mut(k * stride..(k + 1) * stride) else { return false };
+    let mut touched = false;
+    for &(vertex, dx, dy) in moves {
+        if vertex >= count {
+            continue;
+        }
+        if let Some(x) = form.get_mut(vertex * 2) {
+            *x += dx;
+        }
+        if let Some(y) = form.get_mut(vertex * 2 + 1) {
+            *y += dy;
+            touched = true;
+        }
+    }
+    touched
+}
+
+/// Move warp grid points, each by its own parent-space offset, in one
+/// keyform (form editing with the arrow tool) or in all of them (None).
+pub fn move_warp_points(
+    model: &mut Model,
+    deformer: usize,
+    keyform: Option<usize>,
+    moves: &[(usize, f32, f32)],
+) -> bool {
+    let Some(d) = model.deformers.get_mut(deformer) else { return false };
+    let DeformerKind::Warp(w) = &mut d.kind else { return false };
+    let count = w.grid_points();
+    let stride = count * 2;
+    if stride == 0 {
+        return false;
+    }
+    let mut touched = false;
+    for (k, form) in w.positions.chunks_exact_mut(stride).enumerate() {
+        if keyform.is_some_and(|want| want != k) {
+            continue;
+        }
+        for &(p, dx, dy) in moves {
+            if p >= count {
+                continue;
+            }
+            if let Some(x) = form.get_mut(p * 2) {
+                *x += dx;
+            }
+            if let Some(y) = form.get_mut(p * 2 + 1) {
+                *y += dy;
+                touched = true;
+            }
         }
     }
     touched
@@ -1744,5 +2056,92 @@ mod tests {
         assert!(set_glue_compatibility(&mut m, gi, 0.25));
         assert!(unbind_glue(&mut m, gi));
         assert!(m.glues.is_empty());
+    }
+
+    #[test]
+    fn wrapping_deformers_keeps_the_pose() {
+        // mesh under a rotation, then a warp around the rotation, then a
+        // rotation around that warp: the mesh must not move at any step
+        let mut m = test_model();
+        let at = |m: &Model| (0..=4).map(|i| x_at(m, i as f32 / 4.0, 0.0)).collect::<Vec<f32>>();
+        let before = at(&m);
+        let r = create_deformer(
+            &mut m,
+            NewDeformer::Rotation { origin: Some((0.3, 0.1)) },
+            &[Child::Mesh(0)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "R".into(),
+        )
+        .unwrap();
+        assert!((at(&m)[0] - before[0]).abs() < 1e-3, "rotation step: {:?}", at(&m));
+        let w = create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 2, cols: 2 },
+            &[Child::Deformer(r)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "W".into(),
+        )
+        .unwrap();
+        // the warp went in before the rotation, which shifted up one
+        let r = r + 1;
+        assert_eq!(w, 0);
+        assert_eq!(m.deformers[r].parent_deformer, Some(w as u32));
+        assert!((at(&m)[0] - before[0]).abs() < 1e-3, "warp step: {:?}", at(&m));
+        let r2 = create_deformer(
+            &mut m,
+            NewDeformer::Rotation { origin: None },
+            &[Child::Deformer(w)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "R2".into(),
+        )
+        .unwrap();
+        assert_eq!(r2, 0);
+        let w = w + 1;
+        assert_eq!(m.deformers[w].parent_deformer, Some(r2 as u32));
+        let after = at(&m);
+        for (x, y) in before.iter().zip(&after) {
+            assert!((x - y).abs() < 1e-3, "{before:?} vs {after:?}");
+        }
+        // an empty one under a chosen parent holds nothing
+        let e = create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 1, cols: 1 },
+            &[],
+            Some(r2 as u32),
+            (-0.5, -0.5, 0.5, 0.5),
+            None,
+            "E".into(),
+        )
+        .unwrap();
+        assert_eq!(m.deformers[e].parent_deformer, Some(r2 as u32));
+    }
+
+    #[test]
+    fn warp_points_move_in_one_keyform() {
+        let mut m = test_model();
+        let di = create_warp_deformer(&mut m, &[0], 1, 1, "W".into()).unwrap();
+        // give the warp two keyforms on parameter A
+        assert!(add_keys(&mut m, Target::Deformer(di), 0, &[0.0, 1.0]));
+        assert!(move_warp_points(&mut m, di, Some(1), &[(0, 0.5, 0.0)]));
+        let DeformerKind::Warp(w) = &m.deformers[di].kind else { panic!() };
+        let stride = w.grid_points() * 2;
+        assert!((w.positions[stride] - w.positions[0] - 0.5).abs() < 1e-6);
+        // None moves every keyform
+        assert!(move_warp_points(&mut m, di, None, &[(1, 0.0, 0.25)]));
+    }
+
+    #[test]
+    fn vertices_move_in_one_keyform() {
+        let mut m = test_model();
+        // two keyforms: x = 0 and x = 2
+        assert!(move_vertices_in(&mut m, 0, Some(1), &[(0, 0.5, 0.0)]));
+        assert_eq!(m.art_meshes[0].positions, vec![0.0, 0.0, 2.5, 0.0]);
+        assert!(!move_vertices_in(&mut m, 0, Some(9), &[(0, 1.0, 0.0)]));
     }
 }

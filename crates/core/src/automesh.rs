@@ -422,6 +422,60 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
     Mesh { points: kept, triangles }
 }
 
+/// Mesh one layer's patch of a texture atlas. `alpha_at` reads the page's
+/// alpha, `page` is its size in pixels and `patch` the layer's uv box
+/// (u0, v0, u1, v1). Pixels outside the patch belong to neighbouring layers
+/// (imported layers sit two pixels apart), so they read as empty and every
+/// point is clamped inside: a triangle reaching past the patch would sample
+/// the next layer's art and smear it. Returns uvs and triangle indices.
+pub fn for_patch(
+    alpha_at: &dyn Fn(u32, u32) -> u8,
+    page: (u32, u32),
+    patch: (f32, f32, f32, f32),
+    p: &Params,
+) -> Option<(Vec<f32>, Vec<u16>)> {
+    let (tw, th) = (page.0 as f32, page.1 as f32);
+    let (u0, v0, u1, v1) = patch;
+    if !(u0 < u1 && v0 < v1) || tw < 1.0 || th < 1.0 {
+        return None;
+    }
+    // the patch, padded so the margin has room to work out the outline
+    let pad = p.margin + 2.0;
+    let x0 = (u0 * tw - pad).max(0.0).floor() as u32;
+    let y0 = (v0 * th - pad).max(0.0).floor() as u32;
+    let x1 = (u1 * tw + pad).min(tw).ceil() as u32;
+    let y1 = (v1 * th + pad).min(th).ceil() as u32;
+    let (w, h) = (x1.saturating_sub(x0) as usize, y1.saturating_sub(y0) as usize);
+    let (tx0, ty0, tx1, ty1) =
+        ((u0 * tw).floor(), (v0 * th).floor(), (u1 * tw).ceil(), (v1 * th).ceil());
+    let mut alpha = vec![0u8; w.checked_mul(h)?];
+    for y in 0..h {
+        for x in 0..w {
+            let (ax, ay) = (x0 + x as u32, y0 + y as u32);
+            let (fx, fy) = (ax as f32, ay as f32);
+            if fx < tx0 || fy < ty0 || fx >= tx1 || fy >= ty1 {
+                continue;
+            }
+            if let Some(slot) = alpha.get_mut(y * w + x) {
+                *slot = alpha_at(ax, ay);
+            }
+        }
+    }
+    let mesh = generate(&alpha, w, h, p);
+    if mesh.triangles.is_empty() || mesh.points.len() >= u16::MAX as usize {
+        return None;
+    }
+    let uvs = mesh
+        .points
+        .iter()
+        .flat_map(|&(x, y)| {
+            [(x0 as f32 + x).clamp(tx0, tx1) / tw, (y0 as f32 + y).clamp(ty0, ty1) / th]
+        })
+        .collect();
+    let indices = mesh.triangles.iter().flat_map(|t| t.iter().copied()).collect();
+    Some((uvs, indices))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +540,19 @@ mod tests {
         assert!(generate(&[], 0, 0, &Params::default()).triangles.is_empty());
         assert!(generate(&[0; 100], 10, 10, &Params::default()).triangles.is_empty());
         assert!(generate(&[255; 4], 10, 10, &Params::default()).triangles.is_empty());
+    }
+
+    #[test]
+    fn patch_mesh_stays_on_its_layer() {
+        // two opaque layers side by side in a 64x32 page, two pixels apart:
+        // A covers x 0..30, B covers x 32..64
+        let alpha_at = |x: u32, _y: u32| if !(30..32).contains(&x) { 255u8 } else { 0 };
+        let patch = (0.0, 0.0, 30.0 / 64.0, 1.0);
+        let p = Params { margin: 6.0, ..Params::default() };
+        let (uvs, idx) = for_patch(&alpha_at, (64, 32), patch, &p).unwrap();
+        assert!(!idx.is_empty());
+        for uv in uvs.chunks(2) {
+            assert!(uv[0] <= 30.0 / 64.0 + 1e-6, "point at u {} reaches layer B", uv[0]);
+        }
     }
 }

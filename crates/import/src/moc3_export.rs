@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use ayatsuri_format::model::{Binding, DeformerKind, Model};
+use ayatsuri_format::model::{Binding, DeformerKind, Model, flags};
 
 use crate::ImportError;
 
@@ -20,11 +20,21 @@ pub enum ExportVersion {
     V3_03,
     V4_00,
     V4_02,
+    /// Cubism 5.0 to 5.2 (moc3 version 5).
+    V5_00,
+    /// Cubism 5.3, read by Cubism Core 6.0 (moc3 version 6).
+    V5_03,
 }
 
 impl ExportVersion {
-    pub const ALL: [ExportVersion; 4] =
-        [ExportVersion::V3_00, ExportVersion::V3_03, ExportVersion::V4_00, ExportVersion::V4_02];
+    pub const ALL: [ExportVersion; 6] = [
+        ExportVersion::V3_00,
+        ExportVersion::V3_03,
+        ExportVersion::V4_00,
+        ExportVersion::V4_02,
+        ExportVersion::V5_00,
+        ExportVersion::V5_03,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -32,6 +42,8 @@ impl ExportVersion {
             ExportVersion::V3_03 => "3.3",
             ExportVersion::V4_00 => "4.0",
             ExportVersion::V4_02 => "4.2",
+            ExportVersion::V5_00 => "5.0",
+            ExportVersion::V5_03 => "5.3",
         }
     }
 
@@ -41,17 +53,34 @@ impl ExportVersion {
             ExportVersion::V3_03 => 2,
             ExportVersion::V4_00 => 3,
             ExportVersion::V4_02 => 4,
+            ExportVersion::V5_00 => 5,
+            ExportVersion::V5_03 => 6,
         }
     }
 
     /// The highest slot this version defines. 101 (warp quad flags) arrived
-    /// with 3.3; 102..=136 with 4.2.
+    /// with 3.3; 102..=136 with 4.2; 137..=151 (per-keyform colour indices,
+    /// blend shapes on parts, rotations and glue) with 5.0; 152..=166
+    /// (offscreen drawing, extended blend modes) with 5.3.
     fn max_slot(self) -> usize {
         match self {
             ExportVersion::V3_00 => 100,
             ExportVersion::V3_03 | ExportVersion::V4_00 => 101,
             ExportVersion::V4_02 => 136,
+            ExportVersion::V5_00 => 151,
+            ExportVersion::V5_03 => 166,
         }
+    }
+
+    /// Count table size: 32 ints up to 4.2, 64 from 5.0.
+    fn count_ints(self) -> usize {
+        if self.max_slot() >= 137 { 64 } else { 32 }
+    }
+
+    /// The offset table's length in entries. Real 5.3 files end it at
+    /// 0x16C0 (1440 entries); earlier ones at 0x7C0 (480).
+    fn sot_entries(self) -> usize {
+        if self.max_slot() >= 152 { 1440 } else { 480 }
     }
 }
 
@@ -79,7 +108,6 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
     out
 }
 
-const SOT_ENTRIES: usize = 480;
 const HEADER: usize = 0x40;
 
 fn err(msg: impl Into<String>) -> ImportError {
@@ -679,6 +707,47 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     }
     sect.insert(77, f32s(&bind.keys.clone()));
 
+    // ---- v5.0 extensions (137-151) ----
+    // per-keyform colour links into the multiply / screen pools, which are
+    // laid out warps then rotations then meshes, one entry per keyform;
+    // blend shapes on parts, rotations and glue stay empty
+    if version.max_slot() >= 137 {
+        let w_total = w_opac.len() as i32;
+        let r_total = r_opac.len() as i32;
+        let w_idx: Vec<i32> = (0..w_total).collect();
+        let r_idx: Vec<i32> = (0..r_total).map(|k| w_total + k).collect();
+        let m_idx: Vec<i32> = (0..m_opac.len() as i32).map(|k| w_total + r_total + k).collect();
+        sect.insert(137, i32s(&w_idx));
+        sect.insert(138, i32s(&w_idx));
+        sect.insert(139, i32s(&r_idx));
+        sect.insert(140, i32s(&r_idx));
+        sect.insert(141, i32s(&m_idx));
+        sect.insert(142, i32s(&m_idx));
+    }
+
+    // ---- v5.3 extensions (152-166) ----
+    // no offscreens: every part says so (-1), every part keyform points at
+    // no offscreen keyform; each mesh's blend mode is its old flag bits in
+    // the new encoding (colour blend in the low byte, alpha blend "over")
+    if version.max_slot() >= 152 {
+        sect.insert(152, i32s(&vec![-1i32; n_parts]));
+        let modes: Vec<i32> = model
+            .art_meshes
+            .iter()
+            .map(|m| {
+                if m.flags & flags::BLEND_ADDITIVE != 0 {
+                    1
+                } else if m.flags & flags::BLEND_MULTIPLICATIVE != 0 {
+                    2
+                } else {
+                    0
+                }
+            })
+            .collect();
+        sect.insert(153, i32s(&modes));
+        sect.insert(160, i32s(&vec![-1i32; part_keyforms]));
+    }
+
     // ---- counts table (slot 0), field order is the on-disk order ----
     let counts: [i32; 32] = [
         n_parts as i32,
@@ -722,7 +791,9 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         0,
         0,
     ];
-    let mut count_bytes = vec![0u8; 128];
+    // 5.0 doubled the table; the fields past 4.2's (blend shapes, offscreens)
+    // stay zero because this writer emits none
+    let mut count_bytes = vec![0u8; version.count_ints() * 4];
     for (i, c) in counts.iter().enumerate() {
         let at = i * 4;
         if let Some(slice) = count_bytes.get_mut(at..at + 4) {
@@ -750,17 +821,23 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     sect.insert(1, canvas);
 
     // ---- assembly: header, offset table, sections ascending by slot ----
-    let mut file = vec![0u8; HEADER + SOT_ENTRIES * 4];
+    let sot_entries = version.sot_entries();
+    let mut file = vec![0u8; HEADER + sot_entries * 4];
     if let Some(h) = file.get_mut(0..6) {
         h.copy_from_slice(b"MOC3\0\0");
         if let Some(v) = h.get_mut(4) {
             *v = version.byte();
         }
     }
-    let mut offsets = [0u32; SOT_ENTRIES];
+    let mut offsets = vec![0u32; sot_entries];
+    // empty slots after the last populated one point at the file end, as
+    // in real files; an empty slot with data still to come shares the next
+    // section's offset instead, or offsets would stop rising (5.0 and 5.3
+    // put data after 4.2's empty tail, and cores reject that)
+    let last_filled = sect.keys().copied().filter(|&k| k <= version.max_slot()).max().unwrap_or(0);
     for (slot, offset) in offsets.iter_mut().enumerate().take(version.max_slot() + 1) {
         let payload = sect.remove(&slot);
-        if payload.is_none() && slot >= 117 {
+        if payload.is_none() && slot >= 117 && slot > last_filled {
             // defined by the version but never populated by this writer;
             // patched to the file length once it is known
             *offset = u32::MAX;

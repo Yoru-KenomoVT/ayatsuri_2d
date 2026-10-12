@@ -39,6 +39,9 @@ pub struct Imported {
     pub textures: Vec<Vec<u8>>,
     /// Display names, parallel to the model's parts and meshes.
     pub part_names: Vec<String>,
+    /// The layer names, parallel to the model's art meshes. IDs stay plain
+    /// ASCII (ArtMesh0, ArtMesh1...) the way Cubism names them.
+    pub mesh_names: Vec<String>,
     pub skipped: usize,
     /// Layers bigger than a texture page, stored downscaled.
     pub scaled: usize,
@@ -282,17 +285,5 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
     model.canvas = canvas;
     model.parts = parts;
     model.art_meshes = meshes;
-    // mesh ids carry an ASCII form of the layer name, so riggers can still
-    // tell "ArtMesh3_eye_L" apart from its neighbours
-    for (m, name) in model.art_meshes.iter_mut().zip(mesh_names.iter()) {
-        let clean: String = name
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .take(40)
-            .collect();
-        if !clean.trim_matches('_').is_empty() {
-            m.id = format!("{}_{clean}", m.id);
-        }
-    }
-    Ok(Imported { model, textures, part_names, skipped, scaled })
+    Ok(Imported { model, textures, part_names, mesh_names, skipped, scaled })
 }

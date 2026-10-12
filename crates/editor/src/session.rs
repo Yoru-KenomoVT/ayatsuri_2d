@@ -62,11 +62,25 @@ pub enum Sel {
     Parameter(usize),
 }
 
+/// Label colours travel as 0xRRGGBB, -1 for none.
+fn pack_rgb(c: Option<[u8; 3]>) -> i32 {
+    match c {
+        Some([r, g, b]) => ((r as i32) << 16) | ((g as i32) << 8) | (b as i32),
+        None => -1,
+    }
+}
+
+fn unpack_rgb(c: i32) -> Option<[u8; 3]> {
+    (c >= 0).then_some([((c >> 16) & 0xff) as u8, ((c >> 8) & 0xff) as u8, (c & 0xff) as u8])
+}
+
 /// One group of the Parameter palette, in display order.
 pub struct ParamGroup {
     pub name: String,
     pub params: Vec<usize>,
     pub open: bool,
+    /// Label colour on the folder header, like a parameter's.
+    pub color: Option<[u8; 3]>,
 }
 
 pub struct Session {
@@ -92,7 +106,10 @@ pub struct Session {
     pub textures: Vec<Option<TextureHandle>>,
     /// Full-resolution pixels waiting to go to the GPU renderer, taken on
     /// the first frame after load.
-    pub gpu_pending: Option<Vec<ayatsuri_render::TexData>>,
+    /// Textures for the GPU renderer, re-sent every frame until it confirms
+    /// the upload, then dropped to free the memory.
+    pub gpu_pending: Option<std::sync::Arc<Vec<ayatsuri_render::TexData>>>,
+    pub gpu_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub texture_names: Vec<String>,
     /// The encoded images as imported, kept so saving .aom is lossless.
     pub texture_pngs: Vec<Vec<u8>>,
@@ -105,6 +122,8 @@ pub struct Session {
     /// Display names from the cdi3, by model index.
     pub param_names: Vec<String>,
     pub part_names: Vec<String>,
+    /// Display names per art mesh (the PSD layer names); IDs stay ASCII.
+    pub mesh_names: Vec<String>,
     /// Parameter palette grouping, cdi3 order; one trailing group holds the rest.
     pub groups: Vec<ParamGroup>,
     /// Every key value each parameter has anywhere in the model, sorted,
@@ -126,6 +145,16 @@ pub struct Session {
 }
 
 impl Session {
+    /// A mesh's display name: its layer name, else its ID.
+    pub fn mesh_name(&self, i: usize) -> String {
+        self.mesh_names
+            .get(i)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .or_else(|| self.puppet.model().art_meshes.get(i).map(|m| m.id.clone()))
+            .unwrap_or_default()
+    }
+
     /// A fresh model straight from the New Model dialog: no textures yet,
     /// just the canvas and whatever starter parameters were asked for.
     pub fn create(
@@ -188,10 +217,14 @@ impl Session {
             .unwrap_or_else(|| "model".into());
         let tex_names = (0..imported.textures.len()).map(|i| format!("texture_{i:02}")).collect();
         let part_names = imported.part_names.clone();
+        let mesh_names = imported.mesh_names.clone();
         let mut s =
             Self::from_parts(ctx, name, imported.model, imported.textures, tex_names, None, path)?;
         if part_names.len() == s.part_names.len() {
             s.part_names = part_names;
+        }
+        if mesh_names.len() == s.mesh_names.len() {
+            s.mesh_names = mesh_names;
         }
         s.modified = true;
         Ok(s)
@@ -217,6 +250,12 @@ impl Session {
         s.animations = payload.animations;
         if let Some(d) = payload.display {
             let n = s.puppet.model().parameters.len();
+            if !d.part_names.is_empty() && d.part_names.len() == s.part_names.len() {
+                s.part_names = d.part_names.clone();
+            }
+            if !d.mesh_names.is_empty() && d.mesh_names.len() == s.mesh_names.len() {
+                s.mesh_names = d.mesh_names.clone();
+            }
             if d.param_names.len() == n {
                 s.param_names = d.param_names;
             }
@@ -234,13 +273,16 @@ impl Session {
                     .collect();
             }
             if !d.groups.is_empty() {
+                let colors = d.group_colors;
                 s.groups = d
                     .groups
                     .into_iter()
-                    .map(|(name, params)| ParamGroup {
+                    .enumerate()
+                    .map(|(gi, (name, params))| ParamGroup {
                         name,
                         params: params.into_iter().map(|p| p as usize).filter(|&p| p < n).collect(),
                         open: true,
+                        color: colors.get(gi).copied().and_then(unpack_rgb),
                     })
                     .collect();
             }
@@ -390,6 +432,7 @@ impl Session {
                     .map_or(p.id.clone(), |e| e.name.clone())
             })
             .collect();
+        let model_mesh_ids: Vec<String> = model.art_meshes.iter().map(|m| m.id.clone()).collect();
         let part_names: Vec<String> = model
             .parts
             .iter()
@@ -423,6 +466,7 @@ impl Session {
                     name: if g.name.is_empty() { g.id.clone() } else { g.name.clone() },
                     params,
                     open: true,
+                    color: None,
                 });
             }
         }
@@ -431,7 +475,7 @@ impl Session {
             .collect();
         if !rest.is_empty() {
             let name = if groups.is_empty() { String::new() } else { "Other".into() };
-            groups.push(ParamGroup { name, params: rest, open: true });
+            groups.push(ParamGroup { name, params: rest, open: true, color: None });
         }
 
         let param_keys = keys_of(&model);
@@ -472,14 +516,17 @@ impl Session {
             name,
             puppet,
             textures,
-            gpu_pending: Some(full),
+            gpu_pending: Some(std::sync::Arc::new(full)),
+            gpu_uploaded: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             texture_names,
             texture_pngs: pngs,
             aom_path: None,
             dirty: false,
             last_update_ms: 0.0,
             param_names,
+            mesh_names: model_mesh_ids,
             part_names,
+
             groups,
             param_keys,
             author: String::new(),
@@ -626,6 +673,9 @@ impl Session {
                     .iter()
                     .map(|g| (g.name.clone(), g.params.iter().map(|&p| p as u32).collect()))
                     .collect(),
+                group_colors: self.groups.iter().map(|g| pack_rgb(g.color)).collect(),
+                part_names: self.part_names.clone(),
+                mesh_names: self.mesh_names.clone(),
             }),
         }
     }

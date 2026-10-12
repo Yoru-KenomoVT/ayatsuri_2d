@@ -28,6 +28,20 @@ pub struct Prefs {
     pub fps_cap: u32,
     /// Model MSAA samples (1 disables); needs a restart. 0 means default.
     pub msaa: u32,
+    /// Canvas overlay colours; None follows the theme (mesh lines follow
+    /// the primary colour).
+    pub overlay: Overlay,
+}
+
+/// The arrow tool's display settings, RGBA.
+#[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Overlay {
+    pub mesh_width: Option<f32>,
+    pub mesh_color: Option<[u8; 4]>,
+    pub warp_color: Option<[u8; 4]>,
+    pub rotation_color: Option<[u8; 4]>,
+    pub weight_color: Option<[u8; 4]>,
 }
 
 fn path() -> Option<PathBuf> {
