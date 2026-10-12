@@ -57,6 +57,9 @@ pub struct Prefs {
     /// The launcher reads these: skip the splash, or keep it but still.
     pub splash_off: bool,
     pub splash_particles_off: bool,
+    /// Physics page splitters as the user left them: settings column
+    /// width, parameter rail width, tabs height, model panel width.
+    pub physics_layout: Option<[f32; 4]>,
 }
 
 /// The arrow tool's display settings, RGBA.

@@ -31,6 +31,8 @@ pub(super) struct PhysPage {
     /// Heights of the settings panels; the preview takes the rest.
     h_tabs: f32,
     w_model: f32,
+    /// Sizes come from preferences, or from the page width, on first draw.
+    sized: bool,
     /// Outputs to move into new groups, from the output right-click menu.
     split: Option<Vec<Vec<usize>>>,
 }
@@ -49,6 +51,7 @@ impl Default for PhysPage {
             split: None,
             h_tabs: 300.0,
             w_model: 470.0,
+            sized: false,
         }
     }
 }
@@ -205,6 +208,13 @@ fn tab_strip(ui: &mut Ui, labels: &[&str], active: &mut usize, enabled: &[bool])
 }
 
 impl EditorUi {
+    /// Keep the page's splitters for next time.
+    fn save_physics_layout(&mut self) {
+        let p = &self.phys_page;
+        self.prefs.physics_layout = Some([p.editor_w, p.rail_w, p.h_tabs, p.w_model]);
+        self.prefs.save();
+    }
+
     pub(super) fn physics_page(&mut self, ui: &mut Ui) {
         let content = ui.available_rect_before_wrap();
         ui.painter().rect_filled(content, 0.0, theme::pal().chrome);
@@ -284,13 +294,31 @@ impl EditorUi {
         // three columns with draggable splitters between them
         let body = Rect::from_min_max(pos2(content.min.x, tabs.max.y + 1.0), content.max);
         let total = body.width();
-        self.phys_page.editor_w = self.phys_page.editor_w.clamp(300.0, (total - 420.0).max(300.0));
-        self.phys_page.rail_w = self
-            .phys_page
-            .rail_w
-            .clamp(170.0, (total - self.phys_page.editor_w - 220.0).max(170.0));
-        let ex = body.min.x + self.phys_page.editor_w;
-        let rx = ex + 5.0 + self.phys_page.rail_w;
+        if !self.phys_page.sized {
+            self.phys_page.sized = true;
+            match self.prefs.physics_layout {
+                Some([e, r, h, m]) => {
+                    self.phys_page.editor_w = e;
+                    self.phys_page.rail_w = r;
+                    self.phys_page.h_tabs = h;
+                    self.phys_page.w_model = m;
+                }
+                None => {
+                    // a wide settings column by default, the rail beside it,
+                    // the running model in what is left
+                    self.phys_page.editor_w = (total * 0.5).max(520.0);
+                    self.phys_page.rail_w = (total * 0.2).max(235.0);
+                    self.phys_page.h_tabs = (body.height() * 0.45).max(260.0);
+                    self.phys_page.w_model = (self.phys_page.editor_w * 0.6).max(380.0);
+                }
+            }
+        }
+        // clamped only for drawing, so a small window never overwrites the
+        // sizes the user chose
+        let editor_w = self.phys_page.editor_w.clamp(300.0, (total - 230.0).max(300.0));
+        let rail_w = self.phys_page.rail_w.clamp(170.0, (total - editor_w - 60.0).max(170.0));
+        let ex = body.min.x + editor_w;
+        let rx = ex + 5.0 + rail_w;
         let editor_rect = Rect::from_min_max(body.min, pos2(ex, body.max.y));
         let rail_rect = Rect::from_min_max(pos2(ex + 5.0, body.min.y), pos2(rx, body.max.y));
         let view_rect = Rect::from_min_max(pos2(rx + 5.0, body.min.y), body.max);
@@ -309,10 +337,13 @@ impl EditorUi {
             if r.dragged() {
                 let dx = r.drag_delta().x;
                 if n == 0 {
-                    self.phys_page.editor_w += dx;
+                    self.phys_page.editor_w = editor_w + dx;
                 } else {
-                    self.phys_page.rail_w += dx;
+                    self.phys_page.rail_w = rail_w + dx;
                 }
+            }
+            if r.drag_stopped() {
+                self.save_physics_layout();
             }
         }
 
@@ -589,6 +620,9 @@ impl EditorUi {
                     self.phys_page.w_model = w_model + r.drag_delta().x;
                 }
             }
+            if r.drag_stopped() {
+                self.save_physics_layout();
+            }
         }
 
         panel(ui, r_tabs, "phys-p-tabs", |ui| {
@@ -610,10 +644,12 @@ impl EditorUi {
             self.physics_model(ui, g);
         });
         let nodes_copy = g.nodes.clone();
+        // the running sim's chain for this group, driven by the real inputs
+        let live_chain = self.session.as_ref().and_then(|s| s.puppet.physics_group_nodes(sel));
         let prev_size = vec2((r_prev.width() - 16.0).max(60.0), (r_prev.height() - 52.0).max(60.0));
         panel(ui, r_prev, "phys-p-prev", |ui| {
             ui.label(egui::RichText::new("Pendulum preview").size(11.5));
-            self.pendulum_preview(ui, reach, &nodes_copy, prev_size);
+            self.pendulum_preview(ui, reach, &nodes_copy, prev_size, live_chain);
         });
 
         // a separate-as-group request from the output menu

@@ -2148,6 +2148,7 @@ impl EditorUi {
         reach: f32,
         nodes: &[ayatsuri_format::model::PhysicsNode],
         size: Vec2,
+        live_chain: Option<Vec<(f32, f32)>>,
     ) {
         // sized by its panel, which the user drags; never by itself
         let (prect, presp) = ui.allocate_exact_size(size, Sense::click_and_drag());
@@ -2258,9 +2259,19 @@ impl EditorUi {
             let (rx, ry) = (x * rc - y * rs, x * rs + y * rc);
             pos2(cx + rx * sc_units, cy + ry * sc_units)
         };
+        // at rest the preview mirrors the running physics for this group, so
+        // moving its input parameters swings it; a drag or Swing hands it to
+        // the private sim until that settles
+        let drawn: Vec<(f32, f32)> = match live_chain.filter(|c| c.len() == nodes.len()) {
+            Some(chain) if !live => {
+                ui.ctx().request_repaint();
+                chain
+            }
+            _ => self.phys_prev.iter().map(|p| (p.0, p.1)).collect(),
+        };
         let stroke = Stroke::new(1.6, theme::pal().rotation_red);
         let mut prev: Option<Pos2> = None;
-        for (i, &(x, y, ..)) in self.phys_prev.iter().enumerate() {
+        for (i, &(x, y)) in drawn.iter().enumerate() {
             let sp = map(x, y);
             if let Some(pr) = prev {
                 pp.line_segment([pr, sp], stroke);
