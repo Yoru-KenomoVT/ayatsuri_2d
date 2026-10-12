@@ -98,8 +98,11 @@ please report anything that breaks.
 
 - Builds are not signed by Apple or Microsoft, so macOS asks once (right
   click, Open) and Windows SmartScreen may warn ("More info", "Run anyway").
-- Not yet built: texture atlas editor, skinning, model templates, the
-  temporary deform tool, an expression editor, and the full timeline
-  (curve editor, graph view).
+- Not yet built: the art path brush, texture atlas editor, skinning,
+  model templates, the temporary deform tool, an expression editor, and
+  the full timeline (curve editor, graph view).
+- Art meshes cannot be deleted yet, and mesh opacity cannot be keyed to
+  parameters (the part opacity slider only changes the view). Clipping is
+  set by typing mesh IDs into Clip by in Properties.
 - Dragging a weighted selection across several meshes at once is not
   supported yet.
