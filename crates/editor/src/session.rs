@@ -740,21 +740,31 @@ impl Session {
     /// The periodic safety copy: snapshot the payload here, then encode and
     /// write it on a thread so the frame never waits on deflate. One file
     /// per model, overwritten each time.
-    pub fn autosave(&self) {
-        let Some(dir) =
-            crate::logging::log_path().and_then(|p| p.parent().map(|d| d.join("recovery")))
-        else {
-            return;
-        };
+    /// Where this model's periodic safety copy goes.
+    pub fn autosave_path(&self) -> Option<PathBuf> {
         let safe: String = self
             .name
             .chars()
             .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
             .collect();
+        Some(crate::recovery::dir()?.join(format!("{safe}-autosave.aom")))
+    }
+
+    /// The work is safe (saved, or knowingly discarded): its autosave is
+    /// stale and must not be offered for recovery next time.
+    pub fn discard_autosave(&self) {
+        if let Some(p) = self.autosave_path() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    pub fn autosave(&self) {
+        let Some(path) = self.autosave_path() else { return };
         let payload = self.payload();
         std::thread::spawn(move || {
-            let _ = std::fs::create_dir_all(&dir);
-            let path = dir.join(format!("{safe}-autosave.aom"));
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
             let tmp = path.with_extension("aom.tmp");
             match ayatsuri_format::write(&payload) {
                 Ok(bytes) => {
@@ -773,7 +783,7 @@ impl Session {
     /// Write a recovery copy without touching the session's own path, so a
     /// crash never costs the user their work. Returns where it went.
     pub fn write_recovery(&self) -> Option<PathBuf> {
-        let dir = crate::logging::log_path()?.parent()?.join("recovery");
+        let dir = crate::recovery::dir()?;
         std::fs::create_dir_all(&dir).ok()?;
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -14,6 +14,7 @@ pub mod logging;
 mod panels;
 mod point_edit;
 mod prefs;
+mod recovery;
 mod session;
 pub mod theme;
 mod thumb;
@@ -43,4 +44,18 @@ pub(crate) fn remember_recovery(path: std::path::PathBuf) {
 /// The recovery copy to reopen if the app has to restart itself.
 pub fn last_recovery() -> Option<std::path::PathBuf> {
     LAST_RECOVERY.lock().ok().and_then(|g| g.clone())
+}
+
+static WRITTEN: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Crash copies this run wrote; a clean exit removes them, since the work
+/// went on and was saved or discarded after.
+pub(crate) fn note_crash_copy(path: std::path::PathBuf) {
+    if let Ok(mut g) = WRITTEN.lock() {
+        g.push(path);
+    }
+}
+
+pub(crate) fn take_crash_copies() -> Vec<std::path::PathBuf> {
+    WRITTEN.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default()
 }

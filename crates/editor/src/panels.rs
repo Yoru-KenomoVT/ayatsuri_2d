@@ -240,6 +240,9 @@ pub struct EditorUi {
     pub(crate) settings_pos: Option<egui::Pos2>,
     /// Undo depth at the start of the frame; see `on_crash`.
     frame_undo_depth: usize,
+    pub(crate) recovery: crate::windows::recovery::RecoveryState,
+    /// A recovery file being opened: it loads as unsaved work.
+    pub(crate) recovering: Option<PathBuf>,
     tool_opts: ToolOptions,
     lasso: Vec<Pos2>,
     /// The parameter rows' own selection, independent of object selection.
@@ -566,6 +569,8 @@ impl Default for EditorUi {
             settings_tab: 0,
             settings_pos: None,
             frame_undo_depth: 0,
+            recovery: Default::default(),
+            recovering: None,
             tool_opts: ToolOptions::default(),
             lasso: Vec::new(),
             sel_param: None,
@@ -624,6 +629,17 @@ impl EditorUi {
     /// The app shell calls this after catching a panic out of `ui`: the
     /// work gets rescued to a recovery file and the next frames show what
     /// happened instead of the editor vanishing.
+    /// The app is closing normally: anything unsaved was saved or knowingly
+    /// discarded at the Unsaved Changes prompt, so the safety copies go.
+    pub fn clean_exit(&mut self) {
+        if let Some(s) = &self.session {
+            s.discard_autosave();
+        }
+        for p in crate::take_crash_copies() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
     /// Last line of defence: the app is going down past every guard (eframe
     /// itself panicked). Keep any unsaved work in a recovery file the
     /// relaunch can open.
@@ -659,6 +675,7 @@ impl EditorUi {
         let recovery = self.session.as_ref().and_then(|s| s.write_recovery());
         if let Some(p) = &recovery {
             crate::remember_recovery(p.clone());
+            crate::note_crash_copy(p.clone());
         }
         match &recovery {
             Some(p) => log::error!("work saved to {} after the crash", p.display()),
@@ -769,7 +786,7 @@ impl EditorUi {
     /// texture pages takes seconds; on the UI thread that froze the window
     /// long enough for the desktop to call it "not responding". The window
     /// keeps drawing (a loading overlay) and picks the result up when ready.
-    fn import(&mut self, ctx: &egui::Context, path: PathBuf) {
+    pub(crate) fn import(&mut self, ctx: &egui::Context, path: PathBuf) {
         if self.loading.is_some() {
             log::warn!("still opening the previous file");
             return;
@@ -858,9 +875,19 @@ impl EditorUi {
             None => None,
         };
         match done {
-            Some(Some((path, Ok(s)))) => {
+            Some(Some((path, Ok(mut s)))) => {
                 self.loading = None;
-                self.prefs.remember(path);
+                if self.recovering.as_ref() == Some(&path) {
+                    // recovered work is unsaved work: no file of its own, not
+                    // a recent; its autosave takes over from the copy
+                    self.recovering = None;
+                    s.aom_path = None;
+                    s.modified = true;
+                    let _ = std::fs::remove_file(&path);
+                    log::info!("recovered {}", s.name);
+                } else {
+                    self.prefs.remember(path);
+                }
                 self.session = Some(s);
                 self.selected = None;
                 self.view_zoom = 1.0;
@@ -930,6 +957,8 @@ impl EditorUi {
         let Some(s) = &mut self.session else { return false };
         match s.save_aom(&path) {
             Ok(()) => {
+                // saved, so the safety copy is stale
+                s.discard_autosave();
                 self.prefs.remember(path);
                 true
             }
@@ -1115,6 +1144,7 @@ impl EditorUi {
             self.on_crash();
         }
         self.crash_window(ui);
+        self.recovery_window(ui);
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
         if self.last_autosave.elapsed().as_secs() >= 120 {
@@ -3854,6 +3884,10 @@ impl EditorUi {
     }
 
     fn close_session(&mut self) {
+        // closing means the work was saved or knowingly dropped
+        if let Some(s) = &self.session {
+            s.discard_autosave();
+        }
         self.session = None;
         self.mesh_locked.clear();
         self.def_locked.clear();

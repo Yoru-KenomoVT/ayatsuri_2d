@@ -5,6 +5,7 @@ pub(crate) mod about;
 mod dialog;
 mod export_moc3;
 mod model_info;
+pub(crate) mod recovery;
 pub(crate) mod settings;
 mod stats;
 

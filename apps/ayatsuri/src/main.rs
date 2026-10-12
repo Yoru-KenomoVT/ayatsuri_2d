@@ -29,6 +29,8 @@ impl Drop for App {
         // per-frame guard: keep the work for the relaunch
         if std::thread::panicking() {
             self.editor.emergency_save();
+        } else {
+            self.editor.clean_exit();
         }
     }
 }
@@ -45,8 +47,9 @@ fn relaunch_after_crash() {
     let Ok(exe) = std::env::current_exe() else { return };
     let mut cmd = std::process::Command::new(exe);
     cmd.env("AYATSURI_RESTARTS", (restarts + 1).to_string());
+    // the relaunch asks before recovering, through the startup dialog
     if let Some(p) = ayatsuri_editor::last_recovery() {
-        cmd.arg(p);
+        cmd.env("AYATSURI_RECOVER", p);
     }
     match cmd.spawn() {
         Ok(_) => log::error!("the editor crashed and was restarted"),
