@@ -65,33 +65,35 @@ impl EditorUi {
         });
         if go {
             let Some(dlg) = self.export_dlg.take() else { return };
-            let Some(dir) = rfd::FileDialog::new().pick_folder() else {
-                self.export_dlg = Some(dlg);
-                return;
-            };
-            let version = ayatsuri_import::ExportVersion::ALL
-                .get(dlg.version)
-                .copied()
-                .unwrap_or(ayatsuri_import::ExportVersion::V5_03);
-            if let Some(s) = &self.session {
-                let opt = crate::export::Options {
-                    name: dlg.name.clone(),
-                    version,
-                    physics: dlg.physics,
-                    motions: dlg.motions,
-                };
-                match crate::export::export(s, &dir, &opt) {
-                    Ok(files) => log::info!(
-                        "exported {} files (moc3 {}) to {}",
-                        files.len(),
-                        version.label(),
-                        dir.display()
-                    ),
-                    Err(e) => log::error!("export failed: {e}"),
-                }
-            }
+            self.pick_async(crate::panels::PickFor::ExportMoc3(Box::new(dlg)), || {
+                rfd::FileDialog::new().set_title("Export as moc3: choose a folder").pick_folder()
+            });
         } else if !open {
             self.export_dlg = None;
+        }
+    }
+
+    /// Write the Cubism bundle into the picked folder.
+    pub(crate) fn export_moc3_to(&mut self, dlg: &crate::panels::ExportDlg, dir: &std::path::Path) {
+        let version = ayatsuri_import::ExportVersion::ALL
+            .get(dlg.version)
+            .copied()
+            .unwrap_or(ayatsuri_import::ExportVersion::V5_03);
+        let Some(s) = &self.session else { return };
+        let opt = crate::export::Options {
+            name: dlg.name.clone(),
+            version,
+            physics: dlg.physics,
+            motions: dlg.motions,
+        };
+        match crate::export::export(s, dir, &opt) {
+            Ok(files) => log::info!(
+                "exported {} files (moc3 {}) to {}",
+                files.len(),
+                version.label(),
+                dir.display()
+            ),
+            Err(e) => log::error!("export failed: {e}"),
         }
     }
 }

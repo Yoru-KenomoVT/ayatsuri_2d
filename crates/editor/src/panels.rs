@@ -153,6 +153,8 @@ pub struct EditorUi {
     pub(crate) key_filter: String,
     /// A file picker open on its own thread, and a model loading on one.
     picking: Option<std::sync::mpsc::Receiver<BgJob>>,
+    /// Any other native file dialog in flight, and what it is for.
+    dialog_pick: Option<(PickFor, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
     loading: Option<(PathBuf, std::sync::mpsc::Receiver<BgJob>)>,
 
     /// Discord Rich Presence while enabled, and the app id it runs as.
@@ -359,6 +361,20 @@ struct PathPin {
 }
 
 /// Results coming back from background threads.
+/// What a native file dialog running on its own thread was opened for;
+/// the frame loop finishes the job when the path comes back.
+pub(crate) enum PickFor {
+    /// Save As; `then_close` carries an Unsaved Changes close (0 the
+    /// model, 1 the window) to finish once the save lands.
+    SaveAs {
+        then_close: Option<u8>,
+    },
+    ExportImage,
+    ExportMoc3(Box<ExportDlg>),
+    WorkspaceExport,
+    WorkspaceImport,
+}
+
 enum BgJob {
     Picked(Option<PathBuf>),
     Loaded(PathBuf, Box<Result<Session, String>>),
@@ -486,6 +502,7 @@ impl Default for EditorUi {
             show_settings: false,
             key_filter: String::new(),
             picking: None,
+            dialog_pick: None,
             loading: None,
 
             rpc: None,
@@ -773,6 +790,24 @@ impl EditorUi {
     /// Collect finished background work: a picked file starts loading, a
     /// loaded model becomes the session.
     fn poll_background(&mut self, ctx: &egui::Context) {
+        let answered = match &self.dialog_pick {
+            Some((_, rx)) => match rx.try_recv() {
+                Ok(path) => Some(path),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(None),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // keep drawing while the dialog is up, so the answer is
+                    // picked up promptly and the window never looks hung
+                    ctx.request_repaint_after(std::time::Duration::from_millis(150));
+                    None
+                }
+            },
+            None => None,
+        };
+        if let Some(path) = answered
+            && let Some((why, _)) = self.dialog_pick.take()
+        {
+            self.finish_pick(ctx, why, path);
+        }
         if let Some(rx) = &self.picking {
             match rx.try_recv() {
                 Ok(BgJob::Picked(Some(path))) => {
@@ -835,20 +870,122 @@ impl EditorUi {
     }
 
     fn save_session(&mut self, save_as: bool) {
-        let Some(s) = &mut self.session else { return };
-        let path = if save_as || s.aom_path.is_none() {
-            rfd::FileDialog::new()
-                .add_filter("Ayatsuri Open Model", &["aom"])
-                .set_file_name(format!("{}.aom", s.name))
-                .set_title("Save model")
-                .save_file()
-        } else {
-            s.aom_path.clone()
-        };
-        let Some(path) = path else { return };
+        self.save_session_then(save_as, None);
+    }
+
+    /// Save to the known path, or ask for one on the picker thread first.
+    /// `then_close` finishes an Unsaved Changes close after a picked save.
+    fn save_session_then(&mut self, save_as: bool, then_close: Option<u8>) {
+        let Some(s) = &self.session else { return };
+        match s.aom_path.clone().filter(|_| !save_as) {
+            Some(path) => {
+                self.save_session_to(path);
+            }
+            None => {
+                let file = format!("{}.aom", s.name);
+                self.pick_async(PickFor::SaveAs { then_close }, move || {
+                    rfd::FileDialog::new()
+                        .add_filter("Ayatsuri Open Model", &["aom"])
+                        .set_file_name(file)
+                        .set_title("Save model")
+                        .save_file()
+                });
+            }
+        }
+    }
+
+    /// True when the model was written.
+    fn save_session_to(&mut self, path: PathBuf) -> bool {
+        let Some(s) = &mut self.session else { return false };
         match s.save_aom(&path) {
-            Ok(()) => self.prefs.remember(path),
-            Err(e) => log::error!("save failed: {e}"),
+            Ok(()) => {
+                self.prefs.remember(path);
+                true
+            }
+            Err(e) => {
+                log::error!("save failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Run a native file dialog on its own thread. The system picker blocks
+    /// until it closes, and on the UI thread the desktop calls the window
+    /// "not responding"; this way the editor keeps drawing underneath.
+    pub(crate) fn pick_async(
+        &mut self,
+        why: PickFor,
+        dialog: impl FnOnce() -> Option<PathBuf> + Send + 'static,
+    ) {
+        if self.dialog_pick.is_some() || self.picking.is_some() {
+            log::info!("a file dialog is already open");
+            if let PickFor::ExportMoc3(dlg) = why {
+                self.export_dlg = Some(*dlg);
+            }
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("file-dialog".into()).spawn(move || {
+            let _ = tx.send(dialog());
+        });
+        match spawned {
+            Ok(_) => self.dialog_pick = Some((why, rx)),
+            Err(e) => log::error!("could not open the file dialog: {e}"),
+        }
+    }
+
+    /// A background file dialog answered: finish what it was opened for.
+    fn finish_pick(&mut self, ctx: &egui::Context, why: PickFor, path: Option<PathBuf>) {
+        match (why, path) {
+            (PickFor::SaveAs { then_close }, Some(path)) => {
+                if self.save_session_to(path)
+                    && let Some(action) = then_close
+                {
+                    self.finish_close(ctx, action);
+                }
+            }
+            // cancelled out of an Unsaved Changes save: ask again
+            (PickFor::SaveAs { then_close: Some(action) }, None) => {
+                self.confirm_close = Some(action);
+            }
+            (PickFor::ExportImage, Some(path)) => self.export_image_to(path),
+            (PickFor::ExportMoc3(dlg), Some(dir)) => self.export_moc3_to(&dlg, &dir),
+            // a cancelled folder pick leaves the export dialog as it was
+            (PickFor::ExportMoc3(dlg), None) => self.export_dlg = Some(*dlg),
+            (PickFor::WorkspaceExport, Some(path)) => {
+                match serde_json::to_vec_pretty(&self.layout) {
+                    Ok(bytes) => match std::fs::write(&path, bytes) {
+                        Ok(()) => log::info!("workspace exported to {}", path.display()),
+                        Err(e) => log::error!("workspace export: {e}"),
+                    },
+                    Err(e) => log::error!("workspace export: {e}"),
+                }
+            }
+            (PickFor::WorkspaceImport, Some(path)) => {
+                match std::fs::read(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| serde_json::from_slice::<DockNode>(&b).map_err(|e| e.to_string()))
+                {
+                    Ok(layout) => {
+                        self.layout = layout;
+                        self.save_layout();
+                        log::info!("workspace imported from {}", path.display());
+                    }
+                    Err(e) => log::error!("workspace import: {e}"),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Close the model (0) or the window (1) after Unsaved Changes.
+    fn finish_close(&mut self, ctx: &egui::Context, action: u8) {
+        self.confirm_close = None;
+        if action == 1 {
+            self.force_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.close_session();
         }
     }
 
@@ -1555,43 +1692,20 @@ impl EditorUi {
                         ui.separator();
                         if ui.button("Export Current Layout…").clicked() {
                             ui.close();
-                            let picked = rfd::FileDialog::new()
-                                .add_filter("Workspace", &["json"])
-                                .set_file_name("workspace.json")
-                                .save_file();
-                            if let Some(path) = picked {
-                                match serde_json::to_vec_pretty(&self.layout) {
-                                    Ok(bytes) => {
-                                        if let Err(e) = std::fs::write(&path, bytes) {
-                                            log::error!("workspace export: {e}");
-                                        } else {
-                                            log::info!("workspace exported to {}", path.display());
-                                        }
-                                    }
-                                    Err(e) => log::error!("workspace export: {e}"),
-                                }
-                            }
+                            self.pick_async(PickFor::WorkspaceExport, || {
+                                rfd::FileDialog::new()
+                                    .add_filter("Workspace", &["json"])
+                                    .set_file_name("workspace.json")
+                                    .save_file()
+                            });
                         }
                         if ui.button("Import Layout…").clicked() {
                             ui.close();
-                            let picked = rfd::FileDialog::new()
-                                .add_filter("Workspace", &["json"])
-                                .pick_file();
-                            if let Some(path) = picked {
-                                match std::fs::read(&path).map_err(|e| e.to_string()).and_then(
-                                    |b| {
-                                        serde_json::from_slice::<DockNode>(&b)
-                                            .map_err(|e| e.to_string())
-                                    },
-                                ) {
-                                    Ok(layout) => {
-                                        self.layout = layout;
-                                        self.save_layout();
-                                        log::info!("workspace imported from {}", path.display());
-                                    }
-                                    Err(e) => log::error!("workspace import: {e}"),
-                                }
-                            }
+                            self.pick_async(PickFor::WorkspaceImport, || {
+                                rfd::FileDialog::new()
+                                    .add_filter("Workspace", &["json"])
+                                    .pick_file()
+                            });
                         }
                     });
                     if ui.button("Reset Current Layout").clicked() {
@@ -3745,27 +3859,23 @@ impl EditorUi {
         match choice {
             Some(0) => self.confirm_close = None,
             Some(1) => {
-                self.save_session(false);
-                // a cancelled file picker leaves it modified; stay open then
-                if self.session.as_ref().is_some_and(|s| !s.modified) {
-                    self.confirm_close = None;
-                    if action == 1 {
-                        self.force_close = true;
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    } else {
-                        self.close_session();
+                let known = self.session.as_ref().and_then(|s| s.aom_path.clone());
+                match known {
+                    // a known path saves now; close only if it worked
+                    Some(path) => {
+                        if self.save_session_to(path) {
+                            self.finish_close(ui.ctx(), action);
+                        }
+                    }
+                    // otherwise the picker asks first and the close follows
+                    // the save; the dialog steps aside meanwhile
+                    None => {
+                        self.confirm_close = None;
+                        self.save_session_then(true, Some(action));
                     }
                 }
             }
-            Some(2) => {
-                self.confirm_close = None;
-                if action == 1 {
-                    self.force_close = true;
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                } else {
-                    self.close_session();
-                }
-            }
+            Some(2) => self.finish_close(ui.ctx(), action),
             _ => {}
         }
     }
@@ -3984,11 +4094,14 @@ impl EditorUi {
     /// Render the current pose to a PNG at canvas resolution.
     fn export_image(&mut self) {
         let Some(s) = &self.session else { return };
-        let picked = rfd::FileDialog::new()
-            .add_filter("PNG image", &["png"])
-            .set_file_name(format!("{}.png", s.name))
-            .save_file();
-        let Some(path) = picked else { return };
+        let file = format!("{}.png", s.name);
+        self.pick_async(PickFor::ExportImage, move || {
+            rfd::FileDialog::new().add_filter("PNG image", &["png"]).set_file_name(file).save_file()
+        });
+    }
+
+    fn export_image_to(&mut self, path: PathBuf) {
+        let Some(s) = &self.session else { return };
         let mut tex = Vec::new();
         for png in &s.texture_pngs {
             match image::load_from_memory(png) {
