@@ -200,6 +200,21 @@ pub(crate) fn handle(text: &str, conn: &mut Conn, w: &mut World) -> Option<Strin
         "SetGlobalVersion" => return ok(json!({})),
         _ => {}
     }
+    // subscriptions are kept even before the user allows the app (clients
+    // subscribe right after registering); events only flow once allowed
+    if let Some(event) = NOTIFY.iter().find(|e| **e == method) {
+        let on = data
+            .get("Enabled")
+            .or_else(|| data.get("Enable"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        conn.subscribed.retain(|s| s != event);
+        if on {
+            conn.subscribed.push((*event).to_string());
+        }
+        return ok(json!({ "Accepted": true }));
+    }
+
     let allowed =
         conn.token.as_ref().is_some_and(|t| w.clients.iter().any(|c| &c.token == t && c.allowed));
     if !allowed {
@@ -219,19 +234,6 @@ pub(crate) fn handle(text: &str, conn: &mut Conn, w: &mut World) -> Option<Strin
             (None, None) => false,
         }
     };
-
-    if let Some(event) = NOTIFY.iter().find(|e| **e == method) {
-        let on = data
-            .get("Enabled")
-            .or_else(|| data.get("Enable"))
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        conn.subscribed.retain(|s| s != event);
-        if on {
-            conn.subscribed.push((*event).to_string());
-        }
-        return ok(json!({ "Accepted": true }));
-    }
 
     match method.as_str() {
         "GetCurrentModelUID" => match &snap.model_uid {
@@ -515,6 +517,16 @@ mod tests {
         // no RequestId sent, none echoed
         let quiet = r.send(r#"{"Type":"Request","Method":"GetAPIVersion","Data":{}}"#);
         assert!(quiet.get("RequestId").is_none());
+    }
+
+    #[test]
+    fn subscribing_before_approval_is_kept() {
+        let mut r = Rig::new();
+        r.call("RegisterPlugin", json!({"Name":"VTube Studio"}));
+        // VTube Studio subscribes straight after registering
+        let sub = r.call("NotifyChangeEditMode", json!({"Enabled":true}));
+        assert_eq!(sub["Data"]["Accepted"], true);
+        assert_eq!(r.conn.subscribed, vec!["NotifyChangeEditMode"]);
     }
 
     #[test]

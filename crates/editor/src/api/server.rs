@@ -86,6 +86,12 @@ fn record(shared: &Shared, peer: &str, incoming: bool, text: &str) {
         ),
         Err(_) => ("?".into(), "unparsed".into()),
     };
+    // the log file gets every exchange but the every-frame parameter stream,
+    // which would bury the rest
+    if !matches!(method.as_str(), "SetParameterValues" | "GetParameterValues") {
+        let dir = if incoming { "<-" } else { "->" };
+        log::debug!("api {peer} {dir} {method} {kind}");
+    }
     let text: String = text.chars().take(TRAFFIC_TEXT).collect();
     let counter = if incoming { &shared.count_in } else { &shared.count_out };
     counter.fetch_add(1, Ordering::Relaxed);
@@ -200,7 +206,11 @@ fn serve(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
             break;
         }
         while let Ok((method, text)) = rx.try_recv() {
-            if conn.subscribed.contains(&method) {
+            let allowed = conn
+                .token
+                .as_ref()
+                .is_some_and(|t| lock(&shared.clients).iter().any(|c| &c.token == t && c.allowed));
+            if allowed && conn.subscribed.contains(&method) {
                 record(&shared, &peer.to_string(), false, &text);
                 if ws.send(text.into()).is_err() {
                     break;

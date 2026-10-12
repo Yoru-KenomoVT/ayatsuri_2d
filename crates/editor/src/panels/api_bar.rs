@@ -118,14 +118,17 @@ impl EditorUi {
             return;
         };
         let path = s.aom_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+        let mut model_changed = false;
         let n = s.puppet.model().parameters.len();
         let key = uid_of(&s.name, &path, n);
         {
             let mut snap = lock(&shared.snap);
             snap.edit_mode = mode;
             if key != self.api.meta_key || snap.params.len() != n {
-                // the model changed: rebuild what clients list
+                // the model changed: rebuild what clients list, then tell
+                // them (below) so they ask for the new model's id
                 self.api.meta_key = key;
+                model_changed = true;
                 self.api.base.clear();
                 self.api.index.clear();
                 let group_of: HashMap<usize, usize> = s
@@ -171,6 +174,12 @@ impl EditorUi {
             snap.values.extend((0..n).map(|i| s.puppet.value(i)));
         }
 
+        // clients (VTube Studio among them) only re-read the model id when
+        // a view event arrives, the way Cubism sends one on switching views
+        if model_changed && let Some(srv) = &self.api.server {
+            srv.notify("NotifyChangeEditMode", serde_json::json!({ "EditMode": mode }));
+        }
+
         // apply live overrides; restore what lapsed
         let now = Instant::now();
         let mut ov = lock(&shared.overrides);
@@ -203,6 +212,11 @@ impl EditorUi {
         if changed {
             s.dirty = true;
         }
+    }
+
+    /// The edit mode last reported to clients.
+    fn api_mode(&self) -> &'static str {
+        if self.api.mode.is_empty() { "Modeling" } else { self.api.mode }
     }
 
     /// Put back every value an override replaced (the server stopped).
@@ -380,6 +394,14 @@ impl EditorUi {
                     c.allowed = true;
                 }
                 log::info!("api: allowed {}", client.name);
+                // an app that asked for the model before it was allowed got
+                // an error and waits for a view event to try again; send one
+                if let Some(srv) = &self.api.server {
+                    srv.notify(
+                        "NotifyChangeEditMode",
+                        serde_json::json!({ "EditMode": self.api_mode() }),
+                    );
+                }
             } else {
                 clients.retain(|c| c.token != token);
                 log::info!("api: denied {}", client.name);
