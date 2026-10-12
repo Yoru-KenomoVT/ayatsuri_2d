@@ -193,6 +193,88 @@ pub struct Session {
 /// (uvs, indices) Reset mesh returns to.
 type MeshExtras = (String, bool, (Vec<f32>, Vec<u16>));
 
+/// Names from an import, one per new row: missing ones are empty (the
+/// palette then shows the id).
+fn pad(mut names: Vec<String>, n: usize) -> Vec<String> {
+    names.resize(n, String::new());
+    names
+}
+
+/// The first `{prefix}{n}` id not in `taken`, which then holds it.
+fn free_id(prefix: &str, taken: &mut std::collections::HashSet<String>) -> String {
+    let mut n = 0usize;
+    loop {
+        let id = format!("{prefix}{n}");
+        if taken.insert(id.clone()) {
+            return id;
+        }
+        n += 1;
+    }
+}
+
+/// Add an imported paint document's parts and meshes to `base`, on top of
+/// what is there. Texture pages are numbered after `tex_offset`, ids are
+/// made unique, and positions move from the document's canvas onto the
+/// model's (top-left pixels lined up). A model with no art and no
+/// deformers yet takes the document's canvas as is.
+pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
+    let fresh = base.art_meshes.is_empty() && base.deformers.is_empty();
+    if fresh {
+        base.canvas = add.canvas;
+    }
+    let (from, to) = (add.canvas, base.canvas);
+    let part_offset = base.parts.len() as u32;
+    let mesh_offset = base.art_meshes.len() as u32;
+
+    let mut part_ids: std::collections::HashSet<String> =
+        base.parts.iter().map(|p| p.id.clone()).collect();
+    for mut part in add.parts {
+        part.id = free_id("Part", &mut part_ids);
+        part.parent_part = part.parent_part.map(|p| p + part_offset);
+        base.parts.push(part);
+    }
+    let mut mesh_ids: std::collections::HashSet<String> =
+        base.art_meshes.iter().map(|m| m.id.clone()).collect();
+    let mut orders: Vec<i32> = Vec::new();
+    for mut mesh in add.art_meshes {
+        mesh.id = free_id("ArtMesh", &mut mesh_ids);
+        mesh.parent_part = mesh.parent_part.map(|p| p + part_offset);
+        mesh.texture += tex_offset;
+        for m in &mut mesh.masks {
+            *m += mesh_offset;
+        }
+        if !fresh {
+            for [x, y] in mesh.positions.as_chunks_mut::<2>().0 {
+                let px = *x * from.pixels_per_unit + from.origin_x;
+                let py = *y * from.pixels_per_unit + from.origin_y;
+                *x = (px - to.origin_x) / to.pixels_per_unit.max(1e-6);
+                *y = (py - to.origin_y) / to.pixels_per_unit.max(1e-6);
+            }
+        }
+        orders.extend(mesh.draw_orders.iter().map(|o| o.round() as i32));
+        base.art_meshes.push(mesh);
+    }
+    // a model read from moc3 orders meshes through its draw order groups;
+    // new meshes join the root group or they would never be drawn
+    let added = base.art_meshes.len() as u32 - mesh_offset;
+    if let Some(root) = base.draw_groups.first_mut()
+        && added > 0
+    {
+        for i in mesh_offset..base.art_meshes.len() as u32 {
+            root.items.push(ayatsuri_format::model::DrawItem {
+                part: false,
+                object: i,
+                child_group: None,
+            });
+        }
+        root.total += added;
+        if let (Some(lo), Some(hi)) = (orders.iter().min(), orders.iter().max()) {
+            root.min_order = root.min_order.min(*lo);
+            root.max_order = root.max_order.max(*hi);
+        }
+    }
+}
+
 impl Session {
     /// A mesh's display name: its layer name, else its ID.
     pub fn mesh_name(&self, i: usize) -> String {
@@ -277,6 +359,101 @@ impl Session {
         }
         s.modified = true;
         Ok(s)
+    }
+
+    /// Import a paint document into this model: its groups and layers are
+    /// added as new parts and meshes on new texture pages, on top of what
+    /// is there. A model with no art yet takes the document's canvas. One
+    /// undo step takes the new art back out. Returns the file name.
+    pub fn import_paint(&mut self, ctx: &Context, path: &Path) -> Result<String, String> {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let imported = if ext == "kra" {
+            ayatsuri_import::from_kra(&bytes)
+        } else {
+            ayatsuri_import::from_psd(&bytes)
+        }
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.add_imported(ctx, imported, path)?;
+        Ok(file)
+    }
+
+    /// The model-side half of `import_paint`, for an import already built.
+    /// Returns how many (meshes, parts) came in.
+    pub(crate) fn add_imported(
+        &mut self,
+        ctx: &Context,
+        imported: ayatsuri_import::Imported,
+        path: &Path,
+    ) -> Result<(usize, usize), String> {
+        let before = self.puppet.model().clone();
+        let mut model = before.clone();
+        let added_meshes = imported.model.art_meshes.len();
+        let added_parts = imported.model.parts.len();
+        merge_paint(&mut model, imported.model, self.texture_pngs.len() as u32);
+
+        let mut pngs = self.texture_pngs.clone();
+        pngs.extend(imported.textures);
+        let tex_names = (0..pngs.len()).map(|i| format!("texture_{i:02}")).collect();
+        let source = self.aom_path.clone().unwrap_or_else(|| path.to_path_buf());
+        let next = Self::from_parts(ctx, self.name.clone(), model, pngs, tex_names, None, &source)?;
+
+        // everything beside the model carries over; the new rows are added
+        let old = std::mem::replace(self, next);
+        let mut part_names = old.part_names.clone();
+        part_names.extend(pad(imported.part_names, added_parts));
+        let mut mesh_names = old.mesh_names.clone();
+        mesh_names.extend(pad(imported.mesh_names, added_meshes));
+        let mut part_shown = old.part_shown.clone();
+        part_shown.resize(part_shown.len() + added_parts, true);
+        let mut mesh_shown = old.mesh_shown.clone();
+        mesh_shown.resize(mesh_shown.len() + added_meshes, true);
+        let mut original_meshes = old.original_meshes.clone();
+        original_meshes.extend(
+            self.puppet
+                .model()
+                .art_meshes
+                .iter()
+                .skip(old.original_meshes.len())
+                .map(|m| (m.uvs.clone(), m.indices.clone())),
+        );
+        self.part_names = part_names;
+        self.mesh_names = mesh_names;
+        self.part_shown = part_shown;
+        self.mesh_shown = mesh_shown;
+        self.original_meshes = original_meshes;
+        self.aom_path = old.aom_path;
+        self.author = old.author;
+        self.animations = old.animations;
+        self.expressions = old.expressions;
+        self.current_anim = old.current_anim;
+        self.param_names = old.param_names;
+        self.param_colors = old.param_colors;
+        self.groups = old.groups;
+        self.combined = old.combined;
+        self.model_groups = old.model_groups;
+        self.deformer_shown = old.deformer_shown;
+        self.departed = old.departed;
+        self.undo = old.undo;
+        self.undo.push(before);
+        if self.undo.len() > 16 {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        self.modified = true;
+        for (i, v) in (0..old.puppet.model().parameters.len()).map(|i| (i, old.puppet.value(i))) {
+            self.puppet.set_value(i, v);
+        }
+        for (i, on) in self.part_shown.iter().enumerate() {
+            self.puppet.set_part_opacity(i, if *on { 1.0 } else { 0.0 });
+        }
+        for (i, on) in self.mesh_shown.iter().enumerate() {
+            self.puppet.set_mesh_visible(i, *on);
+        }
+        self.dirty = true;
+        info!("imported {added_meshes} layer(s) in {added_parts} folder(s)");
+        Ok((added_meshes, added_parts))
     }
 
     fn load_aom(ctx: &Context, path: &Path) -> Result<Self, String> {
@@ -1175,5 +1352,118 @@ mod crash_tests {
         s.crash_rollback(depth);
         assert_eq!(s.puppet.model().parameters.len(), 1);
         assert!(s.can_undo());
+    }
+}
+
+#[cfg(test)]
+mod import_paint_tests {
+    use super::*;
+    use ayatsuri_import::{Document, Layer};
+
+    /// A document of solid squares, one per (name, group, x, y, size).
+    fn doc(width: u32, height: u32, layers: &[(&str, &str, i32, i32, u32)]) -> Document {
+        Document {
+            width,
+            height,
+            layers: layers
+                .iter()
+                .map(|&(name, group, x, y, size)| Layer {
+                    name: name.into(),
+                    groups: if group.is_empty() { vec![] } else { vec![group.into()] },
+                    x,
+                    y,
+                    width: size,
+                    height: size,
+                    rgba: vec![255; (size * size * 4) as usize],
+                    visible: true,
+                    opacity: 1.0,
+                    clip_to_below: false,
+                })
+                .collect(),
+        }
+    }
+
+    /// Where a mesh's first vertex sits in the model's canvas pixels.
+    fn pixel_of(s: &Session, mesh: usize) -> (f32, f32) {
+        let m = s.puppet.model();
+        let c = m.canvas;
+        let xs = m.art_meshes[mesh].positions.chunks(2).map(|p| p[0]).fold(f32::MAX, f32::min);
+        let ys = m.art_meshes[mesh].positions.chunks(2).map(|p| p[1]).fold(f32::MAX, f32::min);
+        (xs * c.pixels_per_unit + c.origin_x, ys * c.pixels_per_unit + c.origin_y)
+    }
+
+    #[test]
+    fn an_empty_model_takes_the_psd_as_is() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        let first =
+            ayatsuri_import::from_layers(&doc(400, 300, &[("Eye", "Face", 40, 50, 20)])).unwrap();
+        let canvas = first.model.canvas;
+        assert_eq!(s.add_imported(&ctx, first, Path::new("a.psd")).unwrap(), (1, 1));
+        assert_eq!(s.puppet.model().canvas.width, canvas.width);
+        assert_eq!(s.mesh_name(0), "Eye");
+        let (px, py) = pixel_of(&s, 0);
+        assert!((px - 40.0).abs() < 0.6 && (py - 50.0).abs() < 0.6, "{px},{py}");
+        // one undo step takes it back out
+        s.undo();
+        assert!(s.puppet.model().art_meshes.is_empty());
+    }
+
+    #[test]
+    fn a_second_psd_lands_on_top_with_its_own_ids_and_pages() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        let first =
+            ayatsuri_import::from_layers(&doc(400, 300, &[("Body", "Torso", 10, 10, 30)])).unwrap();
+        s.add_imported(&ctx, first, Path::new("a.psd")).unwrap();
+        s.mesh_shown[0] = false;
+        s.animations.push(ayatsuri_format::Animation::default());
+        // a smaller document: its pixels line up with the model's top left
+        let second = ayatsuri_import::from_layers(&doc(
+            200,
+            100,
+            &[("Hair", "Head", 60, 20, 16), ("Bang", "Head", 5, 5, 8)],
+        ))
+        .unwrap();
+        assert_eq!(s.add_imported(&ctx, second, Path::new("b.psd")).unwrap(), (2, 1));
+        let m = s.puppet.model();
+        let ids: Vec<&str> = m.art_meshes.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["ArtMesh0", "ArtMesh1", "ArtMesh2"]);
+        // Torso was part 0, so the new Head folder is part 1
+        assert_eq!(m.parts.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["Part0", "Part1"]);
+        assert_eq!(s.part_names, vec!["Torso".to_string(), "Head".to_string()]);
+        assert!(m.art_meshes[1].texture >= 1, "new art goes on new pages");
+        assert_eq!(m.art_meshes[1].parent_part, Some(1));
+        assert_eq!(s.mesh_name(0), "Body");
+        assert_eq!(s.mesh_name(1), "Hair");
+        assert_eq!(s.mesh_shown, vec![false, true, true]);
+        assert_eq!(s.animations.len(), 1);
+        assert_eq!(s.texture_pngs.len(), s.textures.len());
+        let (px, py) = pixel_of(&s, 1);
+        assert!((px - 60.0).abs() < 0.6 && (py - 20.0).abs() < 0.6, "{px},{py}");
+        s.undo();
+        assert_eq!(s.puppet.model().art_meshes.len(), 1);
+        assert_eq!(s.mesh_name(0), "Body");
+    }
+
+    #[test]
+    fn moc3_draw_groups_get_the_new_meshes() {
+        use ayatsuri_format::model::{DrawGroup, DrawItem};
+        let mut base =
+            ayatsuri_import::from_layers(&doc(100, 100, &[("A", "", 0, 0, 10)])).unwrap().model;
+        base.draw_groups = vec![DrawGroup {
+            total: 1,
+            min_order: 500,
+            max_order: 500,
+            items: vec![DrawItem { part: false, object: 0, child_group: None }],
+        }];
+        let add =
+            ayatsuri_import::from_layers(&doc(100, 100, &[("B", "", 0, 0, 10)])).unwrap().model;
+        merge_paint(&mut base, add, 1);
+        assert_eq!(base.draw_groups[0].total, 2);
+        assert_eq!(base.draw_groups[0].items.len(), 2);
+        let mut p = Puppet::new(base);
+        p.update();
+        assert_eq!(p.drawables().count(), 2);
     }
 }

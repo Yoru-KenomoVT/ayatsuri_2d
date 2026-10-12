@@ -16,7 +16,12 @@ mod motion3;
 mod physics3;
 mod psd_doc;
 
-pub use layers::Imported;
+pub use layers::{Document, Imported, Layer};
+
+/// Any layered document (already read from its file) as a fresh model.
+pub fn from_layers(doc: &Document) -> Result<Imported, ImportError> {
+    layers::build(doc)
+}
 
 /// A Photoshop document as a fresh, rig-ready model.
 pub fn from_psd(bytes: &[u8]) -> Result<Imported, ImportError> {

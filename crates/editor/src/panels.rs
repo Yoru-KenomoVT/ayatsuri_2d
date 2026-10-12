@@ -599,6 +599,8 @@ pub(crate) enum PickFor {
     WorkspaceExport,
     WorkspaceImport,
     ImportMotion,
+    /// A .psd or .kra added to the open model.
+    ImportPaint,
 }
 
 enum BgJob {
@@ -1256,6 +1258,20 @@ impl EditorUi {
                 }
             }
             (PickFor::ImportMotion, Some(path)) => self.import_motion(&path),
+            (PickFor::ImportPaint, Some(path)) => {
+                if self.mesh_edit.is_some() {
+                    log::warn!("leave Mesh Edit before importing artwork");
+                } else if let Some(s) = &mut self.session {
+                    match s.import_paint(ctx, &path) {
+                        Ok(file) => {
+                            log::info!("imported artwork from {file}");
+                            self.mesh_drag = None;
+                            self.mesh_art = None;
+                        }
+                        Err(e) => log::error!("import artwork: {e}"),
+                    }
+                }
+            }
             (PickFor::WorkspaceImport, Some(path)) => {
                 match std::fs::read(&path)
                     .map_err(|e| e.to_string())
@@ -1693,6 +1709,22 @@ impl EditorUi {
                                 .pick_files()
                                 .map(|v| v.into_iter().next())
                                 .unwrap_or_default()
+                        });
+                    }
+                    if ui
+                        .add_enabled(self.session.is_some(), egui::Button::new("Import PSD…"))
+                        .on_hover_text(
+                            "Add a Photoshop or Krita file's layers to this model as new parts \
+                             and meshes",
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        self.pick_async(PickFor::ImportPaint, || {
+                            rfd::FileDialog::new()
+                                .add_filter("Artwork", &["psd", "kra"])
+                                .set_title("Import PSD into this model")
+                                .pick_file()
                         });
                     }
                     ui.separator();
