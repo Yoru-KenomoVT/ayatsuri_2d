@@ -1,6 +1,9 @@
 //! The desktop app: a thin eframe shell around `ayatsuri-editor`.
 
 #![forbid(unsafe_code)]
+// a windowed program on Windows: no console window behind it (release
+// builds only, so debug builds keep their log output)
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use ayatsuri_editor::EditorUi;
 
@@ -57,12 +60,29 @@ fn relaunch_after_crash() {
     }
 }
 
+/// The app icon for the window and taskbar, from the packaged icon set.
+fn window_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    let bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/app-icon/ayatsuri2d-256.png"
+    ));
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    Some(std::sync::Arc::new(egui::IconData { rgba: img.into_raw(), width, height }))
+}
+
 fn main() -> eframe::Result {
     ayatsuri_editor::logging::init(log::LevelFilter::Info);
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Ayatsuri2D")
-            .with_inner_size([1280.0, 800.0]),
+        viewport: {
+            let v = egui::ViewportBuilder::default()
+                .with_title("Ayatsuri2D")
+                .with_inner_size([1280.0, 800.0]);
+            match window_icon() {
+                Some(icon) => v.with_icon(icon),
+                None => v,
+            }
+        },
         ..Default::default()
     };
     // `ayatsuri model.moc3` opens straight onto a model

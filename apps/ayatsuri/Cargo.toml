@@ -11,7 +11,6 @@ license.workspace = true
 workspace = true
 
 [dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
 serde_json = { workspace = true }
 ayatsuri-core = { workspace = true }
 ayatsuri-import = { workspace = true }
@@ -28,3 +27,8 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x1
 # and GitHub buttons) logs a warning and does nothing
 egui-winit = { version = "0.36", default-features = false, features = ["links"] }
 log = { workspace = true }
+# decodes the window icon
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[build-dependencies]
+winresource = "0.1"

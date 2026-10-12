@@ -10,6 +10,9 @@
 //! timeout means it can never hang around.
 
 #![forbid(unsafe_code)]
+// a windowed program on Windows: no console window behind it (release
+// builds only, so debug builds keep their log output)
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -68,7 +71,10 @@ fn start_editor(open_arg: Option<String>, ready_file: Option<&PathBuf>) -> Resul
     // prefer the sibling binary, fall back to PATH
     let sibling = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("ayatsuri")))
+        // `ayatsuri.exe` on Windows
+        .and_then(|p| {
+            p.parent().map(|d| d.join(format!("ayatsuri{}", std::env::consts::EXE_SUFFIX)))
+        })
         .filter(|p| p.exists());
     let mut cmd = match sibling {
         Some(p) => std::process::Command::new(p),
@@ -393,6 +399,17 @@ fn load_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     Some(ctx.load_texture("logo", color, egui::TextureOptions::LINEAR))
 }
 
+/// The app icon for the window and taskbar, from the packaged icon set.
+fn window_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    let bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/app-icon/ayatsuri2d-256.png"
+    ));
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    Some(std::sync::Arc::new(egui::IconData { rgba: img.into_raw(), width, height }))
+}
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -403,7 +420,8 @@ fn main() -> eframe::Result {
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(true)
-            .with_always_on_top(),
+            .with_always_on_top()
+            .with_icon(window_icon().unwrap_or_default()),
         ..Default::default()
     };
     let open_arg = std::env::args().nth(1);
