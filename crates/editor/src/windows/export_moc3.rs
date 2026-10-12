@@ -24,7 +24,10 @@ impl EditorUi {
                     )
                     .show_ui(ui, |ui| {
                         for (i, v) in ayatsuri_import::ExportVersion::ALL.iter().enumerate() {
-                            ui.selectable_value(&mut dlg.version, i, v.label());
+                            let item = ui.selectable_value(&mut dlg.version, i, v.label());
+                            if *v == ayatsuri_import::ExportVersion::V5_03 {
+                                item.on_hover_text(ayatsuri_import::VTS_NOTE);
+                            }
                         }
                     });
                 ui.end_row();

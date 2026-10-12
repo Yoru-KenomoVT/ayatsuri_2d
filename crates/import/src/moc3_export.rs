@@ -96,6 +96,12 @@ impl ExportVersion {
 }
 
 /// What the chosen revision cannot carry from this model. Empty means the
+/// Shown for 5.3 exports. Tested 2026-10-12: VTube Studio 1.35.10 rejects
+/// Live2D's own 5.3 models too ("The Core unsupport later than moc3
+/// ver:[5]"), and OpenVT's reader stops at 5.3's longer offset table.
+pub const VTS_NOTE: &str = "5.3 is not compatible with VTube Studio or OpenVT yet (they read up \
+     to 5.0); export 5.0 for those";
+
 /// export is lossless.
 pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
     let mut out = Vec::new();
@@ -113,11 +119,7 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
         }
     }
     if version.max_slot() >= 152 {
-        out.push(
-            "5.3 needs the newest Cubism runtimes; OpenVT and VTube Studio cannot \
-             open it yet, so pick 5.0 for those"
-                .into(),
-        );
+        out.push(VTS_NOTE.into());
     }
     if model.physics.is_some() {
         // physics never lives in the moc3 itself; noted so nobody hunts for it
