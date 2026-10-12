@@ -126,6 +126,8 @@ pub struct Session {
     pub mesh_names: Vec<String>,
     /// Parameters the user is dragging this frame; physics stays off them.
     pub params_held: Vec<usize>,
+    /// Parameters picked in the palette (Ctrl/Shift+click), in pick order.
+    pub param_picked: Vec<usize>,
     /// Parameter palette grouping, cdi3 order; one trailing group holds the rest.
     pub groups: Vec<ParamGroup>,
     /// Every key value each parameter has anywhere in the model, sorted,
@@ -535,6 +537,7 @@ impl Session {
             param_names,
             mesh_names: model_mesh_ids,
             params_held: Vec::new(),
+            param_picked: Vec::new(),
             part_names,
 
             groups,

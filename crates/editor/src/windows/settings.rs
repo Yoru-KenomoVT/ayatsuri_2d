@@ -69,6 +69,9 @@ impl EditorUi {
         let mut open = true;
         egui::Window::new("Settings")
             .title_bar(false)
+            // only the header strip moves it; egui's own drag-anywhere
+            // fought the pinned position and snapped back
+            .movable(false)
             .collapsible(false)
             .resizable(false)
             .fixed_size(vec2(W, H))
@@ -295,11 +298,14 @@ impl EditorUi {
             }
         });
         row(ui, "Primary colour", "Accents, selection, the launcher bar", |ui| {
+            // the same RGBA picker as the overlay colours
             let c = theme::accent();
-            let mut rgb = [c.r(), c.g(), c.b()];
-            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                theme::set_accent(&ctx, Some(Color32::from_rgb(rgb[0], rgb[1], rgb[2])));
-                self.prefs.accent = Some(rgb);
+            let mut pick = c;
+            if ui.color_edit_button_srgba(&mut pick).changed() {
+                let [r, g, b, a] = pick.to_srgba_unmultiplied();
+                theme::set_accent(&ctx, Some(pick));
+                self.prefs.accent = Some([r, g, b]);
+                self.prefs.accent_alpha = (a < 255).then_some(a);
                 save = true;
             }
             ui.add_space(6.0);
@@ -319,6 +325,7 @@ impl EditorUi {
                     let default = sw == &[0xF0, 0x8E, 0x1E];
                     theme::set_accent(&ctx, if default { None } else { Some(col) });
                     self.prefs.accent = if default { None } else { Some(*sw) };
+                    self.prefs.accent_alpha = None;
                     save = true;
                 }
             }
@@ -377,6 +384,11 @@ impl EditorUi {
             self.prefs.follow_system = false;
             self.prefs.dark = Some(true);
             self.prefs.accent = None;
+            self.prefs.accent_alpha = None;
+            // the canvas and overlays live on this page too
+            self.prefs.view_bg = None;
+            self.prefs.view_bg_alpha = None;
+            self.prefs.overlay = Default::default();
             self.prefs.ui_scale = None;
             self.prefs.text_size = None;
             self.prefs.density = None;
@@ -399,14 +411,14 @@ impl EditorUi {
         row(ui, "Background", "Behind the model's canvas", |ui| {
             if ui.small_button("Reset").clicked() {
                 self.prefs.view_bg = None;
+                self.prefs.view_bg_alpha = None;
                 save = true;
             }
-            let mut rgb = self.prefs.view_bg.unwrap_or({
-                let c = theme::pal().canvas_bg;
-                [c.r(), c.g(), c.b()]
-            });
-            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                self.prefs.view_bg = Some(rgb);
+            let mut pick = self.prefs.view_bg_color().unwrap_or(theme::pal().canvas_bg);
+            if ui.color_edit_button_srgba(&mut pick).changed() {
+                let [r, g, b, a] = pick.to_srgba_unmultiplied();
+                self.prefs.view_bg = Some([r, g, b]);
+                self.prefs.view_bg_alpha = (a < 255).then_some(a);
                 save = true;
             }
         });

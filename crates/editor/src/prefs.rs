@@ -18,6 +18,10 @@ pub struct Prefs {
     pub custom_workspaces: Vec<(String, DockNode)>,
     pub accent: Option<[u8; 3]>,
     pub view_bg: Option<[u8; 3]>,
+    /// Alpha for the two colours above, kept apart so older files with
+    /// three-channel colours still load. None is opaque.
+    pub accent_alpha: Option<u8>,
+    pub view_bg_alpha: Option<u8>,
     pub reopen_last: bool,
     pub toolbar_docked: bool,
     pub toolbar_pos: Option<[f32; 2]>,
@@ -74,6 +78,18 @@ fn path() -> Option<PathBuf> {
 }
 
 impl Prefs {
+    /// The saved primary colour with its alpha, if one was picked.
+    pub fn accent_color(&self) -> Option<egui::Color32> {
+        let a = self.accent_alpha.unwrap_or(255);
+        self.accent.map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
+    }
+
+    /// The saved canvas background with its alpha, if one was picked.
+    pub fn view_bg_color(&self) -> Option<egui::Color32> {
+        let a = self.view_bg_alpha.unwrap_or(255);
+        self.view_bg.map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
+    }
+
     /// The interface look these preferences ask for.
     pub fn look(&self) -> crate::theme::Look {
         let d = crate::theme::Look::default();

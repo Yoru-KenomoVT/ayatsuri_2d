@@ -26,6 +26,10 @@ pub(super) enum ParamCmd {
     MoveIntoGroup(usize),
     RenameGroup(usize),
     MoveGroupSubject(usize),
+    /// Make a folder holding this parameter and everything picked with it.
+    GroupSelected(usize),
+    /// Move this parameter and everything picked with it into a folder.
+    MoveSelectedTo(usize, usize),
     /// Join a parameter with the one below it into a 2D pad.
     Combine(usize),
     Uncombine(usize),
@@ -91,6 +95,8 @@ pub(super) enum Moving {
 pub(super) struct ParamMenuState {
     /// "Select for Movement": what waits for "Move Here".
     pub(super) subject: Option<Moving>,
+    /// Every parameter moving with it when the subject was multi-picked.
+    pub(super) subject_set: Vec<usize>,
     rename: Option<(usize, String)>,
     corners: Option<Corners>,
     mirror: Option<Mirror>,
@@ -165,9 +171,34 @@ pub(super) fn name_menu(
     } else {
         item(ui, true, "Link with parameter below", ParamCmd::Combine(pi), &mut out);
     }
-    item(ui, true, "Select for Movement", ParamCmd::MoveSubject(pi), &mut out);
+    // a right-click on a picked row acts on the whole pick
+    let n = if s.param_picked.contains(&pi) { s.param_picked.len().max(1) } else { 1 };
+    let what = if n > 1 { format!("{n} Parameters") } else { String::new() };
+    let move_label =
+        if n > 1 { format!("Select {what} for Movement") } else { "Select for Movement".into() };
+    item(ui, true, &move_label, ParamCmd::MoveSubject(pi), &mut out);
     let can_move = subject.is_some_and(|m| m != Moving::Param(pi));
     item(ui, can_move, "Move Here", ParamCmd::MoveHere(pi), &mut out);
+    let group_label = if n > 1 {
+        format!("Group {what} into New Folder…")
+    } else {
+        "Group into New Folder…".into()
+    };
+    item(ui, true, &group_label, ParamCmd::GroupSelected(pi), &mut out);
+    let folders: Vec<(usize, String)> = s
+        .groups
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| !g.name.is_empty())
+        .map(|(gi, g)| (gi, g.name.clone()))
+        .collect();
+    ui.add_enabled_ui(!folders.is_empty(), |ui| {
+        ui.menu_button("Move to Folder", |ui| {
+            for (gi, name) in &folders {
+                item(ui, true, name, ParamCmd::MoveSelectedTo(pi, *gi), &mut out);
+            }
+        });
+    });
     ui.separator();
     if ui.button("Reset to default").clicked() {
         let d = s.puppet.model().parameters.get(pi).map(|p| p.default).unwrap_or(0.0);
@@ -363,12 +394,25 @@ impl EditorUi {
                     group: group.unwrap_or(last),
                 });
             }
-            ParamCmd::CreateFolder => self.new_folder = Some(String::new()),
+            ParamCmd::CreateFolder => {
+                self.folder_from.clear();
+                self.new_folder = Some(String::new());
+            }
+            ParamCmd::GroupSelected(pi) => {
+                self.folder_from = self.picked_with(pi);
+                self.new_folder = Some(String::new());
+            }
+            ParamCmd::MoveSelectedTo(pi, gi) => {
+                let set = self.picked_with(pi);
+                let Some(s) = &mut self.session else { return };
+                move_params_into(s, &set, gi);
+            }
             ParamCmd::Delete(pi) => self.delete_parameter(pi),
             ParamCmd::Replicate(pi) => {
                 self.replicate_parameter(pi, true);
             }
             ParamCmd::MoveSubject(pi) => {
+                self.pmenu.subject_set = self.picked_with(pi);
                 self.pmenu.subject = Some(Moving::Param(pi));
                 log::info!(
                     "parameter picked to move: right-click a parameter or folder and choose Move here"
@@ -379,12 +423,22 @@ impl EditorUi {
                 let Some(s) = &mut self.session else { return };
                 match moving {
                     Moving::Param(src) => {
+                        let mut set = std::mem::take(&mut self.pmenu.subject_set);
+                        if set.is_empty() {
+                            set.push(src);
+                        }
+                        // dropping a pick onto one of its own rows is a no-op
+                        if set.contains(&dest) {
+                            return;
+                        }
                         for g in &mut s.groups {
-                            g.params.retain(|&p| p != src);
+                            g.params.retain(|p| !set.contains(p));
                         }
                         if let Some(g) = s.groups.iter_mut().find(|g| g.params.contains(&dest)) {
                             let at = g.params.iter().position(|&p| p == dest).unwrap_or(0);
-                            g.params.insert(at, src);
+                            for (k, &p) in set.iter().enumerate() {
+                                g.params.insert((at + k).min(g.params.len()), p);
+                            }
                         }
                         s.modified = true;
                     }
@@ -404,14 +458,11 @@ impl EditorUi {
                 }
                 match moving {
                     Moving::Param(src) => {
-                        for g in &mut s.groups {
-                            g.params.retain(|&p| p != src);
+                        let mut set = std::mem::take(&mut self.pmenu.subject_set);
+                        if set.is_empty() {
+                            set.push(src);
                         }
-                        if let Some(g) = s.groups.get_mut(gi) {
-                            g.params.push(src);
-                            g.open = true;
-                        }
-                        s.modified = true;
+                        move_params_into(s, &set, gi);
                     }
                     Moving::Group(src) => move_group(s, src, gi),
                 }
@@ -913,4 +964,20 @@ impl EditorUi {
             }
         }
     }
+}
+
+/// Take these parameters out of whatever folders hold them and append them,
+/// in order, to folder `gi`, which opens to show them.
+pub(super) fn move_params_into(s: &mut Session, set: &[usize], gi: usize) {
+    if gi >= s.groups.len() || set.is_empty() {
+        return;
+    }
+    for g in &mut s.groups {
+        g.params.retain(|p| !set.contains(p));
+    }
+    if let Some(g) = s.groups.get_mut(gi) {
+        g.params.extend_from_slice(set);
+        g.open = true;
+    }
+    s.modified = true;
 }

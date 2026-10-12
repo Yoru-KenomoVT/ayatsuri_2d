@@ -1,7 +1,7 @@
 // Light and dark palettes. Accent is the orange from the Ayatsuri2D logo.
 // Light mode follows Cubism Editor's grays; dark mode is our own.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use egui::{Color32, Context, FontId, TextStyle};
 
@@ -67,19 +67,26 @@ pub const DARK: Palette = Palette {
 };
 
 static DARK_ON: AtomicBool = AtomicBool::new(true);
-// 0 means "use the default logo orange"; anything else is 0xFFrrggbb
-static ACCENT_OVERRIDE: AtomicU32 = AtomicU32::new(0);
+// 0 means "use the default logo orange"; anything else is bit 32 set over
+// the unmultiplied 0xrrggbbaa, so a picked alpha survives
+static ACCENT_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_accent(ctx: &Context, color: Option<Color32>) {
-    let packed = color
-        .map_or(0, |c| 0xFF00_0000 | (c.r() as u32) << 16 | (c.g() as u32) << 8 | c.b() as u32);
+    let packed = color.map_or(0, |c| {
+        let [r, g, b, a] = c.to_srgba_unmultiplied();
+        1u64 << 32 | u64::from(u32::from_be_bytes([r, g, b, a]))
+    });
     ACCENT_OVERRIDE.store(packed, Ordering::Relaxed);
     install(ctx);
 }
 
 pub fn accent() -> Color32 {
     let v = ACCENT_OVERRIDE.load(Ordering::Relaxed);
-    if v == 0 { ACCENT } else { Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8) }
+    if v == 0 {
+        return ACCENT;
+    }
+    let [r, g, b, a] = (v as u32).to_be_bytes();
+    Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
 pub fn is_dark() -> bool {

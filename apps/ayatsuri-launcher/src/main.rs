@@ -182,8 +182,12 @@ fn primary_colour(prefs: &serde_json::Value) -> Color32 {
     let fallback = Color32::from_rgb(0xF0, 0x8E, 0x1E);
     let channel =
         |i: usize| prefs.get("accent")?.get(i)?.as_u64().and_then(|v| u8::try_from(v).ok());
+    let alpha =
+        prefs.get("accent_alpha").and_then(|v| v.as_u64()).and_then(|v| u8::try_from(v).ok());
     match (channel(0), channel(1), channel(2)) {
-        (Some(r), Some(g), Some(b)) => Color32::from_rgb(r, g, b),
+        (Some(r), Some(g), Some(b)) => {
+            Color32::from_rgba_unmultiplied(r, g, b, alpha.unwrap_or(255))
+        }
         _ => fallback,
     }
 }

@@ -219,6 +219,8 @@ pub struct EditorUi {
     part_collapsed: std::collections::HashSet<usize>,
     new_param: Option<ParamNew>,
     new_folder: Option<String>,
+    /// Parameters the New Folder dialog files into the folder it makes.
+    folder_from: Vec<usize>,
     new_model: Option<ModelNew>,
     pub(crate) show_model_info: bool,
     pub(crate) gpu: bool,
@@ -532,6 +534,7 @@ impl Default for EditorUi {
             last_autosave: std::time::Instant::now(),
             new_param: None,
             new_folder: None,
+            folder_from: Vec::new(),
             new_model: None,
             show_model_info: false,
             gpu: false,
@@ -963,8 +966,8 @@ impl EditorUi {
         }
         if !self.theme_applied {
             let ctx = ui.ctx().clone();
-            if let Some([r, g, b]) = self.prefs.accent {
-                theme::set_accent(&ctx, Some(Color32::from_rgb(r, g, b)));
+            if let Some(c) = self.prefs.accent_color() {
+                theme::set_accent(&ctx, Some(c));
             }
             theme::set_look(&ctx, self.prefs.look());
             theme::set_dark(&ctx, self.prefs.dark.unwrap_or(true));
@@ -2130,7 +2133,7 @@ impl EditorUi {
         let h = ui.available_height().max(40.0);
         let actions = self.param_list(ui, "phys-params", false, h);
         for a in actions {
-            if let ParamAction::Select(pi) = a {
+            if let ParamAction::Pick(pi, _) = a {
                 self.sel_param = Some(pi);
             }
         }
@@ -3597,6 +3600,70 @@ impl EditorUi {
         }
     }
 
+    /// A click on a parameter name: plain picks just it, Ctrl (Cmd on
+    /// macOS) toggles it in the pick, Shift picks the run from the last
+    /// clicked parameter in palette order.
+    fn pick_param(&mut self, pi: usize, mods: egui::Modifiers) {
+        let anchor = self.sel_param;
+        if let Some(s) = &mut self.session {
+            if mods.command {
+                if let Some(at) = s.param_picked.iter().position(|&p| p == pi) {
+                    s.param_picked.remove(at);
+                } else {
+                    // a first Ctrl+click keeps the row that was selected
+                    if s.param_picked.is_empty()
+                        && let Some(a) = anchor
+                    {
+                        s.param_picked.push(a);
+                    }
+                    if !s.param_picked.contains(&pi) {
+                        s.param_picked.push(pi);
+                    }
+                }
+            } else if mods.shift
+                && let Some(a) = anchor
+            {
+                let order: Vec<usize> =
+                    s.groups.iter().flat_map(|g| g.params.iter().copied()).collect();
+                let (ia, ib) =
+                    (order.iter().position(|&p| p == a), order.iter().position(|&p| p == pi));
+                if let (Some(ia), Some(ib)) = (ia, ib) {
+                    let (lo, hi) = (ia.min(ib), ia.max(ib));
+                    s.param_picked = order.get(lo..=hi).map(<[usize]>::to_vec).unwrap_or_default();
+                }
+            } else {
+                s.param_picked = vec![pi];
+            }
+        }
+        // Shift keeps its anchor so the range can be stretched again
+        if !mods.shift {
+            self.sel_param = Some(pi);
+        }
+        self.selected = Some(Sel::Parameter(pi));
+    }
+
+    /// The parameters a menu command on `pi` covers: the whole pick, in
+    /// palette order, when `pi` is in it, else just `pi`.
+    pub(super) fn picked_with(&self, pi: usize) -> Vec<usize> {
+        let Some(s) = &self.session else { return vec![pi] };
+        if !s.param_picked.contains(&pi) {
+            return vec![pi];
+        }
+        let mut out: Vec<usize> = s
+            .groups
+            .iter()
+            .flat_map(|g| g.params.iter().copied())
+            .filter(|p| s.param_picked.contains(p))
+            .collect();
+        // anything picked but somehow unfiled still comes along
+        for &p in &s.param_picked {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
+    }
+
     fn folder_new_window(&mut self, ui: &mut Ui) {
         let Some(name) = &mut self.new_folder else { return };
         let mut open = true;
@@ -3609,6 +3676,7 @@ impl EditorUi {
             }
         });
         if create {
+            let from = std::mem::take(&mut self.folder_from);
             if let (Some(s), Some(name)) = (&mut self.session, self.new_folder.take()) {
                 let name = if name.is_empty() { "Folder".into() } else { name };
                 s.groups.push(crate::session::ParamGroup {
@@ -3617,9 +3685,13 @@ impl EditorUi {
                     open: true,
                     color: None,
                 });
+                // "Group into New Folder": the picked parameters move in
+                let gi = s.groups.len().saturating_sub(1);
+                param_menu::move_params_into(s, &from, gi);
             }
         } else if !open {
             self.new_folder = None;
+            self.folder_from.clear();
         }
     }
 
@@ -4192,10 +4264,7 @@ impl EditorUi {
 
         for action in actions {
             match action {
-                ParamAction::Select(pi) => {
-                    self.sel_param = Some(pi);
-                    self.selected = Some(Sel::Parameter(pi));
-                }
+                ParamAction::Pick(pi, mods) => self.pick_param(pi, mods),
                 ParamAction::Cmd(c) => self.run_param_cmd(c),
             }
         }
@@ -5230,11 +5299,7 @@ impl EditorUi {
     /// the zoom strip along the bottom, Cubism-style.
     fn viewport(&mut self, ui: &mut Ui, content: Rect) {
         let painter = ui.painter_at(content);
-        let view_bg = self
-            .prefs
-            .view_bg
-            .map(|[r, g, b]| Color32::from_rgb(r, g, b))
-            .unwrap_or(theme::pal().canvas_bg);
+        let view_bg = self.prefs.view_bg_color().unwrap_or(theme::pal().canvas_bg);
         painter.rect_filled(content, 0.0, view_bg);
 
         let strip_h = 26.0;
@@ -7594,7 +7659,8 @@ fn ancestors_shown(s: &Session, mut parent: Option<u32>) -> bool {
 }
 
 enum ParamAction {
-    Select(usize),
+    /// A click with its modifiers: Ctrl toggles, Shift picks a range.
+    Pick(usize, egui::Modifiers),
     Cmd(ParamCmd),
 }
 
@@ -7637,7 +7703,7 @@ fn parameter_row(
             }
         }
         let (nr, nresp) = ui.allocate_exact_size(vec2(92.0, 16.0), Sense::click());
-        if *sel_param == Some(pi) {
+        if *sel_param == Some(pi) || s.param_picked.contains(&pi) {
             ui.painter().rect_filled(nr, 2.0, theme::pal().select);
         }
         ui.painter().text(
@@ -7655,7 +7721,7 @@ fn parameter_row(
             );
         }
         if nresp.clicked() {
-            actions.push(ParamAction::Select(pi));
+            actions.push(ParamAction::Pick(pi, ui.input(|i| i.modifiers)));
         }
         if nresp.double_clicked() {
             v = default;
@@ -7754,7 +7820,7 @@ fn combined_pad(
     for (p, label, dy) in [(pa, &name_a, -edge), (pb, &name_b, edge)] {
         let nr = Rect::from_min_size(pos2(block.min.x + 14.0, cy + dy - 8.0), vec2(name_w, 16.0));
         let nresp = ui.interact(nr, egui::Id::new(("pad-name", pa, p)), Sense::click());
-        if *sel_param == Some(p) {
+        if *sel_param == Some(p) || s.param_picked.contains(&p) {
             ui.painter().rect_filled(nr, 2.0, theme::pal().select);
         }
         ui.painter().text(
@@ -7765,7 +7831,7 @@ fn combined_pad(
             theme::pal().text,
         );
         if nresp.clicked() {
-            actions.push(ParamAction::Select(p));
+            actions.push(ParamAction::Pick(p, ui.input(|i| i.modifiers)));
         }
         if menus {
             nresp.context_menu(|ui| {
@@ -8098,5 +8164,81 @@ mod home_file_tests {
         assert_eq!(duplicate_file(&a).unwrap(), dir.join("rig copy.aom"));
         assert_eq!(duplicate_file(&a).unwrap(), dir.join("rig copy 2.aom"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod param_pick_tests {
+    use super::*;
+
+    /// An editor holding a blank model with parameters 0..5 in one folder.
+    fn editor() -> EditorUi {
+        let mut model = Model::new();
+        for i in 0..5 {
+            model.parameters.push(ayatsuri_format::model::Parameter {
+                id: format!("P{i}"),
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                repeat: false,
+                decimals: 3,
+            });
+        }
+        let ctx = egui::Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), model).unwrap();
+        s.groups = vec![crate::session::ParamGroup {
+            name: String::new(),
+            params: (0..5).collect(),
+            open: true,
+            color: None,
+        }];
+        let mut ed = EditorUi::new();
+        ed.session = Some(s);
+        ed
+    }
+
+    fn picked(ed: &EditorUi) -> Vec<usize> {
+        ed.session.as_ref().unwrap().param_picked.clone()
+    }
+
+    #[test]
+    fn click_ctrl_and_shift_pick() {
+        let mut ed = editor();
+        ed.pick_param(1, egui::Modifiers::NONE);
+        assert_eq!(picked(&ed), vec![1]);
+        ed.pick_param(3, egui::Modifiers::COMMAND);
+        assert_eq!(picked(&ed), vec![1, 3]);
+        ed.pick_param(1, egui::Modifiers::COMMAND);
+        assert_eq!(picked(&ed), vec![3]);
+        // Shift runs from the last plain or Ctrl click (1, even though that
+        // click unpicked it), in palette order, like a file manager
+        ed.pick_param(0, egui::Modifiers::SHIFT);
+        assert_eq!(picked(&ed), vec![0, 1]);
+        ed.pick_param(4, egui::Modifiers::SHIFT);
+        assert_eq!(picked(&ed), vec![1, 2, 3, 4]);
+        ed.pick_param(2, egui::Modifiers::NONE);
+        assert_eq!(picked(&ed), vec![2]);
+    }
+
+    #[test]
+    fn picked_params_move_together_in_order() {
+        let mut ed = editor();
+        ed.session.as_mut().unwrap().groups.push(crate::session::ParamGroup {
+            name: "Face".into(),
+            params: Vec::new(),
+            open: false,
+            color: None,
+        });
+        ed.pick_param(3, egui::Modifiers::NONE);
+        ed.pick_param(1, egui::Modifiers::COMMAND);
+        // a menu on a picked row covers the whole pick, palette order
+        assert_eq!(ed.picked_with(1), vec![1, 3]);
+        // on an unpicked row only that row
+        assert_eq!(ed.picked_with(0), vec![0]);
+        ed.run_param_cmd(ParamCmd::MoveSelectedTo(1, 1));
+        let s = ed.session.as_ref().unwrap();
+        assert_eq!(s.groups[0].params, vec![0, 2, 4]);
+        assert_eq!(s.groups[1].params, vec![1, 3]);
+        assert!(s.groups[1].open);
     }
 }

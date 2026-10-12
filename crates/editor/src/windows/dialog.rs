@@ -52,6 +52,9 @@ impl<'a> Dialog<'a> {
         let out = egui::Window::new(title.as_str())
             .id(id)
             .title_bar(false)
+            // only the header strip moves it; egui's own drag-anywhere
+            // fought the pinned position and snapped back
+            .movable(false)
             .collapsible(false)
             .resizable(false)
             .frame(egui::Frame::window(&style).inner_margin(0.0).stroke(egui::Stroke::NONE))

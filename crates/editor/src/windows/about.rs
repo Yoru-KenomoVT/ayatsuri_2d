@@ -133,6 +133,9 @@ impl EditorUi {
         let mut open = true;
         egui::Window::new("About Ayatsuri2D")
             .title_bar(false)
+            // only the header strip moves it; egui's own drag-anywhere
+            // fought the pinned position and snapped back
+            .movable(false)
             .collapsible(false)
             .resizable(false)
             .fixed_size(vec2(W, H))
