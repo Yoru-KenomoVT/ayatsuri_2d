@@ -13,7 +13,7 @@ use crate::theme;
 const W: f32 = 760.0;
 const H: f32 = 520.0;
 const RAIL: f32 = 170.0;
-const PAGES: [&str; 4] = ["General", "Appearance", "Performance", "Keyboard"];
+const PAGES: [&str; 5] = ["General", "Appearance", "Performance", "Keyboard", "API"];
 
 /// Primary colour presets: the logo orange first.
 const SWATCHES: [(&str, [u8; 3]); 7] = [
@@ -167,7 +167,8 @@ impl EditorUi {
                             0 => self.settings_general(ui),
                             1 => self.settings_appearance(ui),
                             2 => self.settings_performance(ui),
-                            _ => self.settings_keyboard(ui),
+                            3 => self.settings_keyboard(ui),
+                            _ => self.settings_api(ui),
                         }
                     });
             });
@@ -228,9 +229,6 @@ impl EditorUi {
                 )
                 .changed();
         });
-
-        section(ui, "AYATSURI API");
-        save |= self.api_settings_rows(ui);
 
         section(ui, "FILES");
         let n = self.prefs.recents.len();
@@ -493,6 +491,20 @@ impl EditorUi {
         if save {
             self.prefs.save();
         }
+    }
+
+    fn settings_api(&mut self, ui: &mut Ui) {
+        section(ui, "SERVER");
+        if self.api_settings_rows(ui) {
+            self.prefs.save();
+        }
+        row(ui, "API window", "Status, connected apps, the data coming in", |ui| {
+            if ui.button("Open…").clicked() {
+                self.show_api_window = true;
+            }
+        });
+        section(ui, "ALLOWED APPS");
+        self.api_clients_ui(ui);
     }
 
     fn settings_keyboard(&mut self, ui: &mut Ui) {

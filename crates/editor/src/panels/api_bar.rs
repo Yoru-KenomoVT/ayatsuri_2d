@@ -20,8 +20,6 @@ pub(crate) struct ApiState {
     pub(crate) server: Option<Server>,
     /// Why the server is not running although it should be.
     pub(crate) failed: Option<String>,
-    /// Port field in the menu, applied on Enter or Apply.
-    pub(crate) port_text: String,
     /// What overridden parameters held before the first override, so they
     /// return when the override lapses.
     base: HashMap<usize, f32>,
@@ -30,6 +28,14 @@ pub(crate) struct ApiState {
     /// Identity of the model the snapshot metadata was built from.
     meta_key: u64,
     mode: &'static str,
+    /// The API window: a frozen copy of the log while paused, whether the
+    /// steady parameter stream is hidden, the message picked for detail.
+    pub(crate) win_frozen: Option<Vec<crate::api::server::Traffic>>,
+    pub(crate) win_show_stream: bool,
+    pub(crate) win_pick: Option<usize>,
+    /// Messages per second, measured once a second.
+    pub(crate) win_rate: (f32, f32),
+    pub(crate) win_rate_mark: Option<(Instant, u64, u64)>,
 }
 
 /// The port the preferences ask for.
@@ -217,90 +223,81 @@ impl EditorUi {
         }
     }
 
-    /// The top-bar control: state at a glance, settings and clients in
-    /// its menu.
-    pub(crate) fn api_bar(&mut self, ui: &mut Ui) {
-        let (icon_col, label) = match (&self.api.server, &self.api.failed) {
-            (Some(s), _) => (theme::pal().warp_green, format!("API {}", s.addr.port())),
-            (None, Some(_)) => (theme::pal().rotation_red, "API".to_string()),
-            (None, None) => (theme::pal().text_faint, "API off".to_string()),
+    /// The API menu in the menu bar: switch it on or off, open its window.
+    pub(crate) fn api_menu(&mut self, ui: &mut Ui) {
+        let status = match (&self.api.server, &self.api.failed) {
+            (Some(s), _) => format!("Listening on port {}", s.addr.port()),
+            (None, Some(_)) => "Could not start; see the API window".into(),
+            (None, None) => "Off".into(),
         };
-        let text =
-            RichText::new(format!("{} {label}", egui_phosphor::regular::BROADCAST)).color(icon_col);
-        ui.menu_button(text, |ui| self.api_menu(ui)).response.on_hover_text(
-            "Ayatsuri API: Cubism Editor's integration API, for VTube Studio and others",
-        );
+        if ui.checkbox(&mut self.prefs.api_enabled, "Ayatsuri API").changed() {
+            self.api.failed = None;
+            self.prefs.save();
+        }
+        ui.label(RichText::new(status).size(10.5).color(theme::pal().text_faint));
+        ui.separator();
+        if ui.button("API Window…").clicked() {
+            self.show_api_window = true;
+            ui.close();
+        }
+        if ui.button("API Settings…").clicked() {
+            self.show_settings = true;
+            self.settings_tab = 4;
+            ui.close();
+        }
     }
 
-    fn api_menu(&mut self, ui: &mut Ui) {
-        ui.set_min_width(300.0);
+    /// Port and network switches, shared by the window and Settings.
+    pub(crate) fn api_settings_rows(&mut self, ui: &mut Ui) -> bool {
+        use crate::windows::settings::row;
         let mut save = false;
-        if ui.checkbox(&mut self.prefs.api_enabled, "Ayatsuri API").changed() {
-            save = true;
-        }
-        ui.label(
-            RichText::new("Speaks Cubism Editor's External Application Integration API")
-                .size(10.5)
-                .color(theme::pal().text_faint),
-        );
-        ui.add_space(6.0);
-        if self.api.port_text.is_empty() {
-            self.api.port_text = wanted_port(self.prefs.api_port).to_string();
-        }
-        ui.horizontal(|ui| {
-            ui.label("Port");
-            let edit =
-                ui.add(egui::TextEdit::singleline(&mut self.api.port_text).desired_width(70.0));
-            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if ui.button("Apply").clicked() || enter {
-                match self.api.port_text.trim().parse::<u16>() {
-                    Ok(p) if p >= 1024 => {
-                        self.prefs.api_port = p;
-                        self.api.failed = None;
-                        save = true;
-                    }
-                    _ => self.api.port_text = wanted_port(self.prefs.api_port).to_string(),
+        row(
+            ui,
+            "Ayatsuri API",
+            "Cubism Editor's integration API, for VTube Studio and others",
+            |ui| {
+                if ui.checkbox(&mut self.prefs.api_enabled, "").changed() {
+                    self.api.failed = None;
+                    save = true;
                 }
-            }
-            if ui.small_button("Default").on_hover_text("Cubism's 22033").clicked() {
+            },
+        );
+        let mut port = wanted_port(self.prefs.api_port);
+        row(ui, "Port", "22033 is Cubism's; change it if Cubism runs too", |ui| {
+            if ui.small_button("Default").clicked() {
                 self.prefs.api_port = 0;
-                self.api.port_text = DEFAULT_PORT.to_string();
+                self.api.failed = None;
+                save = true;
+            }
+            if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
+                self.prefs.api_port = port;
                 self.api.failed = None;
                 save = true;
             }
         });
-        if ui
-            .checkbox(&mut self.prefs.api_remote, "Allow remote connections")
-            .on_hover_text("Off: only apps on this computer can connect")
-            .changed()
-        {
-            // takes effect on the next start
-            self.api.server = None;
-            self.api.failed = None;
-            save = true;
-        }
-        ui.add_space(4.0);
-        let status = match (&self.api.server, &self.api.failed) {
-            (Some(s), _) => format!("Listening on ws://{}", s.addr),
-            (None, Some(e)) => e.clone(),
-            (None, None) => "Not running".into(),
-        };
-        ui.label(RichText::new(status).size(10.5).color(theme::pal().text_faint));
-
-        ui.separator();
-        ui.label(RichText::new("Clients").strong());
-        let Some(server) = &self.api.server else {
-            ui.weak("Start the API to see clients.");
-            if save {
-                self.prefs.save();
+        row(ui, "Allow remote connections", "Off: only apps on this computer can connect", |ui| {
+            if ui.checkbox(&mut self.prefs.api_remote, "").changed() {
+                // takes effect on the next start
+                self.api.server = None;
+                self.api.failed = None;
+                save = true;
             }
+        });
+        save
+    }
+
+    /// Registered apps with their Allow switch, Disconnect and Forget.
+    pub(crate) fn api_clients_ui(&mut self, ui: &mut Ui) {
+        let Some(server) = &self.api.server else {
+            ui.weak("Turn the API on to see apps.");
             return;
         };
         let shared = server.shared.clone();
         let live = lock(&shared.live).clone();
         let mut clients = lock(&shared.clients).clone();
         if clients.is_empty() {
-            ui.weak("None yet. Apps appear here when they connect.");
+            ui.weak("No apps yet. They appear here when they connect.");
+            return;
         }
         let mut forget: Option<usize> = None;
         let mut changed = false;
@@ -315,17 +312,25 @@ impl EditorUi {
                 } else {
                     theme::pal().warp_green
                 };
-                ui.label(RichText::new("●").color(dot));
+                ui.label(RichText::new("●").color(dot)).on_hover_text(if online.is_empty() {
+                    "not connected".to_string()
+                } else {
+                    format!("connected from {peers}")
+                });
                 changed |= ui.checkbox(&mut c.allowed, &c.name).on_hover_text(&c.path).changed();
-                if !online.is_empty()
-                    && ui.small_button("Disconnect").on_hover_text(&peers).clicked()
-                {
-                    lock(&shared.kick).extend(online.iter().copied());
-                }
-                if ui.small_button("Forget").clicked() {
-                    lock(&shared.kick).extend(online.iter().copied());
-                    forget = Some(i);
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("Forget")
+                        .on_hover_text("Remove; it must ask again")
+                        .clicked()
+                    {
+                        lock(&shared.kick).extend(online.iter().copied());
+                        forget = Some(i);
+                    }
+                    if !online.is_empty() && ui.small_button("Disconnect").clicked() {
+                        lock(&shared.kick).extend(online.iter().copied());
+                    }
+                });
             });
         }
         if let Some(i) = forget
@@ -337,9 +342,6 @@ impl EditorUi {
         if changed {
             *lock(&shared.clients) = clients.clone();
             self.prefs.api_clients = clients;
-            save = true;
-        }
-        if save {
             self.prefs.save();
         }
     }
@@ -386,36 +388,6 @@ impl EditorUi {
             drop(clients);
             self.prefs.save();
         }
-    }
-
-    /// Settings > General: the same switches as the top-bar menu.
-    pub(crate) fn api_settings_rows(&mut self, ui: &mut Ui) -> bool {
-        use crate::windows::settings::row;
-        let mut save = false;
-        row(
-            ui,
-            "Ayatsuri API",
-            "Cubism Editor's integration API, for VTube Studio and others",
-            |ui| {
-                save |= ui.checkbox(&mut self.prefs.api_enabled, "").changed();
-            },
-        );
-        let mut port = wanted_port(self.prefs.api_port);
-        row(ui, "Port", "22033 is Cubism's; change it if Cubism runs too", |ui| {
-            if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
-                self.prefs.api_port = port;
-                self.api.port_text = port.to_string();
-                self.api.failed = None;
-                save = true;
-            }
-        });
-        row(ui, "Allow remote connections", "Off: only apps on this computer", |ui| {
-            if ui.checkbox(&mut self.prefs.api_remote, "").changed() {
-                self.api.server = None;
-                save = true;
-            }
-        });
-        save
     }
 }
 

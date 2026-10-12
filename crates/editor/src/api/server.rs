@@ -4,7 +4,7 @@
 // applies; nothing here touches the model directly, so a slow or hostile
 // client can never stall a frame.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -12,6 +12,24 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::protocol::{self, Client, Conn, Snapshot, World};
+
+/// How many messages the traffic log keeps.
+const TRAFFIC_KEEP: usize = 500;
+/// Longest message text the log stores; the rest is cut.
+const TRAFFIC_TEXT: usize = 4000;
+
+/// One message in the traffic log.
+#[derive(Clone, Debug)]
+pub(crate) struct Traffic {
+    pub(crate) at: Instant,
+    /// True for what a client sent, false for what we sent.
+    pub(crate) incoming: bool,
+    pub(crate) peer: String,
+    pub(crate) method: String,
+    /// Response, Event, Error or Request.
+    pub(crate) kind: String,
+    pub(crate) text: String,
+}
 
 /// More connections than any real setup needs; past this, new ones close.
 const MAX_CONNS: usize = 16;
@@ -42,6 +60,10 @@ pub(crate) struct Shared {
     pub(crate) live: Mutex<Vec<LiveConn>>,
     /// Connections the user asked to drop.
     pub(crate) kick: Mutex<Vec<u64>>,
+    /// The last messages both ways, for the API window.
+    pub(crate) traffic: Mutex<VecDeque<Traffic>>,
+    pub(crate) count_in: AtomicU64,
+    pub(crate) count_out: AtomicU64,
     /// Per-connection event queues: (connection, sender).
     events: Mutex<Vec<(u64, Sender<EventMsg>)>>,
     stop: AtomicBool,
@@ -51,6 +73,34 @@ pub(crate) struct Shared {
 pub(crate) struct Server {
     pub(crate) shared: Arc<Shared>,
     pub(crate) addr: SocketAddr,
+    pub(crate) started: Instant,
+}
+
+/// Note a message in the traffic log, cheaply: the method and type come
+/// out of a quick parse, the text is kept only up to a limit.
+fn record(shared: &Shared, peer: &str, incoming: bool, text: &str) {
+    let (method, kind) = match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(v) => (
+            v.get("Method").and_then(|m| m.as_str()).unwrap_or("?").to_string(),
+            v.get("Type").and_then(|m| m.as_str()).unwrap_or("?").to_string(),
+        ),
+        Err(_) => ("?".into(), "unparsed".into()),
+    };
+    let text: String = text.chars().take(TRAFFIC_TEXT).collect();
+    let counter = if incoming { &shared.count_in } else { &shared.count_out };
+    counter.fetch_add(1, Ordering::Relaxed);
+    let mut log = lock(&shared.traffic);
+    if log.len() >= TRAFFIC_KEEP {
+        log.pop_front();
+    }
+    log.push_back(Traffic {
+        at: Instant::now(),
+        incoming,
+        peer: peer.to_string(),
+        method,
+        kind,
+        text,
+    });
 }
 
 /// A lock that a panicking thread poisoned is still usable data.
@@ -69,7 +119,7 @@ impl Server {
         let s = shared.clone();
         std::thread::Builder::new().name("api-listen".into()).spawn(move || listen(listener, s))?;
         log::info!("Ayatsuri API listening on ws://{addr}");
-        Ok(Server { shared, addr })
+        Ok(Server { shared, addr, started: Instant::now() })
     }
 
     /// Stop listening and drop every connection (they notice within ~0.1 s).
@@ -150,12 +200,16 @@ fn serve(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
             break;
         }
         while let Ok((method, text)) = rx.try_recv() {
-            if conn.subscribed.contains(&method) && ws.send(text.into()).is_err() {
-                break;
+            if conn.subscribed.contains(&method) {
+                record(&shared, &peer.to_string(), false, &text);
+                if ws.send(text.into()).is_err() {
+                    break;
+                }
             }
         }
         match ws.read() {
             Ok(tungstenite::Message::Text(text)) => {
+                record(&shared, &peer.to_string(), true, text.as_str());
                 let reply = {
                     let snap = lock(&shared.snap);
                     let mut clients = lock(&shared.clients);
@@ -177,10 +231,11 @@ fn serve(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
                 if let Some(l) = lock(&shared.live).iter_mut().find(|l| l.id == id) {
                     l.token = conn.token.clone();
                 }
-                if let Some(r) = reply
-                    && ws.send(r.into()).is_err()
-                {
-                    break;
+                if let Some(r) = reply {
+                    record(&shared, &peer.to_string(), false, &r);
+                    if ws.send(r.into()).is_err() {
+                        break;
+                    }
                 }
             }
             Ok(tungstenite::Message::Close(_)) => break,
@@ -235,6 +290,11 @@ mod tests {
         lock(&server.shared.clients)[0].allowed = true;
         assert_eq!(ask("GetCurrentModelUID", "{}")["Data"]["ModelUID"], "42");
         assert_eq!(lock(&server.shared.live).len(), 1);
+        // both directions are in the traffic log
+        let log = lock(&server.shared.traffic);
+        assert!(log.iter().any(|t| t.incoming && t.method == "RegisterPlugin"));
+        assert!(log.iter().any(|t| !t.incoming && t.kind == "Response"));
+        drop(log);
         server.stop();
     }
 }

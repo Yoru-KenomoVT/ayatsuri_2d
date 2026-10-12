@@ -150,6 +150,7 @@ pub struct EditorUi {
     pub(crate) show_about: bool,
     pub(crate) about: crate::windows::about::AboutState,
     pub(crate) show_settings: bool,
+    pub(crate) show_api_window: bool,
     /// The keyboard settings' search text.
     pub(crate) key_filter: String,
     /// A file picker open on its own thread, and a model loading on one.
@@ -510,6 +511,7 @@ impl Default for EditorUi {
             show_about: false,
             about: crate::windows::about::AboutState::default(),
             show_settings: false,
+            show_api_window: false,
             key_filter: String::new(),
             picking: None,
             dialog_pick: None,
@@ -1151,8 +1153,10 @@ impl EditorUi {
                 self.settings_tab = page.to_string_lossy().parse().unwrap_or(0);
             }
             // developer hook for screenshots: AYATSURI_SHOW_DIALOG=new
-            if std::env::var_os("AYATSURI_SHOW_DIALOG").is_some_and(|d| d == "new") {
-                self.new_model = Some(ModelNew::default());
+            match std::env::var("AYATSURI_SHOW_DIALOG").as_deref() {
+                Ok("new") => self.new_model = Some(ModelNew::default()),
+                Ok("api") => self.show_api_window = true,
+                _ => {}
             }
             // developer hook for screenshots: AYATSURI_SHOW_ABOUT=credits
             if let Some(tab) = std::env::var_os("AYATSURI_SHOW_ABOUT") {
@@ -1176,6 +1180,7 @@ impl EditorUi {
         self.crash_window(ui);
         self.recovery_window(ui);
         self.api_prompt_window(&ui.ctx().clone());
+        self.api_window(ui);
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
         if self.last_autosave.elapsed().as_secs() >= 120 {
@@ -1823,6 +1828,7 @@ impl EditorUi {
                         ui.close();
                     }
                 });
+                ui.menu_button("API", |ui| self.api_menu(ui));
                 ui.menu_button("Help", |ui| {
                     if ui.button("About Ayatsuri2D").clicked() {
                         self.show_about = true;
@@ -1872,8 +1878,6 @@ impl EditorUi {
                 if let Some(w) = pick {
                     self.set_workspace(w);
                 }
-                ui.separator();
-                self.api_bar(ui);
                 ui.separator();
                 ui.weak("Edit Level:");
                 for lvl in 1..=3u8 {
