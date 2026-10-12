@@ -2584,136 +2584,19 @@ impl EditorUi {
             };
         let mut done = false;
         let mut cancel = false;
-        let mut auto = false;
         let mut dialog_action: Option<MeshAction> = None;
         crate::windows::Dialog::new("Edit Mesh")
-            .width(260.0)
+            .width(290.0)
             // beside the canvas, not over the mesh being edited
             .at(ui.ctx().content_rect().right_top() + vec2(-200.0, 220.0))
             .show(ui.ctx(), |ui| {
                 ui.label(truncate(&id, 28));
                 ui.weak(format!("{verts} vertices · {tris} triangles"));
-                ui.separator();
-                ui.horizontal(|ui| {
-                    for (mode, icon, tip) in [
-                        (0u8, egui_phosphor::regular::CURSOR, "Move vertices"),
-                        (1, egui_phosphor::regular::PLUS_CIRCLE, "Add vertices (click a face)"),
-                        (2, egui_phosphor::regular::ERASER, "Erase vertices"),
-                        (
-                            3,
-                            egui_phosphor::regular::LINE_SEGMENT,
-                            "Connect two points (click one, then the other)",
-                        ),
-                        (4, egui_phosphor::regular::SCISSORS, "Cut the edge between two points"),
-                        (
-                            5,
-                            egui_phosphor::regular::PAINT_BRUSH_BROAD,
-                            "Erase brush: drag over points to remove them ([ and ] resize)",
-                        ),
-                        (
-                            6,
-                            egui_phosphor::regular::LASSO,
-                            "Select points: drag a lasso (Shift adds), then Ctrl+C to copy and \
-                             Ctrl+V to paste into any mesh",
-                        ),
-                    ] {
-                        if ui
-                            .selectable_label(
-                                self.mesh_mode == mode,
-                                egui::RichText::new(icon).size(16.0),
-                            )
-                            .on_hover_text(tip)
-                            .clicked()
-                        {
-                            self.mesh_mode = mode;
-                        }
-                    }
-                });
-                ui.separator();
-                if self.mesh_mode == 6 || self.point_clip.is_some() {
-                    let picked = self.mesh_picked.len();
-                    ui.weak(format!(
-                        "{picked} point(s) picked. Ctrl+C copies, Delete removes them."
-                    ));
-                    match &self.point_clip {
-                        Some(c) => ui.weak(format!(
-                            "{} point(s) from {} on the clipboard: Ctrl+V pastes them into the \
-                             mesh being edited.",
-                            c.points.len(),
-                            truncate(&c.from, 20)
-                        )),
-                        None => ui.weak("Nothing copied yet."),
-                    };
-                }
-                if self.mesh_mode == 5 {
-                    ui.horizontal(|ui| {
-                        ui.weak("Brush");
-                        ui.add(
-                            egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
-                                .logarithmic(true)
-                                .suffix(" px"),
-                        );
-                    });
-                }
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("Auto connect")
-                        .on_hover_text("Triangulate the points you placed")
-                        .clicked()
-                    {
-                        dialog_action = Some(MeshAction::AutoConnect);
-                    }
-                    if ui.button("4 division").clicked() {
-                        dialog_action = Some(MeshAction::Divide);
-                    }
-                    if ui
-                        .button("Reset")
-                        .on_hover_text("Back to the mesh as the file had it")
-                        .clicked()
-                    {
-                        dialog_action = Some(MeshAction::Reset);
-                    }
-                });
-                ui.checkbox(&mut self.mesh_autoconnect, "Auto connect new points")
-                    .on_hover_text("Off: added points stay loose until joined with the edge tool");
-                ui.separator();
-                ui.label("Auto mesh");
-                ui.horizontal(|ui| {
-                    for (i, (name, outline, inner, margin)) in Self::AUTO_PRESETS.iter().enumerate()
-                    {
-                        if ui.selectable_label(self.tool_opts.auto_preset == i, *name).clicked() {
-                            self.tool_opts.auto_preset = i;
-                            self.tool_opts.auto_spacing = *outline;
-                            self.tool_opts.auto_inner = *inner;
-                            self.tool_opts.auto_margin = *margin;
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.weak("Outline");
-                    ui.add(
-                        egui::DragValue::new(&mut self.tool_opts.auto_spacing)
-                            .range(4.0..=256.0)
-                            .suffix(" px"),
-                    );
-                    ui.weak("Inner");
-                    ui.add(
-                        egui::DragValue::new(&mut self.tool_opts.auto_inner)
-                            .range(4.0..=512.0)
-                            .suffix(" px"),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.weak("Margin");
-                    ui.add(
-                        egui::DragValue::new(&mut self.tool_opts.auto_margin)
-                            .range(0.0..=128.0)
-                            .suffix(" px"),
-                    );
-                });
-                if ui.button("Generate from texture").clicked() {
-                    auto = true;
-                }
+                // the same controls as Tool Details' mesh section, so both match
+                egui::ScrollArea::vertical()
+                    .id_salt("edit-mesh-popup")
+                    .max_height(460.0)
+                    .show(ui, |ui| self.td_mesh(ui, &mut dialog_action));
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button(egui::RichText::new("Done").color(Color32::WHITE)).clicked() {
@@ -2725,9 +2608,6 @@ impl EditorUi {
                 });
                 ui.weak("Esc finishes too; Ctrl+Z steps back");
             });
-        if auto {
-            self.auto_mesh(mi);
-        }
         if let Some(a) = dialog_action {
             self.run_mesh_action(a);
         }

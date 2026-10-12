@@ -288,11 +288,12 @@ impl EditorUi {
         }
     }
 
-    fn td_mesh(&mut self, ui: &mut Ui, action: &mut Option<MeshAction>) {
+    /// The mesh section, shared by Tool Details and the Edit Mesh popup.
+    pub(super) fn td_mesh(&mut self, ui: &mut Ui, action: &mut Option<MeshAction>) {
         section(
             ui,
             "Edit mesh manually",
-            "Select / Edit drags points. Eraser deletes everything it sweeps ([ and ] resize it).\n\nThe actions work on the mesh being edited, or on the selected meshes.",
+            "Select / Edit drags points. Lasso select picks points: Ctrl+C copies them, and Ctrl+V pastes them into the mesh being edited at the same spots (points landing on existing ones merge, ready for glue); Delete removes them. Eraser deletes everything it sweeps ([ and ] resize it).\n\nThe actions work on the mesh being edited, or on the selected meshes.",
         );
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -301,7 +302,18 @@ impl EditorUi {
             {
                 self.mesh_mode = 0;
             }
-            let _ = icon(ui, false, false, ph::LASSO, "Lasso: pick points with a lasso");
+            if icon(
+                ui,
+                self.mesh_mode == 6,
+                true,
+                ph::LASSO,
+                "Lasso select: pick points (Shift adds), Ctrl+C copies, Ctrl+V pastes into the \
+                 mesh being edited",
+            )
+            .clicked()
+            {
+                self.mesh_mode = 6;
+            }
             if icon(
                 ui,
                 self.mesh_mode == 5,
@@ -313,8 +325,6 @@ impl EditorUi {
             {
                 self.mesh_mode = 5;
             }
-            let _ =
-                icon(ui, false, false, ph::PAINT_BRUSH, "Add more vertices: paint to add points");
         });
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -382,6 +392,22 @@ impl EditorUi {
                 }
             }
         });
+        if self.mesh_mode == 6 || self.point_clip.is_some() {
+            section(ui, "Lasso select", "");
+            ui.weak(format!(
+                "{} point(s) picked. Ctrl+C copies, Delete removes them.",
+                self.mesh_picked.len()
+            ));
+            match &self.point_clip {
+                Some(c) => ui.weak(format!(
+                    "{} point(s) from {} on the clipboard: Ctrl+V pastes them into the mesh \
+                     being edited.",
+                    c.points.len(),
+                    super::truncate(&c.from, 20)
+                )),
+                None => ui.weak("Nothing copied yet."),
+            };
+        }
         if self.mesh_mode == 5 {
             section(ui, "Eraser", "");
             grid(ui, "td-eraser", |ui| {
