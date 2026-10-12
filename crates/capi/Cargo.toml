@@ -20,10 +20,19 @@ expect_used = "deny"
 panic = "deny"
 indexing_slicing = "deny"
 
+[features]
+# `fixture`: a small model written to .aom, for the tests and for the C
+# host example that drives the built library end to end.
+fixture = ["dep:serde_bytes"]
+
 [dependencies]
 ayatsuri-core = { workspace = true }
 ayatsuri-format = { workspace = true }
+serde_bytes = { workspace = true, optional = true }
 
 [dev-dependencies]
-# the tests write a small .aom to load through the C surface
 serde_bytes = { workspace = true }
+
+[[example]]
+name = "small_aom"
+required-features = ["fixture"]

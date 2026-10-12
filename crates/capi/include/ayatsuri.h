@@ -17,6 +17,12 @@
 #include <stdint.h>
 
 /*
+ The ABI version this header describes. Bumped only on a breaking
+ change to it; a host compares it with `ay2d_abi_version()`.
+ */
+#define AY2D_ABI_VERSION 1
+
+/*
  Drawn with additive blending.
  */
 #define AY2D_FLAG_ADDITIVE 1
@@ -95,21 +101,21 @@ typedef struct ay2d_drawable {
  The canvas the model is drawn on: pixels, and how model units map
  onto them (`px = unit * pixels_per_unit + origin`).
  */
-typedef struct ay2d_canvas {
+typedef struct ay2d_canvas_info {
   float width;
   float height;
   float pixels_per_unit;
   float origin_x;
   float origin_y;
-} ay2d_canvas;
+} ay2d_canvas_info;
 
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
 /*
- The ABI version a host checks before anything else. Bumped only on a
- breaking change to the header.
+ The ABI version the library was built with, for a host to check
+ against `AY2D_ABI_VERSION` before anything else.
  */
 uint32_t ay2d_abi_version(void);
 
@@ -209,7 +215,7 @@ uint32_t ay2d_texture_count(const struct ay2d_model *m);
  # Safety
  `m` is a live handle; `out` points at one writable canvas.
  */
-enum ay2d_status ay2d_canvas(const struct ay2d_model *m, struct ay2d_canvas *out);
+enum ay2d_status ay2d_canvas(const struct ay2d_model *m, struct ay2d_canvas_info *out);
 
 /*
  A parameter's id (`ParamAngleX`...), NUL-terminated, alive as long as

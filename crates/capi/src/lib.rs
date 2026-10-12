@@ -8,6 +8,8 @@
 
 mod draw;
 mod error;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 mod handle;
 mod params;
 mod parts;
@@ -35,11 +37,15 @@ pub use physics::{
 };
 pub use textures::ay2d_texture;
 
-/// The ABI version a host checks before anything else. Bumped only on a
-/// breaking change to the header.
+/// The ABI version this header describes. Bumped only on a breaking
+/// change to it; a host compares it with `ay2d_abi_version()`.
+pub const AY2D_ABI_VERSION: u32 = 1;
+
+/// The ABI version the library was built with, for a host to check
+/// against `AY2D_ABI_VERSION` before anything else.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_abi_version() -> u32 {
-    1
+    AY2D_ABI_VERSION
 }
 
 /// The library's own version, as a NUL-terminated string that lives as
