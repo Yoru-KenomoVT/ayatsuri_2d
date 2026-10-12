@@ -39,6 +39,20 @@ pub struct Prefs {
     pub discord_show_name: bool,
     /// Open the editor window fullscreen.
     pub start_fullscreen: bool,
+    /// Follow the desktop's light or dark setting instead of `dark`.
+    pub follow_system: bool,
+    /// Whole-interface zoom; None is 100%.
+    pub ui_scale: Option<f32>,
+    /// Body text size in points; None is 12.
+    pub text_size: Option<f32>,
+    /// Spacing multiplier; None is 1 (compact).
+    pub density: Option<f32>,
+    /// Corner radius in points; None is 3.
+    pub corners: Option<f32>,
+    pub reduce_motion: bool,
+    /// The launcher reads these: skip the splash, or keep it but still.
+    pub splash_off: bool,
+    pub splash_particles_off: bool,
 }
 
 /// The arrow tool's display settings, RGBA.
@@ -60,6 +74,17 @@ fn path() -> Option<PathBuf> {
 }
 
 impl Prefs {
+    /// The interface look these preferences ask for.
+    pub fn look(&self) -> crate::theme::Look {
+        let d = crate::theme::Look::default();
+        crate::theme::Look {
+            text: self.text_size.unwrap_or(d.text),
+            density: self.density.unwrap_or(d.density),
+            corners: self.corners.unwrap_or(d.corners),
+            reduce_motion: self.reduce_motion,
+        }
+    }
+
     pub fn load() -> Self {
         path()
             .and_then(|p| std::fs::read(p).ok())

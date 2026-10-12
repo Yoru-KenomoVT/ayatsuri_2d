@@ -2,9 +2,10 @@
 name = "ayatsuri-launcher"
 description = "The Ayatsuri2D splash launcher"
 version.workspace = true
+authors.workspace = true
+repository.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
 
 [lints]
 workspace = true
@@ -14,3 +15,4 @@ egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 log = { workspace = true }
+serde_json = { workspace = true }

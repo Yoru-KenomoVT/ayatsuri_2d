@@ -2,11 +2,12 @@
 name = "ayatsuri-capi"
 description = "The C ABI: ayatsuri.h plus a static and shared lib. The load-bearing wall."
 version.workspace = true
+authors.workspace = true
+repository.workspace = true
 edition.workspace = true
 # Apache-2.0, not the workspace GPL-3.0: a copyleft ABI cannot be embedded in
 # a proprietary game, which is most of what a puppet runtime is for. See LICENSE.
 license = "Apache-2.0"
-rust-version.workspace = true
 
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]

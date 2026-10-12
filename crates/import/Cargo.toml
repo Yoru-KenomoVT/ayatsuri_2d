@@ -2,9 +2,10 @@
 name = "ayatsuri-import"
 description = "Imports foreign formats into the puppet model: .moc3 today, PSD later"
 version.workspace = true
+authors.workspace = true
+repository.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
 
 [lints]
 workspace = true

@@ -222,7 +222,7 @@ impl EditorUi {
 
     /// The overlay display settings, shared by Tool Details and Settings >
     /// View. Changes are saved straight away.
-    pub(super) fn overlay_settings(&mut self, ui: &mut Ui) {
+    pub(crate) fn overlay_settings(&mut self, ui: &mut Ui) {
         let rgba = |c: Color32| {
             let [r, g, b, a] = c.to_srgba_unmultiplied();
             Some([r, g, b, a])

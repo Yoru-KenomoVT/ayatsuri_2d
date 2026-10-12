@@ -2,9 +2,10 @@
 name = "ayatsuri"
 description = "The Ayatsuri2D desktop app"
 version.workspace = true
+authors.workspace = true
+repository.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
 
 [lints]
 workspace = true
@@ -23,4 +24,7 @@ ayatsuri-editor = { workspace = true }
 ayatsuri-render = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+# only here to switch on "links": without it ctx.open_url (About, Discord
+# and GitHub buttons) logs a warning and does nothing
+egui-winit = { version = "0.36", default-features = false, features = ["links"] }
 log = { workspace = true }

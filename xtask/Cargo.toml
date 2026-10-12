@@ -1,10 +1,12 @@
 [package]
 name = "xtask"
-description = "Repo tasks: cargo xtask layers | ci"
+description = "Repo tasks: cargo xtask layers | credits | ci"
 version.workspace = true
+authors.workspace = true
+repository.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
 
 [dependencies]
+serde_json = { workspace = true }
 toml = "1"

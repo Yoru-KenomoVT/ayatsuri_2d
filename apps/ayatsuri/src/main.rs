@@ -33,12 +33,27 @@ fn main() -> eframe::Result {
     };
     // `ayatsuri model.moc3` opens straight onto a model
     let open = std::env::args().nth(1).map(std::path::PathBuf::from);
+    // started from the launcher: load everything windowless first, tell the
+    // splash we are ready, and only open the window once it has gone, so
+    // the dashboard never covers the splash
+    let mut editor = Some(EditorUi::new());
+    if let Some(ready) = std::env::var_os("AYATSURI_READY_FILE").map(std::path::PathBuf::from) {
+        let _ = std::fs::write(&ready, b"ready");
+        let mut go = ready.into_os_string();
+        go.push(".go");
+        let go = std::path::PathBuf::from(go);
+        let started = std::time::Instant::now();
+        while !go.exists() && started.elapsed() < std::time::Duration::from_secs(30) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_file(&go);
+    }
     eframe::run_native(
         "ayatsuri2d",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             ayatsuri_editor::theme::install(&cc.egui_ctx);
-            let mut editor = EditorUi::new();
+            let mut editor = editor.take().unwrap_or_default();
             if let Some(rs) = &cc.wgpu_render_state {
                 let renderer = ayatsuri_render::GpuRenderer::with_samples(
                     &rs.device,

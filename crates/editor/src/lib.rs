@@ -17,6 +17,7 @@ mod prefs;
 mod session;
 pub mod theme;
 mod thumb;
+mod windows;
 
 pub use panels::EditorUi;
 

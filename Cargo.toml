@@ -4,11 +4,13 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.5.0"
 edition = "2024"
 license = "GPL-3.0"
-rust-version = "1.95"
-repository = "https://github.com/ayatsuri2d/ayatsuri2d"
+authors = ["Yoru_KenomoVT"]
+description = "An open, native 2D puppet studio: rig, animate and run Live2D-style models"
+repository = "https://github.com/Yoru-KenomoVT/ayatsuri_2d"
+homepage = "https://github.com/Yoru-KenomoVT/ayatsuri_2d"
 
 [workspace.dependencies]
 # internal

@@ -2,9 +2,10 @@
 name = "ayatsuri-editor"
 description = "The egui editor frontend: panels, viewport, parameters, timeline"
 version.workspace = true
+authors.workspace = true
+repository.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
 
 [lints]
 workspace = true

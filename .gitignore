@@ -18,3 +18,7 @@ Cargo.lock
 
 # Personal study material, not part of the project.
 /study
+
+# agent notes stay local, never in the repo
+CLAUDE.md
+.claude/

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ayatsuri_format::Model;
 use ayatsuri_format::model::DeformerKind;
@@ -137,19 +137,24 @@ impl Workspace {
 pub struct EditorUi {
     layout: DockNode,
     workspace: Workspace,
-    session: Option<Session>,
+    pub(crate) session: Option<Session>,
     selected: Option<Sel>,
     log_view: log::Level,
     pending_import: Option<PathBuf>,
     /// View zoom relative to fit-to-panel, and pan in screen points.
     view_zoom: f32,
     view_pan: Vec2,
-    prefs: Prefs,
+    pub(crate) prefs: Prefs,
     tool: Tool,
-    show_about: bool,
-    show_settings: bool,
+    pub(crate) show_about: bool,
+    pub(crate) about: crate::windows::about::AboutState,
+    pub(crate) show_settings: bool,
     /// The keyboard settings' search text.
-    key_filter: String,
+    pub(crate) key_filter: String,
+    /// A file picker open on its own thread, and a model loading on one.
+    picking: Option<std::sync::mpsc::Receiver<BgJob>>,
+    loading: Option<(PathBuf, std::sync::mpsc::Receiver<BgJob>)>,
+
     /// Discord Rich Presence while enabled, and the app id it runs as.
     rpc: Option<crate::discord::Presence>,
     rpc_id: String,
@@ -158,7 +163,7 @@ pub struct EditorUi {
     /// One-time startup work (fullscreen) has run.
     startup_done: bool,
 
-    show_stats: bool,
+    pub(crate) show_stats: bool,
     show_physics: bool,
     phys_sel: usize,
     phys_tab: usize,
@@ -186,7 +191,7 @@ pub struct EditorUi {
     /// Cubism's edit level: 1 meshes, 2 deformers, 3 structure.
     edit_level: u8,
     /// The action waiting for its new shortcut in settings, if any.
-    rebind: Option<&'static str>,
+    pub(crate) rebind: Option<&'static str>,
     /// Last states the debug log reported, so changes log exactly once.
     logged_sel: Option<Sel>,
     logged_param: Option<usize>,
@@ -199,7 +204,7 @@ pub struct EditorUi {
     anim_autokey: bool,
     anim_applied: f32,
     new_anim: Option<AnimNew>,
-    export_dlg: Option<ExportDlg>,
+    pub(crate) export_dlg: Option<ExportDlg>,
     /// Collapsed rows in the Deformer palette, and canvas-locked deformers.
     def_collapsed: std::collections::HashSet<usize>,
     def_locked: std::collections::HashSet<usize>,
@@ -215,15 +220,18 @@ pub struct EditorUi {
     new_param: Option<ParamNew>,
     new_folder: Option<String>,
     new_model: Option<ModelNew>,
-    show_model_info: bool,
-    gpu: bool,
+    pub(crate) show_model_info: bool,
+    pub(crate) gpu: bool,
     theme_applied: bool,
     last_layout: DockNode,
-    logo: Option<TextureHandleCache>,
+    pub(crate) logo: Option<TextureHandleCache>,
+    /// The home header's dithered accent wash, keyed by pixel size and
+    /// colours so it is only rebuilt on resize or a theme change.
+    home_wash: Option<(WashKey, egui::TextureHandle)>,
     show_ws_save: bool,
     ws_name: String,
     show_ws_manage: bool,
-    settings_tab: usize,
+    pub(crate) settings_tab: usize,
     tool_opts: ToolOptions,
     lasso: Vec<Pos2>,
     /// The parameter rows' own selection, independent of object selection.
@@ -298,6 +306,10 @@ pub struct EditorUi {
     confirm_close: Option<u8>,
     force_close: bool,
     home_thumbs: std::collections::HashMap<PathBuf, Option<egui::TextureHandle>>,
+    /// Home card being renamed: the file and the name typed so far.
+    home_rename: Option<(PathBuf, String)>,
+    /// One line under the home actions after a file operation fails.
+    home_note: Option<String>,
 }
 
 /// One vertex being dragged in mesh edit mode. The parent-space offset is
@@ -340,6 +352,12 @@ struct RotDrag {
 struct PathPin {
     tri: usize,
     w: [f32; 3],
+}
+
+/// Results coming back from background threads.
+enum BgJob {
+    Picked(Option<PathBuf>),
+    Loaded(PathBuf, Box<Result<Session, String>>),
 }
 
 /// A finished path bend: the control point, where it was dropped, each
@@ -386,11 +404,11 @@ struct AnimNew {
 }
 
 /// The Export as moc3 dialog's working copy.
-struct ExportDlg {
-    name: String,
-    version: usize,
-    physics: bool,
-    motions: bool,
+pub(crate) struct ExportDlg {
+    pub(crate) name: String,
+    pub(crate) version: usize,
+    pub(crate) physics: bool,
+    pub(crate) motions: bool,
 }
 
 /// The New Model dialog's working copy.
@@ -437,9 +455,9 @@ struct ParamEdit {
     repeat: bool,
 }
 
-struct TextureHandleCache {
-    dark: bool,
-    handle: egui::TextureHandle,
+pub(crate) struct TextureHandleCache {
+    pub(crate) dark: bool,
+    pub(crate) handle: egui::TextureHandle,
 }
 
 impl Default for EditorUi {
@@ -460,8 +478,12 @@ impl Default for EditorUi {
             prefs,
             tool: Tool::Arrow,
             show_about: false,
+            about: crate::windows::about::AboutState::default(),
             show_settings: false,
             key_filter: String::new(),
+            picking: None,
+            loading: None,
+
             rpc: None,
             rpc_id: String::new(),
 
@@ -513,6 +535,7 @@ impl Default for EditorUi {
             gpu: false,
             theme_applied: false,
             logo: None,
+            home_wash: None,
             show_ws_save: false,
             ws_name: String::new(),
             show_ws_manage: false,
@@ -561,6 +584,8 @@ impl Default for EditorUi {
             confirm_close: None,
             force_close: false,
             home_thumbs: std::collections::HashMap::new(),
+            home_rename: None,
+            home_note: None,
         }
     }
 }
@@ -690,29 +715,121 @@ impl EditorUi {
         self.gpu = on;
     }
 
+    /// Open a model or artwork on a worker thread. Decoding a PSD and its
+    /// texture pages takes seconds; on the UI thread that froze the window
+    /// long enough for the desktop to call it "not responding". The window
+    /// keeps drawing (a loading overlay) and picks the result up when ready.
     fn import(&mut self, ctx: &egui::Context, path: PathBuf) {
-        match Session::load(ctx, &path) {
-            Ok(s) => {
-                self.prefs.remember(path.clone());
+        if self.loading.is_some() {
+            log::warn!("still opening the previous file");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx2 = ctx.clone();
+        let p2 = path.clone();
+        let spawned = std::thread::Builder::new().name("model-load".into()).spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Session::load(&ctx2, &p2)
+            }))
+            .unwrap_or_else(|_| Err("the loader crashed on this file".into()));
+            let _ = tx.send(BgJob::Loaded(p2, Box::new(result)));
+            ctx2.request_repaint();
+        });
+        match spawned {
+            Ok(_) => {
+                log::info!("opening {}", path.display());
+                self.loading = Some((path, rx));
+            }
+            Err(e) => log::error!("open failed: could not start the loader ({e})"),
+        }
+    }
+
+    /// The Open dialog runs on its own thread too: the system file picker
+    /// blocks until closed, and on the UI thread that stalls the window.
+    fn import_dialog(&mut self, ctx: &egui::Context) {
+        if self.picking.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx2 = ctx.clone();
+        let spawned = std::thread::Builder::new().name("file-picker".into()).spawn(move || {
+            let picked = rfd::FileDialog::new()
+                .add_filter("All supported", &["aom", "moc3", "json", "psd", "kra"])
+                .add_filter("Ayatsuri / Live2D model", &["aom", "moc3", "json"])
+                .add_filter("Artwork (Photoshop, Krita)", &["psd", "kra"])
+                .set_title("Open model or artwork")
+                .pick_file();
+            let _ = tx.send(BgJob::Picked(picked));
+            ctx2.request_repaint();
+        });
+        match spawned {
+            Ok(_) => self.picking = Some(rx),
+            Err(e) => log::error!("could not open the file picker: {e}"),
+        }
+    }
+
+    /// Collect finished background work: a picked file starts loading, a
+    /// loaded model becomes the session.
+    fn poll_background(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.picking {
+            match rx.try_recv() {
+                Ok(BgJob::Picked(Some(path))) => {
+                    self.picking = None;
+                    self.import(ctx, path);
+                }
+                Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => self.picking = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        let done = match &self.loading {
+            Some((_, rx)) => match rx.try_recv() {
+                Ok(BgJob::Loaded(path, result)) => Some(Some((path, *result))),
+                Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(None),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            },
+            None => None,
+        };
+        match done {
+            Some(Some((path, Ok(s)))) => {
+                self.loading = None;
+                self.prefs.remember(path);
                 self.session = Some(s);
                 self.selected = None;
                 self.view_zoom = 1.0;
                 self.view_pan = Vec2::ZERO;
             }
-            Err(e) => log::error!("open failed: {e}"),
+            Some(Some((_, Err(e)))) => {
+                self.loading = None;
+                log::error!("open failed: {e}");
+            }
+            Some(None) => {
+                self.loading = None;
+                log::error!("open failed: the loader stopped");
+            }
+            None => {}
         }
     }
 
-    fn import_dialog(&mut self, ctx: &egui::Context) {
-        let picked = rfd::FileDialog::new()
-            .add_filter("All supported", &["aom", "moc3", "json", "psd", "kra"])
-            .add_filter("Ayatsuri / Live2D model", &["aom", "moc3", "json"])
-            .add_filter("Artwork (Photoshop, Krita)", &["psd", "kra"])
-            .set_title("Open model or artwork")
-            .pick_file();
-        if let Some(path) = picked {
-            self.import(ctx, path);
-        }
+    /// While a model loads, a small card over everything says so and the
+    /// window keeps redrawing.
+    fn loading_overlay(&mut self, ui: &mut Ui) {
+        let Some((path, _)) = &self.loading else { return };
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        egui::Area::new(egui::Id::new("loading-card"))
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(16)).show(
+                    ui,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new().size(18.0));
+                            ui.label(format!("Opening {name}…"));
+                        });
+                    },
+                );
+            });
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
 
     fn save_session(&mut self, save_as: bool) {
@@ -784,6 +901,8 @@ impl EditorUi {
         // on the outer frame
         self.warp_bezier = self.edit_level >= 2;
         self.update_presence();
+        self.poll_background(&ui.ctx().clone());
+        self.loading_overlay(ui);
         // whatever slider was held last frame is kept off physics this frame,
         // so a physics-driven parameter can be dragged by hand
         if let Some(s) = &mut self.session {
@@ -794,6 +913,16 @@ impl EditorUi {
             self.startup_done = true;
             if self.prefs.start_fullscreen {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            }
+            // developer hook for screenshots: AYATSURI_SHOW_SETTINGS=1 (page)
+            if let Some(page) = std::env::var_os("AYATSURI_SHOW_SETTINGS") {
+                self.show_settings = true;
+                self.settings_tab = page.to_string_lossy().parse().unwrap_or(0);
+            }
+            // developer hook for screenshots: AYATSURI_SHOW_ABOUT=credits
+            if let Some(tab) = std::env::var_os("AYATSURI_SHOW_ABOUT") {
+                self.show_about = true;
+                self.about.open_tab(&tab.to_string_lossy());
             }
         }
         // developer hook for screenshots: AYATSURI_SHOW_PHYSICS=1 opens the
@@ -820,12 +949,25 @@ impl EditorUi {
                 s.autosave();
             }
         }
+        // follow the desktop's light/dark switch while asked to
+        if self.prefs.follow_system
+            && let Some(sys) = ui.ctx().system_theme()
+        {
+            let want = sys == egui::Theme::Dark;
+            if want != theme::is_dark() {
+                theme::set_dark(&ui.ctx().clone(), want);
+            }
+        }
         if !self.theme_applied {
             let ctx = ui.ctx().clone();
             if let Some([r, g, b]) = self.prefs.accent {
                 theme::set_accent(&ctx, Some(Color32::from_rgb(r, g, b)));
             }
+            theme::set_look(&ctx, self.prefs.look());
             theme::set_dark(&ctx, self.prefs.dark.unwrap_or(true));
+            if let Some(z) = self.prefs.ui_scale {
+                ctx.set_zoom_factor(z.clamp(0.5, 3.0));
+            }
             if let Some(level) = self.prefs.log_level.as_deref() {
                 logging::set_level(logging::level_from_str(level));
             }
@@ -2164,56 +2306,6 @@ impl EditorUi {
             }
         });
     }
-
-    /// Cubism's Model Statistics dialog: object and geometry counts.
-    fn stats_window(&mut self, ui: &mut Ui) {
-        if !self.show_stats {
-            return;
-        }
-        let mut open = self.show_stats;
-        egui::Window::new("Model Statistics")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                let Some(s) = &self.session else {
-                    ui.weak("No model loaded.");
-                    return;
-                };
-                let m = s.puppet.model();
-                let (mut verts, mut tris, mut keyforms) = (0usize, 0usize, 0usize);
-                for am in &m.art_meshes {
-                    verts += am.vertex_count as usize;
-                    tris += am.indices.len() / 3;
-                    let stride = (am.vertex_count as usize).saturating_mul(2);
-                    keyforms += am.positions.len().checked_div(stride).unwrap_or(0);
-                }
-                let warps =
-                    m.deformers.iter().filter(|d| matches!(d.kind, DeformerKind::Warp(_))).count();
-                ui.set_width(260.0);
-                egui::Grid::new("stats").num_columns(2).spacing([24.0, 4.0]).show(ui, |ui| {
-                    for (label, value) in [
-                        ("Canvas", format!("{} × {} px", m.canvas.width, m.canvas.height)),
-                        ("Parameters", m.parameters.len().to_string()),
-                        ("Parts", m.parts.len().to_string()),
-                        ("Deformers", m.deformers.len().to_string()),
-                        ("  Warp", warps.to_string()),
-                        ("  Rotation", (m.deformers.len() - warps).to_string()),
-                        ("ArtMeshes", m.art_meshes.len().to_string()),
-                        ("Vertices", verts.to_string()),
-                        ("Triangles", tris.to_string()),
-                        ("Keyforms", keyforms.to_string()),
-                        ("Textures", s.texture_names.len().to_string()),
-                    ] {
-                        ui.weak(label);
-                        ui.label(value);
-                        ui.end_row();
-                    }
-                });
-            });
-        self.show_stats = open;
-    }
-
     fn workspace_windows(&mut self, ui: &mut Ui) {
         let mut open = self.show_ws_save;
         let mut saved = false;
@@ -2275,18 +2367,28 @@ impl EditorUi {
         // a Photoshop-style home: brand band, actions, recents with previews
         let band = Rect::from_min_size(rect.min, vec2(rect.width(), 150.0));
         ui.painter().rect_filled(band, 0.0, theme::pal().header);
-        // a quiet accent wash fading out of the left edge, Adobe style
-        let accent = theme::pal().accent;
-        for i in 0..24 {
-            let t = i as f32 / 24.0;
-            let w = band.width() * 0.45;
-            ui.painter().rect_filled(
-                Rect::from_min_size(
-                    pos2(band.min.x + w * t, band.min.y),
-                    vec2(w / 24.0 + 1.0, band.height()),
-                ),
-                0.0,
-                accent.gamma_multiply(0.05 * (1.0 - t)),
+        // a quiet accent wash fading across the header, Adobe style. The
+        // whole fade spans only a dozen 8-bit shades, so drawn directly each
+        // shade shows as a flat stripe; baking it with per-pixel noise lets
+        // the eye average neighbouring shades into a smooth ramp
+        let ppp = ui.ctx().pixels_per_point();
+        let key = WashKey {
+            w: (band.width() * ppp).round().max(1.0) as u32,
+            h: (band.height() * ppp).round().max(1.0) as u32,
+            base: theme::pal().header.to_array(),
+            accent: theme::pal().accent.to_array(),
+        };
+        if self.home_wash.as_ref().is_none_or(|(k, _)| *k != key) {
+            let img = dithered_wash(&key);
+            let tex = ui.ctx().load_texture("home-wash", img, egui::TextureOptions::NEAREST);
+            self.home_wash = Some((key, tex));
+        }
+        if let Some((_, tex)) = &self.home_wash {
+            ui.painter().image(
+                tex.id(),
+                band,
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
             );
         }
         ui.painter().line_segment(
@@ -2346,6 +2448,10 @@ impl EditorUi {
             ui.add_space(10.0);
             ui.weak("or drop a .aom / .moc3 / .model3.json anywhere");
         });
+        if let Some(note) = &self.home_note {
+            ui.add_space(6.0);
+            ui.colored_label(theme::pal().rotation_red, note);
+        }
         ui.add_space(16.0);
 
         if self.prefs.recents.is_empty() {
@@ -2356,12 +2462,15 @@ impl EditorUi {
         ui.add_space(8.0);
         let recents: Vec<PathBuf> = self.prefs.recents.iter().take(8).cloned().collect();
         let mut open_this: Option<PathBuf> = None;
+        let mut card_cmd: Option<HomeCmd> = None;
         ScrollArea::vertical().id_salt("home-recents").show(&mut ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for r in &recents {
                     let card_w = 150.0;
                     let card_h = 230.0;
                     let (card, resp) = ui.allocate_exact_size(vec2(card_w, card_h), Sense::click());
+                    let exists = r.exists();
+                    resp.context_menu(|ui| home_card_menu(ui, r, exists, &mut card_cmd));
                     let hovered = resp.hovered();
                     ui.painter().rect_filled(
                         card,
@@ -2406,8 +2515,7 @@ impl EditorUi {
                             );
                         }
                     }
-                    let name =
-                        r.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = card_name(r);
                     ui.painter().text(
                         pos2(card.center().x, card.max.y - 20.0),
                         Align2::CENTER_CENTER,
@@ -2415,7 +2523,23 @@ impl EditorUi {
                         FontId::proportional(12.0),
                         theme::pal().text,
                     );
-                    if resp.clicked() {
+                    if !exists {
+                        // moved or deleted since: say so, the menu offers removal
+                        ui.painter().rect_filled(
+                            card,
+                            6.0,
+                            theme::pal().chrome.gamma_multiply(0.7),
+                        );
+                        ui.painter().text(
+                            card.center(),
+                            Align2::CENTER_CENTER,
+                            "File not found",
+                            FontId::proportional(12.0),
+                            theme::pal().text_faint,
+                        );
+                    }
+                    let resp = resp.on_hover_text(r.display().to_string());
+                    if resp.clicked() && exists {
                         open_this = Some(r.clone());
                     }
                 }
@@ -2423,6 +2547,113 @@ impl EditorUi {
         });
         if let Some(path) = open_this {
             self.import(&ui.ctx().clone(), path);
+        }
+        if let Some(cmd) = card_cmd {
+            self.run_home_cmd(&ui.ctx().clone(), cmd);
+        }
+        self.home_rename_window(&ui.ctx().clone());
+    }
+
+    fn run_home_cmd(&mut self, ctx: &egui::Context, cmd: HomeCmd) {
+        self.home_note = None;
+        match cmd {
+            HomeCmd::Open(p) => self.import(ctx, p),
+            HomeCmd::OpenNewWindow(p) => {
+                let spawned = std::env::current_exe()
+                    .and_then(|exe| std::process::Command::new(exe).arg(&p).spawn());
+                if let Err(e) = spawned {
+                    self.home_note = Some(format!("Could not open a new window: {e}"));
+                }
+            }
+            HomeCmd::ShowInFolder(p) => {
+                if let Err(e) = show_in_folder(&p) {
+                    self.home_note = Some(format!("Could not open the folder: {e}"));
+                }
+            }
+            HomeCmd::CopyPath(p) => ctx.copy_text(p.display().to_string()),
+            HomeCmd::Rename(p) => {
+                let name = card_name(&p);
+                self.home_rename = Some((p, name));
+            }
+            HomeCmd::Duplicate(p) => match duplicate_file(&p) {
+                Ok(copy) => {
+                    // a copy is new work: list it right after the original
+                    let at = self.prefs.recents.iter().position(|r| r == &p).map_or(0, |i| i + 1);
+                    self.prefs.recents.insert(at.min(self.prefs.recents.len()), copy);
+                    self.prefs.recents.truncate(8);
+                    self.prefs.save();
+                }
+                Err(e) => self.home_note = Some(format!("Could not duplicate: {e}")),
+            },
+            HomeCmd::Remove(p) => {
+                self.prefs.recents.retain(|r| r != &p);
+                self.home_thumbs.remove(&p);
+                self.prefs.save();
+            }
+            HomeCmd::RemoveMissing => {
+                self.prefs.recents.retain(|r| r.exists());
+                self.prefs.save();
+            }
+            HomeCmd::ClearAll => {
+                self.prefs.recents.clear();
+                self.home_thumbs.clear();
+                self.prefs.save();
+            }
+        }
+    }
+
+    /// Rename a recent file on disk, keeping its extension (all of it, so
+    /// `.model3.json` stays whole), its place in the list and its preview.
+    fn home_rename_window(&mut self, ctx: &egui::Context) {
+        let Some((path, mut name)) = self.home_rename.take() else { return };
+        let mut keep = true;
+        let mut commit = false;
+        egui::Window::new("Rename")
+            .collapsible(false)
+            .resizable(false)
+            .pivot(Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(220.0));
+                    if !edit.has_focus() && !edit.lost_focus() {
+                        edit.request_focus();
+                    }
+                    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        commit = true;
+                    }
+                    ui.weak(full_extension(&path));
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Rename").clicked() {
+                        commit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep = false;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            keep = false;
+        }
+        if commit {
+            match rename_file(&path, name.trim()) {
+                Ok(new) => {
+                    for r in &mut self.prefs.recents {
+                        if *r == path {
+                            *r = new.clone();
+                        }
+                    }
+                    self.home_thumbs.remove(&path);
+                    self.prefs.save();
+                }
+                Err(e) => self.home_note = Some(format!("Could not rename: {e}")),
+            }
+            keep = false;
+        }
+        if keep {
+            self.home_rename = Some((path, name));
         }
     }
 
@@ -2449,7 +2680,7 @@ impl EditorUi {
         self.home_thumbs.insert(source.clone(), loaded);
         out
     }
-    fn logo_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+    pub(crate) fn logo_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
         let want_dark = theme::is_dark();
         if let Some(c) = &self.logo
             && c.dark == want_dark
@@ -2468,410 +2699,6 @@ impl EditorUi {
         let id = handle.id();
         self.logo = Some(TextureHandleCache { dark: want_dark, handle });
         Some(id)
-    }
-
-    fn about_window(&mut self, ui: &mut Ui) {
-        if !self.show_about {
-            return;
-        }
-        let logo = self.logo_texture(&ui.ctx().clone());
-        let logo_size = self.logo.as_ref().map(|c| c.handle.size_vec2()).unwrap_or(vec2(1.0, 1.0));
-        let mut open = self.show_about;
-        egui::Window::new("About Ayatsuri2D")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .default_pos(ui.ctx().content_rect().center() - vec2(170.0, 150.0))
-            .show(ui.ctx(), |ui| {
-                ui.set_width(330.0);
-                ui.vertical_centered(|ui| {
-                    ui.add_space(10.0);
-                    if let Some(id) = logo {
-                        let w = 230.0f32.min(logo_size.x);
-                        ui.image((id, vec2(w, w * logo_size.y / logo_size.x.max(1.0))));
-                    } else {
-                        ui.label(
-                            egui::RichText::new("操り2D").color(theme::pal().accent).size(34.0),
-                        );
-                    }
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(format!("version {}", env!("CARGO_PKG_VERSION")))
-                            .color(theme::pal().text_faint)
-                            .size(11.5),
-                    );
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    ui.label("An open, native 2D puppet runtime and editor.");
-                    ui.label("Imports and round-trips moc3; .aom is the native format.");
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Format research by the Alterion project, cross-checked against \
-                             PurismCore and OpenL2D.",
-                        )
-                        .size(11.0)
-                        .color(theme::pal().text_faint),
-                    );
-                    ui.label(
-                        egui::RichText::new("GPL-3.0 · openmoc3 MIT · C ABI Apache-2.0")
-                            .size(11.0)
-                            .color(theme::pal().text_faint),
-                    );
-                    ui.add_space(10.0);
-                });
-            });
-        self.show_about = open;
-    }
-
-    fn settings_window(&mut self, ui: &mut Ui) {
-        let mut open = self.show_settings;
-        egui::Window::new("Preferences").open(&mut open).collapsible(false).resizable(false).show(
-            ui.ctx(),
-            |ui| {
-                ui.set_width(640.0);
-                ui.set_height(380.0);
-                ui.horizontal_top(|ui| {
-                    // the Adobe-style category rail
-                    ui.vertical(|ui| {
-                        ui.set_width(150.0);
-                        for (i, name) in
-                            ["General", "Appearance", "View", "Performance", "Keyboard"]
-                                .iter()
-                                .enumerate()
-                        {
-                            let on = self.settings_tab == i;
-                            let (rect, resp) =
-                                ui.allocate_exact_size(vec2(146.0, 24.0), Sense::click());
-                            if on {
-                                ui.painter().rect_filled(rect, 3.0, theme::pal().select);
-                                ui.painter().rect_filled(
-                                    Rect::from_min_size(rect.min, vec2(2.5, 24.0)),
-                                    1.0,
-                                    theme::pal().accent,
-                                );
-                            } else if resp.hovered() {
-                                ui.painter().rect_filled(rect, 3.0, theme::pal().header);
-                            }
-                            ui.painter().text(
-                                rect.left_center() + vec2(10.0, 0.0),
-                                Align2::LEFT_CENTER,
-                                *name,
-                                FontId::proportional(12.0),
-                                theme::pal().text,
-                            );
-                            if resp.clicked() {
-                                self.settings_tab = i;
-                            }
-                        }
-                    });
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.set_width(450.0);
-                        match self.settings_tab {
-                            0 => self.settings_general(ui),
-                            1 => self.settings_appearance(ui),
-                            2 => self.settings_view(ui),
-                            3 => self.settings_performance(ui),
-                            _ => self.settings_keyboard(ui),
-                        }
-                    });
-                });
-            },
-        );
-        self.show_settings = open;
-    }
-
-    fn settings_general(&mut self, ui: &mut Ui) {
-        ui.heading("General");
-        ui.add_space(6.0);
-        let mut reopen = self.prefs.reopen_last;
-        if ui.checkbox(&mut reopen, "Reopen the last model on launch").changed() {
-            self.prefs.reopen_last = reopen;
-            self.prefs.save();
-        }
-        let mut full = self.prefs.start_fullscreen;
-        if ui.checkbox(&mut full, "Start in fullscreen").changed() {
-            self.prefs.start_fullscreen = full;
-            self.prefs.save();
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(full));
-        }
-        ui.add_space(10.0);
-        ui.label(egui::RichText::new("Discord Rich Presence").strong());
-        let mut changed = false;
-        let mut on = !self.prefs.discord_off;
-        if ui.checkbox(&mut on, "Show what I'm doing on Discord").changed() {
-            self.prefs.discord_off = !on;
-            changed = true;
-        }
-        ui.horizontal(|ui| {
-            ui.label("Application ID (optional)");
-            changed |= ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.prefs.discord_app_id)
-                        .hint_text("Ayatsuri2D's own")
-                        .desired_width(200.0),
-                )
-                .changed();
-        });
-        changed |= ui
-            .checkbox(&mut self.prefs.discord_show_name, "Show the model's name")
-            .on_hover_text("Off shows \"Editing a model\" instead of the file name")
-            .changed();
-        ui.weak("Needs the Discord app running; reconnects on its own if Discord restarts.");
-        if changed {
-            self.prefs.save();
-        }
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label(format!("{} recent files", self.prefs.recents.len()));
-            if ui.small_button("Clear").clicked() {
-                self.prefs.recents.clear();
-                self.prefs.save();
-            }
-        });
-        ui.separator();
-        ui.heading("Logging");
-        ui.add_space(4.0);
-        let current = self.prefs.log_level.clone().unwrap_or_else(|| "info".into());
-        ui.horizontal(|ui| {
-            ui.label("Level");
-            for name in ["error", "warn", "info", "debug", "trace"] {
-                if ui.selectable_label(current == name, name).clicked() {
-                    self.prefs.log_level = Some(name.to_string());
-                    self.prefs.save();
-                    logging::set_level(logging::level_from_str(name));
-                }
-            }
-        });
-        if let Some(p) = logging::log_path() {
-            ui.weak(format!("Logs save to {}", p.display()));
-        }
-    }
-
-    fn settings_appearance(&mut self, ui: &mut Ui) {
-        ui.heading("Appearance");
-        ui.add_space(6.0);
-        let dark = theme::is_dark();
-        ui.horizontal(|ui| {
-            ui.label("Theme");
-            if ui.selectable_label(!dark, "Light").clicked() && dark {
-                theme::set_dark(&ui.ctx().clone(), false);
-                self.prefs.dark = Some(false);
-                self.prefs.save();
-            }
-            if ui.selectable_label(dark, "Dark").clicked() && !dark {
-                theme::set_dark(&ui.ctx().clone(), true);
-                self.prefs.dark = Some(true);
-                self.prefs.save();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Primary color");
-            let c = theme::accent();
-            let mut rgb = [c.r(), c.g(), c.b()];
-            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                theme::set_accent(
-                    &ui.ctx().clone(),
-                    Some(Color32::from_rgb(rgb[0], rgb[1], rgb[2])),
-                );
-                self.prefs.accent = Some(rgb);
-                self.prefs.save();
-            }
-            if ui.small_button("Reset").clicked() {
-                theme::set_accent(&ui.ctx().clone(), None);
-                self.prefs.accent = None;
-                self.prefs.save();
-            }
-        });
-    }
-
-    fn settings_view(&mut self, ui: &mut Ui) {
-        ui.heading("View");
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label("Canvas background");
-            let cur = self.prefs.view_bg.unwrap_or({
-                let c = theme::pal().canvas_bg;
-                [c.r(), c.g(), c.b()]
-            });
-            let mut rgb = cur;
-            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                self.prefs.view_bg = Some(rgb);
-                self.prefs.save();
-            }
-            if ui.small_button("Reset").clicked() {
-                self.prefs.view_bg = None;
-                self.prefs.save();
-            }
-        });
-        ui.add_space(6.0);
-        ui.weak("Anti-aliasing: 4x MSAA on the model, mipmapped textures.");
-        ui.add_space(8.0);
-        ui.separator();
-        ui.heading("Canvas overlays");
-        ui.set_max_width(360.0);
-        self.overlay_settings(ui);
-    }
-
-    fn settings_performance(&mut self, ui: &mut Ui) {
-        ui.heading("Performance");
-        ui.add_space(6.0);
-        if let Some(s) = &self.session {
-            let verts: usize = s.puppet.drawables().map(|d| d.positions.len() / 2).sum();
-            egui::Grid::new("perf").num_columns(2).spacing([24.0, 2.0]).show(ui, |ui| {
-                ui.weak("Last evaluate");
-                ui.weak(format!("{:.2} ms", s.last_update_ms));
-                ui.end_row();
-                ui.weak("Visible meshes");
-                ui.weak(format!("{}", s.puppet.drawables().count()));
-                ui.end_row();
-                ui.weak("Vertices");
-                ui.weak(format!("{verts}"));
-                ui.end_row();
-            });
-        } else {
-            ui.weak("No model loaded.");
-        }
-        ui.add_space(8.0);
-        ui.separator();
-        ui.heading("Limits");
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label("Animation FPS cap");
-            for (label, v) in [("Off", 0u32), ("30", 30), ("60", 60), ("120", 120)] {
-                if ui.selectable_label(self.prefs.fps_cap == v, label).clicked() {
-                    self.prefs.fps_cap = v;
-                    self.prefs.save();
-                }
-            }
-        });
-        ui.weak("Caps how often physics and cursor follow redraw. 30 is easy on laptops.");
-        ui.add_space(6.0);
-        let cur_msaa = match self.prefs.msaa {
-            1 | 2 | 4 | 8 => self.prefs.msaa,
-            _ => 4,
-        };
-        ui.horizontal(|ui| {
-            ui.label("Model anti-aliasing");
-            for (label, v) in [("Off", 1u32), ("2x", 2), ("4x", 4), ("8x", 8)] {
-                if ui.selectable_label(cur_msaa == v, label).clicked() {
-                    self.prefs.msaa = v;
-                    self.prefs.save();
-                }
-            }
-        });
-        ui.weak("Takes effect after a restart. Off is the cheapest on old GPUs.");
-        ui.add_space(6.0);
-        ui.weak("Renderer: wgpu (native GPU), shared with the UI.");
-    }
-
-    fn settings_keyboard(&mut self, ui: &mut Ui) {
-        ui.heading("Keyboard");
-        ui.add_space(6.0);
-        ui.weak("Click a binding, then press the new keys. Esc cancels.");
-        ui.add_space(4.0);
-
-        // an armed row eats the next real key press
-        if let Some(action) = self.rebind {
-            let captured = ui.ctx().input(|i| {
-                i.events.iter().find_map(|e| {
-                    if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-                        Some((*key, *modifiers))
-                    } else {
-                        None
-                    }
-                })
-            });
-            if let Some((key, modifiers)) = captured {
-                if key == egui::Key::Escape {
-                    self.rebind = None;
-                } else {
-                    let sc = egui::KeyboardShortcut::new(modifiers, key);
-                    let text = format_shortcut(&sc);
-                    self.prefs.keybinds.retain(|(a, _)| a != action);
-                    self.prefs.keybinds.push((action.to_string(), text.clone()));
-                    self.prefs.save();
-                    log::info!("{action} rebound to {text}");
-                    self.rebind = None;
-                }
-            }
-        }
-
-        // a binding used twice gets flagged, so clashes are easy to spot
-        let texts: Vec<String> =
-            KEY_ACTIONS.iter().map(|a| format_shortcut(&self.bound(a.1))).collect();
-        ui.horizontal(|ui| {
-            ui.label(egui_phosphor::regular::MAGNIFYING_GLASS);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.key_filter)
-                    .hint_text("Search actions or keys")
-                    .desired_width(260.0),
-            );
-            if !self.key_filter.is_empty() && ui.small_button("Clear").clicked() {
-                self.key_filter.clear();
-            }
-        });
-        ui.add_space(4.0);
-        let needle = self.key_filter.to_lowercase();
-        let mut current = "";
-        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-            egui::Grid::new("keys").num_columns(3).spacing([24.0, 5.0]).show(ui, |ui| {
-                for (n, &(cat, action, label, _, _)) in KEY_ACTIONS.iter().enumerate() {
-                    // the search matches the action, its category or its keys
-                    if !needle.is_empty() {
-                        let keys = texts.get(n).map(|t| t.to_lowercase()).unwrap_or_default();
-                        let hit = label.to_lowercase().contains(&needle)
-                            || cat.to_lowercase().contains(&needle)
-                            || keys.contains(&needle);
-                        if !hit {
-                            continue;
-                        }
-                    }
-                    if cat != current {
-                        current = cat;
-                        ui.label(egui::RichText::new(cat).strong().color(theme::pal().text_faint));
-                        ui.end_row();
-                    }
-                    ui.label(label);
-                    let armed = self.rebind == Some(action);
-                    let text = texts.get(n).cloned().unwrap_or_default();
-                    let clash = texts.iter().filter(|t| **t == text).count() > 1;
-                    let shown = if armed { "press keys…".to_string() } else { text };
-                    let rich = if armed {
-                        egui::RichText::new(shown).color(theme::pal().accent)
-                    } else if clash {
-                        egui::RichText::new(shown).color(theme::pal().rotation_red)
-                    } else {
-                        egui::RichText::new(shown)
-                    };
-                    let btn = ui.add_sized(vec2(150.0, 20.0), egui::Button::new(rich));
-                    let btn =
-                        if clash { btn.on_hover_text("Also used by another action") } else { btn };
-                    if btn.clicked() {
-                        self.rebind = Some(action);
-                    }
-                    if self.prefs.keybinds.iter().any(|(a, _)| a == action) {
-                        if ui.small_button("Reset").clicked() {
-                            self.prefs.keybinds.retain(|(a, _)| a != action);
-                            self.prefs.save();
-                        }
-                    } else {
-                        ui.label("");
-                    }
-                    ui.end_row();
-                }
-            });
-        });
-        ui.add_space(8.0);
-        if !self.prefs.keybinds.is_empty() && ui.button("Reset all to defaults").clicked() {
-            self.prefs.keybinds.clear();
-            self.prefs.save();
-        }
-        ui.add_space(8.0);
-        ui.separator();
-        ui.weak("Built in: Space+drag pans, scroll zooms, Alt+click walks up deformers, Esc cancels or clears, Delete removes, [ and ] size brushes, B+drag sizes the selection brush, K keys the selected parameter.");
     }
 
     fn panel_contents(&mut self, ui: &mut Ui, p: PanelKind, content: Rect) {
@@ -3247,101 +3074,6 @@ impl EditorUi {
             self.new_anim = None;
         }
     }
-
-    fn export_window(&mut self, ui: &mut Ui) {
-        let Some(dlg) = &mut self.export_dlg else { return };
-        let mut open = true;
-        let mut go = false;
-        egui::Window::new("Export as moc3")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                egui::Grid::new("export").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut dlg.name);
-                    ui.end_row();
-                    ui.label("moc3 version");
-                    egui::ComboBox::from_id_salt("moc-ver")
-                        .selected_text(
-                            ayatsuri_import::ExportVersion::ALL
-                                .get(dlg.version)
-                                .map(|v| v.label())
-                                .unwrap_or("4.2"),
-                        )
-                        .show_ui(ui, |ui| {
-                            for (i, v) in ayatsuri_import::ExportVersion::ALL.iter().enumerate() {
-                                ui.selectable_value(&mut dlg.version, i, v.label());
-                            }
-                        });
-                    ui.end_row();
-                    ui.label("Include");
-                    ui.vertical(|ui| {
-                        ui.checkbox(&mut dlg.physics, "physics3.json");
-                        ui.checkbox(&mut dlg.motions, "motion3.json for each animation");
-                    });
-                    ui.end_row();
-                });
-                ui.weak("Writes <name>.moc3, .model3.json, .cdi3.json and the textures.");
-                if let (Some(s), Some(v)) =
-                    (&self.session, ayatsuri_import::ExportVersion::ALL.get(dlg.version))
-                {
-                    for w in ayatsuri_import::export_warnings(s.puppet.model(), *v) {
-                        let lossy = !w.starts_with("physics");
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} {w}",
-                                if lossy {
-                                    egui_phosphor::regular::WARNING
-                                } else {
-                                    egui_phosphor::regular::INFO
-                                }
-                            ))
-                            .size(11.0)
-                            .color(if lossy {
-                                theme::pal().accent
-                            } else {
-                                theme::pal().text_faint
-                            }),
-                        );
-                    }
-                }
-                if ui.button(egui::RichText::new("Export…").strong()).clicked() {
-                    go = true;
-                }
-            });
-        if go {
-            let Some(dlg) = self.export_dlg.take() else { return };
-            let Some(dir) = rfd::FileDialog::new().pick_folder() else {
-                self.export_dlg = Some(dlg);
-                return;
-            };
-            let version = ayatsuri_import::ExportVersion::ALL
-                .get(dlg.version)
-                .copied()
-                .unwrap_or(ayatsuri_import::ExportVersion::V5_03);
-            if let Some(s) = &self.session {
-                let opt = crate::export::Options {
-                    name: dlg.name.clone(),
-                    version,
-                    physics: dlg.physics,
-                    motions: dlg.motions,
-                };
-                match crate::export::export(s, &dir, &opt) {
-                    Ok(files) => log::info!(
-                        "exported {} files (moc3 {}) to {}",
-                        files.len(),
-                        version.label(),
-                        dir.display()
-                    ),
-                    Err(e) => log::error!("export failed: {e}"),
-                }
-            }
-        } else if !open {
-            self.export_dlg = None;
-        }
-    }
-
     // ---- Parameter palette -------------------------------------------------
 
     fn edit_target(&self) -> Option<(ayatsuri_core::edit::Target, String)> {
@@ -3425,7 +3157,7 @@ impl EditorUi {
 
     /// The shortcut for an action: the user's remap when one is saved, the
     /// Cubism-style default otherwise.
-    fn bound(&self, action: &str) -> egui::KeyboardShortcut {
+    pub(crate) fn bound(&self, action: &str) -> egui::KeyboardShortcut {
         if let Some((_, text)) = self.prefs.keybinds.iter().find(|(a, _)| a == action)
             && let Some(sc) = parse_shortcut(text)
         {
@@ -3790,41 +3522,6 @@ impl EditorUi {
             self.new_model = None;
         }
     }
-
-    fn model_info_window(&mut self, ui: &mut Ui) {
-        if !self.show_model_info {
-            return;
-        }
-        let mut open = self.show_model_info;
-        egui::Window::new("Model Info").open(&mut open).collapsible(false).resizable(false).show(
-            ui.ctx(),
-            |ui| {
-                let Some(s) = &mut self.session else {
-                    ui.weak("No model loaded.");
-                    return;
-                };
-                ui.set_width(280.0);
-                egui::Grid::new("minfo").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut s.name);
-                    ui.end_row();
-                    ui.label("Author");
-                    ui.text_edit_singleline(&mut s.author);
-                    ui.end_row();
-                    let c = s.puppet.model().canvas;
-                    ui.label("Canvas");
-                    ui.weak(format!(
-                        "{} × {} px, {} px/unit",
-                        c.width, c.height, c.pixels_per_unit
-                    ));
-                    ui.end_row();
-                });
-                ui.weak("Name and author save into the .aom meta block.");
-            },
-        );
-        self.show_model_info = open;
-    }
-
     fn param_new_window(&mut self, ui: &mut Ui) {
         let Some(new) = &mut self.new_param else { return };
         let mut open = true;
@@ -7499,7 +7196,7 @@ fn parent_delta(
 /// Everything a shortcut can be rebound to, with Cubism-flavoured defaults.
 /// Every shortcut, with Cubism's defaults (docs.live2d.com shortcut list):
 /// (category, action id, label, modifiers, key). Rebindable in Settings.
-const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] = {
+pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] = {
     use egui::Key as K;
     use egui::Modifiers as M;
     const C: M = M::COMMAND;
@@ -7542,7 +7239,7 @@ const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] = {
     ]
 };
 
-fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
+pub(crate) fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
     let mut out = String::new();
     if sc.modifiers.command || sc.modifiers.ctrl {
         out.push_str("Ctrl+");
@@ -8222,5 +7919,211 @@ fn combined_pad(
             s.puppet.set_value(p, dv);
             s.dirty = true;
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WashKey {
+    pub(crate) w: u32,
+    pub(crate) h: u32,
+    pub(crate) base: [u8; 4],
+    pub(crate) accent: [u8; 4],
+}
+
+/// The header wash as an opaque image: the accent laid over the header
+/// colour at 6% on the left, easing to nothing on the right, with triangular
+/// noise of about one shade so no stripes form.
+pub(crate) fn dithered_wash(k: &WashKey) -> egui::ColorImage {
+    let [br, bg, bb, _] = k.base;
+    let [ar, ag, ab, _] = k.accent;
+    let (w, h) = (k.w as usize, k.h as usize);
+    let mut px = Vec::with_capacity(w.saturating_mul(h));
+    for y in 0..h {
+        for x in 0..w {
+            let t = x as f32 / w.max(2).saturating_sub(1) as f32;
+            let a = 0.06 * (1.0 - t * t * (3.0 - 2.0 * t));
+            // two hashed uniforms summed give triangular noise in -1..1
+            let n = noise(x as u32, y as u32, 0) + noise(x as u32, y as u32, 1) - 1.0;
+            let mix = |b: u8, c: u8| {
+                (f32::from(b) + (f32::from(c) - f32::from(b)) * a + n).round().clamp(0.0, 255.0)
+                    as u8
+            };
+            px.push(Color32::from_rgb(mix(br, ar), mix(bg, ag), mix(bb, ab)));
+        }
+    }
+    egui::ColorImage { size: [w, h], source_size: vec2(w as f32, h as f32), pixels: px }
+}
+
+/// A cheap integer hash to 0..1, stable per pixel so the grain never crawls.
+fn noise(x: u32, y: u32, salt: u32) -> f32 {
+    let mut v =
+        x.wrapping_mul(0x8da6_b343) ^ y.wrapping_mul(0xd816_3841) ^ salt.wrapping_mul(0xcb1a_b31f);
+    v ^= v >> 13;
+    v = v.wrapping_mul(0x5bd1_e995);
+    v ^= v >> 15;
+    (v & 0xffff) as f32 / 65535.0
+}
+
+/// What a home card's context menu asked for, applied after the card loop.
+enum HomeCmd {
+    Open(PathBuf),
+    OpenNewWindow(PathBuf),
+    ShowInFolder(PathBuf),
+    CopyPath(PathBuf),
+    Rename(PathBuf),
+    Duplicate(PathBuf),
+    Remove(PathBuf),
+    RemoveMissing,
+    ClearAll,
+}
+
+fn home_card_menu(ui: &mut Ui, path: &Path, exists: bool, cmd: &mut Option<HomeCmd>) {
+    let p = || path.to_path_buf();
+    let mut pick = |ui: &mut Ui, label: &str, enabled: bool, c: HomeCmd| {
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            *cmd = Some(c);
+            ui.close();
+        }
+    };
+    pick(ui, "Open", exists, HomeCmd::Open(p()));
+    pick(ui, "Open in New Window", exists, HomeCmd::OpenNewWindow(p()));
+    ui.separator();
+    pick(ui, "Show in Folder", exists, HomeCmd::ShowInFolder(p()));
+    pick(ui, "Copy Path", true, HomeCmd::CopyPath(p()));
+    ui.separator();
+    pick(ui, "Rename…", exists, HomeCmd::Rename(p()));
+    pick(ui, "Duplicate", exists, HomeCmd::Duplicate(p()));
+    ui.separator();
+    pick(ui, "Remove from Recent", true, HomeCmd::Remove(p()));
+    pick(ui, "Remove Missing Files", true, HomeCmd::RemoveMissing);
+    pick(ui, "Clear Recent", true, HomeCmd::ClearAll);
+}
+
+/// Everything after the first dot of the file name, dot included, so
+/// `ariu.model3.json` keeps `.model3.json` whole.
+fn full_extension(path: &Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    name.find('.').filter(|&i| i > 0).map(|i| name[i..].to_string()).unwrap_or_default()
+}
+
+/// The file name without its full extension, as the cards show it.
+fn card_name(path: &Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = full_extension(path);
+    name.strip_suffix(ext.as_str()).unwrap_or(&name).to_string()
+}
+
+fn rename_file(path: &Path, stem: &str) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    if stem.is_empty() || stem.contains(['/', '\\']) || stem == "." || stem == ".." {
+        return Err(Error::new(ErrorKind::InvalidInput, "that is not a valid file name"));
+    }
+    let target = path.with_file_name(format!("{stem}{}", full_extension(path)));
+    if target == path {
+        return Ok(target);
+    }
+    if target.exists() {
+        return Err(Error::new(ErrorKind::AlreadyExists, "a file with that name already exists"));
+    }
+    let old_thumb = crate::thumb::cache_path(path);
+    std::fs::rename(path, &target)?;
+    // a rename keeps size and mtime, so the cached preview carries over
+    if let (Some(from), Some(to)) = (old_thumb, crate::thumb::cache_path(&target)) {
+        let _ = std::fs::rename(from, to);
+    }
+    Ok(target)
+}
+
+/// `name copy.ext`, then `name copy 2.ext` and so on, never overwriting.
+fn duplicate_file(path: &Path) -> std::io::Result<PathBuf> {
+    let (stem, ext) = (card_name(path), full_extension(path));
+    let target = (1..1000)
+        .map(|n| {
+            let suffix = if n == 1 { " copy".to_string() } else { format!(" copy {n}") };
+            path.with_file_name(format!("{stem}{suffix}{ext}"))
+        })
+        .find(|t| !t.exists())
+        .ok_or_else(|| std::io::Error::other("too many copies"))?;
+    std::fs::copy(path, &target)?;
+    Ok(target)
+}
+
+/// Open the system file manager with the file selected where the platform
+/// allows it, else on its folder.
+fn show_in_folder(path: &Path) -> std::io::Result<()> {
+    use std::process::Command;
+    if cfg!(target_os = "macos") {
+        return Command::new("open").arg("-R").arg(path).spawn().map(|_| ());
+    }
+    if cfg!(target_os = "windows") {
+        let mut arg = std::ffi::OsString::from("/select,");
+        arg.push(path);
+        return Command::new("explorer").arg(arg).spawn().map(|_| ());
+    }
+    // the freedesktop file manager interface selects the file (Dolphin,
+    // Nautilus, Nemo, Thunar...); plain xdg-open on the folder otherwise
+    let uri = format!("file://{}", path.display());
+    let selected = Command::new("dbus-send")
+        .args([
+            "--session",
+            "--print-reply",
+            "--dest=org.freedesktop.FileManager1",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+        ])
+        .arg(format!("array:string:{uri}"))
+        .arg("string:")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if selected {
+        return Ok(());
+    }
+    let folder = path.parent().unwrap_or(path);
+    Command::new("xdg-open").arg(folder).spawn().map(|_| ())
+}
+
+#[cfg(test)]
+mod home_file_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ayatsuri-home-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn extensions_stay_whole() {
+        assert_eq!(full_extension(Path::new("/m/ariu.model3.json")), ".model3.json");
+        assert_eq!(card_name(Path::new("/m/ariu.model3.json")), "ariu");
+        assert_eq!(full_extension(Path::new("/m/rig.aom")), ".aom");
+        assert_eq!(card_name(Path::new("/m/.hidden")), ".hidden");
+        assert_eq!(card_name(Path::new("/m/plain")), "plain");
+    }
+
+    #[test]
+    fn rename_keeps_extension_and_refuses_clobber() {
+        let dir = scratch("rename");
+        let a = dir.join("a.model3.json");
+        std::fs::write(&a, b"{}").unwrap();
+        std::fs::write(dir.join("taken.model3.json"), b"{}").unwrap();
+        let b = rename_file(&a, "b").unwrap();
+        assert_eq!(b, dir.join("b.model3.json"));
+        assert!(b.exists() && !a.exists());
+        assert!(rename_file(&b, "taken").is_err());
+        assert!(rename_file(&b, "../escape").is_err());
+        assert!(rename_file(&b, "").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn duplicate_never_overwrites() {
+        let dir = scratch("dup");
+        let a = dir.join("rig.aom");
+        std::fs::write(&a, b"x").unwrap();
+        assert_eq!(duplicate_file(&a).unwrap(), dir.join("rig copy.aom"));
+        assert_eq!(duplicate_file(&a).unwrap(), dir.join("rig copy 2.aom"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

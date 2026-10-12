@@ -869,3 +869,14 @@ fn keys_of(model: &Model) -> Vec<Vec<f32>> {
     }
     param_keys
 }
+
+// models load on a worker thread so the window keeps answering; that
+// needs a Session to be movable between threads
+#[cfg(test)]
+mod send_check {
+    fn is_send<T: Send>() {}
+    #[test]
+    fn session_can_cross_threads() {
+        is_send::<super::Session>();
+    }
+}

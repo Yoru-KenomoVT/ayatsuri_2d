@@ -1,12 +1,13 @@
 [package]
 name = "openmoc3"
 version = "0.1.0"
+authors = ["Yoru_KenomoVT"]
 edition = "2021"
 # MIT only, not the usual MIT/Apache dual: portions derive from
 # PurismCore, which is MIT. See NOTICE.
 license = "MIT"
 description = "A safe, allocation-free reader for Live2D .moc3 model files"
-repository = "https://github.com/ayatsuri2d/ayatsuri2d"
+repository = "https://github.com/Yoru-KenomoVT/ayatsuri_2d"
 keywords = ["live2d", "moc3", "vtuber", "parser"]
 categories = ["parser-implementations", "no-std"]
 

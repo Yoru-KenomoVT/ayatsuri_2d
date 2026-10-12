@@ -97,6 +97,38 @@ pub fn pal() -> Palette {
     p
 }
 
+/// The shape of the interface, from Settings > Appearance.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Look {
+    /// Body text size in points (12 is the default).
+    pub text: f32,
+    /// Spacing multiplier: 1 compact (the default), up to 1.6 roomy.
+    pub density: f32,
+    /// Widget corner radius in points; windows get a little more.
+    pub corners: f32,
+    /// No animated expand, fade or scroll transitions.
+    pub reduce_motion: bool,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self { text: 12.0, density: 1.0, corners: 3.0, reduce_motion: false }
+    }
+}
+
+static LOOK: std::sync::Mutex<Option<Look>> = std::sync::Mutex::new(None);
+
+pub fn look() -> Look {
+    LOOK.lock().ok().and_then(|g| *g).unwrap_or_default()
+}
+
+pub fn set_look(ctx: &Context, look: Look) {
+    if let Ok(mut g) = LOOK.lock() {
+        *g = Some(look);
+    }
+    install(ctx);
+}
+
 pub fn set_dark(ctx: &Context, dark: bool) {
     DARK_ON.store(dark, Ordering::Relaxed);
     install(ctx);
@@ -123,12 +155,33 @@ pub fn install(ctx: &Context) {
     v.widgets.hovered.fg_stroke.color = if dark { Color32::WHITE } else { Color32::BLACK };
     v.widgets.active.fg_stroke.color = if dark { Color32::WHITE } else { Color32::BLACK };
     v.override_text_color = Some(p.text);
-    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
-    style.spacing.button_padding = egui::vec2(6.0, 2.0);
-    style.text_styles.insert(TextStyle::Body, FontId::proportional(12.0));
-    style.text_styles.insert(TextStyle::Button, FontId::proportional(12.0));
-    style.text_styles.insert(TextStyle::Small, FontId::proportional(10.5));
-    style.text_styles.insert(TextStyle::Heading, FontId::proportional(13.0));
+    let look = look();
+    let d = look.density.clamp(0.8, 2.0);
+    style.spacing.item_spacing = egui::vec2(6.0 * d, 4.0 * d);
+    style.spacing.button_padding = egui::vec2(6.0 * d, 2.0 * d);
+    style.spacing.interact_size.y = (18.0 * d.sqrt()).max(16.0);
+    let t = look.text.clamp(9.0, 18.0);
+    style.text_styles.insert(TextStyle::Body, FontId::proportional(t));
+    style.text_styles.insert(TextStyle::Button, FontId::proportional(t));
+    style.text_styles.insert(TextStyle::Small, FontId::proportional(t - 1.5));
+    style.text_styles.insert(TextStyle::Heading, FontId::proportional(t + 1.0));
+    let r = egui::CornerRadius::same(look.corners.clamp(0.0, 12.0) as u8);
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.corner_radius = r;
+    }
+    let big = egui::CornerRadius::same((look.corners * 2.0).clamp(0.0, 16.0) as u8);
+    v.window_corner_radius = big;
+    v.menu_corner_radius = big;
+    if look.reduce_motion {
+        style.animation_time = 0.0;
+        style.scroll_animation = egui::style::ScrollAnimation::none();
+    }
     ctx.set_style_of(theme, style);
     // one deterministic font set: defaults + phosphor icons + a system CJK
     // face; built together so nothing resets anything else

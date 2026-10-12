@@ -10,7 +10,7 @@ use discord_rich_presence::activity::{Activity, Assets, Button, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 
 /// Where the presence's button sends people.
-const GITHUB: &str = "https://github.com/Yoru-KenomoVT/ayatsuri_2d";
+pub(crate) const GITHUB: &str = "https://github.com/Yoru-KenomoVT/ayatsuri_2d";
 
 /// Ayatsuri2D's own Discord application, so presence works with no setup.
 pub const APP_ID: &str = "1559152287459446904";
