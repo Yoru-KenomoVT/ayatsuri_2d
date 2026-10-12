@@ -273,6 +273,9 @@ pub struct EditorUi {
     deformer_dialog: Option<deformer_dialog::DeformerDialog>,
     /// Extra meshes picked by the lasso, beyond `selected`.
     multi_sel: Vec<usize>,
+    /// Picking clipping masks on the canvas for this mesh: each click on
+    /// another mesh adds it (Shift keeps picking), Esc ends.
+    clip_pick: Option<usize>,
     /// A deformer creation requested from inside a borrow (canvas, tool pane).
     pending_create: Option<(bool, Option<(f32, f32)>)>,
     /// Mesh edit mode: the mesh whose vertices are being edited, if any.
@@ -563,12 +566,22 @@ struct PathPin {
 
 /// Results coming back from background threads.
 /// A Deformer palette menu choice, run once the palette is drawn.
+/// What a Parts palette mesh row's menu asked for.
+enum MeshRowCmd {
+    Delete(usize),
+    ClipBy(usize),
+}
+
 enum DefCmd {
     /// Create a warp (true) or rotation deformer around this object.
     Create(bool, Sel),
     CreateForSelection(bool),
     Rename(usize),
     Delete(usize),
+    /// Delete this art mesh (with the rest of the pick when it is in it).
+    DeleteMesh(usize),
+    /// Pick this art mesh's clipping masks on the canvas.
+    ClipBy(usize),
     /// Move this object under that deformer (None: under no deformer).
     Reparent(Child, Option<usize>),
 }
@@ -798,6 +811,7 @@ impl Default for EditorUi {
             pmenu: param_menu::ParamMenuState::default(),
             deformer_dialog: None,
             multi_sel: Vec::new(),
+            clip_pick: None,
             pending_create: None,
             mesh_edit: None,
             mesh_drag: None,
@@ -1551,6 +1565,17 @@ impl EditorUi {
         {
             log::info!("glue {gi} deleted");
             self.selected_glue = None;
+        } else if self.selected_glue.is_none()
+            && self.mesh_edit.is_none()
+            && self.tool == Tool::Arrow
+            && self.pts.picked.is_empty()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && let Some(Sel::Mesh(mi)) = self.selected
+            && ui.ctx().input(|i| i.key_pressed(egui::Key::Delete))
+        {
+            // Delete only: Backspace is too easy to hit while typing elsewhere
+            let meshes = self.mesh_pick_with(mi);
+            self.delete_meshes(meshes);
         }
 
         let dropped: Vec<PathBuf> = ui
@@ -4911,6 +4936,7 @@ impl EditorUi {
         // live stack positions, front-most last, for the right-hand column
         let stack: std::collections::HashMap<usize, usize> =
             s.puppet.drawables().enumerate().map(|(pos, d)| (d.mesh, pos + 1)).collect();
+        let mut mesh_cmd: Option<MeshRowCmd> = None;
         // which part each mesh belongs to, up the whole chain, for previews
         let part_parent: Vec<Option<u32>> =
             s.puppet.model().parts.iter().map(|p| p.parent_part).collect();
@@ -5076,7 +5102,17 @@ impl EditorUi {
                     .collect();
                 for (mi, mid) in meshes {
                     let x_off = 66.0 + depth as f32 * 14.0;
-                    parts_mesh_row(ui, s, &mut self.selected, mi, &mid, x_off, effective, &stack);
+                    parts_mesh_row(
+                        ui,
+                        s,
+                        &mut self.selected,
+                        mi,
+                        &mid,
+                        x_off,
+                        effective,
+                        &stack,
+                        &mut mesh_cmd,
+                    );
                 }
             }
             // meshes that belong to no part sit at the top level, so imports
@@ -5091,7 +5127,17 @@ impl EditorUi {
                 .map(|(mi, _)| (mi, s.mesh_name(mi)))
                 .collect();
             for (mi, mid) in loose {
-                parts_mesh_row(ui, s, &mut self.selected, mi, &mid, 30.0, true, &stack);
+                parts_mesh_row(
+                    ui,
+                    s,
+                    &mut self.selected,
+                    mi,
+                    &mid,
+                    30.0,
+                    true,
+                    &stack,
+                    &mut mesh_cmd,
+                );
             }
             // glue objects, as the reference palette lists them
             let glues: Vec<(usize, String, String, String)> = s
@@ -5149,6 +5195,81 @@ impl EditorUi {
                 self.selected_glue = None;
             }
         });
+        match mesh_cmd {
+            Some(MeshRowCmd::Delete(mi)) => {
+                let meshes = self.mesh_pick_with(mi);
+                self.delete_meshes(meshes);
+            }
+            Some(MeshRowCmd::ClipBy(mi)) => self.start_clip_pick(mi),
+            None => {}
+        }
+    }
+
+    /// Start picking `mesh`'s clipping masks on the canvas.
+    fn start_clip_pick(&mut self, mesh: usize) {
+        self.selected = Some(Sel::Mesh(mesh));
+        self.multi_sel.clear();
+        self.tool = Tool::Arrow;
+        self.mesh_edit = None;
+        self.clip_pick = Some(mesh);
+    }
+
+    /// The meshes a mesh menu acts on: the whole pick when `mesh` is in it,
+    /// else just `mesh`.
+    fn mesh_pick_with(&self, mesh: usize) -> Vec<usize> {
+        let mut pick = self.multi_sel.clone();
+        if let Some(Sel::Mesh(m)) = self.selected {
+            pick.push(m);
+        }
+        if pick.contains(&mesh) {
+            pick.sort_unstable();
+            pick.dedup();
+            pick
+        } else {
+            vec![mesh]
+        }
+    }
+
+    /// Delete art meshes as one undo step, and renumber everything the
+    /// editor keeps per mesh so nothing points at the wrong one after.
+    fn delete_meshes(&mut self, meshes: Vec<usize>) {
+        if self.mesh_edit.is_some() {
+            log::warn!("leave Mesh Edit before deleting art meshes");
+            return;
+        }
+        let Some(s) = &mut self.session else { return };
+        let names: Vec<String> = meshes.iter().map(|&m| s.mesh_name(m)).collect();
+        if !s.edit(|m| ayatsuri_core::edit::delete_art_meshes(m, &meshes)) {
+            return;
+        }
+        log::info!("deleted art mesh(es): {}", names.join(", "));
+        let mut gone = meshes;
+        gone.sort_unstable();
+        // a kept index moves down by how many deleted ones came before it
+        let remap = |i: usize| -> Option<usize> {
+            if gone.binary_search(&i).is_ok() {
+                None
+            } else {
+                Some(i - gone.partition_point(|&g| g < i))
+            }
+        };
+        self.selected = None;
+        self.multi_sel.clear();
+        self.selected_glue = None;
+        self.mesh_drag = None;
+        self.edge_first = None;
+        self.pending_edges =
+            self.pending_edges.drain().filter_map(|(m, e)| Some((remap(m)?, e))).collect();
+        self.deform_paths =
+            self.deform_paths.drain().filter_map(|((m, l), p)| Some(((remap(m)?, l), p))).collect();
+        self.brush_w = self
+            .brush_w
+            .drain()
+            .filter_map(|((kind, i), w)| match kind {
+                1 => Some(((kind, remap(i)?), w)),
+                _ => Some(((kind, i), w)),
+            })
+            .collect();
     }
     /// The toolbar's right-click menu, wherever on the bar it opens.
     fn toolbar_menu(&mut self, ui: &mut Ui) {
@@ -5530,6 +5651,15 @@ impl EditorUi {
                             def_cmd = Some(DefCmd::Create(false, Sel::Mesh(mi)));
                             ui.close();
                         }
+                        ui.separator();
+                        if ui.button("Clip by…").clicked() {
+                            def_cmd = Some(DefCmd::ClipBy(mi));
+                            ui.close();
+                        }
+                        if ui.button("Delete Art Mesh").clicked() {
+                            def_cmd = Some(DefCmd::DeleteMesh(mi));
+                            ui.close();
+                        }
                     });
                 }
             }
@@ -5631,6 +5761,11 @@ impl EditorUi {
                 } else {
                     log::warn!("can't move a deformer under itself or its own children");
                 }
+            }
+            DefCmd::ClipBy(mi) => self.start_clip_pick(mi),
+            DefCmd::DeleteMesh(mi) => {
+                let meshes = self.mesh_pick_with(mi);
+                self.delete_meshes(meshes);
             }
             DefCmd::Delete(i) => {
                 let Some(s) = &mut self.session else { return };
@@ -5766,29 +5901,10 @@ impl EditorUi {
                 row(ui, "Vertices", format!("{}", m.vertex_count));
                 let stack = s.puppet.drawables().position(|d| d.mesh == i);
                 row(ui, "Render #", stack.map_or("hidden".into(), |n| format!("{n}")));
-                row(
-                    ui,
-                    "Clipping ID",
-                    if m.masks.is_empty() {
-                        "-".into()
-                    } else {
-                        m.masks
-                            .iter()
-                            .map(|x| {
-                                s.puppet
-                                    .model()
-                                    .art_meshes
-                                    .get(*x as usize)
-                                    .map(|am| am.id.clone())
-                                    .unwrap_or_else(|| x.to_string())
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    },
-                );
                 ui.separator();
 
                 // the editable half, like Cubism's inspector
+                opacity_row(ui, s, ayatsuri_core::edit::Target::ArtMesh(i));
                 use ayatsuri_format::model::flags;
                 let blend = if m.flags & flags::BLEND_ADDITIVE != 0 {
                     1
@@ -5862,20 +5978,11 @@ impl EditorUi {
                 if inverted {
                     new_flags |= flags::INVERTED_MASK;
                 }
-                // clipping is editable: comma-separated mesh IDs
-                let clip_id = egui::Id::new(("clipedit", i));
-                let mut clip_text = ui.ctx().data_mut(|d| {
-                    d.get_temp::<String>(clip_id).unwrap_or_else(|| {
-                        m.masks
-                            .iter()
-                            .filter_map(|x| {
-                                s.puppet.model().art_meshes.get(*x as usize).map(|am| am.id.clone())
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                });
-                ui.horizontal(|ui| {
+                // clipping: the masks as chips (x takes one off), pick more on
+                // the canvas or from the list
+                let mut masks = m.masks.clone();
+                let mut changed_masks = false;
+                ui.horizontal_wrapped(|ui| {
                     ui.add_sized(
                         [74.0, 16.0],
                         egui::Label::new(
@@ -5884,43 +5991,61 @@ impl EditorUi {
                                 .size(11.0),
                         ),
                     );
-                    let edit =
-                        ui.add(egui::TextEdit::singleline(&mut clip_text).desired_width(130.0));
-                    if edit.changed() {
-                        ui.ctx().data_mut(|d| d.insert_temp(clip_id, clip_text.clone()));
+                    if masks.is_empty() {
+                        ui.weak("none");
                     }
-                    if ui.small_button("Apply").clicked() {
-                        let wanted: Vec<u32> = clip_text
-                            .split(',')
-                            .map(str::trim)
-                            .filter(|t| !t.is_empty())
-                            .filter_map(|t| {
-                                s.puppet
-                                    .model()
-                                    .art_meshes
-                                    .iter()
-                                    .position(|am| am.id == t)
-                                    .map(|x| x as u32)
-                            })
-                            .filter(|&x| x as usize != i)
-                            .collect();
-                        let changed = s.edit(|model| {
-                            let Some(am) = model.art_meshes.get_mut(i) else { return false };
-                            if am.masks == wanted {
-                                return false;
-                            }
-                            am.masks = wanted.clone();
-                            true
-                        });
-                        if changed {
-                            log::info!(
-                                "clipping of mesh {i} set to {} source(s)",
-                                clip_text.split(',').count()
-                            );
+                    let mut drop: Option<usize> = None;
+                    for (at, &x) in masks.iter().enumerate() {
+                        let chip = egui::Button::new(
+                            egui::RichText::new(format!(
+                                "{}  ×",
+                                truncate(&s.mesh_name(x as usize), 18)
+                            ))
+                            .size(10.5),
+                        )
+                        .corner_radius(8.0)
+                        .small();
+                        if ui.add(chip).on_hover_text("Stop clipping by this mesh").clicked() {
+                            drop = Some(at);
                         }
-                        ui.ctx().data_mut(|d| d.remove::<String>(clip_id));
+                    }
+                    if let Some(at) = drop {
+                        masks.remove(at);
+                        changed_masks = true;
                     }
                 });
+                ui.horizontal(|ui| {
+                    ui.add_space(78.0);
+                    let picking = self.clip_pick == Some(i);
+                    if ui
+                        .selectable_label(picking, "Pick on canvas")
+                        .on_hover_text("Click the mask mesh on the canvas. Shift+click adds several, Esc ends.")
+                        .clicked()
+                    {
+                        self.clip_pick = if picking { None } else { Some(i) };
+                        self.tool = Tool::Arrow;
+                    }
+                    ui.menu_button("+", |ui| {
+                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            for mi in 0..s.puppet.model().art_meshes.len() {
+                                if mi == i || masks.contains(&(mi as u32)) {
+                                    continue;
+                                }
+                                if ui.button(s.mesh_name(mi)).clicked() {
+                                    masks.push(mi as u32);
+                                    changed_masks = true;
+                                    ui.close();
+                                }
+                            }
+                        });
+                    })
+                    .response
+                    .on_hover_text("Add a clipping mask from the list");
+                });
+                if changed_masks && s.edit(|model| ayatsuri_core::edit::set_masks(model, i, &masks))
+                {
+                    log::info!("{} clips by {} mesh(es)", s.mesh_name(i), masks.len());
+                }
 
                 if new_flags != m.flags || (order - base_order).abs() > 0.5 {
                     let changed = s.edit(|model| {
@@ -5975,6 +6100,8 @@ impl EditorUi {
                     .filter(|m| m.parent_deformer == Some(i as u32))
                     .count();
                 row(ui, "Children", format!("{kids} meshes"));
+                ui.separator();
+                opacity_row(ui, s, ayatsuri_core::edit::Target::Deformer(i));
             }
             Some(Sel::Part(i)) => {
                 let Some(p) = s.puppet.model().parts.get(i) else { return };
@@ -5988,19 +6115,29 @@ impl EditorUi {
                         .unwrap_or_else(|| "-".into()),
                 );
                 ui.separator();
-                let shown = s.part_shown.get(i).copied().unwrap_or(true);
-                let mut opacity = if shown { 1.0f32 } else { 0.0 };
+                let mut opacity = s.puppet.part_user_opacity(i) * 100.0;
                 ui.horizontal(|ui| {
                     ui.add_sized(
                         [74.0, 16.0],
                         egui::Label::new(
-                            egui::RichText::new("Opacity")
+                            egui::RichText::new("View opacity")
                                 .color(theme::pal().text_faint)
                                 .size(11.0),
                         ),
                     );
-                    if ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0)).changed() {
-                        s.puppet.set_part_opacity(i, opacity);
+                    let slider =
+                        egui::Slider::new(&mut opacity, 0.0..=100.0).suffix("%").fixed_decimals(0);
+                    if ui
+                        .add(slider)
+                        .on_hover_text(
+                            "Only changes what you see while editing; it is not saved or \
+                             exported, because moc3 parts have no opacity. To fade a part by a \
+                             parameter, put its meshes under a deformer and key that \
+                             deformer's Opacity.",
+                        )
+                        .changed()
+                    {
+                        s.puppet.set_part_opacity(i, opacity / 100.0);
                         if let Some(f) = s.part_shown.get_mut(i) {
                             *f = opacity > 0.0;
                         }
@@ -6231,7 +6368,29 @@ impl EditorUi {
                 let hit = hit_mesh(&s.puppet, ux, uy, &|m| {
                     self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
                 });
-                if add && !alt {
+                if let Some(target) = self.clip_pick {
+                    if let Some(mi) = hit
+                        && mi != target
+                    {
+                        let mut masks =
+                            s.puppet.model().art_meshes.get(target).map(|m| m.masks.clone());
+                        if let Some(list) = masks.as_mut()
+                            && !list.contains(&(mi as u32))
+                        {
+                            list.push(mi as u32);
+                            if s.edit(|m| ayatsuri_core::edit::set_masks(m, target, list)) {
+                                log::info!(
+                                    "{} now clips by {}",
+                                    s.mesh_name(target),
+                                    s.mesh_name(mi)
+                                );
+                            }
+                        }
+                    }
+                    if !add {
+                        self.clip_pick = None;
+                    }
+                } else if add && !alt {
                     // Shift (or Ctrl) + click adds a mesh to the selection or
                     // takes it out; on empty canvas it keeps what is there
                     if let Some(mi) = hit {
@@ -6283,6 +6442,30 @@ impl EditorUi {
                     self.mesh_drag = None;
                     self.mesh_snapshot = Some(s.puppet.model().clone());
                 }
+            }
+        }
+
+        // picking clipping masks: say so on the canvas, Esc or another tool ends it
+        if let Some(target) = self.clip_pick {
+            let gone = s.puppet.model().art_meshes.get(target).is_none();
+            if gone
+                || self.tool != Tool::Arrow
+                || self.mesh_edit.is_some()
+                || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape))
+            {
+                self.clip_pick = None;
+            } else {
+                let text = format!(
+                    "Click the mesh that clips {}  ·  Shift+click for more  ·  Esc to finish",
+                    s.mesh_name(target)
+                );
+                let at = content.center_top() + vec2(0.0, 14.0);
+                let galley = vp.layout_no_wrap(text, FontId::proportional(12.0), Color32::WHITE);
+                let bg =
+                    Rect::from_center_size(at + vec2(0.0, galley.size().y / 2.0), galley.size())
+                        .expand2(vec2(10.0, 5.0));
+                vp.rect_filled(bg, 4.0, theme::pal().accent.gamma_multiply(0.9));
+                vp.galley(bg.min + vec2(10.0, 5.0), galley, Color32::WHITE);
             }
         }
 
@@ -8517,6 +8700,64 @@ fn add_mesh_shape(painter: &egui::Painter, mesh: egui::Mesh) {
 
 /// One mesh row in the Parts palette: eye, dot, name, live stack position.
 #[allow(clippy::too_many_arguments)]
+/// Properties' Opacity slider for a mesh or deformer, on the keyform the
+/// parameters sit on (as in Cubism: move the parameters onto a key, then
+/// set it). Dragging previews live in place; letting go puts the stored
+/// number back and commits one edit, so undo sees a single change.
+fn opacity_row(ui: &mut Ui, s: &mut Session, target: ayatsuri_core::edit::Target) {
+    let values: Vec<f32> =
+        (0..s.puppet.model().parameters.len()).map(|p| s.puppet.value(p)).collect();
+    let keyform = ayatsuri_core::keyform::keyform_at(s.puppet.model(), target, &values);
+    let stored = keyform.and_then(|k| s.puppet.opacity_mut(target, k).map(|o| *o));
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [74.0, 16.0],
+            egui::Label::new(
+                egui::RichText::new("Opacity").color(theme::pal().text_faint).size(11.0),
+            ),
+        );
+        let (Some(k), Some(now)) = (keyform, stored) else {
+            ui.add_enabled(false, egui::Slider::new(&mut 100.0f32, 0.0..=100.0).suffix("%"))
+                .on_disabled_hover_text(
+                    "Between keys. Move the parameters onto a key to set opacity there.",
+                );
+            return;
+        };
+        let live_id = egui::Id::new(("opacity-live", target, k));
+        let mut percent = now * 100.0;
+        let resp =
+            ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%").fixed_decimals(0));
+        if resp.drag_started() {
+            ui.ctx().data_mut(|d| d.insert_temp(live_id, now));
+        }
+        let original: Option<f32> = ui.ctx().data(|d| d.get_temp(live_id));
+        if resp.changed() {
+            let value = (percent / 100.0).clamp(0.0, 1.0);
+            if original.is_some() {
+                if let Some(slot) = s.puppet.opacity_mut(target, k) {
+                    *slot = value;
+                }
+                s.dirty = true;
+            } else if s.edit(|m| ayatsuri_core::edit::set_opacity(m, target, k, value)) {
+                log::debug!("opacity of {target:?} keyform {k} set to {value:.2}");
+            }
+        }
+        if resp.drag_stopped()
+            && let Some(before) = original
+        {
+            ui.ctx().data_mut(|d| d.remove::<f32>(live_id));
+            let value = s.puppet.opacity_mut(target, k).map(|o| *o).unwrap_or(before);
+            if let Some(slot) = s.puppet.opacity_mut(target, k) {
+                *slot = before;
+            }
+            if s.edit(|m| ayatsuri_core::edit::set_opacity(m, target, k, value)) {
+                log::info!("opacity of {target:?} keyform {k} set to {:.0}%", value * 100.0);
+            }
+            s.dirty = true;
+        }
+    });
+}
+
 fn parts_mesh_row(
     ui: &mut Ui,
     s: &mut Session,
@@ -8526,6 +8767,7 @@ fn parts_mesh_row(
     x_off: f32,
     parent_effective: bool,
     stack: &std::collections::HashMap<usize, usize>,
+    cmd: &mut Option<MeshRowCmd>,
 ) {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
     if *selected == Some(Sel::Mesh(mi)) {
@@ -8572,6 +8814,33 @@ fn parts_mesh_row(
     if resp.clicked() {
         *selected = Some(Sel::Mesh(mi));
     }
+    resp.context_menu(|ui| {
+        if ui.button(if mesh_on { "Hide" } else { "Show" }).clicked() {
+            if let Some(f) = s.mesh_shown.get_mut(mi) {
+                *f = !mesh_on;
+            }
+            s.puppet.set_mesh_visible(mi, !mesh_on);
+            s.dirty = true;
+            ui.close();
+        }
+        if ui.button("Select").clicked() {
+            *selected = Some(Sel::Mesh(mi));
+            ui.close();
+        }
+        if ui
+            .button("Clip by…")
+            .on_hover_text("Pick this mesh's clipping masks on the canvas")
+            .clicked()
+        {
+            *cmd = Some(MeshRowCmd::ClipBy(mi));
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Delete Art Mesh").clicked() {
+            *cmd = Some(MeshRowCmd::Delete(mi));
+            ui.close();
+        }
+    });
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -9435,5 +9704,155 @@ mod drag_tests {
         assert!(old_miss > 0.01, "the bend should defeat one linear step, missed by {old_miss}");
         // no parent: canvas moves are moves
         assert_eq!(parent_delta(&puppet, None, px, py, mdx, mdy), (mdx, mdy));
+    }
+}
+
+#[cfg(test)]
+mod mesh_delete_tests {
+    use super::*;
+    use ayatsuri_format::model::{ArtMesh, Binding};
+
+    /// An editor holding three named meshes, A, B and C.
+    fn editor() -> EditorUi {
+        let mut model = Model::new();
+        for i in 0..3 {
+            model.art_meshes.push(ArtMesh {
+                id: format!("ArtMesh{i}"),
+                parent_part: None,
+                parent_deformer: None,
+                visible: true,
+                enabled: true,
+                texture: 0,
+                flags: 0,
+                vertex_count: 3,
+                uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                indices: vec![0, 1, 2],
+                masks: vec![],
+                binding: Binding::default(),
+                opacities: vec![1.0],
+                draw_orders: vec![500.0],
+                positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            });
+        }
+        let ctx = egui::Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), model).unwrap();
+        s.mesh_names = vec!["A".into(), "B".into(), "C".into()];
+        s.mesh_shown = vec![true, false, true];
+        let mut ed = EditorUi::new();
+        ed.session = Some(s);
+        ed
+    }
+
+    fn names(ed: &EditorUi) -> Vec<String> {
+        let s = ed.session.as_ref().unwrap();
+        (0..s.puppet.model().art_meshes.len()).map(|i| s.mesh_name(i)).collect()
+    }
+
+    #[test]
+    fn names_and_visibility_follow_their_meshes_through_undo() {
+        let mut ed = editor();
+        ed.deform_paths.insert((2, 2), Vec::new());
+        ed.selected = Some(Sel::Mesh(0));
+        ed.delete_meshes(vec![0]);
+        assert_eq!(names(&ed), ["B", "C"]);
+        assert_eq!(ed.session.as_ref().unwrap().mesh_shown, vec![false, true]);
+        assert!(ed.deform_paths.contains_key(&(1, 2)));
+        assert!(ed.selected.is_none());
+        ed.session.as_mut().unwrap().undo();
+        assert_eq!(names(&ed), ["A", "B", "C"]);
+        assert_eq!(ed.session.as_ref().unwrap().mesh_shown, vec![true, false, true]);
+        ed.session.as_mut().unwrap().redo();
+        assert_eq!(names(&ed), ["B", "C"]);
+    }
+
+    #[test]
+    fn a_menu_on_a_picked_mesh_takes_the_whole_pick() {
+        let mut ed = editor();
+        ed.selected = Some(Sel::Mesh(2));
+        ed.multi_sel = vec![0];
+        assert_eq!(ed.mesh_pick_with(0), vec![0, 2]);
+        assert_eq!(ed.mesh_pick_with(1), vec![1]);
+        let pick = ed.mesh_pick_with(2);
+        ed.delete_meshes(pick);
+        assert_eq!(names(&ed), ["B"]);
+    }
+}
+
+#[cfg(test)]
+mod key_cmd_tests {
+    use super::*;
+    use ayatsuri_format::model::{ArtMesh, Binding, BindingAxis, Parameter};
+
+    /// One mesh keyed on P at -1, 0 and 1, its vertex at x = key value.
+    fn editor() -> EditorUi {
+        let mut model = Model::new();
+        model.parameters.push(Parameter {
+            id: "P".into(),
+            min: -1.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+        });
+        model.art_meshes.push(ArtMesh {
+            id: "ArtMesh0".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            vertex_count: 1,
+            uvs: vec![0.0, 0.0],
+            indices: vec![0, 0, 0],
+            masks: vec![],
+            binding: Binding {
+                axes: vec![BindingAxis { parameter: 0, keys: vec![-1.0, 0.0, 1.0] }],
+            },
+            opacities: vec![1.0; 3],
+            draw_orders: vec![500.0; 3],
+            positions: vec![-1.0, 0.0, 0.0, 0.0, 2.0, 0.0],
+        });
+        let ctx = egui::Context::default();
+        let s = Session::create(&ctx, "t".into(), String::new(), model).unwrap();
+        let mut ed = EditorUi::new();
+        ed.session = Some(s);
+        ed.selected = Some(Sel::Mesh(0));
+        ed
+    }
+
+    fn mesh(ed: &EditorUi) -> ArtMesh {
+        ed.session.as_ref().unwrap().puppet.model().art_meshes[0].clone()
+    }
+
+    #[test]
+    fn delete_keyform_removes_the_key_at_the_value() {
+        let mut ed = editor();
+        ed.session.as_mut().unwrap().puppet.set_value(0, 1.0);
+        ed.run_param_cmd(ParamCmd::DeleteKey(0));
+        let m = mesh(&ed);
+        assert_eq!(m.binding.axes[0].keys, vec![-1.0, 0.0]);
+        assert_eq!(m.positions, vec![-1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn reflect_asks_then_mirrors_into_the_opposite_key() {
+        let mut ed = editor();
+        ed.session.as_mut().unwrap().puppet.set_value(0, 0.9);
+        ed.run_param_cmd(ParamCmd::Reflect(0));
+        // it only asks: the key at 1 would overwrite the one at -1
+        assert_eq!(ed.pmenu.reflect, Some((0, 1.0, Some(-1.0))));
+        assert_eq!(mesh(&ed).positions, vec![-1.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
+        // confirmed: the move away from the default (x + 2) comes back
+        // mirrored (x - 2) on the opposite key
+        ed.reflect_into_opposite(0, 1.0);
+        assert_eq!(mesh(&ed).positions, vec![-2.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn reflect_on_the_default_key_has_nothing_to_overwrite() {
+        let mut ed = editor();
+        ed.run_param_cmd(ParamCmd::Reflect(0));
+        assert_eq!(ed.pmenu.reflect, Some((0, 0.0, None)));
     }
 }

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.2 beta (2026-10-12)
+
+### Added
+
+- **Delete art meshes.** Right-click a mesh in the Parts or Deformer
+  palette and choose Delete Art Mesh, or press Delete with the Arrow tool.
+  A multi-selection goes together. Glues on the mesh are removed and other
+  meshes stop clipping by it. One undo step brings it back with its name.
+- **Opacity for meshes and deformers.** Properties has an Opacity slider
+  that sets the keyform the parameters sit on, as in Cubism: put the
+  parameters on a key, set the opacity, and the runtime fades between keys.
+  The art fades live while dragging. A deformer's opacity fades everything
+  under it. Exported to moc3.
+- **Clipping mask picker.** Properties shows the masks as chips (click one
+  to remove it), Pick on canvas to click the mask mesh (Shift+click for
+  several, Esc ends), and a + list. Clip by… is also in the palette menus.
+
+### Fixed
+
+- **Reflect** now works like Cubism's: it mirrors the key under the slider
+  into the opposite key, after asking before it overwrites that keyform.
+  It used to swap the end keys silently.
+- The part opacity slider snapped back to 0% or 100%. It now holds any
+  value. It is labelled View opacity: moc3 parts have no opacity, so it is
+  not saved or exported. To fade a part by a parameter, key the Opacity of
+  a deformer that holds it.
+
 ## 0.5.1 beta (2026-10-12)
 
 The first public build of Ayatsuri2D: a free, open-source 2D rigging editor

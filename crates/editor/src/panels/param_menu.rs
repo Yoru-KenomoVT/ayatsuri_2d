@@ -100,6 +100,9 @@ pub(super) struct ParamMenuState {
     rename: Option<(usize, String)>,
     corners: Option<Corners>,
     mirror: Option<Mirror>,
+    /// Reflect waiting for the overwrite confirmation: (parameter, the
+    /// key it mirrors from, the opposite key it overwrites).
+    pub(super) reflect: Option<(usize, f32, Option<f32>)>,
     adjust: Option<(usize, f32, f32)>,
     change: Option<(usize, usize)>,
 }
@@ -364,6 +367,32 @@ impl EditorUi {
         out
     }
 
+    /// Mirror the key at `from` horizontally into its opposite key on the
+    /// selected objects, parents first, as one undo step.
+    pub(super) fn reflect_into_opposite(&mut self, param: usize, from: f32) {
+        let mut targets = self.param_targets();
+        if let Some(s) = &self.session {
+            targets.sort_by_key(|t| match t {
+                Target::Deformer(d) => depth(s, *d),
+                _ => usize::MAX,
+            });
+        }
+        let Some(s) = &mut self.session else { return };
+        let mut wrote = None;
+        s.edit(|m| {
+            for &t in &targets {
+                if let Some(k) = keyform::mirror_motion(m, t, param, from, true, false) {
+                    wrote = Some(k);
+                }
+            }
+            wrote.is_some()
+        });
+        match wrote {
+            Some(k) => log::info!("reflected the key at {from} into the key at {k}"),
+            None => log::warn!("reflect: nothing on the selection has both keys"),
+        }
+    }
+
     pub(super) fn run_param_cmd(&mut self, cmd: ParamCmd) {
         log::debug!("parameter palette: {cmd:?}");
         match cmd {
@@ -596,20 +625,29 @@ impl EditorUi {
                 };
             }
             ParamCmd::Reflect(pi) => {
+                // Cubism's Reflect: the key under the slider is mirrored into
+                // the opposite key, after asking before it overwrites that one
                 let targets = self.param_targets();
-                let Some(s) = &mut self.session else { return };
-                let mut n = 0;
-                s.edit(|m| {
-                    for &t in &targets {
-                        n += keyform::reflect_keys(m, t, pi) as usize;
-                    }
-                    n > 0
-                });
-                if n == 0 {
-                    log::warn!("reflect: the selection has no keys on this parameter");
-                } else {
-                    log::info!("reflected the keys on {n} object(s)");
-                }
+                let Some(s) = &self.session else { return };
+                let model = s.puppet.model();
+                let Some(default) = model.parameters.get(pi).map(|p| p.default) else { return };
+                let value = s.puppet.value(pi);
+                let keys: Vec<f32> = targets
+                    .iter()
+                    .filter_map(|&t| keyform::keys_on(model, t, pi))
+                    .flatten()
+                    .collect();
+                let from = keys
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| (a - value).abs().total_cmp(&(b - value).abs()))
+                    .unwrap_or(value);
+                let mirrored = 2.0 * default - from;
+                let opposite = keys
+                    .iter()
+                    .copied()
+                    .find(|k| (k - mirrored).abs() < 1e-3 && (from - default).abs() > 1e-4);
+                self.pmenu.reflect = Some((pi, from, opposite));
             }
             ParamCmd::Adjust(pi) => {
                 let v = self.session.as_ref().map_or(0.0, |s| s.puppet.value(pi));
@@ -821,6 +859,47 @@ impl EditorUi {
                 }
             } else if !open {
                 self.pmenu.corners = None;
+            }
+        }
+
+        if let Some((p, from, opposite)) = self.pmenu.reflect {
+            let mut open = true;
+            let mut run = false;
+            let name = names.get(p).cloned().unwrap_or_default();
+            crate::windows::Dialog::new("Reflect").open(&mut open).width(340.0).show(&ctx, |ui| {
+                match opposite {
+                    Some(to) => {
+                        ui.label(format!(
+                            "The keyform at {to} on {name} will be overwritten with a mirror \
+                             image of the keyform at {from}."
+                        ));
+                        ui.weak("This applies to the selected objects. Undo brings it back.");
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Overwrite").clicked() {
+                                run = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.pmenu.reflect = None;
+                            }
+                        });
+                    }
+                    None => {
+                        ui.label(format!(
+                            "Move {name} onto a key other than the default, on an object that \
+                             also has the opposite key."
+                        ));
+                        if ui.button("Close").clicked() {
+                            self.pmenu.reflect = None;
+                        }
+                    }
+                }
+            });
+            if run {
+                self.pmenu.reflect = None;
+                self.reflect_into_opposite(p, from);
+            } else if !open {
+                self.pmenu.reflect = None;
             }
         }
 

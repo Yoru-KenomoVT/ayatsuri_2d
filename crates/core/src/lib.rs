@@ -271,6 +271,21 @@ impl Puppet {
         m.positions.get_mut(start..start.checked_add(stride)?)
     }
 
+    /// One keyform's opacity of an art mesh or deformer, editable in place
+    /// for a live slider preview, the same way.
+    pub fn opacity_mut(&mut self, target: edit::Target, keyform: usize) -> Option<&mut f32> {
+        match target {
+            edit::Target::ArtMesh(i) => {
+                self.model.art_meshes.get_mut(i)?.opacities.get_mut(keyform)
+            }
+            edit::Target::Deformer(i) => match &mut self.model.deformers.get_mut(i)?.kind {
+                DeformerKind::Warp(w) => w.opacities.get_mut(keyform),
+                DeformerKind::Rotation(r) => r.opacities.get_mut(keyform),
+            },
+            edit::Target::Part(_) => None,
+        }
+    }
+
     /// A rotation deformer's keyform angles, editable in place for a live
     /// turn preview, the same way.
     pub fn rotation_angles_mut(&mut self, deformer: usize) -> Option<&mut [f32]> {
@@ -311,6 +326,11 @@ impl Puppet {
         if let Some(v) = self.def_user_visible.get_mut(deformer) {
             *v = visible;
         }
+    }
+
+    /// The opacity a part was given with `set_part_opacity` (1.0 unless set).
+    pub fn part_user_opacity(&self, part: usize) -> f32 {
+        self.part_user_opacity.get(part).copied().unwrap_or(1.0)
     }
 
     pub fn set_part_opacity(&mut self, part: usize, opacity: f32) {

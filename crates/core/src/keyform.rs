@@ -112,6 +112,15 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
     }
 }
 
+/// The keys `target` has on `param`, if it is bound on it.
+pub fn keys_on(model: &Model, target: Target, param: usize) -> Option<Vec<f32>> {
+    binding_of(model, target)?
+        .axes
+        .iter()
+        .find(|a| a.parameter as usize == param)
+        .map(|a| a.keys.clone())
+}
+
 /// The keyform the current parameter values sit on, when every bound axis
 /// is on a key (within a hundredth of its range). Copy and paste need one.
 pub fn keyform_at(model: &Model, target: Target, values: &[f32]) -> Option<usize> {

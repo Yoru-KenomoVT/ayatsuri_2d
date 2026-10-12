@@ -6,7 +6,7 @@
 use ayatsuri_format::model::{Binding, BindingAxis, DeformerKind, Model};
 
 /// Which rig object an edit touches.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     Part(usize),
     Deformer(usize),
@@ -923,6 +923,119 @@ pub fn delete_deformer(model: &mut Model, deformer: usize) -> bool {
     for d in &mut model.deformers {
         shift(&mut d.parent_deformer);
     }
+    true
+}
+
+/// Delete art meshes. Glues that hold one of them go too; other meshes
+/// stop clipping by them; draw order groups lose their items (and every
+/// group above counts one mesh fewer). References past them shift down.
+pub fn delete_art_meshes(model: &mut Model, meshes: &[usize]) -> bool {
+    let mut gone: Vec<usize> =
+        meshes.iter().copied().filter(|&i| i < model.art_meshes.len()).collect();
+    gone.sort_unstable();
+    gone.dedup();
+    if gone.is_empty() {
+        return false;
+    }
+    let is_gone = |x: u32| gone.binary_search(&(x as usize)).is_ok();
+    // where an index lands once the deleted ones are out
+    let new_index = |x: u32| x - gone.partition_point(|&g| g < x as usize) as u32;
+
+    // which group holds which as a child, to fix the totals up the tree
+    let mut parent_group: Vec<Option<usize>> = vec![None; model.draw_groups.len()];
+    for (gi, g) in model.draw_groups.iter().enumerate() {
+        for it in &g.items {
+            if let Some(slot) = it.child_group.and_then(|c| parent_group.get_mut(c as usize)) {
+                *slot = Some(gi);
+            }
+        }
+    }
+    let mut removed_from: Vec<u32> = vec![0; model.draw_groups.len()];
+    for (gi, g) in model.draw_groups.iter_mut().enumerate() {
+        let before = g.items.len();
+        g.items.retain(|it| it.part || !is_gone(it.object));
+        if let Some(r) = removed_from.get_mut(gi) {
+            *r = (before - g.items.len()) as u32;
+        }
+        for it in &mut g.items {
+            if !it.part {
+                it.object = new_index(it.object);
+            }
+        }
+    }
+    for (gi, &n) in removed_from.clone().iter().enumerate() {
+        let mut at = Some(gi);
+        // a malformed cycle must not spin forever
+        let mut hops = 0;
+        while let Some(g) = at
+            && hops <= removed_from.len()
+        {
+            if let Some(group) = model.draw_groups.get_mut(g) {
+                group.total = group.total.saturating_sub(n);
+            }
+            at = parent_group.get(g).copied().flatten();
+            hops += 1;
+        }
+    }
+
+    model.glues.retain(|g| !is_gone(g.art_mesh_a) && !is_gone(g.art_mesh_b));
+    for g in &mut model.glues {
+        g.art_mesh_a = new_index(g.art_mesh_a);
+        g.art_mesh_b = new_index(g.art_mesh_b);
+    }
+    let mut index = 0usize;
+    model.art_meshes.retain(|_| {
+        let keep = gone.binary_search(&index).is_err();
+        index += 1;
+        keep
+    });
+    for m in &mut model.art_meshes {
+        m.masks.retain(|&x| !is_gone(x));
+        for x in &mut m.masks {
+            *x = new_index(*x);
+        }
+    }
+    true
+}
+
+/// Set which art meshes clip `mesh` (its masks). Itself, unknown indices
+/// and repeats are dropped. False when nothing changed.
+pub fn set_masks(model: &mut Model, mesh: usize, masks: &[u32]) -> bool {
+    let n = model.art_meshes.len();
+    let mut clean: Vec<u32> = Vec::with_capacity(masks.len());
+    for &x in masks {
+        if (x as usize) < n && x as usize != mesh && !clean.contains(&x) {
+            clean.push(x);
+        }
+    }
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    if m.masks == clean {
+        return false;
+    }
+    m.masks = clean;
+    true
+}
+
+/// Set the opacity an art mesh or deformer has on one keyform (the one the
+/// parameters sit on, from `keyform::keyform_at`). Parts have no opacity
+/// keyforms in the model, so they are refused.
+pub fn set_opacity(model: &mut Model, target: Target, keyform: usize, opacity: f32) -> bool {
+    let slot = match target {
+        Target::ArtMesh(i) => {
+            model.art_meshes.get_mut(i).and_then(|m| m.opacities.get_mut(keyform))
+        }
+        Target::Deformer(i) => model.deformers.get_mut(i).and_then(|d| match &mut d.kind {
+            DeformerKind::Warp(w) => w.opacities.get_mut(keyform),
+            DeformerKind::Rotation(r) => r.opacities.get_mut(keyform),
+        }),
+        Target::Part(_) => None,
+    };
+    let Some(slot) = slot else { return false };
+    let opacity = opacity.clamp(0.0, 1.0);
+    if (*slot - opacity).abs() < 1e-6 {
+        return false;
+    }
+    *slot = opacity;
     true
 }
 
@@ -2663,6 +2776,89 @@ mod tests {
         assert_eq!(m.art_meshes[0].uvs, vec![0.3, 0.7]);
         assert!(!slide_vertex(&mut m, 0, 9, 0.1, 0.1, (0.0, 0.0)));
         assert!(!slide_vertex(&mut m, 0, 0, 0.1, 0.1, (f32::NAN, 0.0)));
+    }
+
+    #[test]
+    fn deleting_meshes_fixes_every_reference() {
+        use ayatsuri_format::model::{DrawGroup, DrawItem, Glue};
+        let mut m = test_model();
+        let base = m.art_meshes[0].clone();
+        m.art_meshes = (0..4).map(|i| ArtMesh { id: format!("M{i}"), ..base.clone() }).collect();
+        // M3 clips by M1 (goes) and M2 (stays)
+        m.art_meshes[3].masks = vec![1, 2];
+        let glue = |a, b| Glue {
+            id: format!("G{a}{b}"),
+            art_mesh_a: a,
+            art_mesh_b: b,
+            binding: Binding::default(),
+            intensities: vec![1.0],
+            weights: vec![],
+            indices: vec![],
+        };
+        m.glues = vec![glue(0, 1), glue(2, 3)];
+        let mesh = |object| DrawItem { part: false, object, child_group: None };
+        // root: M0 and a part holding group 1 (M1, M2, M3)
+        m.draw_groups = vec![
+            DrawGroup {
+                total: 4,
+                min_order: 500,
+                max_order: 500,
+                items: vec![mesh(0), DrawItem { part: true, object: 0, child_group: Some(1) }],
+            },
+            DrawGroup {
+                total: 3,
+                min_order: 500,
+                max_order: 500,
+                items: vec![mesh(1), mesh(2), mesh(3)],
+            },
+        ];
+        assert!(delete_art_meshes(&mut m, &[1, 1, 9]));
+        let ids: Vec<&str> = m.art_meshes.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["M0", "M2", "M3"]);
+        assert_eq!(m.art_meshes[2].masks, vec![1]);
+        assert_eq!(m.glues.len(), 1);
+        assert_eq!((m.glues[0].art_mesh_a, m.glues[0].art_mesh_b), (1, 2));
+        assert_eq!(m.draw_groups[1].total, 2);
+        assert_eq!(m.draw_groups[0].total, 3);
+        let objects: Vec<u32> = m.draw_groups[1].items.iter().map(|i| i.object).collect();
+        assert_eq!(objects, vec![1, 2]);
+        // the runtime still draws all three
+        let mut p = Puppet::new(m.clone());
+        p.update();
+        assert_eq!(p.drawables().count(), 3);
+        assert!(!delete_art_meshes(&mut m, &[7]));
+    }
+
+    #[test]
+    fn masks_drop_self_repeats_and_unknown_meshes() {
+        let mut m = test_model();
+        let base = m.art_meshes[0].clone();
+        m.art_meshes = (0..3).map(|i| ArtMesh { id: format!("M{i}"), ..base.clone() }).collect();
+        assert!(set_masks(&mut m, 0, &[2, 0, 2, 9, 1]));
+        assert_eq!(m.art_meshes[0].masks, vec![2, 1]);
+        assert!(!set_masks(&mut m, 0, &[2, 1]));
+        assert!(set_masks(&mut m, 0, &[]));
+        assert!(m.art_meshes[0].masks.is_empty());
+    }
+
+    #[test]
+    fn opacity_is_set_on_one_keyform() {
+        let mut m = test_model();
+        assert!(set_opacity(&mut m, Target::ArtMesh(0), 1, 0.25));
+        assert_eq!(m.art_meshes[0].opacities, vec![1.0, 0.25]);
+        assert!(!set_opacity(&mut m, Target::ArtMesh(0), 1, 0.25));
+        // out of range clamps: 7 is the 1.0 already there, -3 becomes 0
+        assert!(!set_opacity(&mut m, Target::ArtMesh(0), 0, 7.0));
+        assert!(set_opacity(&mut m, Target::ArtMesh(0), 0, -3.0));
+        assert_eq!(m.art_meshes[0].opacities[0], 0.0);
+        assert!(!set_opacity(&mut m, Target::ArtMesh(0), 5, 0.5));
+        assert!(!set_opacity(&mut m, Target::Part(0), 0, 0.5));
+        // halfway between the keys the runtime blends it
+        let mut p = Puppet::new(m);
+        p.set_value(0, 0.5);
+        p.update();
+        let o = p.drawables().next().map(|d| d.opacity).unwrap_or(f32::NAN);
+        assert!((o - 0.125).abs() < 1e-4, "{o}");
     }
 
     #[test]
