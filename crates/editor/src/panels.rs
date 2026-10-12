@@ -5751,11 +5751,29 @@ impl EditorUi {
                 && let Some(ptr) = resp.interact_pointer_pos()
             {
                 let (ux, uy) = unit_of(ptr);
-                let alt = ui.ctx().input(|i| i.modifiers.alt);
+                let (alt, add) =
+                    ui.ctx().input(|i| (i.modifiers.alt, i.modifiers.shift || i.modifiers.command));
                 let hit = hit_mesh(&s.puppet, ux, uy, &|m| {
                     self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
                 });
-                if alt {
+                if add && !alt {
+                    // Shift (or Ctrl) + click adds a mesh to the selection or
+                    // takes it out; on empty canvas it keeps what is there
+                    if let Some(mi) = hit {
+                        if self.multi_sel.is_empty()
+                            && let Some(Sel::Mesh(cur)) = self.selected
+                        {
+                            self.multi_sel.push(cur);
+                        }
+                        if let Some(at) = self.multi_sel.iter().position(|&m| m == mi) {
+                            self.multi_sel.remove(at);
+                            self.selected = self.multi_sel.last().copied().map(Sel::Mesh);
+                        } else {
+                            self.multi_sel.push(mi);
+                            self.selected = Some(Sel::Mesh(mi));
+                        }
+                    }
+                } else if alt {
                     // alt+click selects the mesh's deformer; again walks up
                     let start = match (self.selected, hit) {
                         (Some(Sel::Deformer(d)), _) => {
@@ -6639,6 +6657,46 @@ impl EditorUi {
             if esc {
                 self.brush_w.clear();
                 log::debug!("brush selection cleared");
+            }
+            // painting over meshes selects them, as Cubism's brush does, so
+            // the same stroke picks the objects and weights their points
+            let painting = !alt
+                && !b_down
+                && (resp.drag_started() || resp.clicked() || resp.dragged())
+                && self.brush_last.is_none_or(|l| ptr.is_some_and(|p| l.distance(p) >= r * 0.15));
+            if painting
+                && let Some(p) = ptr
+                && !matches!(self.selected, Some(Sel::Deformer(_)))
+            {
+                let mut picked = Vec::new();
+                for mi in 0..s.puppet.model().art_meshes.len() {
+                    let hidden = self.mesh_locked.contains(&mi)
+                        || !s.mesh_shown.get(mi).copied().unwrap_or(true)
+                        || targets.iter().any(|(k, _)| *k == (1, mi));
+                    if hidden {
+                        continue;
+                    }
+                    let Some(g) = s.puppet.mesh_geometry(mi) else { continue };
+                    let (gp, _) = g.positions.as_chunks::<2>();
+                    let pts: Vec<Pos2> = gp.iter().map(|q| to_screen(q[0], q[1])).collect();
+                    if pts.iter().any(|q| q.distance(p) < r) {
+                        picked.push(mi);
+                        targets.push(((1, mi), pts));
+                    }
+                }
+                if !picked.is_empty() {
+                    if self.multi_sel.is_empty()
+                        && let Some(Sel::Mesh(cur)) = self.selected
+                    {
+                        self.multi_sel.push(cur);
+                    }
+                    for &mi in &picked {
+                        if !self.multi_sel.contains(&mi) {
+                            self.multi_sel.push(mi);
+                        }
+                    }
+                    self.selected = self.multi_sel.last().copied().map(Sel::Mesh);
+                }
             }
             if b_down && resp.dragged() {
                 self.tool_opts.brush_size = (self.tool_opts.brush_size + delta.x).clamp(2.0, 400.0);
