@@ -12,6 +12,7 @@ mod kra;
 mod layers;
 mod moc3;
 mod moc3_export;
+mod motion3;
 mod physics3;
 mod psd_doc;
 
@@ -35,7 +36,8 @@ pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
 pub use exp3::{from_exp3, to_exp3};
 pub use moc3::from_moc3;
 pub use moc3_export::{ExportVersion, VTS_NOTE, export_warnings, to_moc3};
-pub use physics3::{cubism_json, from_physics3, to_motion3, to_physics3};
+pub use motion3::{from_motion3, to_motion3};
+pub use physics3::{cubism_json, from_physics3, to_physics3};
 
 use thiserror::Error;
 
@@ -61,6 +63,8 @@ pub enum ImportError {
     Physics(String),
     #[error("exp3.json: {0}")]
     Expression(String),
+    #[error("motion3.json: {0}")]
+    Motion(String),
     #[error("export: {0}")]
     Export(String),
 }

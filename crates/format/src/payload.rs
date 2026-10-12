@@ -68,9 +68,9 @@ pub enum ExpressionBlend {
     Overwrite,
 }
 
-/// One animation clip: parameter curves over time. Linear segments for now;
-/// richer easing lands with the timeline editor.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// One scene (Cubism's word for a clip): curves over time, the shape of
+/// motion3.json, plus what the editor needs around it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Animation {
     pub name: String,
@@ -78,16 +78,125 @@ pub struct Animation {
     /// Seconds.
     pub duration: f32,
     pub looped: bool,
+    /// Straight-line parameter tracks from files before 0.5; `upgrade`
+    /// turns them into curves when the file is read, so only old files
+    /// ever carry them.
     pub tracks: Vec<Track>,
+    pub curves: Vec<Curve>,
+    /// motion3 UserData: a string fired at a time.
+    pub events: Vec<Event>,
+    /// Whole-motion fades in seconds; None leaves them to the player.
+    pub fade_in: Option<f32>,
+    pub fade_out: Option<f32>,
+    /// motion3's AreBeziersRestricted: handles keep to 1/3 and 2/3 of their
+    /// segment in time, so a bezier can be evaluated without solving for
+    /// time (what Cubism's Unity target asks for).
+    pub restricted_beziers: bool,
+    /// The play range (Cubism's Work Area) in seconds; None is the whole
+    /// scene.
+    pub work_area: Option<(f32, f32)>,
+    pub kind: SceneKind,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// What a scene is for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneKind {
+    /// A motion, exported as motion3.json.
+    #[default]
+    Motion,
+    /// A pose that becomes an expression (exp3.json), the way Cubism makes
+    /// them from short scenes.
+    Expression,
+}
+
+/// Pre-0.5 straight-line track.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Track {
     /// Parameter id the curve drives.
     pub param: String,
     /// (time seconds, value) pairs, sorted by time.
     pub points: Vec<(f32, f32)>,
+}
+
+/// One animated value: what it drives and its keys, sorted by time.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Curve {
+    pub target: CurveTarget,
+    /// Parameter id, part id, or for Model one of Opacity, EyeBlink, LipSync.
+    pub id: String,
+    pub keys: Vec<Key>,
+    pub fade_in: Option<f32>,
+    pub fade_out: Option<f32>,
+}
+
+/// motion3.json's curve targets.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CurveTarget {
+    #[default]
+    Parameter,
+    PartOpacity,
+    Model,
+}
+
+/// A key: a value at a time, and how the segment after it gets to the next
+/// key (Cubism keeps interpolation on the segment, not the key).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Key {
+    /// Seconds.
+    pub time: f32,
+    pub value: f32,
+    pub interp: Interp,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub enum Interp {
+    /// Cubism's default "auto smooth": eases out of this key and into the
+    /// next (flat handles a third of the way along). Written as a bezier.
+    #[default]
+    Auto,
+    Linear,
+    /// Holds this key's value until the next key.
+    Stepped,
+    /// Jumps to the next key's value straight away.
+    InverseStepped,
+    /// Free handles: `out` from this key, `into` from the next one back,
+    /// each (seconds, value) relative to its own key.
+    Bezier {
+        out: (f32, f32),
+        into: (f32, f32),
+    },
+}
+
+/// A string fired at a time while the motion plays (motion3 UserData).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Event {
+    pub time: f32,
+    pub value: String,
+}
+
+impl Animation {
+    /// Bring a scene read from an older file up to date: straight-line
+    /// tracks become linear curves.
+    pub fn upgrade(&mut self) {
+        for t in core::mem::take(&mut self.tracks) {
+            let keys = t
+                .points
+                .iter()
+                .map(|&(time, value)| Key { time, value, interp: Interp::Linear })
+                .collect();
+            self.curves.push(Curve {
+                target: CurveTarget::Parameter,
+                id: t.param,
+                keys,
+                fade_in: None,
+                fade_out: None,
+            });
+        }
+    }
 }
 
 /// How the editor presents the model: display names, the parameter palette's

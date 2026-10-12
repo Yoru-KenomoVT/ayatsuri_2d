@@ -24,7 +24,13 @@ pub fn read(bytes: &[u8]) -> Result<AomPayload, Error> {
     } else {
         payload
     };
-    rmp_serde::from_slice(plain).map_err(|e| Error::Decode(alloc::format!("{e}")))
+    let mut out: AomPayload =
+        rmp_serde::from_slice(plain).map_err(|e| Error::Decode(alloc::format!("{e}")))?;
+    // scenes from older files carry straight-line tracks; curves from here on
+    for a in &mut out.animations {
+        a.upgrade();
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -86,6 +92,32 @@ mod tests {
         assert_eq!(m.indices, vec![0, 1, 2]);
         assert_eq!(back.textures[0].as_ref(), &[1u8, 2, 3]);
         assert_eq!(back.expressions, payload.expressions);
+    }
+
+    #[test]
+    fn old_straight_line_tracks_become_linear_curves() {
+        use crate::payload::{Animation, CurveTarget, Interp, Track};
+        let old = AomPayload {
+            animations: vec![Animation {
+                name: "idle".into(),
+                fps: 30.0,
+                duration: 1.0,
+                tracks: vec![Track {
+                    param: "ParamX".into(),
+                    points: vec![(0.0, 0.0), (1.0, 5.0)],
+                }],
+                ..Animation::default()
+            }],
+            ..AomPayload::default()
+        };
+        let back = crate::read::read(&crate::writer::write(&old).unwrap()).unwrap();
+        let a = &back.animations[0];
+        assert!(a.tracks.is_empty());
+        let c = &a.curves[0];
+        assert_eq!((c.target, c.id.as_str()), (CurveTarget::Parameter, "ParamX"));
+        assert_eq!(c.keys.len(), 2);
+        assert_eq!(c.keys[1].value, 5.0);
+        assert!(c.keys.iter().all(|k| k.interp == Interp::Linear));
     }
 
     #[test]

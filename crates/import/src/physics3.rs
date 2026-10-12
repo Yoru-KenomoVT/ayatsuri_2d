@@ -246,52 +246,6 @@ pub fn cubism_json(doc: &serde_json::Value) -> Vec<u8> {
     out
 }
 
-/// Serialize an animation as motion3.json: linear segments only, which is
-/// all the clip format carries today.
-pub fn to_motion3(anim: &ayatsuri_format::Animation) -> Vec<u8> {
-    use serde_json::json;
-    let mut total_segments = 0usize;
-    let mut total_points = 0usize;
-    let curves: Vec<_> = anim
-        .tracks
-        .iter()
-        .map(|t| {
-            let mut seg: Vec<serde_json::Value> = Vec::new();
-            for (i, (time, value)) in t.points.iter().enumerate() {
-                if i == 0 {
-                    seg.push(json!(time));
-                    seg.push(json!(value));
-                    total_points += 1;
-                } else {
-                    // 0 marks a linear segment in the published schema
-                    seg.push(json!(0));
-                    seg.push(json!(time));
-                    seg.push(json!(value));
-                    total_segments += 1;
-                    total_points += 1;
-                }
-            }
-            json!({"Target": "Parameter", "Id": t.param, "Segments": seg})
-        })
-        .collect();
-    let doc = json!({
-        "Version": 3,
-        "Meta": {
-            "Duration": anim.duration,
-            "Fps": if anim.fps > 0.0 { anim.fps } else { 30.0 },
-            "Loop": anim.looped,
-            "AreBeziersRestricted": true,
-            "CurveCount": curves.len(),
-            "TotalSegmentCount": total_segments,
-            "TotalPointCount": total_points,
-            "UserDataCount": 0,
-            "TotalUserDataSize": 0,
-        },
-        "Curves": curves,
-    });
-    cubism_json(&doc)
-}
-
 /// Parse a physics3.json file into the native rig.
 pub fn from_physics3(bytes: &[u8]) -> Result<PhysicsRig, ImportError> {
     let file: File =

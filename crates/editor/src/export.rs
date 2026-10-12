@@ -228,7 +228,7 @@ mod tests {
             fps: 30.0,
             duration: 1.0,
             looped: true,
-            tracks: Vec::new(),
+            ..ayatsuri_format::Animation::default()
         }];
         let dir = std::env::temp_dir().join(format!("ayatsuri-exp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

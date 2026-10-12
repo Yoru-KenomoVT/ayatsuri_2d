@@ -43,6 +43,15 @@ struct FileReferences {
     physics: Option<String>,
     #[serde(rename = "Expressions", default)]
     expressions: Vec<ExpRef>,
+    /// Motion groups: group name to its files.
+    #[serde(rename = "Motions", default)]
+    motions: std::collections::BTreeMap<String, Vec<MotionRef>>,
+}
+
+#[derive(Deserialize)]
+struct MotionRef {
+    #[serde(rename = "File", default)]
+    file: String,
 }
 
 /// One model3.json expression entry.
@@ -409,9 +418,22 @@ impl Session {
         if !expressions.is_empty() {
             info!("{} expression(s)", expressions.len());
         }
+        let mut animations = Vec::new();
+        for mpath in &bundle.motions {
+            match std::fs::read(mpath).map_err(|e| e.to_string()).and_then(|b| {
+                ayatsuri_import::from_motion3(&b, &motion_name(mpath)).map_err(|e| e.to_string())
+            }) {
+                Ok(a) => animations.push(a),
+                Err(e) => warn!("motion {}: {e}", mpath.display()),
+            }
+        }
+        if !animations.is_empty() {
+            info!("{} motion(s)", animations.len());
+        }
         let mut s = Self::from_parts(ctx, name, model, pngs, names, cdi, path)?;
         s.model_groups = groups;
         s.expressions = expressions;
+        s.animations = animations;
         Ok(s)
     }
 
@@ -858,6 +880,8 @@ struct Bundle {
     groups: Option<Vec<(String, String, Vec<String>)>>,
     /// Expression files: (name, path), the listed ones first.
     expressions: Vec<(String, PathBuf)>,
+    /// Motion files: the listed ones first, then any found beside the model.
+    motions: Vec<PathBuf>,
 }
 
 /// From whichever file was picked, find the `.moc3`, the texture list and the
@@ -887,6 +911,19 @@ fn resolve_bundle(path: &Path) -> Result<Bundle, String> {
                     .map(|e| (e.name, dir.join(e.file)))
                     .collect(),
             ),
+            motions: find_beside(
+                dir,
+                m.file_references
+                    .motions
+                    .into_values()
+                    .flatten()
+                    .map(|r| (String::new(), dir.join(r.file)))
+                    .collect(),
+                ".motion3.json",
+            )
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect(),
         })
     };
 
@@ -918,14 +955,33 @@ fn resolve_bundle(path: &Path) -> Result<Bundle, String> {
         physics: None,
         groups: None,
         expressions: find_expressions(dir, Vec::new()),
+        motions: find_beside(dir, Vec::new(), ".motion3.json")
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect(),
     })
 }
 
-/// Expression files for a bundle: the ones its model3.json lists, then any
-/// other `*.exp3.json` in the folder or one level down, which is where
-/// VTube Studio finds them for models that list none. At most 256, and
-/// every path stays inside the model folder.
-fn find_expressions(dir: &Path, mut listed: Vec<(String, PathBuf)>) -> Vec<(String, PathBuf)> {
+/// A scene name from a motion file: the file name without `.motion3.json`.
+pub(crate) fn motion_name(path: &Path) -> String {
+    let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    file.strip_suffix(".motion3.json").map(str::to_string).unwrap_or(file)
+}
+
+/// Expression files for a bundle; see `find_beside`.
+fn find_expressions(dir: &Path, listed: Vec<(String, PathBuf)>) -> Vec<(String, PathBuf)> {
+    find_beside(dir, listed, ".exp3.json")
+}
+
+/// Files of one kind for a bundle: the ones its model3.json lists, then any
+/// other `*<suffix>` in the folder or one level down, which is where
+/// VTube Studio finds them for models that list none. At most 256, every
+/// path inside the model folder. Found ones are named by their file stem.
+fn find_beside(
+    dir: &Path,
+    mut listed: Vec<(String, PathBuf)>,
+    suffix: &str,
+) -> Vec<(String, PathBuf)> {
     listed.retain(|(_, p)| p.starts_with(dir) && p.is_file());
     let mut seen: Vec<PathBuf> = listed.iter().map(|(_, p)| p.clone()).collect();
     let mut found = Vec::new();
@@ -935,7 +991,7 @@ fn find_expressions(dir: &Path, mut listed: Vec<(String, PathBuf)>) -> Vec<(Stri
         paths.sort();
         for p in paths {
             let file = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            if let Some(stem) = file.strip_suffix(".exp3.json")
+            if let Some(stem) = file.strip_suffix(suffix)
                 && p.is_file()
                 && !seen.contains(&p)
             {

@@ -378,6 +378,7 @@ pub(crate) enum PickFor {
     ExportMoc3(Box<ExportDlg>),
     WorkspaceExport,
     WorkspaceImport,
+    ImportMotion,
 }
 
 enum BgJob {
@@ -1022,6 +1023,7 @@ impl EditorUi {
                     Err(e) => log::error!("workspace export: {e}"),
                 }
             }
+            (PickFor::ImportMotion, Some(path)) => self.import_motion(&path),
             (PickFor::WorkspaceImport, Some(path)) => {
                 match std::fs::read(&path)
                     .map_err(|e| e.to_string())
@@ -1036,6 +1038,26 @@ impl EditorUi {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Add a motion3.json to the open model as a new scene.
+    fn import_motion(&mut self, path: &Path) {
+        let Some(s) = &mut self.session else { return };
+        let name = crate::session::motion_name(path);
+        match std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| ayatsuri_import::from_motion3(&b, &name).map_err(|e| e.to_string()))
+        {
+            Ok(a) => {
+                log::info!("imported motion {} ({} curves)", a.name, a.curves.len());
+                s.animations.push(a);
+                s.current_anim = Some(s.animations.len().saturating_sub(1));
+                s.modified = true;
+                self.anim_time = 0.0;
+                self.anim_applied = f32::NAN;
+            }
+            Err(e) => log::error!("import motion {}: {e}", path.display()),
         }
     }
 
@@ -1381,6 +1403,21 @@ impl EditorUi {
                             physics: true,
                             motions: true,
                             expressions: true,
+                        });
+                    }
+                    if ui
+                        .add_enabled(self.session.is_some(), egui::Button::new("Import Motion…"))
+                        .on_hover_text("Add a .motion3.json as a scene")
+                        .clicked()
+                    {
+                        ui.close();
+                        self.pick_async(PickFor::ImportMotion, || {
+                            rfd::FileDialog::new()
+                                .add_filter("Live2D motion", &["json"])
+                                .set_title("Import motion3.json")
+                                .pick_files()
+                                .map(|v| v.into_iter().next())
+                                .unwrap_or_default()
                         });
                     }
                     ui.separator();
@@ -1928,12 +1965,31 @@ impl EditorUi {
             }
             let moved = self.anim_time != self.anim_applied;
             if moved || self.anim_playing {
-                for t in &anim.tracks {
-                    if let (Some(v), Some(pi)) = (
-                        ayatsuri_core::anim::sample(t, self.anim_time),
-                        s.puppet.model().parameters.iter().position(|p| p.id == t.param),
-                    ) {
-                        s.puppet.set_value(pi, v);
+                for c in &anim.curves {
+                    let Some(v) = ayatsuri_core::anim::sample(&anim, c, self.anim_time) else {
+                        continue;
+                    };
+                    match c.target {
+                        ayatsuri_format::CurveTarget::Parameter => {
+                            if let Some(pi) =
+                                s.puppet.model().parameters.iter().position(|p| p.id == c.id)
+                            {
+                                s.puppet.set_value(pi, v);
+                            }
+                        }
+                        // animated part opacity sits under the editor's own
+                        // show/hide: a hidden part stays hidden
+                        ayatsuri_format::CurveTarget::PartOpacity => {
+                            if let Some(i) =
+                                s.puppet.model().parts.iter().position(|p| p.id == c.id)
+                            {
+                                let shown = s.part_shown.get(i).copied().unwrap_or(true);
+                                s.puppet.set_part_opacity(i, if shown { v } else { 0.0 });
+                            }
+                        }
+                        // model opacity, eye blink and lip sync are player
+                        // effects; the editor plays the parameters they drive
+                        ayatsuri_format::CurveTarget::Model => {}
                     }
                 }
                 self.anim_applied = self.anim_time;
@@ -1962,11 +2018,8 @@ impl EditorUi {
                     if physics_out.contains(&p.id) {
                         continue;
                     }
-                    let reference = anim
-                        .tracks
-                        .iter()
-                        .find(|t| t.param == p.id)
-                        .and_then(|t| ayatsuri_core::anim::sample(t, self.anim_time))
+                    let reference = ayatsuri_core::anim::param_curve(&anim, &p.id)
+                        .and_then(|c| ayatsuri_core::anim::sample(&anim, c, self.anim_time))
                         .unwrap_or(p.default);
                     let v = s.puppet.value(pi);
                     let eps = 0.1f32.powi(p.decimals.clamp(0, 6)) * 0.5;
@@ -1980,8 +2033,18 @@ impl EditorUi {
                 {
                     let fps_a = a.fps;
                     for (id, v) in &keyed {
-                        if let Some(t) = ayatsuri_core::anim::track_mut(a, id) {
-                            ayatsuri_core::anim::set_key(t, self.anim_time, *v, fps_a);
+                        if let Some(c) = ayatsuri_core::anim::curve_mut(
+                            a,
+                            ayatsuri_format::CurveTarget::Parameter,
+                            id,
+                        ) {
+                            ayatsuri_core::anim::set_key(
+                                c,
+                                self.anim_time,
+                                *v,
+                                fps_a,
+                                ayatsuri_format::Interp::Auto,
+                            );
                         }
                     }
                     s.modified = true;
@@ -3061,18 +3124,19 @@ impl EditorUi {
             .animations
             .get(ai)
             .map(|a| {
-                a.tracks
+                a.curves
                     .iter()
+                    .filter(|c| c.target == ayatsuri_format::CurveTarget::Parameter)
                     .map(|t| {
                         let label = s
                             .puppet
                             .model()
                             .parameters
                             .iter()
-                            .position(|p| p.id == t.param)
+                            .position(|p| p.id == t.id)
                             .and_then(|pi| s.param_names.get(pi).cloned())
-                            .unwrap_or_else(|| t.param.clone());
-                        (t.param.clone(), label)
+                            .unwrap_or_else(|| t.id.clone());
+                        (t.id.clone(), label)
                     })
                     .collect()
             })
@@ -3137,10 +3201,10 @@ impl EditorUi {
                 let points = s
                     .animations
                     .get(ai)
-                    .and_then(|a| a.tracks.iter().find(|t| &t.param == param))
-                    .map(|t| t.points.clone())
+                    .and_then(|a| ayatsuri_core::anim::param_curve(a, param))
+                    .map(|c| c.keys.iter().map(|k| k.time).collect::<Vec<_>>())
                     .unwrap_or_default();
-                for (t, _) in points {
+                for t in points {
                     let c = pos2(x_of(t, row.min.x), row.center().y);
                     let r = Rect::from_center_size(c, vec2(9.0, 9.0));
                     let kresp = ui.interact(
@@ -3183,10 +3247,14 @@ impl EditorUi {
             && let Some(a) = s.animations.get_mut(ai)
         {
             let fps_a = a.fps;
-            if let Some(tr) = a.tracks.iter_mut().find(|tr| tr.param == param) {
-                ayatsuri_core::anim::remove_key(tr, t, fps_a);
+            if let Some(c) = a
+                .curves
+                .iter_mut()
+                .find(|c| c.target == ayatsuri_format::CurveTarget::Parameter && c.id == param)
+            {
+                ayatsuri_core::anim::remove_key(c, t, fps_a);
             }
-            a.tracks.retain(|tr| !tr.points.is_empty());
+            a.curves.retain(|c| !c.keys.is_empty());
             s.modified = true;
             self.anim_applied = f32::NAN;
         }
@@ -3199,8 +3267,16 @@ impl EditorUi {
             let v = s.puppet.value(pi);
             if let Some(a) = s.animations.get_mut(ai) {
                 let fps_a = a.fps;
-                if let Some(tr) = ayatsuri_core::anim::track_mut(a, &id) {
-                    ayatsuri_core::anim::set_key(tr, self.anim_time, v, fps_a);
+                if let Some(c) =
+                    ayatsuri_core::anim::curve_mut(a, ayatsuri_format::CurveTarget::Parameter, &id)
+                {
+                    ayatsuri_core::anim::set_key(
+                        c,
+                        self.anim_time,
+                        v,
+                        fps_a,
+                        ayatsuri_format::Interp::Auto,
+                    );
                 }
                 s.modified = true;
             }
@@ -3247,7 +3323,7 @@ impl EditorUi {
                     fps: n.fps,
                     duration: n.duration,
                     looped: n.looped,
-                    tracks: Vec::new(),
+                    ..ayatsuri_format::Animation::default()
                 });
                 s.current_anim = Some(s.animations.len() - 1);
                 s.modified = true;
