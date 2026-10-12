@@ -716,8 +716,14 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
             107,
             i32s(&m_kf_begin.iter().map(|b| b + w_total + r_total).collect::<Vec<_>>()),
         );
-        for slot in 108..=113usize {
+        // neutral means multiply by white (108-110 RGB = 1) and screen
+        // with black (111-113 RGB = 0); a white screen colour lifts every
+        // pixel to white and the model renders as a silhouette
+        for slot in 108..=110usize {
             sect.insert(slot, f32s(&vec![1.0f32; color_total]));
+        }
+        for slot in 111..=113usize {
+            sect.insert(slot, f32s(&vec![0.0f32; color_total]));
         }
         sect.insert(114, vec![0u8; n_params * 4]);
         sect.insert(115, i32s(&vec![-1i32; n_params]));
@@ -915,6 +921,48 @@ mod tests {
                 .max()
                 .unwrap();
             assert!(max <= file.len(), "{}: offset past the end", v.label());
+        }
+    }
+
+    /// Slot `slot`'s section as f32s, `n` of them.
+    fn floats(file: &[u8], slot: usize, n: usize) -> Vec<f32> {
+        let at = HEADER + slot * 4;
+        let off = u32::from_le_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+        (0..n)
+            .map(|i| f32::from_le_bytes(file[off + i * 4..off + i * 4 + 4].try_into().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn colour_pools_are_neutral() {
+        // one mesh with one keyform is enough to get a pool entry
+        let mut model = Model::new();
+        model.art_meshes.push(ayatsuri_format::model::ArtMesh {
+            id: "M".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: Default::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        });
+        for v in ExportVersion::ALL.into_iter().filter(|v| v.max_slot() >= 113) {
+            let file = to_moc3(&model, v).unwrap();
+            for slot in 108..=110 {
+                assert!(floats(&file, slot, 1).iter().all(|&c| c == 1.0), "{} multiply", v.label());
+            }
+            // a white screen colour turns every pixel white
+            for slot in 111..=113 {
+                assert!(floats(&file, slot, 1).iter().all(|&c| c == 0.0), "{} screen", v.label());
+            }
         }
     }
 
