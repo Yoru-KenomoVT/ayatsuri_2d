@@ -194,6 +194,10 @@ pub fn install(ctx: &Context) {
         style.scroll_animation = egui::style::ScrollAnimation::none();
     }
     ctx.set_style_of(theme, style);
+    // a press becomes a drag after 3 px instead of egui's 6, so a dragged
+    // point barely snaps to the pointer when the drag kicks in; still
+    // loose enough that a slightly shaky click stays a click
+    ctx.options_mut(|o| o.input_options.max_click_dist = 3.0);
     // one deterministic font set: defaults + phosphor icons + a system CJK
     // face; built together so nothing resets anything else
     let mut fonts = egui::FontDefinitions::default();

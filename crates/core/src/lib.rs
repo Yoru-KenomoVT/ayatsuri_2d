@@ -260,6 +260,27 @@ impl Puppet {
         &self.model
     }
 
+    /// One keyform's stored vertex positions of a mesh, editable in place
+    /// for a live drag preview. Only the numbers change, never the shape of
+    /// the data, so nothing derived from the model needs rebuilding; the
+    /// next `update` shows it. Callers restore and commit through an edit.
+    pub fn mesh_keyform_mut(&mut self, mesh: usize, keyform: usize) -> Option<&mut [f32]> {
+        let m = self.model.art_meshes.get_mut(mesh)?;
+        let stride = (m.vertex_count as usize).checked_mul(2)?;
+        let start = keyform.checked_mul(stride)?;
+        m.positions.get_mut(start..start.checked_add(stride)?)
+    }
+
+    /// One keyform's warp grid, editable in place the same way.
+    pub fn warp_keyform_mut(&mut self, deformer: usize, keyform: usize) -> Option<&mut [f32]> {
+        let d = self.model.deformers.get_mut(deformer)?;
+        let DeformerKind::Warp(w) = &mut d.kind else { return None };
+        let points = (w.rows as usize + 1).checked_mul(w.cols as usize + 1)?;
+        let stride = points.checked_mul(2)?;
+        let start = keyform.checked_mul(stride)?;
+        w.positions.get_mut(start..start.checked_add(stride)?)
+    }
+
     pub fn value(&self, parameter: usize) -> f32 {
         self.values.get(parameter).copied().unwrap_or(0.0)
     }

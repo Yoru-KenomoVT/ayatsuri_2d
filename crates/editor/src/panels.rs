@@ -241,6 +241,8 @@ pub struct EditorUi {
     pub(crate) settings_tab: usize,
     /// Where the Settings window sits (its centre) once dragged.
     pub(crate) settings_pos: Option<egui::Pos2>,
+    /// A mesh point drag being shown live on the model.
+    live_drag: Option<LiveDrag>,
     /// Set by "Reset Toolbar Position": put the floating bar back next frame.
     toolbar_reset: bool,
     /// The Rename Deformer dialog: which deformer and the name typed.
@@ -367,6 +369,67 @@ struct RotDrag {
     wy: f32,
     degrees: f32,
     last_ptr: Pos2,
+}
+
+/// A mesh point drag shown live: the keyform being edited, its numbers as
+/// they were, and the mesh's local positions at the grab. Each frame the
+/// keyform is rewritten from these, so the art follows the pointer without
+/// an undo step per frame; on release they go back and one real edit lands.
+struct LiveDrag {
+    mesh: usize,
+    keyform: usize,
+    base: Vec<f32>,
+    local: Vec<f32>,
+    parent: Option<u32>,
+}
+
+impl LiveDrag {
+    fn start(puppet: &mut ayatsuri_core::Puppet, mesh: usize) -> Option<Self> {
+        let values: Vec<f32> =
+            (0..puppet.model().parameters.len()).map(|i| puppet.value(i)).collect();
+        let keyform = ayatsuri_core::keyform::keyform_at(
+            puppet.model(),
+            ayatsuri_core::edit::Target::ArtMesh(mesh),
+            &values,
+        )?;
+        let local = puppet.mesh_local_positions(mesh)?;
+        let parent = puppet.model().art_meshes.get(mesh)?.parent_deformer;
+        let base = puppet.mesh_keyform_mut(mesh, keyform)?.to_vec();
+        Some(Self { mesh, keyform, base, local, parent })
+    }
+
+    /// Write the keyform as the drag has it: `shifts` are screen moves.
+    fn show(&self, puppet: &mut ayatsuri_core::Puppet, shifts: &[(usize, Vec2)], k_unit: f32) {
+        let moves: Vec<(usize, f32, f32)> = shifts
+            .iter()
+            .map(|&(vi, d)| {
+                let px = self.local.get(vi * 2).copied().unwrap_or(0.0);
+                let py = self.local.get(vi * 2 + 1).copied().unwrap_or(0.0);
+                let (dx, dy) =
+                    parent_delta(puppet, self.parent, px, py, d.x * k_unit, d.y * k_unit);
+                (vi, dx, dy)
+            })
+            .collect();
+        if let Some(form) = puppet.mesh_keyform_mut(self.mesh, self.keyform) {
+            form.copy_from_slice(&self.base);
+            for (vi, dx, dy) in moves {
+                if let Some(x) = form.get_mut(vi * 2) {
+                    *x += dx;
+                }
+                if let Some(y) = form.get_mut(vi * 2 + 1) {
+                    *y += dy;
+                }
+            }
+        }
+    }
+
+    fn restore(&self, puppet: &mut ayatsuri_core::Puppet) {
+        if let Some(form) = puppet.mesh_keyform_mut(self.mesh, self.keyform)
+            && form.len() == self.base.len()
+        {
+            form.copy_from_slice(&self.base);
+        }
+    }
 }
 
 /// A deform path control point, pinned to a triangle of its mesh so the
@@ -597,6 +660,7 @@ impl Default for EditorUi {
             frame_undo_depth: 0,
             def_rename: None,
             toolbar_reset: false,
+            live_drag: None,
             api: Default::default(),
             recovery: Default::default(),
             recovering: None,
@@ -6375,6 +6439,37 @@ impl EditorUi {
                         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                             self.pts.picked.clear();
                         }
+                        // live preview: the art follows the pointer, not just
+                        // the dots; put back before anything is committed
+                        let dragging =
+                            self.pts.drag.as_ref().filter(|d| d.grab != point_edit::Grab::Marquee);
+                        match (dragging, &self.live_drag) {
+                            (Some(d), _) => {
+                                if self.live_drag.as_ref().is_none_or(|l| l.mesh != mi) {
+                                    if let Some(old) = self.live_drag.take() {
+                                        old.restore(&mut s.puppet);
+                                    }
+                                    self.live_drag = LiveDrag::start(&mut s.puppet, mi);
+                                }
+                                if let Some(l) = &self.live_drag {
+                                    let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                                    let shifts: Vec<(usize, Vec2)> = d
+                                        .from
+                                        .iter()
+                                        .filter_map(|&(i, p0)| Some((i, *pts.get(i)? - p0)))
+                                        .collect();
+                                    l.show(&mut s.puppet, &shifts, k_unit);
+                                    s.dirty = true;
+                                }
+                            }
+                            (None, Some(_)) => {
+                                if let Some(l) = self.live_drag.take() {
+                                    l.restore(&mut s.puppet);
+                                    s.dirty = true;
+                                }
+                            }
+                            (None, None) => {}
+                        }
                         if let Some(moved) = out.commit
                             && let Some(local) = s.puppet.mesh_local_positions(mi)
                         {
@@ -7897,6 +7992,11 @@ fn pivot_move(
     Some((deltas, child))
 }
 
+/// A move of (mdx, mdy) canvas units, as a move in `parent`'s own space for
+/// a point at (px, py) there. Exact, not a straight-line guess: warps bend
+/// space, so one linear step lands a dragged point short of (or past) the
+/// pointer and it visibly jumps on release. Newton steps on the parent's map
+/// until the point lands where the pointer let go.
 fn parent_delta(
     puppet: &ayatsuri_core::Puppet,
     parent: Option<u32>,
@@ -7907,20 +8007,28 @@ fn parent_delta(
 ) -> (f32, f32) {
     let Some(pd) = parent else { return (mdx, mdy) };
     let pd = pd as usize;
-    let e = 1e-3;
-    let (fx, fy) = puppet.deformer_point(pd, px, py);
-    let (ax, ay) = puppet.deformer_point(pd, px + e, py);
-    let (bx, by) = puppet.deformer_point(pd, px, py + e);
-    let j00 = (ax - fx) / e;
-    let j10 = (ay - fy) / e;
-    let j01 = (bx - fx) / e;
-    let j11 = (by - fy) / e;
-    let det = j00 * j11 - j01 * j10;
-    if det.abs() < 1e-9 {
-        (mdx, mdy)
-    } else {
-        ((j11 * mdx - j01 * mdy) / det, (j00 * mdy - j10 * mdx) / det)
+    let map = |x: f32, y: f32| puppet.deformer_point(pd, x, y);
+    let (sx, sy) = map(px, py);
+    let (tx, ty) = (sx + mdx, sy + mdy);
+    let (mut x, mut y) = (px, py);
+    for _ in 0..16 {
+        let (fx, fy) = map(x, y);
+        let (ex, ey) = (tx - fx, ty - fy);
+        if ex.abs() + ey.abs() < 1e-6 {
+            break;
+        }
+        let e = 1e-3;
+        let (ax, ay) = map(x + e, y);
+        let (bx, by) = map(x, y + e);
+        let (j00, j10, j01, j11) = ((ax - fx) / e, (ay - fy) / e, (bx - fx) / e, (by - fy) / e);
+        let det = j00 * j11 - j01 * j10;
+        if det.abs() < 1e-9 || !det.is_finite() {
+            break;
+        }
+        x += (j11 * ex - j01 * ey) / det;
+        y += (j00 * ey - j10 * ex) / det;
     }
+    (x - px, y - py)
 }
 
 /// Everything a shortcut can be rebound to, with Cubism-flavoured defaults.
@@ -8932,5 +9040,87 @@ mod param_pick_tests {
         assert_eq!(s.groups[0].params, vec![0, 2, 4]);
         assert_eq!(s.groups[1].params, vec![1, 3]);
         assert!(s.groups[1].open);
+    }
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::*;
+    use ayatsuri_format::model::{ArtMesh, Binding, Canvas, Parameter};
+
+    /// A mesh under a warp whose grid is bent hard, so its map is far from
+    /// linear.
+    fn bent_rig() -> ayatsuri_core::Puppet {
+        let mut m = Model::new();
+        m.canvas = Canvas { pixels_per_unit: 1.0, ..Canvas::default() };
+        m.parameters.push(Parameter {
+            id: "P".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+        });
+        m.art_meshes.push(ArtMesh {
+            id: "M".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: Binding::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![0.2, 0.2, 0.8, 0.2, 0.5, 0.8],
+        });
+        let w = ayatsuri_core::edit::create_deformer(
+            &mut m,
+            ayatsuri_core::edit::NewDeformer::Warp { rows: 2, cols: 2 },
+            &[Child::Mesh(0)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "W".into(),
+        )
+        .unwrap();
+        // bend the grid: pull the centre point far up and right
+        if let DeformerKind::Warp(g) = &mut m.deformers[w].kind {
+            g.positions[8] += 0.35;
+            g.positions[9] -= 0.3;
+        }
+        let mut p = ayatsuri_core::Puppet::new(m);
+        p.update();
+        p
+    }
+
+    #[test]
+    fn dragged_points_land_exactly_under_the_pointer() {
+        let puppet = bent_rig();
+        let parent = Some(0u32);
+        // a vertex position in the warp's space and a long drag across the bend
+        let (px, py) = (0.3, 0.35);
+        let (mdx, mdy) = (0.45, 0.4);
+        let (dx, dy) = parent_delta(&puppet, parent, px, py, mdx, mdy);
+        let (sx, sy) = puppet.deformer_point(0, px, py);
+        let (fx, fy) = puppet.deformer_point(0, px + dx, py + dy);
+        let miss = ((fx - (sx + mdx)).powi(2) + (fy - (sy + mdy)).powi(2)).sqrt();
+        assert!(miss < 1e-4, "landed {miss} away from the pointer");
+        // what the old single linear step did: noticeably short or past
+        let e = 1e-3;
+        let (ax, ay) = puppet.deformer_point(0, px + e, py);
+        let (bx, by) = puppet.deformer_point(0, px, py + e);
+        let (j00, j10, j01, j11) = ((ax - sx) / e, (ay - sy) / e, (bx - sx) / e, (by - sy) / e);
+        let det = j00 * j11 - j01 * j10;
+        let (lx, ly) = ((j11 * mdx - j01 * mdy) / det, (j00 * mdy - j10 * mdx) / det);
+        let (gx, gy) = puppet.deformer_point(0, px + lx, py + ly);
+        let old_miss = ((gx - (sx + mdx)).powi(2) + (gy - (sy + mdy)).powi(2)).sqrt();
+        assert!(old_miss > 0.01, "the bend should defeat one linear step, missed by {old_miss}");
+        // no parent: canvas moves are moves
+        assert_eq!(parent_delta(&puppet, None, px, py, mdx, mdy), (mdx, mdy));
     }
 }
