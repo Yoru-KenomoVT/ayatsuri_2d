@@ -15,27 +15,27 @@ pub enum Target {
 
 /// Where each key of a changed axis takes its data from.
 #[derive(Clone, Copy)]
-enum KeySrc {
+pub(crate) enum KeySrc {
     Copy(usize),
     Lerp(usize, usize, f32),
 }
 
-enum Channel<'a> {
+pub(crate) enum Channel<'a> {
     F32 { elems: usize, data: &'a mut Vec<f32> },
     Bool { data: &'a mut Vec<bool> },
 }
 
-fn axis_lens(binding: &Binding) -> Vec<usize> {
+pub(crate) fn axis_lens(binding: &Binding) -> Vec<usize> {
     binding.axes.iter().map(|a| a.keys.len().max(1)).collect()
 }
 
-fn product(lens: &[usize]) -> usize {
+pub(crate) fn product(lens: &[usize]) -> usize {
     lens.iter().product::<usize>().max(1)
 }
 
 // Walk every keyform of the new product and pull its data from the old one
 // through `map` on the changed axis.
-fn remap(old_lens: &[usize], axis: usize, map: &[KeySrc], channel: &mut Channel<'_>) {
+pub(crate) fn remap(old_lens: &[usize], axis: usize, map: &[KeySrc], channel: &mut Channel<'_>) {
     let mut new_lens = old_lens.to_vec();
     if let Some(l) = new_lens.get_mut(axis) {
         *l = map.len().max(1);
@@ -130,7 +130,7 @@ fn tile(channel: &mut Channel<'_>, k: usize) {
     }
 }
 
-fn with_object<R>(
+pub(crate) fn with_object<R>(
     model: &mut Model,
     target: Target,
     f: impl FnOnce(&mut Binding, Vec<Channel<'_>>) -> R,
@@ -508,6 +508,187 @@ pub fn move_vertices(model: &mut Model, mesh: usize, moves: &[(usize, f32, f32)]
         }
     }
     touched
+}
+
+/// Shift vertices in one keyform only (form editing with the arrow tool),
+/// or in all of them when `keyform` is None (mesh editing).
+pub fn move_vertices_in(
+    model: &mut Model,
+    mesh: usize,
+    keyform: Option<usize>,
+    moves: &[(usize, f32, f32)],
+) -> bool {
+    let Some(k) = keyform else { return move_vertices(model, mesh, moves) };
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    let count = m.vertex_count as usize;
+    let stride = count.saturating_mul(2);
+    let Some(form) = m.positions.get_mut(k * stride..(k + 1) * stride) else { return false };
+    let mut touched = false;
+    for &(vertex, dx, dy) in moves {
+        if vertex >= count {
+            continue;
+        }
+        if let Some(x) = form.get_mut(vertex * 2) {
+            *x += dx;
+        }
+        if let Some(y) = form.get_mut(vertex * 2 + 1) {
+            *y += dy;
+            touched = true;
+        }
+    }
+    touched
+}
+
+/// Mesh edit moves: the points slide over the texture instead of dragging
+/// it along. Positions shift in every keyform and each uv shifts by its
+/// (du, dv), so the picture stays where it is, the way Cubism's mesh edit
+/// mode behaves.
+pub fn slide_vertices(
+    model: &mut Model,
+    mesh: usize,
+    moves: &[(usize, f32, f32, f32, f32)],
+) -> bool {
+    let plain: Vec<(usize, f32, f32)> =
+        moves.iter().map(|&(v, dx, dy, _, _)| (v, dx, dy)).collect();
+    if !move_vertices(model, mesh, &plain) {
+        return false;
+    }
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    for &(v, _, _, du, dv) in moves {
+        if let Some(u) = m.uvs.get_mut(v * 2) {
+            *u = (*u + du).clamp(0.0, 1.0);
+        }
+        if let Some(w) = m.uvs.get_mut(v * 2 + 1) {
+            *w = (*w + dv).clamp(0.0, 1.0);
+        }
+    }
+    true
+}
+
+/// Warp grid points, the same way: one keyform, or all with None.
+pub fn move_warp_points(
+    model: &mut Model,
+    deformer: usize,
+    keyform: Option<usize>,
+    moves: &[(usize, f32, f32)],
+) -> bool {
+    let Some(d) = model.deformers.get_mut(deformer) else { return false };
+    let DeformerKind::Warp(w) = &mut d.kind else { return false };
+    let count = w.grid_points();
+    let stride = count * 2;
+    if stride == 0 {
+        return false;
+    }
+    let mut touched = false;
+    for (k, form) in w.positions.chunks_exact_mut(stride).enumerate() {
+        if keyform.is_some_and(|want| want != k) {
+            continue;
+        }
+        for &(p, dx, dy) in moves {
+            if p >= count {
+                continue;
+            }
+            if let Some(x) = form.get_mut(p * 2) {
+                *x += dx;
+            }
+            if let Some(y) = form.get_mut(p * 2 + 1) {
+                *y += dy;
+                touched = true;
+            }
+        }
+    }
+    touched
+}
+
+/// Paste points copied from a mesh (Cubism's partial vertex copy): each
+/// point lands where it was, in model space, with its uv and keyforms taken
+/// from the target mesh around it, so it deforms with that mesh. Points
+/// that land on an existing point within `merge` merge into it. `current`
+/// is the target's evaluated positions (model space) and `faces` the copied
+/// faces in clipboard indices. Returns the target index of every point.
+pub fn paste_points(
+    model: &mut Model,
+    mesh: usize,
+    current: &[f32],
+    points: &[(f32, f32)],
+    faces: &[[u16; 3]],
+    merge: f32,
+) -> Option<Vec<u16>> {
+    let m = model.art_meshes.get(mesh)?;
+    let n0 = m.vertex_count as usize;
+    if n0 < 3 || current.len() < n0 * 2 {
+        return None;
+    }
+    let tris: Vec<[usize; 3]> = m
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
+        .collect();
+    let at = |i: usize| -> (f32, f32) {
+        (current.get(i * 2).copied().unwrap_or(0.0), current.get(i * 2 + 1).copied().unwrap_or(0.0))
+    };
+    let bary = |c: [usize; 3], x: f32, y: f32| -> Option<[f32; 3]> {
+        let (p0, p1, p2) = (at(c[0]), at(c[1]), at(c[2]));
+        let den = (p1.1 - p2.1) * (p0.0 - p2.0) + (p2.0 - p1.0) * (p0.1 - p2.1);
+        if den.abs() < 1e-12 {
+            return None;
+        }
+        let w0 = ((p1.1 - p2.1) * (x - p2.0) + (p2.0 - p1.0) * (y - p2.1)) / den;
+        let w1 = ((p2.1 - p0.1) * (x - p2.0) + (p0.0 - p2.0) * (y - p2.1)) / den;
+        Some([w0, w1, 1.0 - w0 - w1])
+    };
+    let mut map: Vec<u16> = Vec::with_capacity(points.len());
+    for &(x, y) in points {
+        let d2 = |i: usize| {
+            let (px, py) = at(i);
+            (px - x).powi(2) + (py - y).powi(2)
+        };
+        let nearest = (0..n0).min_by(|&a, &b| d2(a).total_cmp(&d2(b)))?;
+        if d2(nearest) <= merge * merge {
+            map.push(nearest as u16);
+            continue;
+        }
+        // the face it sits in, else the nearest three points not in a line
+        let inside = tris
+            .iter()
+            .find_map(|&c| bary(c, x, y).filter(|w| w.iter().all(|v| *v >= -1e-4)).map(|w| (c, w)));
+        let basis = inside.or_else(|| {
+            let mut order: Vec<usize> = (0..n0).collect();
+            order.sort_by(|&a, &b| d2(a).total_cmp(&d2(b)));
+            let (a, b) = (*order.first()?, *order.get(1)?);
+            order.iter().skip(2).find_map(|&c| bary([a, b, c], x, y).map(|w| ([a, b, c], w)))
+        })?;
+        let idx = add_free_vertex(model, mesh, basis.0, basis.1, None)?;
+        map.push(idx as u16);
+    }
+    let m = model.art_meshes.get_mut(mesh)?;
+    let mut have: std::collections::HashSet<[u16; 3]> = m
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| {
+            let mut k = *t;
+            k.sort_unstable();
+            k
+        })
+        .collect();
+    for f in faces {
+        let (Some(&a), Some(&b), Some(&c)) =
+            (map.get(f[0] as usize), map.get(f[1] as usize), map.get(f[2] as usize))
+        else {
+            continue;
+        };
+        let mut k = [a, b, c];
+        k.sort_unstable();
+        if a == b || b == c || a == c || !have.insert(k) {
+            continue;
+        }
+        m.indices.extend_from_slice(&[a, b, c]);
+    }
+    Some(map)
 }
 
 /// Split the triangle `tri` of a mesh at the barycentric point (w0, w1, w2).
@@ -1744,5 +1925,32 @@ mod tests {
         assert!(set_glue_compatibility(&mut m, gi, 0.25));
         assert!(unbind_glue(&mut m, gi));
         assert!(m.glues.is_empty());
+    }
+    #[test]
+    fn paste_points_merge_and_follow() {
+        let mut m = test_model();
+        {
+            // a triangle, keyform 1 slid right by 2
+            let a = &mut m.art_meshes[0];
+            a.vertex_count = 3;
+            a.uvs = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+            a.indices = vec![0, 1, 2];
+            a.positions = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 3.0, 0.0, 2.0, 1.0];
+        }
+        let before = m.art_meshes[0].vertex_count;
+        let cur: Vec<f32> = m.art_meshes[0].positions[..before as usize * 2].to_vec();
+        let (x0, y0) = (cur[0], cur[1]);
+        // one point on top of vertex 0 merges, one in open space is added
+        let map =
+            paste_points(&mut m, 0, &cur, &[(x0, y0), (x0 + 0.01, y0 + 0.01)], &[], 1e-4).unwrap();
+        assert_eq!(map[0], 0);
+        assert_eq!(m.art_meshes[0].vertex_count, before + 1);
+        // per-keyform edit touches one keyform only
+        let k1 = m.art_meshes[0].positions.len() / (m.art_meshes[0].vertex_count as usize * 2);
+        assert!(move_vertices_in(&mut m, 0, Some(0), &[(0, 1.0, 0.0)]));
+        if k1 > 1 {
+            let stride = m.art_meshes[0].vertex_count as usize * 2;
+            assert!((m.art_meshes[0].positions[stride] - m.art_meshes[0].positions[0]).abs() > 0.5);
+        }
     }
 }

@@ -64,4 +64,7 @@ pub struct DisplayInfo {
     pub param_colors: Vec<i32>,
     /// Folder name plus the parameter indices inside, palette order.
     pub groups: Vec<(String, Vec<u32>)>,
+    /// Parameter pairs shown as one 2D pad. None in files that predate it,
+    /// which keep the conventional X/Y pairs.
+    pub combined: Option<Vec<(u32, u32)>>,
 }
