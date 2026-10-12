@@ -241,8 +241,10 @@ pub struct EditorUi {
     pub(crate) settings_tab: usize,
     /// Where the Settings window sits (its centre) once dragged.
     pub(crate) settings_pos: Option<egui::Pos2>,
-    /// A mesh point drag being shown live on the model.
+    /// A mesh or warp point drag being shown live on the model.
     live_drag: Option<LiveDrag>,
+    /// A rotation being turned live: the deformer and its angles as they were.
+    rot_live: Option<(usize, Vec<f32>)>,
     /// Set by "Reset Toolbar Position": put the floating bar back next frame.
     toolbar_reset: bool,
     /// The Rename Deformer dialog: which deformer and the name typed.
@@ -342,6 +344,54 @@ struct MeshDrag {
     local: Vec<f32>,
     dx: f32,
     dy: f32,
+    /// The mesh on screen when the drag began, its triangles, and its
+    /// texture coordinates as the model stores them and as they are drawn:
+    /// the art under any point is read off this, so the vertex slides over
+    /// the picture instead of pulling it along.
+    start: Vec<Pos2>,
+    indices: Vec<u16>,
+    model_uvs: Vec<f32>,
+    draw_uvs: Vec<f32>,
+}
+
+/// Where `p` falls on a mesh as (triangle corners, weights): inside the
+/// triangle holding it, else extended from the nearest one, so a point
+/// dragged past the edge keeps reading the art beyond it.
+fn mesh_weights(pts: &[Pos2], indices: &[u16], p: Pos2) -> Option<([usize; 3], [f32; 3])> {
+    let (tris, _) = indices.as_chunks::<3>();
+    let mut best: Option<(f32, [usize; 3], [f32; 3])> = None;
+    for &[a, b, c] in tris {
+        let (a, b, c) = (a as usize, b as usize, c as usize);
+        let (Some(&pa), Some(&pb), Some(&pc)) = (pts.get(a), pts.get(b), pts.get(c)) else {
+            continue;
+        };
+        let d = (pb.x - pa.x) * (pc.y - pa.y) - (pc.x - pa.x) * (pb.y - pa.y);
+        if d.abs() < 1e-9 {
+            continue;
+        }
+        let wb = ((p.x - pa.x) * (pc.y - pa.y) - (pc.x - pa.x) * (p.y - pa.y)) / d;
+        let wc = ((pb.x - pa.x) * (p.y - pa.y) - (p.x - pa.x) * (pb.y - pa.y)) / d;
+        let wa = 1.0 - wb - wc;
+        // 0 inside; outside, how far past the edges the weights reach
+        let out = (-wa).max(0.0) + (-wb).max(0.0) + (-wc).max(0.0);
+        if best.as_ref().is_none_or(|(o, _, _)| out < *o) {
+            best = Some((out, [a, b, c], [wa, wb, wc]));
+        }
+        if out == 0.0 {
+            break;
+        }
+    }
+    best.map(|(_, t, w)| (t, w))
+}
+
+/// Blend a vertex pool's (u, v) pairs with triangle weights.
+fn mix_uv(uvs: &[f32], t: [usize; 3], w: [f32; 3]) -> Option<(f32, f32)> {
+    let mut out = (0.0, 0.0);
+    for (i, wi) in t.iter().zip(w) {
+        out.0 += uvs.get(i * 2)? * wi;
+        out.1 += uvs.get(i * 2 + 1)? * wi;
+    }
+    Some(out)
 }
 
 /// A Bezier control point of a warp mid-drag: the lattice fitted when the
@@ -371,12 +421,20 @@ struct RotDrag {
     last_ptr: Pos2,
 }
 
-/// A mesh point drag shown live: the keyform being edited, its numbers as
-/// they were, and the mesh's local positions at the grab. Each frame the
-/// keyform is rewritten from these, so the art follows the pointer without
-/// an undo step per frame; on release they go back and one real edit lands.
+/// What a live drag is rewriting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LiveTarget {
+    Mesh(usize),
+    Warp(usize),
+}
+
+/// A point drag shown live on the model: the keyform being edited, its
+/// numbers as they were, and the object's local positions at the grab.
+/// Each frame the keyform is rewritten from these, so the art (and
+/// everything a warp holds) follows the pointer without an undo step per
+/// frame; on release they go back and one real edit lands.
 struct LiveDrag {
-    mesh: usize,
+    target: LiveTarget,
     keyform: usize,
     base: Vec<f32>,
     local: Vec<f32>,
@@ -384,51 +442,99 @@ struct LiveDrag {
 }
 
 impl LiveDrag {
-    fn start(puppet: &mut ayatsuri_core::Puppet, mesh: usize) -> Option<Self> {
+    fn start(puppet: &mut ayatsuri_core::Puppet, target: LiveTarget) -> Option<Self> {
         let values: Vec<f32> =
             (0..puppet.model().parameters.len()).map(|i| puppet.value(i)).collect();
-        let keyform = ayatsuri_core::keyform::keyform_at(
-            puppet.model(),
-            ayatsuri_core::edit::Target::ArtMesh(mesh),
-            &values,
-        )?;
-        let local = puppet.mesh_local_positions(mesh)?;
-        let parent = puppet.model().art_meshes.get(mesh)?.parent_deformer;
-        let base = puppet.mesh_keyform_mut(mesh, keyform)?.to_vec();
-        Some(Self { mesh, keyform, base, local, parent })
+        let (edit_target, local, parent) = match target {
+            LiveTarget::Mesh(m) => (
+                ayatsuri_core::edit::Target::ArtMesh(m),
+                puppet.mesh_local_positions(m)?,
+                puppet.model().art_meshes.get(m)?.parent_deformer,
+            ),
+            LiveTarget::Warp(d) => (
+                ayatsuri_core::edit::Target::Deformer(d),
+                puppet.warp_local_grid(d)?,
+                puppet.model().deformers.get(d)?.parent_deformer,
+            ),
+        };
+        let keyform = ayatsuri_core::keyform::keyform_at(puppet.model(), edit_target, &values)?;
+        let mut me = Self { target, keyform, base: Vec::new(), local, parent };
+        me.base = me.form(puppet)?.to_vec();
+        Some(me)
+    }
+
+    fn form<'a>(&self, puppet: &'a mut ayatsuri_core::Puppet) -> Option<&'a mut [f32]> {
+        match self.target {
+            LiveTarget::Mesh(m) => puppet.mesh_keyform_mut(m, self.keyform),
+            LiveTarget::Warp(d) => puppet.warp_keyform_mut(d, self.keyform),
+        }
     }
 
     /// Write the keyform as the drag has it: `shifts` are screen moves.
     fn show(&self, puppet: &mut ayatsuri_core::Puppet, shifts: &[(usize, Vec2)], k_unit: f32) {
         let moves: Vec<(usize, f32, f32)> = shifts
             .iter()
-            .map(|&(vi, d)| {
-                let px = self.local.get(vi * 2).copied().unwrap_or(0.0);
-                let py = self.local.get(vi * 2 + 1).copied().unwrap_or(0.0);
+            .map(|&(i, d)| {
+                let px = self.local.get(i * 2).copied().unwrap_or(0.0);
+                let py = self.local.get(i * 2 + 1).copied().unwrap_or(0.0);
                 let (dx, dy) =
                     parent_delta(puppet, self.parent, px, py, d.x * k_unit, d.y * k_unit);
-                (vi, dx, dy)
+                (i, dx, dy)
             })
             .collect();
-        if let Some(form) = puppet.mesh_keyform_mut(self.mesh, self.keyform) {
+        if let Some(form) = self.form(puppet) {
             form.copy_from_slice(&self.base);
-            for (vi, dx, dy) in moves {
-                if let Some(x) = form.get_mut(vi * 2) {
+            for (i, dx, dy) in moves {
+                if let Some(x) = form.get_mut(i * 2) {
                     *x += dx;
                 }
-                if let Some(y) = form.get_mut(vi * 2 + 1) {
+                if let Some(y) = form.get_mut(i * 2 + 1) {
                     *y += dy;
                 }
             }
         }
     }
 
-    fn restore(&self, puppet: &mut ayatsuri_core::Puppet) {
-        if let Some(form) = puppet.mesh_keyform_mut(self.mesh, self.keyform)
-            && form.len() == self.base.len()
+    /// Write the keyform from new local positions (a Bezier drag's grid).
+    fn show_local(&self, puppet: &mut ayatsuri_core::Puppet, new_local: &[f32]) {
+        let (base, local) = (self.base.clone(), self.local.clone());
+        if let Some(form) = self.form(puppet)
+            && form.len() == new_local.len()
         {
-            form.copy_from_slice(&self.base);
+            for (i, f) in form.iter_mut().enumerate() {
+                let (b, o, n) = (
+                    base.get(i).copied().unwrap_or(0.0),
+                    local.get(i).copied().unwrap_or(0.0),
+                    new_local.get(i).copied().unwrap_or(0.0),
+                );
+                *f = b + (n - o);
+            }
         }
+    }
+
+    fn restore(&self, puppet: &mut ayatsuri_core::Puppet) {
+        let base = self.base.clone();
+        if let Some(form) = self.form(puppet)
+            && form.len() == base.len()
+        {
+            form.copy_from_slice(&base);
+        }
+    }
+}
+
+/// Keep `live` on `target` (starting it, or switching from another
+/// object), or put back whatever it was showing when nothing is dragged.
+fn live_for(
+    live: &mut Option<LiveDrag>,
+    puppet: &mut ayatsuri_core::Puppet,
+    target: Option<LiveTarget>,
+) {
+    let same = live.as_ref().map(|l| l.target) == target;
+    if !same {
+        if let Some(old) = live.take() {
+            old.restore(puppet);
+        }
+        *live = target.and_then(|t| LiveDrag::start(puppet, t));
     }
 }
 
@@ -661,6 +767,7 @@ impl Default for EditorUi {
             def_rename: None,
             toolbar_reset: false,
             live_drag: None,
+            rot_live: None,
             api: Default::default(),
             recovery: Default::default(),
             recovering: None,
@@ -6443,32 +6550,23 @@ impl EditorUi {
                         // the dots; put back before anything is committed
                         let dragging =
                             self.pts.drag.as_ref().filter(|d| d.grab != point_edit::Grab::Marquee);
-                        match (dragging, &self.live_drag) {
-                            (Some(d), _) => {
-                                if self.live_drag.as_ref().is_none_or(|l| l.mesh != mi) {
-                                    if let Some(old) = self.live_drag.take() {
-                                        old.restore(&mut s.puppet);
-                                    }
-                                    self.live_drag = LiveDrag::start(&mut s.puppet, mi);
-                                }
-                                if let Some(l) = &self.live_drag {
-                                    let k_unit = 1.0 / (scale * c.pixels_per_unit);
-                                    let shifts: Vec<(usize, Vec2)> = d
-                                        .from
-                                        .iter()
-                                        .filter_map(|&(i, p0)| Some((i, *pts.get(i)? - p0)))
-                                        .collect();
-                                    l.show(&mut s.puppet, &shifts, k_unit);
-                                    s.dirty = true;
-                                }
-                            }
-                            (None, Some(_)) => {
-                                if let Some(l) = self.live_drag.take() {
-                                    l.restore(&mut s.puppet);
-                                    s.dirty = true;
-                                }
-                            }
-                            (None, None) => {}
+                        let was_live = self.live_drag.is_some();
+                        live_for(
+                            &mut self.live_drag,
+                            &mut s.puppet,
+                            dragging.map(|_| LiveTarget::Mesh(mi)),
+                        );
+                        if let (Some(d), Some(l)) = (dragging, &self.live_drag) {
+                            let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                            let shifts: Vec<(usize, Vec2)> = d
+                                .from
+                                .iter()
+                                .filter_map(|&(i, p0)| Some((i, *pts.get(i)? - p0)))
+                                .collect();
+                            l.show(&mut s.puppet, &shifts, k_unit);
+                        }
+                        if was_live || self.live_drag.is_some() {
+                            s.dirty = true;
                         }
                         if let Some(moved) = out.commit
                             && let Some(local) = s.puppet.mesh_local_positions(mi)
@@ -6570,6 +6668,7 @@ impl EditorUi {
                     let mut screen_pts: Vec<Pos2> =
                         gp.iter().map(|p| to_screen(p[0], p[1])).collect();
                     let mut warp_commit: Option<Vec<(usize, f32, f32)>> = None;
+                    let mut bez_grid: Option<Vec<f32>> = None;
                     let mut warp_commit_screen = false;
                     let editable = matches!(self.tool, Tool::Arrow | Tool::Lasso)
                         && !space
@@ -6673,6 +6772,7 @@ impl EditorUi {
                             }
                             lat.derive_inner();
                             let new_grid = lat.to_grid(cols as usize, rows as usize);
+                            bez_grid = Some(new_grid.clone());
                             let (ng, _) = new_grid.as_chunks::<2>();
                             for (sp, &[x, y]) in screen_pts.iter_mut().zip(ng) {
                                 *sp = to_scr(x, y);
@@ -6735,6 +6835,37 @@ impl EditorUi {
                         }
                     }
                     warp_hot |= bez_hover.is_some() || bez_busy;
+                    // live preview: whatever the warp holds follows the drag;
+                    // put back before the real edit below
+                    let point_drag = self
+                        .pts
+                        .drag
+                        .as_ref()
+                        .filter(|d| d.grab != point_edit::Grab::Marquee)
+                        .map(|d| d.from.clone());
+                    let live_target = (self.bez_drag.is_some() || point_drag.is_some())
+                        .then_some(LiveTarget::Warp(di));
+                    let was_live = self.live_drag.is_some();
+                    live_for(&mut self.live_drag, &mut s.puppet, live_target);
+                    if let Some(l) = &self.live_drag {
+                        match (&bez_grid, &point_drag) {
+                            (Some(grid), _) if self.bez_drag.is_some() => {
+                                l.show_local(&mut s.puppet, grid);
+                            }
+                            (_, Some(from)) => {
+                                let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                                let shifts: Vec<(usize, Vec2)> = from
+                                    .iter()
+                                    .filter_map(|&(i, p0)| Some((i, *screen_pts.get(i)? - p0)))
+                                    .collect();
+                                l.show(&mut s.puppet, &shifts, k_unit);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if was_live || self.live_drag.is_some() {
+                        s.dirty = true;
+                    }
                     // land the edit in the keyform the parameters sit on. Box
                     // and point drags hand back screen offsets; Bezier drags
                     // hand back parent-space ones already
@@ -6909,6 +7040,38 @@ impl EditorUi {
                                 last_ptr: ptr,
                             });
                         }
+                        // live turn: what the rotation holds swings with the
+                        // handle; the angles go back before the real edit
+                        let turning_now =
+                            self.rot_drag.as_ref().filter(|d| d.turning && d.deformer == di);
+                        match (turning_now, &self.rot_live) {
+                            (Some(d), _) => {
+                                if self.rot_live.as_ref().is_none_or(|(rd, _)| *rd != di)
+                                    && let Some(a) = s.puppet.rotation_angles_mut(di)
+                                {
+                                    self.rot_live = Some((di, a.to_vec()));
+                                }
+                                if let Some((_, base)) = &self.rot_live
+                                    && let Some(a) = s.puppet.rotation_angles_mut(di)
+                                    && a.len() == base.len()
+                                {
+                                    for (x, b) in a.iter_mut().zip(base) {
+                                        *x = b + d.degrees;
+                                    }
+                                    s.dirty = true;
+                                }
+                            }
+                            (None, Some(_)) => {
+                                if let Some((rd, base)) = self.rot_live.take()
+                                    && let Some(a) = s.puppet.rotation_angles_mut(rd)
+                                    && a.len() == base.len()
+                                {
+                                    a.copy_from_slice(&base);
+                                    s.dirty = true;
+                                }
+                            }
+                            (None, None) => {}
+                        }
                         if resp.dragged()
                             && let Some(ptr) = ptr
                             && let Some(d) = &mut self.rot_drag
@@ -6951,6 +7114,14 @@ impl EditorUi {
                             && let Some(d) = self.rot_drag.take()
                             && d.deformer == di
                         {
+                            // the live angles go back first; the edit below
+                            // turns the real model once
+                            if let Some((rd, base)) = self.rot_live.take()
+                                && let Some(a) = s.puppet.rotation_angles_mut(rd)
+                                && a.len() == base.len()
+                            {
+                                a.copy_from_slice(&base);
+                            }
                             if d.turning && d.degrees.abs() > 1e-3 {
                                 let (deg, dfm) = (d.degrees, d.deformer);
                                 if s.edit(|m| ayatsuri_core::edit::rotate_rotation(m, dfm, deg)) {
@@ -7268,6 +7439,8 @@ impl EditorUi {
         }
         enum MeshOp {
             Move(usize, usize, f32, f32),
+            /// Mesh Edit's move: the vertex slides over the art (new uv).
+            Slide(usize, usize, f32, f32, (f32, f32)),
             Add(usize, usize, [f32; 3]),
             AddFree(usize, [usize; 3], [f32; 3], Option<(u16, u16)>, Vec<u16>),
             Connect(usize, u16, u16),
@@ -7484,7 +7657,23 @@ impl EditorUi {
                         && let Some((vi, _)) = near
                         && let Some(local) = s.puppet.mesh_local_positions(mi)
                     {
-                        self.mesh_drag = Some(MeshDrag { vertex: vi, local, dx: 0.0, dy: 0.0 });
+                        let m_uvs = s
+                            .puppet
+                            .model()
+                            .art_meshes
+                            .get(mi)
+                            .map(|m| m.uvs.clone())
+                            .unwrap_or_default();
+                        self.mesh_drag = Some(MeshDrag {
+                            vertex: vi,
+                            local,
+                            dx: 0.0,
+                            dy: 0.0,
+                            start: screen_pts.clone(),
+                            indices: g.indices.to_vec(),
+                            model_uvs: m_uvs,
+                            draw_uvs: g.uvs.to_vec(),
+                        });
                     }
                     if resp.dragged()
                         && let Some(d) = &mut self.mesh_drag
@@ -7505,15 +7694,27 @@ impl EditorUi {
                         && let Some(d) = self.mesh_drag.take()
                         && (d.dx != 0.0 || d.dy != 0.0)
                     {
-                        mesh_op = Some(MeshOp::Move(mi, d.vertex, d.dx, d.dy));
+                        // the texture coordinate that was under the drop
+                        let uv = ptr
+                            .and_then(|p| mesh_weights(&d.start, &d.indices, p))
+                            .and_then(|(t, w)| mix_uv(&d.model_uvs, t, w));
+                        mesh_op = Some(match uv {
+                            Some(uv) => MeshOp::Slide(mi, d.vertex, d.dx, d.dy, uv),
+                            None => MeshOp::Move(mi, d.vertex, d.dx, d.dy),
+                        });
                     }
                 }
 
-                // live preview: the dragged vertex follows the pointer
+                // live preview: the dragged vertex follows the pointer and
+                // shows the art that was under it, so the picture holds still
+                let mut slide_uv: Option<(usize, (f32, f32))> = None;
                 if let (Some(d), Some(ptr)) = (&self.mesh_drag, ptr)
                     && let Some(sp) = screen_pts.get_mut(d.vertex)
                 {
                     *sp = ptr;
+                    slide_uv = mesh_weights(&d.start, &d.indices, ptr)
+                        .and_then(|(t, w)| mix_uv(&d.draw_uvs, t, w))
+                        .map(|uv| (d.vertex, uv));
                 }
 
                 // the mesh itself, textured, above the scrim
@@ -7523,8 +7724,11 @@ impl EditorUi {
                 };
                 let (uv_pairs, _) = g.uvs.as_chunks::<2>();
                 let mut uvs = uv_pairs.iter();
-                for sp in &screen_pts {
+                for (vi, sp) in screen_pts.iter().enumerate() {
                     let uv = match (tex_id, uvs.next()) {
+                        (Some(_), _) if slide_uv.is_some_and(|(v, _)| v == vi) => {
+                            slide_uv.map_or(egui::epaint::WHITE_UV, |(_, (u, v))| pos2(u, v))
+                        }
                         (Some(_), Some(&[u, v])) => pos2(u, v),
                         _ => egui::epaint::WHITE_UV,
                     };
@@ -7627,6 +7831,9 @@ impl EditorUi {
             let applied = match op {
                 MeshOp::Move(mi, vi, dx, dy) => {
                     s.edit(|m| ayatsuri_core::edit::move_vertex(m, mi, vi, dx, dy))
+                }
+                MeshOp::Slide(mi, vi, dx, dy, uv) => {
+                    s.edit(|m| ayatsuri_core::edit::slide_vertex(m, mi, vi, dx, dy, uv))
                 }
                 MeshOp::Add(mi, ti, w) => {
                     s.edit(|m| ayatsuri_core::edit::add_vertex(m, mi, ti, w).is_some())

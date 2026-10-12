@@ -942,6 +942,36 @@ pub fn rename_deformer(model: &mut Model, deformer: usize, id: &str) -> bool {
     }
 }
 
+/// Mesh Edit's vertex move: shift it by (dx, dy) in the parent's space on
+/// every keyform and give it the texture coordinate `uv` that was under its
+/// new spot, so the vertex slides over the art instead of dragging it.
+pub fn slide_vertex(
+    model: &mut Model,
+    mesh: usize,
+    vertex: usize,
+    dx: f32,
+    dy: f32,
+    uv: (f32, f32),
+) -> bool {
+    if !uv.0.is_finite() || !uv.1.is_finite() || !move_vertex(model, mesh, vertex, dx, dy) {
+        return false;
+    }
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    let at = vertex * 2;
+    match (m.uvs.get(at).is_some(), m.uvs.get(at + 1).is_some()) {
+        (true, true) => {
+            if let Some(u) = m.uvs.get_mut(at) {
+                *u = uv.0;
+            }
+            if let Some(v) = m.uvs.get_mut(at + 1) {
+                *v = uv.1;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Shift one vertex by (dx, dy) in the mesh's parent space, across every
 /// keyform. Blending is affine, so the evaluated vertex moves by exactly the
 /// same amount whatever the current pose.
@@ -2622,6 +2652,17 @@ mod tests {
         assert!(delete_deformer(&mut m, outer));
         same(at, mesh_xy(&m), "outer deleted");
         assert!(parents_first(&m));
+    }
+
+    #[test]
+    fn sliding_a_vertex_moves_it_and_its_uv() {
+        let mut m = test_model();
+        assert!(slide_vertex(&mut m, 0, 0, 0.5, 0.25, (0.3, 0.7)));
+        // every keyform moved, the texture coordinate replaced
+        assert_eq!(m.art_meshes[0].positions, vec![0.5, 0.25, 2.5, 0.25]);
+        assert_eq!(m.art_meshes[0].uvs, vec![0.3, 0.7]);
+        assert!(!slide_vertex(&mut m, 0, 9, 0.1, 0.1, (0.0, 0.0)));
+        assert!(!slide_vertex(&mut m, 0, 0, 0.1, 0.1, (f32::NAN, 0.0)));
     }
 
     #[test]

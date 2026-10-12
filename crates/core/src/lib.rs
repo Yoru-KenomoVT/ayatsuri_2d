@@ -271,6 +271,14 @@ impl Puppet {
         m.positions.get_mut(start..start.checked_add(stride)?)
     }
 
+    /// A rotation deformer's keyform angles, editable in place for a live
+    /// turn preview, the same way.
+    pub fn rotation_angles_mut(&mut self, deformer: usize) -> Option<&mut [f32]> {
+        let d = self.model.deformers.get_mut(deformer)?;
+        let DeformerKind::Rotation(r) = &mut d.kind else { return None };
+        Some(r.angles.as_mut_slice())
+    }
+
     /// One keyform's warp grid, editable in place the same way.
     pub fn warp_keyform_mut(&mut self, deformer: usize, keyform: usize) -> Option<&mut [f32]> {
         let d = self.model.deformers.get_mut(deformer)?;
