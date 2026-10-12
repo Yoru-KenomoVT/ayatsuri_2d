@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod exp3;
 mod kra;
 mod layers;
 mod moc3;
@@ -31,6 +32,7 @@ pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
     Ok(out)
 }
 
+pub use exp3::{from_exp3, to_exp3};
 pub use moc3::from_moc3;
 pub use moc3_export::{ExportVersion, VTS_NOTE, export_warnings, to_moc3};
 pub use physics3::{cubism_json, from_physics3, to_motion3, to_physics3};
@@ -57,6 +59,8 @@ pub enum ImportError {
     UnknownDeformerType { at: usize, value: i32 },
     #[error("physics3.json: {0}")]
     Physics(String),
+    #[error("exp3.json: {0}")]
+    Expression(String),
     #[error("export: {0}")]
     Export(String),
 }

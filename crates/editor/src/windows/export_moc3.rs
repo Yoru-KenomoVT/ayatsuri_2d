@@ -35,6 +35,7 @@ impl EditorUi {
                 ui.vertical(|ui| {
                     ui.checkbox(&mut dlg.physics, "physics3.json");
                     ui.checkbox(&mut dlg.motions, "motion3.json for each animation");
+                    ui.checkbox(&mut dlg.expressions, "exp3.json for each expression");
                 });
                 ui.end_row();
             });
@@ -88,6 +89,7 @@ impl EditorUi {
             version,
             physics: dlg.physics,
             motions: dlg.motions,
+            expressions: dlg.expressions,
         };
         match crate::export::export(s, dir, &opt) {
             Ok(files) => log::info!(

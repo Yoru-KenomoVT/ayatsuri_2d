@@ -20,6 +20,7 @@ pub struct Options {
     pub version: ayatsuri_import::ExportVersion,
     pub physics: bool,
     pub motions: bool,
+    pub expressions: bool,
 }
 
 /// File names keep to what every filesystem accepts.
@@ -101,6 +102,29 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     write(&dir.join(&cdi_file), &ayatsuri_import::cubism_json(&cdi), &mut written)?;
     refs.insert("DisplayInfo".into(), json!(cdi_file));
 
+    // expressions go in their own folder, as Live2D's sample models do, and
+    // are listed before the motions in the model3.json, Cubism's order
+    if opt.expressions && !s.expressions.is_empty() {
+        let edir = dir.join("expressions");
+        std::fs::create_dir_all(&edir).map_err(|e| format!("{}: {e}", edir.display()))?;
+        let mut list = Vec::new();
+        let mut used: Vec<String> = Vec::new();
+        for e in &s.expressions {
+            // two expressions whose names clean up the same get numbered
+            let base = safe(if e.name.is_empty() { "expression" } else { &e.name });
+            let mut file = format!("{base}.exp3.json");
+            let mut n = 2;
+            while used.contains(&file) {
+                file = format!("{base}_{n}.exp3.json");
+                n += 1;
+            }
+            used.push(file.clone());
+            write(&edir.join(&file), &ayatsuri_import::to_exp3(e), &mut written)?;
+            list.push(json!({ "Name": e.name, "File": format!("expressions/{file}") }));
+        }
+        refs.insert("Expressions".into(), json!(list));
+    }
+
     if opt.motions && !s.animations.is_empty() {
         let mdir = dir.join("motions");
         std::fs::create_dir_all(&mdir).map_err(|e| format!("{}: {e}", mdir.display()))?;
@@ -175,6 +199,61 @@ mod tests {
         // a model without them still gets both groups, just empty
         let bare = model_groups(&session(&["ParamOther"]));
         assert!(bare.iter().all(|(_, _, ids)| ids.is_empty()) && bare.len() == 2);
+    }
+
+    #[test]
+    fn expressions_export_and_read_back() {
+        let mut s = session(&["ParamEyeLOpen", "ParamSmile"]);
+        let smile = ayatsuri_format::Expression {
+            name: "Smile".into(),
+            fade_in: Some(0.5),
+            fade_out: None,
+            params: vec![
+                ayatsuri_format::ExpressionParam {
+                    id: "ParamSmile".into(),
+                    value: 1.0,
+                    blend: ayatsuri_format::ExpressionBlend::Add,
+                },
+                ayatsuri_format::ExpressionParam {
+                    id: "ParamEyeLOpen".into(),
+                    value: 0.5,
+                    blend: ayatsuri_format::ExpressionBlend::Multiply,
+                },
+            ],
+        };
+        // a second expression with the same name still gets its own file
+        s.expressions = vec![smile.clone(), smile.clone()];
+        s.animations = vec![ayatsuri_format::Animation {
+            name: "idle".into(),
+            fps: 30.0,
+            duration: 1.0,
+            looped: true,
+            tracks: Vec::new(),
+        }];
+        let dir = std::env::temp_dir().join(format!("ayatsuri-exp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let opt = Options {
+            name: "t".into(),
+            version: ayatsuri_import::ExportVersion::DEFAULT,
+            physics: false,
+            motions: true,
+            expressions: true,
+        };
+        export(&s, &dir, &opt).unwrap();
+        let model3 = std::fs::read_to_string(dir.join("t.model3.json")).unwrap();
+        // listed, and before Motions as Cubism orders them
+        let (e, m) = (model3.find("\"Expressions\"").unwrap(), model3.find("\"Motions\"").unwrap());
+        assert!(e < m, "{model3}");
+        assert!(model3.contains("expressions/Smile.exp3.json"), "{model3}");
+        assert!(model3.contains("expressions/Smile_2.exp3.json"), "{model3}");
+        let back = ayatsuri_import::from_exp3(
+            &std::fs::read(dir.join("expressions/Smile.exp3.json")).unwrap(),
+            "Smile",
+        )
+        .unwrap();
+        assert_eq!(back, smile);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

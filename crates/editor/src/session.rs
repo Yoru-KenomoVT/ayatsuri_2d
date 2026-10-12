@@ -41,6 +41,17 @@ struct FileReferences {
     display_info: Option<String>,
     #[serde(rename = "Physics", default)]
     physics: Option<String>,
+    #[serde(rename = "Expressions", default)]
+    expressions: Vec<ExpRef>,
+}
+
+/// One model3.json expression entry.
+#[derive(Deserialize)]
+struct ExpRef {
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "File", default)]
+    file: String,
 }
 
 /// The `.cdi3.json` display info: ids to human names and parameter groups.
@@ -113,6 +124,8 @@ pub struct Session {
     pub deformer_previews: HashMap<usize, Option<TextureHandle>>,
     /// Animation clips; they ride inside the .aom payload.
     pub animations: Vec<ayatsuri_format::Animation>,
+    /// Expressions (exp3.json) that ride with the model.
+    pub expressions: Vec<ayatsuri_format::Expression>,
     pub current_anim: Option<usize>,
     pub puppet: Puppet,
     /// Downscaled for the Texture palette and the non-GPU fallback view.
@@ -268,6 +281,7 @@ impl Session {
         s.aom_path = Some(path.to_path_buf());
         s.author = payload.meta.author;
         s.animations = payload.animations;
+        s.expressions = payload.expressions;
         if let Some(d) = payload.display {
             s.model_groups = d.model_groups.clone();
             let n = s.puppet.model().parameters.len();
@@ -382,8 +396,22 @@ impl Session {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "model".into());
         let groups = bundle.groups.clone();
+        let mut expressions = Vec::new();
+        for (ename, epath) in &bundle.expressions {
+            match std::fs::read(epath)
+                .map_err(|e| e.to_string())
+                .and_then(|b| ayatsuri_import::from_exp3(&b, ename).map_err(|e| e.to_string()))
+            {
+                Ok(e) => expressions.push(e),
+                Err(e) => warn!("expression {}: {e}", epath.display()),
+            }
+        }
+        if !expressions.is_empty() {
+            info!("{} expression(s)", expressions.len());
+        }
         let mut s = Self::from_parts(ctx, name, model, pngs, names, cdi, path)?;
         s.model_groups = groups;
+        s.expressions = expressions;
         Ok(s)
     }
 
@@ -569,6 +597,7 @@ impl Session {
             part_previews: HashMap::new(),
             deformer_previews: HashMap::new(),
             animations: Vec::new(),
+            expressions: Vec::new(),
             current_anim: None,
             part_shown: vec![true; n_parts],
             mesh_shown: vec![true; n_meshes],
@@ -713,6 +742,7 @@ impl Session {
                 .map(|b| serde_bytes::ByteBuf::from(b.clone()))
                 .collect(),
             animations: self.animations.clone(),
+            expressions: self.expressions.clone(),
             display: Some(ayatsuri_format::DisplayInfo {
                 param_names: self.param_names.clone(),
                 param_colors: self
@@ -826,6 +856,8 @@ struct Bundle {
     physics: Option<PathBuf>,
     /// Groups from the model3.json, when the bundle had one.
     groups: Option<Vec<(String, String, Vec<String>)>>,
+    /// Expression files: (name, path), the listed ones first.
+    expressions: Vec<(String, PathBuf)>,
 }
 
 /// From whichever file was picked, find the `.moc3`, the texture list and the
@@ -847,6 +879,14 @@ fn resolve_bundle(path: &Path) -> Result<Bundle, String> {
             display_info: m.file_references.display_info.map(|d| dir.join(d)),
             physics: m.file_references.physics.map(|d| dir.join(d)),
             groups: Some(m.groups.into_iter().map(|g| (g.target, g.name, g.ids)).collect()),
+            expressions: find_expressions(
+                dir,
+                m.file_references
+                    .expressions
+                    .into_iter()
+                    .map(|e| (e.name, dir.join(e.file)))
+                    .collect(),
+            ),
         })
     };
 
@@ -877,7 +917,45 @@ fn resolve_bundle(path: &Path) -> Result<Bundle, String> {
         display_info: None,
         physics: None,
         groups: None,
+        expressions: find_expressions(dir, Vec::new()),
     })
+}
+
+/// Expression files for a bundle: the ones its model3.json lists, then any
+/// other `*.exp3.json` in the folder or one level down, which is where
+/// VTube Studio finds them for models that list none. At most 256, and
+/// every path stays inside the model folder.
+fn find_expressions(dir: &Path, mut listed: Vec<(String, PathBuf)>) -> Vec<(String, PathBuf)> {
+    listed.retain(|(_, p)| p.starts_with(dir) && p.is_file());
+    let mut seen: Vec<PathBuf> = listed.iter().map(|(_, p)| p.clone()).collect();
+    let mut found = Vec::new();
+    let mut scan = |d: &Path, found: &mut Vec<(String, PathBuf)>| {
+        let Ok(entries) = std::fs::read_dir(d) else { return };
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for p in paths {
+            let file = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if let Some(stem) = file.strip_suffix(".exp3.json")
+                && p.is_file()
+                && !seen.contains(&p)
+            {
+                seen.push(p.clone());
+                found.push((stem.to_string(), p));
+            }
+        }
+    };
+    scan(dir, &mut found);
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut subdirs: Vec<PathBuf> =
+            entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        subdirs.sort();
+        for sub in subdirs {
+            scan(&sub, &mut found);
+        }
+    }
+    listed.extend(found);
+    listed.truncate(256);
+    listed
 }
 
 fn decode_texture(

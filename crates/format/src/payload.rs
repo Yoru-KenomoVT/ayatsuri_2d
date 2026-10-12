@@ -30,6 +30,42 @@ pub struct AomPayload {
     /// Animations ride inside the container, per docs/aom-format.md; the
     /// embedded export writes each one out as `<name>.motion3.json`.
     pub animations: Vec<Animation>,
+    /// Expressions (exp3.json): parameter targets layered over the pose.
+    /// Empty in older files.
+    pub expressions: Vec<Expression>,
+}
+
+/// One expression, the published exp3.json shape: parameters held at a
+/// value and blended over whatever the pose is, faded in and out.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Expression {
+    pub name: String,
+    /// Seconds; None leaves it to the player (the spec's default is 1).
+    pub fade_in: Option<f32>,
+    pub fade_out: Option<f32>,
+    pub params: Vec<ExpressionParam>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExpressionParam {
+    /// Parameter id.
+    pub id: String,
+    pub value: f32,
+    pub blend: ExpressionBlend,
+}
+
+/// How an expression value meets the pose's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExpressionBlend {
+    /// pose + value (the spec's default)
+    #[default]
+    Add,
+    /// pose * value; what eye open/close should use, so blinks still work
+    Multiply,
+    /// value, whatever the pose
+    Overwrite,
 }
 
 /// One animation clip: parameter curves over time. Linear segments for now;

@@ -434,6 +434,7 @@ pub(crate) struct ExportDlg {
     pub(crate) version: usize,
     pub(crate) physics: bool,
     pub(crate) motions: bool,
+    pub(crate) expressions: bool,
 }
 
 /// The New Model dialog's working copy.
@@ -1379,6 +1380,7 @@ impl EditorUi {
                             version: ayatsuri_import::ExportVersion::default_index(),
                             physics: true,
                             motions: true,
+                            expressions: true,
                         });
                     }
                     ui.separator();
@@ -3981,6 +3983,7 @@ impl EditorUi {
                     version: ayatsuri_import::ExportVersion::default_index(),
                     physics: true,
                     motions: true,
+                    expressions: true,
                 });
             }
             "shortcuts" => {

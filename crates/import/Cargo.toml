@@ -14,6 +14,7 @@ workspace = true
 ayatsuri-format = { workspace = true }
 openmoc3 = { workspace = true }
 serde = { workspace = true }
+log = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 # paint documents in: Photoshop through `psd`, Krita's zip through `zip`

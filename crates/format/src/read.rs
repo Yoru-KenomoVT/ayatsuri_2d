@@ -66,6 +66,16 @@ mod tests {
             textures: vec![serde_bytes::ByteBuf::from(vec![1u8, 2, 3])],
             display: None,
             animations: Vec::new(),
+            expressions: vec![crate::Expression {
+                name: "smile".into(),
+                fade_in: Some(0.5),
+                fade_out: None,
+                params: vec![crate::ExpressionParam {
+                    id: "ParamEyeLOpen".into(),
+                    value: 0.6,
+                    blend: crate::ExpressionBlend::Multiply,
+                }],
+            }],
         };
         let bytes = crate::writer::write(&payload).unwrap();
         let back = crate::read::read(&bytes).unwrap();
@@ -75,6 +85,7 @@ mod tests {
         assert_eq!(m.positions, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
         assert_eq!(m.indices, vec![0, 1, 2]);
         assert_eq!(back.textures[0].as_ref(), &[1u8, 2, 3]);
+        assert_eq!(back.expressions, payload.expressions);
     }
 
     #[test]
