@@ -161,7 +161,7 @@ impl EditorUi {
         section(
             ui,
             "Selection",
-            "Click selects. Shift or Ctrl+click adds to the selection. Alt+click walks up the deformer chain.",
+            "Click selects. Shift or Ctrl+click adds to the selection. Alt+click walks up the deformer chain.\n\nLasso: with a mesh or warp selected, draw around points to pick them (Shift adds), then use the box to move, scale or rotate them. With nothing selected it selects whole meshes.",
         );
 
         section(
@@ -490,38 +490,54 @@ impl EditorUi {
         section(
             ui,
             "Deform path edit",
-            "Click on the selected mesh to add a control point; drag one to bend the mesh. Backspace removes the last point.",
+            "Click on the selected mesh to add a control point, drag one to move it, Alt+click deletes, Backspace removes the last. Placing a path deforms nothing.\n\nSwitch to the arrow tool and drag a control point: points inside the red circle follow the path, keeping their shape fully inside the blue one. Edits go into the keyform the parameters sit on.\n\nEdit levels 2 and 3 each keep their own path for the same mesh (for example opening and closing a mouth); level 1 hides paths.",
         );
+        let key = match self.selected {
+            Some(Sel::Mesh(mi)) => Some((mi, self.edit_level)),
+            _ => None,
+        };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let _ = icon(ui, true, true, ph::PLUS_CIRCLE, "Add control point: click on the mesh");
             if icon(
                 ui,
                 false,
-                true,
+                key.is_some(),
                 ph::MINUS_CIRCLE,
-                "Delete control point: the last one (Backspace)",
+                "Delete control point: the last one (Backspace), or Alt+click any",
             )
             .clicked()
-                && let Some(p) = &mut self.deform_path
+                && let Some(k) = key
+                && let Some(list) = self.deform_paths.get_mut(&k)
             {
-                p.points.pop();
+                list.pop();
             }
-            if icon(ui, false, true, ph::TRASH, "Delete path").clicked() {
-                self.deform_path = None;
+            if icon(ui, false, key.is_some(), ph::TRASH, "Delete path (this mesh, this edit level)")
+                .clicked()
+                && let Some(k) = key
+            {
+                self.deform_paths.remove(&k);
             }
             let _ = icon(ui, false, false, ph::LINE_SEGMENTS, "Fold line");
-            let _ = icon(ui, false, false, ph::BROOM, "Delete deform paths at the current level");
         });
         grid(ui, "td-path", |ui| {
-            row(ui, "Falloff size", |ui| {
+            row(ui, "Deform path width", |ui| {
                 ui.add(
-                    egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
+                    egui::Slider::new(&mut self.path_width, 4.0..=600.0)
                         .logarithmic(true)
                         .suffix(" px"),
                 );
             });
+            row(ui, "Hardness", |ui| {
+                ui.add(
+                    egui::Slider::new(&mut self.path_hardness, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                );
+            });
         });
+        if self.edit_level < 2 {
+            ui.weak("Edit level 1 hides deform paths; press 2 or 3.");
+        }
     }
 
     fn td_create(&mut self, ui: &mut Ui) {

@@ -31,6 +31,14 @@ pub struct Prefs {
     /// Canvas overlay colours; None follows the theme (mesh lines follow
     /// the primary colour).
     pub overlay: Overlay,
+    /// Discord Rich Presence is on unless turned off here. The app id is an
+    /// optional override of Ayatsuri2D's own; the model's name only shows
+    /// when allowed (file names can be client work).
+    pub discord_off: bool,
+    pub discord_app_id: String,
+    pub discord_show_name: bool,
+    /// Open the editor window fullscreen.
+    pub start_fullscreen: bool,
 }
 
 /// The arrow tool's display settings, RGBA.

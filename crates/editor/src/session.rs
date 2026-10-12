@@ -124,6 +124,8 @@ pub struct Session {
     pub part_names: Vec<String>,
     /// Display names per art mesh (the PSD layer names); IDs stay ASCII.
     pub mesh_names: Vec<String>,
+    /// Parameters the user is dragging this frame; physics stays off them.
+    pub params_held: Vec<usize>,
     /// Parameter palette grouping, cdi3 order; one trailing group holds the rest.
     pub groups: Vec<ParamGroup>,
     /// Every key value each parameter has anywhere in the model, sorted,
@@ -255,6 +257,13 @@ impl Session {
             }
             if !d.mesh_names.is_empty() && d.mesh_names.len() == s.mesh_names.len() {
                 s.mesh_names = d.mesh_names.clone();
+            }
+            if let Some(pairs) = &d.combined {
+                s.combined = pairs
+                    .iter()
+                    .map(|&(a, b)| (a as usize, b as usize))
+                    .filter(|&(a, b)| a < n && b < n && a != b)
+                    .collect();
             }
             if d.param_names.len() == n {
                 s.param_names = d.param_names;
@@ -525,6 +534,7 @@ impl Session {
             last_update_ms: 0.0,
             param_names,
             mesh_names: model_mesh_ids,
+            params_held: Vec::new(),
             part_names,
 
             groups,
@@ -676,6 +686,7 @@ impl Session {
                 group_colors: self.groups.iter().map(|g| pack_rgb(g.color)).collect(),
                 part_names: self.part_names.clone(),
                 mesh_names: self.mesh_names.clone(),
+                combined: Some(self.combined.iter().map(|&(a, b)| (a as u32, b as u32)).collect()),
             }),
         }
     }

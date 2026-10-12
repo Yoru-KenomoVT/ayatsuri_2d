@@ -199,6 +199,14 @@ impl Puppet {
         moved
     }
 
+    /// Keep physics off one parameter while the user drags its slider, so a
+    /// physics-driven parameter can still be moved by hand; empty lets go.
+    pub fn hold_physics_params(&mut self, params: &[usize]) {
+        if let Some(ph) = &mut self.physics {
+            ph.hold(params);
+        }
+    }
+
     /// Settle every strand back to rest.
     pub fn reset_physics(&mut self) {
         if let Some(ph) = &mut self.physics {

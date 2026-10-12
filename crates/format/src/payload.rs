@@ -70,4 +70,7 @@ pub struct DisplayInfo {
     /// empty in older files, which fall back to IDs.
     pub part_names: Vec<String>,
     pub mesh_names: Vec<String>,
+    /// Parameter pairs shown as one 2D pad. None in older files, which
+    /// keep the conventional X/Y pairs.
+    pub combined: Option<Vec<(u32, u32)>>,
 }

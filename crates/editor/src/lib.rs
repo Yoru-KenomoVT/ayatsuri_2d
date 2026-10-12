@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod discord;
 pub mod dock;
 mod export;
 mod gpu_view;

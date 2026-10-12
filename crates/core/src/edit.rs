@@ -1350,6 +1350,37 @@ pub fn move_warp_points(
     touched
 }
 
+/// Edit Form > Flip: mirror a mesh or warp across its own centre, every
+/// keyform, horizontally or vertically. A warp's children flip with it.
+/// Rotation deformers and parts are refused (false).
+pub fn flip_object(model: &mut Model, target: Target, horizontal: bool) -> bool {
+    let pos: &mut Vec<f32> = match target {
+        Target::ArtMesh(i) => match model.art_meshes.get_mut(i) {
+            Some(m) => &mut m.positions,
+            None => return false,
+        },
+        Target::Deformer(i) => match model.deformers.get_mut(i).map(|d| &mut d.kind) {
+            Some(DeformerKind::Warp(w)) => &mut w.positions,
+            _ => return false,
+        },
+        Target::Part(_) => return false,
+    };
+    let axis = if horizontal { 0 } else { 1 };
+    let (lo, hi) = pos
+        .iter()
+        .skip(axis)
+        .step_by(2)
+        .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    if lo > hi {
+        return false;
+    }
+    let mid2 = lo + hi;
+    for v in pos.iter_mut().skip(axis).step_by(2) {
+        *v = mid2 - *v;
+    }
+    true
+}
+
 /// Slide a rotation deformer's origin by (dx, dy) in parent space, across
 /// every keyform.
 pub fn move_rotation_origin(model: &mut Model, deformer: usize, dx: f32, dy: f32) -> bool {
@@ -2143,5 +2174,14 @@ mod tests {
         assert!(move_vertices_in(&mut m, 0, Some(1), &[(0, 0.5, 0.0)]));
         assert_eq!(m.art_meshes[0].positions, vec![0.0, 0.0, 2.5, 0.0]);
         assert!(!move_vertices_in(&mut m, 0, Some(9), &[(0, 1.0, 0.0)]));
+    }
+
+    #[test]
+    fn flip_mirrors_across_the_centre() {
+        let mut m = test_model();
+        // keyform xs are 0 and 2: centre 1, so they swap
+        assert!(flip_object(&mut m, Target::ArtMesh(0), true));
+        assert_eq!(m.art_meshes[0].positions, vec![2.0, 0.0, 0.0, 0.0]);
+        assert!(!flip_object(&mut m, Target::Part(0), true));
     }
 }

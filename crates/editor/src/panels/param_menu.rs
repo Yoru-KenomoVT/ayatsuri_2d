@@ -5,7 +5,7 @@
 // command and the palette runs it afterwards.
 
 use ayatsuri_core::edit::Target;
-use ayatsuri_core::keyform;
+use ayatsuri_core::keyform::{self, CornerRef};
 use egui::Ui;
 
 use super::{EditorUi, ParamEdit, ParamNew, Sel};
@@ -26,6 +26,13 @@ pub(super) enum ParamCmd {
     MoveIntoGroup(usize),
     RenameGroup(usize),
     MoveGroupSubject(usize),
+    /// Join a parameter with the one below it into a 2D pad.
+    Combine(usize),
+    Uncombine(usize),
+    /// Automatic Generation of Four Corner Forms (Ctrl+4).
+    FourCorners,
+    /// Motion Mirroring for a parameter.
+    Mirror(usize),
     ResetAll,
     DeleteEmptyParams,
     DeleteEmptyGroups,
@@ -37,6 +44,39 @@ pub(super) enum ParamCmd {
     Reflect(usize),
     Adjust(usize),
     Change(usize),
+}
+
+/// The Automatic Generation of Four Corner Forms dialog's settings.
+struct Corners {
+    pa: usize,
+    pb: usize,
+    centre: bool,
+    /// Top left, top right, bottom left, bottom right.
+    overwrite: [bool; 4],
+    /// Every object keyed on both, not just the selection.
+    all: bool,
+}
+
+/// The Motion Mirroring dialog's settings.
+struct Mirror {
+    param: usize,
+    horizontal: bool,
+    vertical: bool,
+}
+
+/// How deep a deformer sits, so mirroring can go parents first.
+fn depth(s: &Session, d: usize) -> usize {
+    let m = s.puppet.model();
+    let mut cur = m.deformers.get(d).and_then(|x| x.parent_deformer);
+    let mut n = 0;
+    while let Some(p) = cur {
+        n += 1;
+        cur = m.deformers.get(p as usize).and_then(|x| x.parent_deformer);
+        if n > 256 {
+            break;
+        }
+    }
+    n
 }
 
 /// A parameter or a whole folder picked with Select for Movement.
@@ -52,6 +92,8 @@ pub(super) struct ParamMenuState {
     /// "Select for Movement": what waits for "Move Here".
     pub(super) subject: Option<Moving>,
     rename: Option<(usize, String)>,
+    corners: Option<Corners>,
+    mirror: Option<Mirror>,
     adjust: Option<(usize, f32, f32)>,
     change: Option<(usize, usize)>,
 }
@@ -89,6 +131,14 @@ fn color_menu(ui: &mut Ui) -> Option<Option<[u8; 3]>> {
     out
 }
 
+/// A menu item with its shortcut shown on the right.
+fn item_sc(ui: &mut Ui, label: &str, shortcut: &str, cmd: ParamCmd, out: &mut Option<ParamCmd>) {
+    if ui.add(egui::Button::new(label).shortcut_text(shortcut)).clicked() {
+        *out = Some(cmd);
+        ui.close();
+    }
+}
+
 fn item(ui: &mut Ui, enabled: bool, label: &str, cmd: ParamCmd, out: &mut Option<ParamCmd>) {
     if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
         *out = Some(cmd);
@@ -110,6 +160,11 @@ pub(super) fn name_menu(
     item(ui, true, "Create folder", ParamCmd::CreateFolder, &mut out);
     item(ui, true, "Delete", ParamCmd::Delete(pi), &mut out);
     ui.separator();
+    if s.combined.iter().any(|&(a, b)| a == pi || b == pi) {
+        item(ui, true, "Unlink parameters", ParamCmd::Uncombine(pi), &mut out);
+    } else {
+        item(ui, true, "Link with parameter below", ParamCmd::Combine(pi), &mut out);
+    }
     item(ui, true, "Select for Movement", ParamCmd::MoveSubject(pi), &mut out);
     let can_move = subject.is_some_and(|m| m != Moving::Param(pi));
     item(ui, can_move, "Move Here", ParamCmd::MoveHere(pi), &mut out);
@@ -140,6 +195,8 @@ pub(super) fn slider_menu(ui: &mut Ui, pi: usize, v: f32, can_edit: bool) -> Opt
     item(ui, can_edit, "Reflect", ParamCmd::Reflect(pi), &mut out);
     item(ui, can_edit, "Adjust…", ParamCmd::Adjust(pi), &mut out);
     item(ui, can_edit, "Change…", ParamCmd::Change(pi), &mut out);
+    ui.separator();
+    item(ui, can_edit, "Motion Mirroring…", ParamCmd::Mirror(pi), &mut out);
     out
 }
 
@@ -181,12 +238,23 @@ pub(super) fn group_menu(
 
 /// Right-click on the palette's empty space: creating things, plus the
 /// whole-palette items from Cubism's palette menu.
-pub(super) fn panel_menu(ui: &mut Ui, s: &mut Session) -> Option<ParamCmd> {
+pub(super) fn panel_menu(
+    ui: &mut Ui,
+    s: &mut Session,
+    sc: &dyn Fn(&str) -> String,
+) -> Option<ParamCmd> {
     let mut out = None;
     item(ui, true, "Create Parameter…", ParamCmd::Create(None), &mut out);
     item(ui, true, "Create folder", ParamCmd::CreateFolder, &mut out);
     ui.separator();
-    item(ui, true, "Reset to default values        Ctrl+1", ParamCmd::ResetAll, &mut out);
+    item_sc(ui, "Reset to default values", &sc("reset-params"), ParamCmd::ResetAll, &mut out);
+    item_sc(
+        ui,
+        "Automatic Generation of Four Corner Forms…",
+        &sc("four-corners"),
+        ParamCmd::FourCorners,
+        &mut out,
+    );
     if ui.button("Expand all").clicked() {
         s.groups.iter_mut().for_each(|g| g.open = true);
         ui.close();
@@ -349,6 +417,25 @@ impl EditorUi {
                 }
             }
             ParamCmd::ResetAll => self.reset_parameters(),
+            ParamCmd::Mirror(pi) => {
+                self.pmenu.mirror = Some(Mirror { param: pi, horizontal: true, vertical: false });
+            }
+            ParamCmd::FourCorners => {
+                let Some(s) = &self.session else { return };
+                // start from the conventional pair, else the first pad
+                let find = |id: &str| s.puppet.model().parameters.iter().position(|p| p.id == id);
+                let (pa, pb) = match (find("ParamAngleX"), find("ParamAngleY")) {
+                    (Some(a), Some(b)) => (a, b),
+                    _ => s.combined.first().copied().unwrap_or((0, 1)),
+                };
+                self.pmenu.corners = Some(Corners {
+                    pa,
+                    pb,
+                    centre: false,
+                    overwrite: [true; 4],
+                    all: self.param_targets().is_empty(),
+                });
+            }
             ParamCmd::DeleteEmptyParams => {
                 // no keys anywhere and not used by physics (delete_parameter
                 // refuses those), highest index first so indices hold
@@ -370,6 +457,31 @@ impl EditorUi {
                     let before = s.groups.len();
                     s.groups.retain(|g| !g.params.is_empty() || g.name.is_empty());
                     log::info!("deleted {} empty folder(s)", before - s.groups.len());
+                    s.modified = true;
+                }
+            }
+            ParamCmd::Combine(pi) => {
+                let Some(s) = &mut self.session else { return };
+                // the parameter directly below it in its folder
+                let below = s.groups.iter().find_map(|g| {
+                    let at = g.params.iter().position(|&p| p == pi)?;
+                    g.params.get(at + 1).copied()
+                });
+                let taken =
+                    |p: usize, c: &[(usize, usize)]| c.iter().any(|&(a, b)| a == p || b == p);
+                match below {
+                    Some(b) if !taken(pi, &s.combined) && !taken(b, &s.combined) => {
+                        s.combined.push((pi, b));
+                        s.modified = true;
+                        log::info!("linked {} and {} into a pad", label(s, pi), label(s, b));
+                    }
+                    Some(_) => log::warn!("one of the two is already part of a pad"),
+                    None => log::warn!("link needs a parameter below it in the same folder"),
+                }
+            }
+            ParamCmd::Uncombine(pi) => {
+                if let Some(s) = &mut self.session {
+                    s.combined.retain(|&(a, b)| a != pi && b != pi);
                     s.modified = true;
                 }
             }
@@ -579,6 +691,152 @@ impl EditorUi {
             .as_ref()
             .map(|s| (0..s.puppet.model().parameters.len()).map(|p| label(s, p)).collect())
             .unwrap_or_default();
+
+        let pick = |ui: &mut Ui, id: &str, v: &mut usize| {
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(names.get(*v).cloned().unwrap_or_default())
+                .show_ui(ui, |ui| {
+                    for (i, n) in names.iter().enumerate() {
+                        ui.selectable_value(v, i, n);
+                    }
+                });
+        };
+
+        if let Some(c) = &mut self.pmenu.corners {
+            let mut open = true;
+            let mut run = false;
+            egui::Window::new("Automatic Generation of Four Corner Forms")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(&ctx, |ui| {
+                    egui::Grid::new("corners").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                        ui.label("Parameter 1 (left/right)");
+                        pick(ui, "c-pa", &mut c.pa);
+                        ui.end_row();
+                        ui.label("Parameter 2 (down/up)");
+                        pick(ui, "c-pb", &mut c.pb);
+                        ui.end_row();
+                        ui.label("Parameter value to reference");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut c.centre, false, "Default value");
+                            ui.radio_value(&mut c.centre, true, "Center of parameters");
+                        });
+                        ui.end_row();
+                        ui.label("Overwrite key");
+                        egui::Grid::new("corners-ow").show(ui, |ui| {
+                            ui.checkbox(&mut c.overwrite[0], "Top left");
+                            ui.checkbox(&mut c.overwrite[1], "Top right");
+                            ui.end_row();
+                            ui.checkbox(&mut c.overwrite[2], "Bottom left");
+                            ui.checkbox(&mut c.overwrite[3], "Bottom right");
+                            ui.end_row();
+                        });
+                        ui.end_row();
+                        ui.label("Target");
+                        ui.vertical(|ui| {
+                            ui.radio_value(&mut c.all, false, "Selected objects");
+                            ui.radio_value(&mut c.all, true, "All objects keyed on both");
+                        });
+                        ui.end_row();
+                    });
+                    ui.weak("Each corner becomes its left/right form plus its up/down form minus the centre. Make the four directions first.");
+                    if ui.button("OK").clicked() {
+                        run = true;
+                    }
+                });
+            if run {
+                let (pa, pb, centre, ow, all) = (c.pa, c.pb, c.centre, c.overwrite, c.all);
+                self.pmenu.corners = None;
+                let targets = if all {
+                    self.session
+                        .as_ref()
+                        .map(|s| {
+                            let b = bound_on(s, pb);
+                            bound_on(s, pa).into_iter().filter(|t| b.contains(t)).collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    self.param_targets()
+                };
+                let reference = if centre { CornerRef::Centre } else { CornerRef::Default };
+                if let Some(s) = &mut self.session {
+                    let mut n = 0;
+                    s.edit(|m| {
+                        for &t in &targets {
+                            n += keyform::four_corners(m, t, pa, pb, reference, ow) as usize;
+                        }
+                        n > 0
+                    });
+                    if n == 0 {
+                        log::warn!(
+                            "four corner forms: no target has keys on both parameters (two keys or more each)"
+                        );
+                    } else {
+                        log::info!("four corner forms generated on {n} object(s)");
+                    }
+                }
+            } else if !open {
+                self.pmenu.corners = None;
+            }
+        }
+
+        if let Some(mi) = &mut self.pmenu.mirror {
+            let mut open = true;
+            let mut run = false;
+            egui::Window::new("Motion Mirroring").open(&mut open).collapsible(false).resizable(false).show(
+                &ctx,
+                |ui| {
+                    egui::Grid::new("mirror").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                        ui.label("Parameter");
+                        pick(ui, "m-p", &mut mi.param);
+                        ui.end_row();
+                        ui.label("Flip settings");
+                        ui.vertical(|ui| {
+                            ui.checkbox(&mut mi.horizontal, "Flip horizontally");
+                            ui.checkbox(&mut mi.vertical, "Flip vertically");
+                        });
+                        ui.end_row();
+                    });
+                    ui.weak("The key at the current value is mirrored across the default into the opposite key, on the selected objects, parents first. Warps mirror around their centre; meshes mirror their movement in place.");
+                    if ui.button("OK").clicked() {
+                        run = true;
+                    }
+                },
+            );
+            if run {
+                let (p, h, v) = (mi.param, mi.horizontal, mi.vertical);
+                self.pmenu.mirror = None;
+                let mut targets = self.param_targets();
+                // parents first
+                if let Some(s) = &self.session {
+                    targets.sort_by_key(|t| match t {
+                        Target::Deformer(d) => depth(s, *d),
+                        _ => usize::MAX,
+                    });
+                }
+                if let Some(s) = &mut self.session {
+                    let from = s.puppet.value(p);
+                    let mut wrote = None;
+                    s.edit(|m| {
+                        for &t in &targets {
+                            if let Some(k) = keyform::mirror_motion(m, t, p, from, h, v) {
+                                wrote = Some(k);
+                            }
+                        }
+                        wrote.is_some()
+                    });
+                    match wrote {
+                        Some(k) => log::info!("mirrored into the key at {k}"),
+                        None => log::warn!(
+                            "motion mirroring: move the parameter onto a key other than the default, with an opposite key on the selection"
+                        ),
+                    }
+                }
+            } else if !open {
+                self.pmenu.mirror = None;
+            }
+        }
 
         if let Some((p, from, to)) = &mut self.pmenu.adjust {
             let mut open = true;

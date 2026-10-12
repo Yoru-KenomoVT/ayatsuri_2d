@@ -24,3 +24,4 @@ serde_json = { workspace = true }
 rfd = "0.17"
 image = { version = "0.25", default-features = false, features = ["png"] }
 egui-phosphor = "0.14.0"
+discord-rich-presence = "1.1"

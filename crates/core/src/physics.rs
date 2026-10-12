@@ -73,6 +73,9 @@ pub struct Physics {
     acc: f32,
     /// Outputs exist to apply; false until the first full step.
     primed: bool,
+    /// A parameter the user is dragging by hand: physics leaves it alone
+    /// until let go, so its slider can be moved.
+    held: Vec<usize>,
 }
 
 /// Map a parameter value into the group's normalized range. Per the manual,
@@ -93,6 +96,12 @@ fn normalize(value: f32, min: f32, max: f32, norm: PhysicsRange) -> f32 {
 }
 
 impl Physics {
+    /// Hold parameters out of the outputs while the user drags them.
+    pub fn hold(&mut self, params: &[usize]) {
+        self.held.clear();
+        self.held.extend_from_slice(params);
+    }
+
     /// Build the sim from the model's rig, resolving parameter ids. Entries
     /// naming unknown parameters are dropped rather than failing the load.
     pub fn new(model: &Model) -> Option<Self> {
@@ -179,6 +188,7 @@ impl Physics {
             step: 1.0 / fps,
             acc: 0.0,
             primed: false,
+            held: Vec::new(),
         })
     }
 
@@ -393,6 +403,9 @@ impl Physics {
                 continue;
             }
             for o in &mut g.outputs {
+                if self.held.contains(&o.param) {
+                    continue;
+                }
                 let Some(slot) = values.get_mut(o.param) else { continue };
                 let (min, max, default) = meta_of(o.param);
                 let target = (default + o.last).clamp(min, max);

@@ -32,6 +32,8 @@ pub struct PtDrag {
     /// points, the painted weight under a brush selection.
     pub weight: Vec<f32>,
     pub bbox: Rect,
+    /// The lasso's outline, when the pick is freehand instead of a box.
+    pub lasso: Option<Vec<Pos2>>,
 }
 
 impl PtDrag {
@@ -198,6 +200,8 @@ pub struct PtOpts {
     pub whole_box: bool,
     /// Dragging empty space draws a selection rectangle.
     pub marquee: bool,
+    /// ...or a freehand lasso, for the lasso tool.
+    pub lasso: bool,
     pub reach: f32,
     /// Extra room around the box, so its dots clear points on the edge.
     pub pad: f32,
@@ -368,6 +372,7 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
                     )
                     .collect(),
                 bbox,
+                lasso: (grab == Grab::Marquee && o.lasso).then(|| vec![start]),
             });
         }
     }
@@ -375,6 +380,11 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
         && let Some(p) = ptr
     {
         d.ptr = p;
+        if let Some(path) = &mut d.lasso
+            && path.last().is_none_or(|l| l.distance(p) > 2.0)
+        {
+            path.push(p);
+        }
     }
 
     let mut commit = None;
@@ -396,7 +406,11 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
                     st.picked.clear();
                 }
                 for (i, p) in pts.iter().enumerate() {
-                    if r.contains(*p) {
+                    let inside = match &d.lasso {
+                        Some(path) => path.len() > 2 && point_in_polygon(*p, path),
+                        None => r.contains(*p),
+                    };
+                    if inside {
                         st.picked.insert(i);
                     }
                 }
@@ -444,25 +458,40 @@ pub fn draw_overlay(
     hot: Option<Grab>,
 ) {
     let accent = crate::theme::pal().accent;
+    // picked points, and a lone point being dragged, show red; a single
+    // point needs no transform box around it
+    let red = Color32::from_rgb(0xE5, 0x48, 0x48);
     for &i in &st.picked {
         if let Some(&p) = pts.get(i) {
-            vp.circle(p, 4.2, accent, Stroke::new(1.0, Color32::WHITE));
+            vp.circle(p, 4.2, red, Stroke::new(1.0, Color32::WHITE));
         }
     }
     match &st.drag {
-        Some(d) if d.grab == Grab::Marquee => {
-            let r = Rect::from_two_pos(d.start, d.ptr);
-            vp.rect_filled(r, 0.0, accent.gamma_multiply(0.08));
-            vp.rect_stroke(r, 0.0, Stroke::new(1.0, accent), StrokeKind::Middle);
+        Some(d) if d.grab == Grab::Marquee => match &d.lasso {
+            Some(path) => {
+                if path.len() > 1 {
+                    vp.add(egui::Shape::line(path.clone(), Stroke::new(1.0, accent)));
+                }
+                if let (Some(&a), Some(&b)) = (path.first(), path.last()) {
+                    vp.add(egui::Shape::dashed_line(&[b, a], Stroke::new(1.0, accent), 4.0, 3.0));
+                }
+            }
+            None => {
+                let r = Rect::from_two_pos(d.start, d.ptr);
+                vp.rect_filled(r, 0.0, accent.gamma_multiply(0.08));
+                vp.rect_stroke(r, 0.0, Stroke::new(1.0, accent), StrokeKind::Middle);
+            }
+        },
+        Some(d) if d.from.len() < 2 => {
+            for &(i, _) in &d.from {
+                if let Some(&p) = pts.get(i) {
+                    vp.circle(p, 4.6, red, Stroke::new(1.0, Color32::WHITE));
+                }
+            }
         }
-        Some(_) => {
-            if let Some(r) = bbox(
-                st.drag
-                    .iter()
-                    .flat_map(|d| d.from.iter())
-                    .filter_map(|&(i, _)| pts.get(i).copied()),
-            ) {
-                draw_box(vp, r.expand(pad), st.drag.as_ref().map(|d| d.grab));
+        Some(d) => {
+            if let Some(r) = bbox(d.from.iter().filter_map(|&(i, _)| pts.get(i).copied())) {
+                draw_box(vp, r.expand(pad), Some(d.grab));
             }
         }
         None => {
@@ -471,6 +500,100 @@ pub fn draw_overlay(
             }
         }
     }
+}
+
+/// Deform path follow: a vertex near the path keeps its place relative to
+/// the nearest segment, so moving a control point drags it along like a
+/// bone. Built once when the grab starts.
+pub struct PathBind {
+    /// vertex, segment, position along it (0..1), offset in the segment's
+    /// frame (along, across), weight.
+    pub ties: Vec<(usize, usize, f32, Vec2, f32)>,
+    pub path: Vec<Pos2>,
+}
+
+/// Tie every vertex within `width` of the path to its nearest segment. The
+/// inner `hardness` share of the width follows fully; the rest fades out.
+pub fn bind_path(path: &[Pos2], verts: &[Pos2], width: f32, hardness: f32) -> PathBind {
+    let mut ties = Vec::new();
+    let inner = width * hardness.clamp(0.0, 1.0);
+    for (vi, &v) in verts.iter().enumerate() {
+        let mut best: Option<(usize, f32, f32)> = None;
+        if path.len() == 1
+            && let Some(&p0) = path.first()
+        {
+            best = Some((0, 0.0, p0.distance(v)));
+        }
+        for j in 0..path.len().saturating_sub(1) {
+            let (Some(&a), Some(&b)) = (path.get(j), path.get(j + 1)) else { continue };
+            let seg = b - a;
+            let t = ((v - a).dot(seg) / seg.length_sq().max(1e-6)).clamp(0.0, 1.0);
+            let dist = v.distance(a + seg * t);
+            if best.is_none_or(|(_, _, bd)| dist < bd) {
+                best = Some((j, t, dist));
+            }
+        }
+        let Some((j, t, dist)) = best else { continue };
+        if dist > width {
+            continue;
+        }
+        let w = if dist <= inner {
+            1.0
+        } else {
+            let x = 1.0 - (dist - inner) / (width - inner).max(1e-3);
+            x * x * (3.0 - 2.0 * x)
+        };
+        let (a, b) = (path.get(j).copied().unwrap_or(v), path.get(j + 1).copied());
+        let (u, n) = frame(a, b);
+        let at = b.map_or(a, |b| a + (b - a) * t);
+        let off = v - at;
+        ties.push((vi, j, t, vec2(off.dot(u), off.dot(n)), w));
+    }
+    PathBind { ties, path: path.to_vec() }
+}
+
+fn frame(a: Pos2, b: Option<Pos2>) -> (Vec2, Vec2) {
+    let u = b.map(|b| b - a).filter(|d| d.length() > 1e-4).map_or(Vec2::X, |d| d.normalized());
+    (u, vec2(-u.y, u.x))
+}
+
+/// Where each tied vertex goes now that the path is `moved` (same length).
+/// Returns (vertex, screen offset) pairs.
+pub fn follow_path(bind: &PathBind, verts: &[Pos2], moved: &[Pos2]) -> Vec<(usize, Vec2)> {
+    let mut out = Vec::with_capacity(bind.ties.len());
+    for &(vi, j, t, off, w) in &bind.ties {
+        let Some(&v) = verts.get(vi) else { continue };
+        let (Some(&a), Some(&a0)) = (moved.get(j), bind.path.get(j)) else { continue };
+        let (b, b0) = (moved.get(j + 1).copied(), bind.path.get(j + 1).copied());
+        let (u, n) = frame(a, b);
+        // segments stretch: the along offset scales with the segment
+        let stretch = match (b, b0) {
+            (Some(b), Some(b0)) => (b - a).length() / (b0 - a0).length().max(1e-3),
+            _ => 1.0,
+        };
+        let at = b.map_or(a, |b| a + (b - a) * t);
+        let target = at + u * (off.x * stretch) + n * off.y;
+        out.push((vi, (target - v) * w));
+    }
+    out
+}
+
+/// Even-odd test: is `p` inside the closed outline `poly`?
+pub fn point_in_polygon(p: Pos2, poly: &[Pos2]) -> bool {
+    let mut inside = false;
+    let n = poly.len();
+    let mut j = n.saturating_sub(1);
+    for i in 0..n {
+        let (Some(a), Some(b)) = (poly.get(i), poly.get(j)) else { break };
+        if (a.y > p.y) != (b.y > p.y) {
+            let x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x);
+            if p.x < x {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
 }
 
 #[cfg(test)]
@@ -484,6 +607,7 @@ mod tests {
             ptr,
             from: Vec::new(),
             weight: Vec::new(),
+            lasso: None,
             bbox: Rect::from_min_max(pos2(0.0, 0.0), pos2(10.0, 10.0)),
         }
     }
@@ -511,7 +635,7 @@ mod tests {
     fn brush_weights_scale_the_move() {
         let mut st = PointState { weights: vec![1.0, 0.5, 0.0], ..PointState::default() };
         let mut pts = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(20.0, 0.0)];
-        let opts = PtOpts { whole_box: true, marquee: true, reach: 8.0, pad: 0.0 };
+        let opts = PtOpts { whole_box: true, marquee: true, lasso: false, reach: 8.0, pad: 0.0 };
         // press away from every point, drag 10 px down
         let start = PtInput {
             ptr: Some(pos2(5.0, 40.0)),
@@ -533,5 +657,43 @@ mod tests {
         assert!((by(0) - 10.0).abs() < 1e-4);
         assert!((by(1) - 5.0).abs() < 1e-4);
         assert_eq!(by(2), 0.0);
+    }
+
+    #[test]
+    fn lasso_picks_points_inside_the_outline() {
+        let mut st = PointState::default();
+        let mut pts = [pos2(10.0, 10.0), pos2(50.0, 50.0), pos2(90.0, 10.0)];
+        let opts = PtOpts { whole_box: false, marquee: true, lasso: true, reach: 4.0, pad: 0.0 };
+        let step = |st: &mut PointState, pts: &mut [Pos2], at: Pos2, first: bool, last: bool| {
+            let inp = PtInput {
+                ptr: Some(at),
+                origin: Some(pos2(0.0, 0.0)),
+                any_down: !last,
+                drag_started: first,
+                drag_stopped: last,
+                ..PtInput::default()
+            };
+            point_tool(st, &inp, pts, &opts);
+        };
+        // a loop around the first two points only
+        step(&mut st, &mut pts, pos2(0.0, 0.0), true, false);
+        for p in [pos2(70.0, 0.0), pos2(70.0, 70.0), pos2(0.0, 70.0)] {
+            step(&mut st, &mut pts, p, false, false);
+        }
+        step(&mut st, &mut pts, pos2(0.0, 1.0), false, true);
+        assert_eq!(st.picked.iter().copied().collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn path_carries_vertices() {
+        let path = [pos2(0.0, 0.0), pos2(10.0, 0.0)];
+        let verts = [pos2(10.0, 2.0), pos2(100.0, 100.0)];
+        let bind = bind_path(&path, &verts, 5.0, 1.0);
+        assert_eq!(bind.ties.len(), 1);
+        // swing the end point down: the vertex near it swings with it
+        let moved = [pos2(0.0, 0.0), pos2(0.0, 10.0)];
+        let off = follow_path(&bind, &verts, &moved);
+        let (vi, d) = off[0];
+        assert!((verts[vi] + d).distance(pos2(-2.0, 10.0)) < 1e-3);
     }
 }
