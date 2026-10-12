@@ -472,12 +472,17 @@ impl EditorUi {
             1 | 2 | 4 | 8 => self.prefs.msaa,
             _ => 4,
         };
-        row(ui, "Model anti-aliasing", "Applies after a restart; Off is cheapest", |ui| {
-            if segmented(ui, &mut msaa, &[("Off", 1u32), ("2x", 2), ("4x", 4), ("8x", 8)]) {
-                self.prefs.msaa = msaa;
-                save = true;
-            }
-        });
+        row(
+            ui,
+            "Model anti-aliasing",
+            "Applies after a restart; steps down if the GPU can't do it",
+            |ui| {
+                if segmented(ui, &mut msaa, &[("Off", 1u32), ("2x", 2), ("4x", 4), ("8x", 8)]) {
+                    self.prefs.msaa = msaa;
+                    save = true;
+                }
+            },
+        );
         row(ui, "Renderer", "", |ui| {
             let r = if self.gpu { "wgpu (GPU), shared with the UI" } else { "software fallback" };
             ui.label(RichText::new(r).color(theme::pal().text_faint));

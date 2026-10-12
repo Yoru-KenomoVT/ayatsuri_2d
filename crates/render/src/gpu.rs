@@ -140,6 +140,22 @@ fn samples_or_default(samples: u32) -> u32 {
     }
 }
 
+/// The sample count to really use: the highest at or under `wanted` that
+/// this device can multisample the model target with. WebGPU only
+/// guarantees 1x and 4x; 2x and 8x also need the adapter to offer them and
+/// the device to have TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES on. Asking
+/// for one it lacks is a fatal validation error, so this never does.
+pub fn supported_samples(adapter: &wgpu::Adapter, device: &wgpu::Device, wanted: u32) -> u32 {
+    let extended =
+        device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+    let flags = adapter.get_texture_format_features(OFFSCREEN_FORMAT).flags;
+    [8u32, 4, 2, 1]
+        .into_iter()
+        .filter(|&n| n <= samples_or_default(wanted))
+        .find(|&n| n == 1 || n == 4 || (extended && flags.sample_count_supported(n)))
+        .unwrap_or(1)
+}
+
 pub struct GpuRenderer {
     samples: u32,
     uni_buf: wgpu::Buffer,

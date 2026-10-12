@@ -91,11 +91,21 @@ fn main() -> eframe::Result {
                 ayatsuri_editor::theme::install(&cc.egui_ctx);
                 let mut editor = editor.take().unwrap_or_default();
                 if let Some(rs) = &cc.wgpu_render_state {
+                    // a sample count the device lacks is a fatal error, so
+                    // the saved setting steps down to one it supports
+                    let wanted = ayatsuri_editor::startup_msaa();
+                    let samples =
+                        ayatsuri_render::supported_samples(&rs.adapter, &rs.device, wanted);
+                    if samples != wanted {
+                        log::warn!(
+                            "{wanted}x anti-aliasing is not supported on this GPU; using {samples}x"
+                        );
+                    }
                     let renderer = ayatsuri_render::GpuRenderer::with_samples(
                         &rs.device,
                         &rs.queue,
                         rs.target_format,
-                        ayatsuri_editor::startup_msaa(),
+                        samples,
                     );
                     rs.renderer.write().callback_resources.insert(renderer);
                     editor.set_gpu_available(true);
