@@ -73,4 +73,8 @@ pub struct DisplayInfo {
     /// Parameter pairs shown as one 2D pad. None in older files, which
     /// keep the conventional X/Y pairs.
     pub combined: Option<Vec<(u32, u32)>>,
+    /// The model3.json Groups (EyeBlink, LipSync...) as target, name and
+    /// ids, kept so an export writes back what the model came with. None
+    /// in older files and models that never had any.
+    pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
 }

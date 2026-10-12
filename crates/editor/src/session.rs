@@ -16,6 +16,19 @@ use serde::Deserialize;
 struct Model3 {
     #[serde(rename = "FileReferences")]
     file_references: FileReferences,
+    #[serde(rename = "Groups", default)]
+    groups: Vec<Group3>,
+}
+
+/// One model3.json group: what it targets, its name, the ids in it.
+#[derive(Deserialize)]
+struct Group3 {
+    #[serde(rename = "Target", default)]
+    target: String,
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "Ids", default)]
+    ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +157,9 @@ pub struct Session {
     full_tex: Vec<Option<TextureHandle>>,
     /// Parameter pairs shown as one 2D pad (from cdi3 CombinedParameters).
     pub combined: Vec<(usize, usize)>,
+    /// The model3.json Groups the model came with (target, name, ids);
+    /// None when it had none, and export then writes the standard ones.
+    pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
     undo: Vec<Model>,
     redo: Vec<Model>,
 }
@@ -253,6 +269,7 @@ impl Session {
         s.author = payload.meta.author;
         s.animations = payload.animations;
         if let Some(d) = payload.display {
+            s.model_groups = d.model_groups.clone();
             let n = s.puppet.model().parameters.len();
             if !d.part_names.is_empty() && d.part_names.len() == s.part_names.len() {
                 s.part_names = d.part_names.clone();
@@ -364,7 +381,10 @@ impl Session {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "model".into());
-        Self::from_parts(ctx, name, model, pngs, names, cdi, path)
+        let groups = bundle.groups.clone();
+        let mut s = Self::from_parts(ctx, name, model, pngs, names, cdi, path)?;
+        s.model_groups = groups;
+        Ok(s)
     }
 
     /// Build the session from a model and its encoded textures, whatever
@@ -556,6 +576,7 @@ impl Session {
             param_colors: vec![None; n_params],
             full_tex: vec![None; n_tex],
             combined,
+            model_groups: None,
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -690,6 +711,7 @@ impl Session {
                 part_names: self.part_names.clone(),
                 mesh_names: self.mesh_names.clone(),
                 combined: Some(self.combined.iter().map(|&(a, b)| (a as u32, b as u32)).collect()),
+                model_groups: self.model_groups.clone(),
             }),
         }
     }
@@ -771,6 +793,8 @@ struct Bundle {
     textures: Vec<PathBuf>,
     display_info: Option<PathBuf>,
     physics: Option<PathBuf>,
+    /// Groups from the model3.json, when the bundle had one.
+    groups: Option<Vec<(String, String, Vec<String>)>>,
 }
 
 /// From whichever file was picked, find the `.moc3`, the texture list and the
@@ -791,6 +815,7 @@ fn resolve_bundle(path: &Path) -> Result<Bundle, String> {
             textures: m.file_references.textures.iter().map(|t| dir.join(t)).collect(),
             display_info: m.file_references.display_info.map(|d| dir.join(d)),
             physics: m.file_references.physics.map(|d| dir.join(d)),
+            groups: Some(m.groups.into_iter().map(|g| (g.target, g.name, g.ids)).collect()),
         })
     };
 
@@ -815,7 +840,13 @@ fn resolve_bundle(path: &Path) -> Result<Bundle, String> {
             }
         }
     }
-    Ok(Bundle { moc: path.to_path_buf(), textures: Vec::new(), display_info: None, physics: None })
+    Ok(Bundle {
+        moc: path.to_path_buf(),
+        textures: Vec::new(),
+        display_info: None,
+        physics: None,
+        groups: None,
+    })
 }
 
 fn decode_texture(

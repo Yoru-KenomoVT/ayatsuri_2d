@@ -117,10 +117,14 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
         refs.insert("Motions".into(), json!({ "Idle": group }));
     }
 
+    let groups: Vec<serde_json::Value> = model_groups(s)
+        .into_iter()
+        .map(|(target, name, ids)| json!({ "Target": target, "Name": name, "Ids": ids }))
+        .collect();
     let model3 = json!({
         "Version": 3,
         "FileReferences": refs,
-        "Groups": [],
+        "Groups": groups,
     });
     write(
         &dir.join(format!("{name}.model3.json")),
@@ -128,4 +132,63 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
         &mut written,
     )?;
     Ok(written)
+}
+
+/// The model3.json Groups: the ones the model came with, else the two
+/// every Cubism export carries, filled from the standard parameter ids
+/// when the model has them (apps drive auto blink and lip sync off these).
+fn model_groups(s: &Session) -> Vec<(String, String, Vec<String>)> {
+    if let Some(g) = &s.model_groups {
+        return g.clone();
+    }
+    let has = |id: &str| s.puppet.model().parameters.iter().any(|p| p.id == id);
+    let pick = |ids: &[&str]| ids.iter().filter(|id| has(id)).map(|id| id.to_string()).collect();
+    vec![
+        ("Parameter".into(), "EyeBlink".into(), pick(&["ParamEyeLOpen", "ParamEyeROpen"])),
+        ("Parameter".into(), "LipSync".into(), pick(&["ParamMouthOpenY"])),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(ids: &[&str]) -> Session {
+        let mut model = ayatsuri_format::Model::new();
+        for id in ids {
+            model.parameters.push(ayatsuri_format::model::Parameter {
+                id: (*id).into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                repeat: false,
+                decimals: 3,
+            });
+        }
+        Session::create(&egui::Context::default(), "t".into(), String::new(), model).unwrap()
+    }
+
+    #[test]
+    fn standard_groups_fill_from_known_ids() {
+        let s = session(&["ParamEyeLOpen", "ParamEyeROpen", "ParamMouthOpenY", "ParamOther"]);
+        let g = model_groups(&s);
+        assert_eq!(g[0].1, "EyeBlink");
+        assert_eq!(g[0].2, vec!["ParamEyeLOpen", "ParamEyeROpen"]);
+        assert_eq!(g[1].1, "LipSync");
+        assert_eq!(g[1].2, vec!["ParamMouthOpenY"]);
+        // a model without them still gets both groups, just empty
+        let bare = model_groups(&session(&["ParamOther"]));
+        assert!(bare.iter().all(|(_, _, ids)| ids.is_empty()) && bare.len() == 2);
+    }
+
+    #[test]
+    fn imported_groups_win() {
+        let mut s = session(&["ParamEyeLOpen", "ParamMouthOpenY"]);
+        let original = vec![
+            ("Parameter".to_string(), "EyeBlink".to_string(), vec!["ParamEyeLOpen".to_string()]),
+            ("Parameter".to_string(), "LipSync".to_string(), Vec::new()),
+        ];
+        s.model_groups = Some(original.clone());
+        assert_eq!(model_groups(&s), original);
+    }
 }
