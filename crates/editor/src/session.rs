@@ -233,13 +233,6 @@ impl Session {
                     })
                     .collect();
             }
-            if let Some(pairs) = d.combined {
-                s.combined = pairs
-                    .into_iter()
-                    .map(|(a, b)| (a as usize, b as usize))
-                    .filter(|&(a, b)| a < n && b < n && a != b)
-                    .collect();
-            }
             if !d.groups.is_empty() {
                 s.groups = d
                     .groups
@@ -633,7 +626,6 @@ impl Session {
                     .iter()
                     .map(|g| (g.name.clone(), g.params.iter().map(|&p| p as u32).collect()))
                     .collect(),
-                combined: Some(self.combined.iter().map(|&(a, b)| (a as u32, b as u32)).collect()),
             }),
         }
     }

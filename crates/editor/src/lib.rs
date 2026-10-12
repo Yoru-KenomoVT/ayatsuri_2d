@@ -11,7 +11,6 @@ mod export;
 mod gpu_view;
 pub mod logging;
 mod panels;
-mod point_edit;
 mod prefs;
 mod session;
 pub mod theme;

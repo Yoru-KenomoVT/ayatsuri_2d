@@ -13,7 +13,6 @@ pub mod automesh;
 pub mod blend;
 pub mod deform;
 pub mod edit;
-pub mod keyform;
 pub mod physics;
 
 use ayatsuri_format::model::{DeformerKind, Model};
