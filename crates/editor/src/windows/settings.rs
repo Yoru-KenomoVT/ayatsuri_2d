@@ -209,6 +209,20 @@ impl EditorUi {
             });
         });
 
+        section(ui, "UPDATES");
+        let mut check = !self.prefs.update_check_off;
+        row(
+            ui,
+            "Check for updates",
+            "Asks GitHub for a newer release when Ayatsuri2D starts; never installs anything",
+            |ui| {
+                if ui.checkbox(&mut check, "").changed() {
+                    self.prefs.update_check_off = !check;
+                    save = true;
+                }
+            },
+        );
+
         section(ui, "DISCORD");
         let mut on = !self.prefs.discord_off;
         row(ui, "Rich Presence", "Needs the Discord app; reconnects on its own", |ui| {

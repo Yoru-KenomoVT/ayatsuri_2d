@@ -32,6 +32,93 @@ fn safe(name: &str) -> String {
     if cleaned.is_empty() { "model".into() } else { cleaned }
 }
 
+/// The models already in a folder: its `*.model3.json` files.
+pub fn existing_models(dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|it| {
+            it.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_file() && p.to_string_lossy().ends_with(".model3.json"))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// A path a model3.json names, if it stays inside `dir` (no absolute paths,
+/// no `..`): an export folder's files are the only ones ever removed.
+fn inside(dir: &Path, rel: &str) -> Option<PathBuf> {
+    let rel = Path::new(rel);
+    let safe = rel.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    (safe && !rel.as_os_str().is_empty()).then(|| dir.join(rel))
+}
+
+/// Make a folder ready for a fresh export over an earlier one: for every
+/// model3.json in it, remove the files it lists (moc3, textures, physics,
+/// display info, pose, user data, every motion and expression) and the
+/// model3.json itself, then any folder those leave empty. Files it does not
+/// list stay: VTube Studio's settings, items, icons, the user's own files,
+/// and motion sounds, which a fresh export does not write. Returns how many
+/// files went.
+pub fn clear_previous(dir: &Path) -> Result<usize, String> {
+    let mut removed = 0;
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for model in existing_models(dir) {
+        let text =
+            std::fs::read_to_string(&model).map_err(|e| format!("{}: {e}", model.display()))?;
+        let json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", model.display()))?;
+        let none = serde_json::Value::Null;
+        let refs = json.get("FileReferences").unwrap_or(&none);
+        let mut listed: Vec<String> = Vec::new();
+        for key in ["Moc", "Physics", "DisplayInfo", "Pose", "UserData"] {
+            if let Some(f) = refs.get(key).and_then(|v| v.as_str()) {
+                listed.push(f.to_string());
+            }
+        }
+        for t in refs.get("Textures").and_then(|v| v.as_array()).into_iter().flatten() {
+            if let Some(f) = t.as_str() {
+                listed.push(f.to_string());
+            }
+        }
+        for group in
+            refs.get("Motions").and_then(|v| v.as_object()).into_iter().flat_map(|o| o.values())
+        {
+            for m in group.as_array().into_iter().flatten() {
+                if let Some(f) = m.get("File").and_then(|v| v.as_str()) {
+                    listed.push(f.to_string());
+                }
+            }
+        }
+        for e in refs.get("Expressions").and_then(|v| v.as_array()).into_iter().flatten() {
+            if let Some(f) = e.get("File").and_then(|v| v.as_str()) {
+                listed.push(f.to_string());
+            }
+        }
+        for rel in listed {
+            let Some(path) = inside(dir, &rel) else { continue };
+            if path.is_file() && std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+                if let Some(parent) = path.parent()
+                    && parent != dir
+                    && !folders.iter().any(|f| f == parent)
+                {
+                    folders.push(parent.to_path_buf());
+                }
+            }
+        }
+        std::fs::remove_file(&model).map_err(|e| format!("{}: {e}", model.display()))?;
+        removed += 1;
+    }
+    // folders the old export made, deepest first, once they are empty
+    folders.sort_by_key(|f| std::cmp::Reverse(f.components().count()));
+    for f in folders {
+        let _ = std::fs::remove_dir(f);
+    }
+    Ok(removed)
+}
+
 fn write(path: &Path, bytes: &[u8], written: &mut Vec<PathBuf>) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     written.push(path.to_path_buf());
@@ -265,5 +352,64 @@ mod tests {
         ];
         s.model_groups = Some(original.clone());
         assert_eq!(model_groups(&s), original);
+    }
+}
+
+#[cfg(test)]
+mod overwrite_tests {
+    use super::*;
+
+    #[test]
+    fn clearing_removes_only_what_the_old_model_listed() {
+        let dir = std::env::temp_dir().join(format!("ay-export-overwrite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["ariu.4096", "motions", "expressions"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        let files = [
+            "ariu.moc3",
+            "ariu.physics3.json",
+            "ariu.cdi3.json",
+            "ariu.4096/texture_00.png",
+            "motions/idle.motion3.json",
+            "motions/idle.wav",
+            "expressions/smile.exp3.json",
+            "ariu.vtube.json",
+            "items_pinned_to_model.json",
+        ];
+        for f in files {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        // something outside the folder that a hostile path points at
+        let outside = dir.with_extension("outside");
+        std::fs::write(&outside, b"keep").unwrap();
+        let model = serde_json::json!({
+            "Version": 3,
+            "FileReferences": {
+                "Moc": "ariu.moc3",
+                "Textures": ["ariu.4096/texture_00.png"],
+                "Physics": "ariu.physics3.json",
+                "DisplayInfo": "ariu.cdi3.json",
+                "UserData": format!("../{}", outside.file_name().unwrap().to_string_lossy()),
+                "Motions": {"Idle": [{"File": "motions/idle.motion3.json", "Sound": "motions/idle.wav"}]},
+                "Expressions": [{"Name": "smile", "File": "expressions/smile.exp3.json"}]
+            }
+        });
+        std::fs::write(dir.join("ariu.model3.json"), model.to_string()).unwrap();
+        assert_eq!(existing_models(&dir).len(), 1);
+
+        let removed = clear_previous(&dir).unwrap();
+        assert_eq!(removed, 7, "6 listed files and the model3.json");
+        assert!(existing_models(&dir).is_empty());
+        for gone in ["ariu.moc3", "ariu.4096", "expressions", "motions/idle.motion3.json"] {
+            assert!(!dir.join(gone).exists(), "{gone} should be gone");
+        }
+        // not ours: VTube Studio's settings, items, the motion's sound
+        for kept in ["ariu.vtube.json", "items_pinned_to_model.json", "motions/idle.wav"] {
+            assert!(dir.join(kept).exists(), "{kept} should stay");
+        }
+        assert!(outside.exists(), "a path out of the folder is never followed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&outside);
     }
 }

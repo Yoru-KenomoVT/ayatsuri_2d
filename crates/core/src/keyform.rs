@@ -121,6 +121,31 @@ pub fn keys_on(model: &Model, target: Target, param: usize) -> Option<Vec<f32>> 
         .map(|a| a.keys.clone())
 }
 
+/// Every keyform at the key of `param` that its current value sits on, across
+/// all the object's other parameters: "Bald = 1" whatever the hair does.
+/// None when the object is not bound on `param` or the value is between
+/// two of its keys.
+pub fn keyforms_on_key(
+    model: &Model,
+    target: Target,
+    param: usize,
+    values: &[f32],
+) -> Option<Vec<usize>> {
+    let binding = binding_of(model, target)?;
+    let axis_at = binding.axes.iter().position(|a| a.parameter as usize == param)?;
+    let axis = binding.axes.get(axis_at)?;
+    let p = model.parameters.get(param)?;
+    let v = values.get(param).copied().unwrap_or(p.default);
+    let k = nearest_key(&axis.keys, v)?;
+    let tol = ((p.max - p.min).abs() * 0.01).max(1e-4);
+    if (axis.keys.get(k)? - v).abs() > tol {
+        return None;
+    }
+    let lens = axis_lens(binding);
+    let total = product(&lens);
+    Some((0..total).filter(|&i| coords_of(&lens, i).get(axis_at) == Some(&k)).collect())
+}
+
 /// The keyform the current parameter values sit on, when every bound axis
 /// is on a key (within a hundredth of its range). Copy and paste need one.
 pub fn keyform_at(model: &Model, target: Target, values: &[f32]) -> Option<usize> {

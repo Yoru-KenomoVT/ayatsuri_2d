@@ -201,7 +201,7 @@ impl EditorUi {
                     egui::UiBuilder::new().max_rect(page).layout(Layout::top_down(Align::Min)),
                 );
                 match self.about.tab {
-                    Tab::About => about_page(&mut page_ui, gpu),
+                    Tab::About => about_page(&mut page_ui, gpu, &mut self.update),
                     Tab::Credits => credits_page(&mut page_ui, &mut self.about.search),
                     Tab::Licence => licence_page(&mut page_ui),
                 }
@@ -311,7 +311,7 @@ fn faint(ui: &mut Ui, text: impl Into<String>) {
     ui.label(RichText::new(text.into()).size(11.5).color(theme::pal().text_faint));
 }
 
-fn about_page(ui: &mut Ui, gpu: bool) {
+fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
     heading(ui, "Ayatsuri2D");
     ui.label(
         "An open, native 2D puppet studio: rig, animate and run Live2D-style models, \
@@ -343,6 +343,32 @@ fn about_page(ui: &mut Ui, gpu: bool) {
         if ui.button(format!("{}  Copy info", egui_phosphor::regular::COPY)).clicked() {
             let text = info.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
             ui.ctx().copy_text(format!("Ayatsuri2D\n{text}"));
+        }
+    });
+    // updates: ask on request; only ever points at the release page
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        let label = format!("{}  Check for updates", egui_phosphor::regular::ARROWS_CLOCKWISE);
+        if ui.add_enabled(!update.checking(), egui::Button::new(label)).clicked() {
+            update.start();
+        }
+        if update.checking() {
+            ui.spinner();
+            faint(ui, "Checking…");
+        } else if let Some(latest) = update.available().cloned() {
+            ui.label(
+                RichText::new(format!("Ayatsuri2D {} is available", latest.version))
+                    .color(theme::pal().accent),
+            );
+            if ui.button("Download").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(latest.url));
+            }
+        } else {
+            match &update.status {
+                Some(Ok(())) => faint(ui, "You have the latest version."),
+                Some(Err(e)) => faint(ui, format!("Couldn't check: {e}")),
+                None => {}
+            }
         }
     });
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {

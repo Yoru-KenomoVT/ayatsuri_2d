@@ -20,6 +20,7 @@ ayatsuri-render = { path = "crates/render" }
 ayatsuri-capi = { path = "crates/capi" }
 ayatsuri-editor = { path = "crates/editor" }
 ayatsuri-import = { path = "crates/import" }
+ayatsuri-update = { path = "crates/update" }
 openmoc3 = { path = "crates/openmoc3" }
 
 # foundation

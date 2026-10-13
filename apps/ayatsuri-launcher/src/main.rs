@@ -433,6 +433,16 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    // ask GitHub for a newer release while the splash shows; the editor
+    // finds the answer next to its preferences. Only ever reports.
+    if !pref_on(&prefs, "update_check_off") {
+        let _ = std::thread::Builder::new().name("update-check".into()).spawn(|| {
+            match ayatsuri_update::fetch(env!("CARGO_PKG_VERSION")) {
+                Ok(latest) => ayatsuri_update::remember(&latest),
+                Err(e) => log::debug!("update check: {e}"),
+            }
+        });
+    }
     eframe::run_native(
         "ayatsuri2d-launcher",
         options,

@@ -78,7 +78,62 @@ impl EditorUi {
     }
 
     /// Write the Cubism bundle into the picked folder.
+    /// Export to a folder, asking first when it already holds a model.
     pub(crate) fn export_moc3_to(&mut self, dlg: &crate::panels::ExportDlg, dir: &std::path::Path) {
+        let found = crate::export::existing_models(dir);
+        if found.is_empty() {
+            self.export_moc3_now(dlg, dir);
+        } else {
+            let names = found
+                .iter()
+                .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .collect();
+            self.export_overwrite = Some((dlg.clone(), dir.to_path_buf(), names));
+        }
+    }
+
+    /// The overwrite question for an export folder that already has a model.
+    pub(crate) fn export_overwrite_window(&mut self, ui: &mut Ui) {
+        let Some((_, dir, names)) = &self.export_overwrite else { return };
+        let (dir, names) = (dir.clone(), names.clone());
+        let mut open = true;
+        let mut go = false;
+        let mut cancel = false;
+        crate::windows::Dialog::new("Overwrite Export").open(&mut open).width(380.0).show(
+            ui.ctx(),
+            |ui| {
+                ui.label(format!("{} already has a model: {}.", dir.display(), names.join(", ")));
+                ui.weak(
+                    "Overwrite it with a fresh export? The files that model lists (moc3, \
+                     textures, physics, motions, expressions...) are replaced; anything else \
+                     in the folder, like VTube Studio's settings, stays as it is.",
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Overwrite").clicked() {
+                        go = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            },
+        );
+        if go && let Some((dlg, dir, _)) = self.export_overwrite.take() {
+            match crate::export::clear_previous(&dir) {
+                Ok(n) => {
+                    log::info!("removed {n} file(s) of the previous export in {}", dir.display());
+                    self.export_moc3_now(&dlg, &dir);
+                }
+                Err(e) => log::error!("could not clear the previous export: {e}"),
+            }
+        } else if cancel || !open {
+            self.export_overwrite = None;
+            log::info!("export cancelled: the folder already had a model");
+        }
+    }
+
+    fn export_moc3_now(&mut self, dlg: &crate::panels::ExportDlg, dir: &std::path::Path) {
         let version = ayatsuri_import::ExportVersion::ALL
             .get(dlg.version)
             .copied()

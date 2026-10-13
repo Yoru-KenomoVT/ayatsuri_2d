@@ -16,6 +16,7 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x1
 image = { version = "0.25", default-features = false, features = ["png"] }
 log = { workspace = true }
 serde_json = { workspace = true }
+ayatsuri-update = { workspace = true }
 
 [build-dependencies]
 winresource = "0.1"

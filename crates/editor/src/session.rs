@@ -131,6 +131,8 @@ pub struct Session {
     pub part_previews: HashMap<usize, Option<TextureHandle>>,
     /// The same for the Deformer palette: everything a deformer moves.
     pub deformer_previews: HashMap<usize, Option<TextureHandle>>,
+    /// One art mesh alone, for the Parts palette's hover preview.
+    pub mesh_previews: HashMap<usize, Option<TextureHandle>>,
     /// Animation clips; they ride inside the .aom payload.
     pub animations: Vec<ayatsuri_format::Animation>,
     /// Expressions (exp3.json) that ride with the model.
@@ -275,6 +277,186 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
     }
 }
 
+/// What a re-import did: meshes given new art, layers with no mesh to go
+/// to, and meshes whose layer is gone from the file.
+#[derive(Debug, Default)]
+pub struct Reimported {
+    pub file: String,
+    pub updated: usize,
+    pub new_layers: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+/// Transparent room kept around re-imported art past what the mesh reaches.
+const REIMPORT_PAD: u32 = 8;
+
+/// The model side of `reimport_paint`, for a document already read.
+fn reimport_into(
+    s: &mut Session,
+    ctx: &Context,
+    doc: ayatsuri_import::Document,
+) -> Result<Reimported, String> {
+    let model = s.puppet.model().clone();
+    // each mesh's key: its folder path and name, plus which repeat it is
+    let part_path = |part: Option<u32>| -> String {
+        let mut names = Vec::new();
+        let mut at = part;
+        let mut hops = 0;
+        while let Some(p) = at {
+            names.push(s.part_names.get(p as usize).cloned().unwrap_or_default());
+            at = model.parts.get(p as usize).and_then(|x| x.parent_part);
+            hops += 1;
+            if hops > model.parts.len() {
+                break;
+            }
+        }
+        names.reverse();
+        names.join("/")
+    };
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut mesh_by_key: HashMap<(String, usize), usize> = HashMap::new();
+    for (i, m) in model.art_meshes.iter().enumerate() {
+        let key = format!("{}/{}", part_path(m.parent_part), s.mesh_name(i));
+        let n = seen.entry(key.clone()).or_insert(0);
+        mesh_by_key.insert((key, *n), i);
+        *n += 1;
+    }
+    // where each mesh rests, in canvas pixels, to line the new art up with
+    let c = model.canvas;
+    let mut rest = Puppet::new(model.clone());
+    rest.update();
+    let rest_px = |i: usize| -> Vec<(f32, f32)> {
+        rest.mesh_geometry(i)
+            .map(|g| {
+                g.positions
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&[x, y]| {
+                        (x * c.pixels_per_unit + c.origin_x, y * c.pixels_per_unit + c.origin_y)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let mut report = Reimported::default();
+    let mut matched_meshes = std::collections::HashSet::new();
+    let mut layers = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for layer in doc.layers {
+        if !layer.visible || layer.opacity <= 0.0 {
+            continue;
+        }
+        let key = format!("{}/{}", layer.groups.join("/"), layer.name);
+        let n = seen.entry(key.clone()).or_insert(0);
+        let hit = mesh_by_key.get(&(key.clone(), *n)).copied();
+        *n += 1;
+        let Some(mi) = hit else {
+            report.new_layers.push(key);
+            continue;
+        };
+        matched_meshes.insert(mi);
+        // pad the layer so every point of its mesh lands on this art
+        let pts = rest_px(mi);
+        let (lx, ly) = (layer.x as f32, layer.y as f32);
+        let (lw, lh) = (layer.width as f32, layer.height as f32);
+        let reach = |a: f32| a.max(0.0).ceil() as u32 + REIMPORT_PAD;
+        let left = reach(pts.iter().map(|p| lx - p.0).fold(0.0, f32::max));
+        let top = reach(pts.iter().map(|p| ly - p.1).fold(0.0, f32::max));
+        let right = reach(pts.iter().map(|p| p.0 - (lx + lw)).fold(0.0, f32::max));
+        let bottom = reach(pts.iter().map(|p| p.1 - (ly + lh)).fold(0.0, f32::max));
+        let (w, h) = (layer.width + left + right, layer.height + top + bottom);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for row in 0..layer.height {
+            let src = (row * layer.width * 4) as usize;
+            let dst = (((row + top) * w + left) * 4) as usize;
+            let len = (layer.width * 4) as usize;
+            if let (Some(from), Some(to)) =
+                (layer.rgba.get(src..src + len), rgba.get_mut(dst..dst + len))
+            {
+                to.copy_from_slice(from);
+            }
+        }
+        // an all but invisible pixel in each corner keeps the importer's
+        // trim from cutting the padding away
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            if let Some(a) = rgba.get_mut(((y * w + x) * 4 + 3) as usize) {
+                *a = 1;
+            }
+        }
+        layers.push(ayatsuri_import::Layer {
+            name: mi.to_string(),
+            groups: Vec::new(),
+            x: layer.x - left as i32,
+            y: layer.y - top as i32,
+            width: w,
+            height: h,
+            rgba,
+            visible: true,
+            opacity: layer.opacity,
+            clip_to_below: false,
+        });
+    }
+    report.missing = (0..model.art_meshes.len())
+        .filter(|i| !matched_meshes.contains(i))
+        .map(|i| s.mesh_name(i))
+        .collect();
+    if layers.is_empty() {
+        return Err("no layer in the file matches a mesh of this model (by folder and name)".into());
+    }
+
+    let built = ayatsuri_import::from_layers(&ayatsuri_import::Document {
+        width: doc.width,
+        height: doc.height,
+        layers,
+    })
+    .map_err(|e| e.to_string())?;
+    let nc = built.model.canvas;
+    let page_offset = s.texture_pngs.len() as u32;
+    let mut next = model.clone();
+    let mut originals = s.original_meshes.clone();
+    for (j, quad) in built.model.art_meshes.iter().enumerate() {
+        let Some(mi) = built.mesh_names.get(j).and_then(|n| n.parse::<usize>().ok()) else {
+            continue;
+        };
+        // the quad's top-left and bottom-right corners (points 0 and 2)
+        let (pos, _) = quad.positions.as_chunks::<2>();
+        let (tex, _) = quad.uvs.as_chunks::<2>();
+        let (Some(&[x0, y0]), Some(&[x2, y2]), Some(&[u0, v0]), Some(&[u2, v2])) =
+            (pos.first(), pos.get(2), tex.first(), tex.get(2))
+        else {
+            continue;
+        };
+        // the quad's corners in canvas pixels, and the uv at any pixel
+        let to_px = |x: f32, y: f32| {
+            (x * nc.pixels_per_unit + nc.origin_x, y * nc.pixels_per_unit + nc.origin_y)
+        };
+        let (p0, p2) = (to_px(x0, y0), to_px(x2, y2));
+        let Some(am) = next.art_meshes.get_mut(mi) else { continue };
+        am.uvs = rest_px(mi)
+            .iter()
+            .flat_map(|&(px, py)| {
+                [
+                    u0 + (px - p0.0) / (p2.0 - p0.0) * (u2 - u0),
+                    v0 + (py - p0.1) / (p2.1 - p0.1) * (v2 - v0),
+                ]
+            })
+            .collect();
+        am.texture = page_offset + quad.texture;
+        // Reset mesh goes back to the new art's quad
+        if let Some(slot) = originals.get_mut(mi) {
+            *slot = (quad.uvs.clone(), quad.indices.clone());
+        }
+        report.updated += 1;
+    }
+    let mut pngs = s.texture_pngs.clone();
+    pngs.extend(built.textures);
+    s.swap_in(ctx, next, pngs)?;
+    s.original_meshes = originals;
+    Ok(report)
+}
+
 impl Session {
     /// A mesh's display name: its layer name, else its ID.
     pub fn mesh_name(&self, i: usize) -> String {
@@ -377,6 +559,69 @@ impl Session {
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.add_imported(ctx, imported, path)?;
         Ok(file)
+    }
+
+    /// Re-import an updated paint document onto the meshes already made from
+    /// it: each layer is matched to its mesh by folder path and name (the nth
+    /// layer of a repeated name to the nth such mesh), and the mesh takes the
+    /// new art on new texture pages, lined up at its resting place. Points,
+    /// faces, keyforms and deformers are left exactly as they are. One undo
+    /// step puts the old art back.
+    pub fn reimport_paint(&mut self, ctx: &Context, path: &Path) -> Result<Reimported, String> {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let (doc, _) = ayatsuri_import::read_document(&bytes, ext == "kra")
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut report = reimport_into(self, ctx, doc)?;
+        report.file =
+            path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        Ok(report)
+    }
+
+    /// Swap in a model and texture set while keeping everything beside the
+    /// model (names, visibility, animations, folders, undo), as one undo step.
+    fn swap_in(&mut self, ctx: &Context, model: Model, pngs: Vec<Vec<u8>>) -> Result<(), String> {
+        let before = self.puppet.model().clone();
+        let tex_names = (0..pngs.len()).map(|i| format!("texture_{i:02}")).collect();
+        let source =
+            self.aom_path.clone().unwrap_or_else(|| PathBuf::from(format!("{}.aom", self.name)));
+        let next = Self::from_parts(ctx, self.name.clone(), model, pngs, tex_names, None, &source)?;
+        let old = std::mem::replace(self, next);
+        self.part_names = old.part_names;
+        self.mesh_names = old.mesh_names;
+        self.part_shown = old.part_shown;
+        self.mesh_shown = old.mesh_shown;
+        self.original_meshes = old.original_meshes;
+        self.aom_path = old.aom_path;
+        self.author = old.author;
+        self.animations = old.animations;
+        self.expressions = old.expressions;
+        self.current_anim = old.current_anim;
+        self.param_names = old.param_names;
+        self.param_colors = old.param_colors;
+        self.groups = old.groups;
+        self.combined = old.combined;
+        self.model_groups = old.model_groups;
+        self.deformer_shown = old.deformer_shown;
+        self.departed = old.departed;
+        self.undo = old.undo;
+        self.undo.push(before);
+        if self.undo.len() > 16 {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        self.modified = true;
+        for i in 0..old.puppet.model().parameters.len() {
+            self.puppet.set_value(i, old.puppet.value(i));
+        }
+        for (i, on) in self.part_shown.iter().enumerate() {
+            self.puppet.set_part_opacity(i, if *on { 1.0 } else { 0.0 });
+        }
+        for (i, on) in self.mesh_shown.iter().enumerate() {
+            self.puppet.set_mesh_visible(i, *on);
+        }
+        self.dirty = true;
+        Ok(())
     }
 
     /// The model-side half of `import_paint`, for an import already built.
@@ -802,6 +1047,7 @@ impl Session {
             original_meshes,
             part_previews: HashMap::new(),
             deformer_previews: HashMap::new(),
+            mesh_previews: HashMap::new(),
             animations: Vec::new(),
             expressions: Vec::new(),
             current_anim: None,
@@ -967,6 +1213,7 @@ impl Session {
         self.deformer_shown.resize(puppet.model().deformers.len(), true);
         self.part_previews.clear();
         self.deformer_previews.clear();
+        self.mesh_previews.clear();
         self.param_colors.resize(puppet.model().parameters.len(), None);
         for (i, shown) in self.deformer_shown.iter().enumerate() {
             puppet.set_deformer_visible(i, *shown);
@@ -1444,6 +1691,45 @@ mod import_paint_tests {
         s.undo();
         assert_eq!(s.puppet.model().art_meshes.len(), 1);
         assert_eq!(s.mesh_name(0), "Body");
+    }
+
+    #[test]
+    fn reimport_swaps_art_and_keeps_the_rig() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        let first = ayatsuri_import::from_layers(&doc(
+            400,
+            300,
+            &[("Body", "Torso", 10, 10, 30), ("Arm", "Torso", 100, 40, 20)],
+        ))
+        .unwrap();
+        s.add_imported(&ctx, first, Path::new("a.psd")).unwrap();
+        let before = s.puppet.model().clone();
+        let pages = s.texture_pngs.len();
+        // the updated file: Body redrawn, Arm renamed to Sleeve
+        let mut updated =
+            doc(400, 300, &[("Body", "Torso", 10, 10, 30), ("Sleeve", "Torso", 100, 40, 20)]);
+        for px in updated.layers[0].rgba.as_chunks_mut::<4>().0 {
+            px[0] = 10;
+        }
+        let r = reimport_into(&mut s, &ctx, updated).unwrap();
+        assert_eq!(r.updated, 1);
+        assert_eq!(r.new_layers, vec!["Torso/Sleeve".to_string()]);
+        assert_eq!(r.missing, vec!["Arm".to_string()]);
+        let m = s.puppet.model();
+        // Body reads new art from a new page; its points did not move
+        assert!(m.art_meshes[0].texture as usize >= pages);
+        assert_eq!(m.art_meshes[0].positions, before.art_meshes[0].positions);
+        assert_ne!(m.art_meshes[0].uvs, before.art_meshes[0].uvs);
+        // Arm kept its old art
+        assert_eq!(m.art_meshes[1].texture, before.art_meshes[1].texture);
+        assert_eq!(m.art_meshes[1].uvs, before.art_meshes[1].uvs);
+        assert_eq!(s.mesh_name(0), "Body");
+        assert_eq!(s.texture_pngs.len(), s.textures.len());
+        // one undo step puts the old art back
+        s.undo();
+        assert_eq!(s.puppet.model().art_meshes[0].texture, before.art_meshes[0].texture);
+        assert_eq!(s.puppet.model().art_meshes[0].uvs, before.art_meshes[0].uvs);
     }
 
     #[test]

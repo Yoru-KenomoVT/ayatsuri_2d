@@ -102,6 +102,14 @@ fn main() -> Result<(), String> {
                 d.mesh, d.opacity, d.flags
             );
         }
+        let points: usize = puppet.drawables().map(|d| d.positions.len() / 2).sum();
+        let faces: usize = puppet.drawables().map(|d| d.indices.len() / 3).sum();
+        println!(
+            "{} meshes, {points} points, {faces} triangles, {} deformers, {} parameters",
+            puppet.drawables().count(),
+            m.deformers.len(),
+            m.parameters.len()
+        );
         return Ok(());
     }
 

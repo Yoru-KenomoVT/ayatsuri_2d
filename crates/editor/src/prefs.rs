@@ -57,6 +57,10 @@ pub struct Prefs {
     /// The launcher reads these: skip the splash, or keep it but still.
     pub splash_off: bool,
     pub splash_particles_off: bool,
+    /// Don't ask GitHub for a newer release at start (launcher and editor).
+    pub update_check_off: bool,
+    /// The release the user said "Later" to; its banner stays hidden.
+    pub update_dismissed: Option<String>,
     /// Physics page splitters as the user left them: settings column
     /// width, parameter rail width, tabs height, model panel width.
     pub physics_layout: Option<[f32; 4]>,

@@ -490,6 +490,53 @@ fn parent_of(model: &Model, c: Child) -> Option<Option<u32>> {
     }
 }
 
+/// Objects under different deformers, made ready to share one new parent:
+/// each is replaced by its own ancestor that sits directly under the
+/// selection's nearest common parent, so a new deformer wraps them all
+/// without pulling anything out of its rig (a toggle warp above several
+/// physics warps keeps every one of them). Repeats collapse. None when an
+/// object does not exist.
+pub fn lift_to_common_parent(model: &Model, children: &[Child]) -> Option<Vec<Child>> {
+    if children.is_empty() {
+        return Some(Vec::new());
+    }
+    // each object's parents, nearest first, ending at the top (None)
+    let chain = |c: Child| -> Option<Vec<Option<u32>>> {
+        let mut out = vec![parent_of(model, c)?];
+        let mut guard = 0;
+        while let Some(Some(d)) = out.last().copied() {
+            out.push(model.deformers.get(d as usize)?.parent_deformer);
+            guard += 1;
+            if guard > model.deformers.len() + 1 {
+                return None;
+            }
+        }
+        Some(out)
+    };
+    let chains: Vec<Vec<Option<u32>>> =
+        children.iter().map(|&c| chain(c)).collect::<Option<_>>()?;
+    let first = chains.first()?;
+    // the nearest parent every chain passes through (the top always does)
+    let common = first.iter().copied().find(|p| chains.iter().all(|c| c.contains(p)))?;
+    let mut out: Vec<Child> = Vec::with_capacity(children.len());
+    for &c in children {
+        let mut at = c;
+        let mut guard = 0;
+        while parent_of(model, at)? != common {
+            let up = parent_of(model, at)??;
+            at = Child::Deformer(up as usize);
+            guard += 1;
+            if guard > model.deformers.len() + 1 {
+                return None;
+            }
+        }
+        if !out.contains(&at) {
+            out.push(at);
+        }
+    }
+    Some(out)
+}
+
 /// Every point a child stores in its parent's space, all keyforms.
 fn child_points(model: &Model, c: Child) -> Vec<(f32, f32)> {
     let pairs = |v: &[f32]| v.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
@@ -567,6 +614,9 @@ pub fn create_deformer(
     part: Option<u32>,
     id: String,
 ) -> Option<usize> {
+    // objects under different deformers: wrap their branches instead
+    let lifted = lift_to_common_parent(model, children)?;
+    let children = lifted.as_slice();
     let parent = match children.first() {
         Some(&first) => {
             let p = parent_of(model, first)?;
@@ -1958,6 +2008,98 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
     true
 }
 
+/// What still uses a parameter: (objects bound on it, physics inputs and
+/// outputs that name it).
+pub fn param_users(model: &Model, param: usize) -> (usize, usize) {
+    let p32 = param as u32;
+    let uses = |b: &Binding| b.axes.iter().any(|a| a.parameter == p32);
+    let objects = model.parts.iter().filter(|p| uses(&p.binding)).count()
+        + model.deformers.iter().filter(|d| uses(&d.binding)).count()
+        + model.art_meshes.iter().filter(|m| uses(&m.binding)).count()
+        + model.glues.iter().filter(|g| uses(&g.binding)).count();
+    let id = model.parameters.get(param).map(|p| p.id.as_str()).unwrap_or_default();
+    let physics = model.physics.as_ref().map_or(0, |rig| {
+        rig.groups
+            .iter()
+            .map(|g| {
+                g.inputs.iter().filter(|i| i.param == id).count()
+                    + g.outputs.iter().filter(|o| o.param == id).count()
+            })
+            .sum()
+    });
+    (objects, physics)
+}
+
+/// Take a parameter out of everything that uses it, so it can be deleted:
+/// every object keeps the form it has at the parameter's default (see
+/// `delete_binding`), physics inputs and outputs naming it are dropped, and
+/// a physics group left with no input or no output goes too, as it could no
+/// longer do anything. True when anything changed.
+pub fn unbind_parameter_everywhere(model: &mut Model, param: usize) -> bool {
+    let Some(meta) = model.parameters.get(param) else { return false };
+    let (id, default) = (meta.id.clone(), meta.default);
+    let p32 = param as u32;
+    let uses = |b: &Binding| b.axes.iter().any(|a| a.parameter == p32);
+    let mut targets: Vec<Target> = Vec::new();
+    targets.extend(
+        model
+            .parts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| uses(&p.binding))
+            .map(|(i, _)| Target::Part(i)),
+    );
+    targets.extend(
+        model
+            .deformers
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| uses(&d.binding))
+            .map(|(i, _)| Target::Deformer(i)),
+    );
+    targets.extend(
+        model
+            .art_meshes
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| uses(&m.binding))
+            .map(|(i, _)| Target::ArtMesh(i)),
+    );
+    let mut changed = false;
+    for t in targets {
+        changed |= delete_binding(model, t, param, default);
+    }
+    // glue intensity keyforms: keep the one nearest the default
+    for g in &mut model.glues {
+        if let Some(at) = g.binding.axes.iter().position(|a| a.parameter == p32) {
+            let keep = g.binding.axes.get(at).map_or(0, |a| {
+                a.keys
+                    .iter()
+                    .enumerate()
+                    .min_by(|x, y| (x.1 - default).abs().total_cmp(&(y.1 - default).abs()))
+                    .map_or(0, |(i, _)| i)
+            });
+            let value = g.intensities.get(keep).copied().unwrap_or(1.0);
+            g.binding.axes.remove(at);
+            let n = g.binding.axes.iter().map(|a| a.keys.len().max(1)).product::<usize>().max(1);
+            g.intensities = vec![value; n];
+            changed = true;
+        }
+    }
+    if let Some(rig) = &mut model.physics {
+        for g in &mut rig.groups {
+            let before = g.inputs.len() + g.outputs.len();
+            g.inputs.retain(|i| i.param != id);
+            g.outputs.retain(|o| o.param != id);
+            changed |= g.inputs.len() + g.outputs.len() != before;
+        }
+        let before = rig.groups.len();
+        rig.groups.retain(|g| !g.inputs.is_empty() && !g.outputs.is_empty());
+        changed |= rig.groups.len() != before;
+    }
+    changed
+}
+
 /// Cubism's Auto connect: triangulate the mesh's points (in uv space, so
 /// the result does not depend on the pose). With `rebuild` every face is
 /// redone from the points alone; without it the faces already there stay
@@ -2845,6 +2987,74 @@ mod tests {
     }
 
     #[test]
+    fn a_deformer_over_meshes_in_different_warps_wraps_their_warps() {
+        let mut m = test_model();
+        let base = m.art_meshes[0].clone();
+        m.art_meshes = (0..2).map(|i| ArtMesh { id: format!("M{i}"), ..base.clone() }).collect();
+        let rest = |m: &Model| {
+            let mut p = Puppet::new(m.clone());
+            p.update();
+            p.drawables().map(|d| d.positions.to_vec()).collect::<Vec<_>>()
+        };
+        let warp = NewDeformer::Warp { rows: 2, cols: 2 };
+        let ext = (0.0, 0.0, 1.0, 1.0);
+        create_deformer(
+            &mut m,
+            warp,
+            &[Child::Mesh(0), Child::Mesh(1)],
+            None,
+            ext,
+            None,
+            "Head".into(),
+        )
+        .unwrap();
+        let head = m.deformers.iter().position(|d| d.id == "Head").unwrap();
+        create_deformer(
+            &mut m,
+            warp,
+            &[Child::Mesh(0)],
+            Some(head as u32),
+            ext,
+            None,
+            "HairA".into(),
+        )
+        .unwrap();
+        create_deformer(
+            &mut m,
+            warp,
+            &[Child::Mesh(1)],
+            Some(head as u32),
+            ext,
+            None,
+            "HairB".into(),
+        )
+        .unwrap();
+        let before = rest(&m);
+        // the two meshes now have different parents: a toggle over both
+        create_deformer(
+            &mut m,
+            warp,
+            &[Child::Mesh(0), Child::Mesh(1)],
+            None,
+            ext,
+            None,
+            "Toggle".into(),
+        )
+        .expect("wraps the two hair warps");
+        let id = |n: &str| m.deformers.iter().position(|d| d.id == n).unwrap() as u32;
+        let (head, toggle) = (id("Head"), id("Toggle"));
+        assert_eq!(m.deformers[toggle as usize].parent_deformer, Some(head));
+        assert_eq!(m.deformers[id("HairA") as usize].parent_deformer, Some(toggle));
+        assert_eq!(m.deformers[id("HairB") as usize].parent_deformer, Some(toggle));
+        // the meshes stay in their own warps and do not move
+        assert_eq!(m.art_meshes[0].parent_deformer, Some(id("HairA")));
+        let after = rest(&m);
+        for (a, b) in before.iter().flatten().zip(after.iter().flatten()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    #[test]
     fn pasted_points_merge_place_and_join() {
         let mut m = test_model();
         if let Some(am) = m.art_meshes.get_mut(0) {
@@ -2879,6 +3089,21 @@ mod tests {
         assert_eq!(again, vec![0, 1, 4]);
         assert_eq!(m.art_meshes[0].indices.len(), 9);
         assert!(paste_points(&mut m, 0, &[PastedPoint::Existing(99)], &[]).is_none());
+    }
+
+    #[test]
+    fn a_used_parameter_unbinds_safely_then_deletes() {
+        let mut m = test_model();
+        // mesh 0 is keyed on parameter A (x from 0 to 2)
+        assert_eq!(param_users(&m, 0), (1, 0));
+        assert!(!delete_parameter(&mut m, 0), "still used");
+        assert!(unbind_parameter_everywhere(&mut m, 0));
+        assert_eq!(param_users(&m, 0), (0, 0));
+        // the mesh kept its form at A's default (x = 0)
+        assert!(m.art_meshes[0].binding.axes.is_empty());
+        assert_eq!(&m.art_meshes[0].positions[..2], &[0.0, 0.0]);
+        assert!(delete_parameter(&mut m, 0));
+        assert_eq!(m.parameters.len(), 1);
     }
 
     #[test]

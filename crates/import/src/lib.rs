@@ -18,6 +18,12 @@ mod psd_doc;
 
 pub use layers::{Document, Imported, Layer};
 
+/// A Photoshop (`kra` false) or Krita document's layers, before they are
+/// turned into a model, with how many layers were skipped while reading.
+pub fn read_document(bytes: &[u8], kra: bool) -> Result<(Document, usize), ImportError> {
+    if kra { kra::read_kra(bytes) } else { psd_doc::read_psd(bytes).map(|d| (d, 0)) }
+}
+
 /// Any layered document (already read from its file) as a fresh model.
 pub fn from_layers(doc: &Document) -> Result<Imported, ImportError> {
     layers::build(doc)

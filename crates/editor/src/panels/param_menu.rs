@@ -103,6 +103,9 @@ pub(super) struct ParamMenuState {
     /// Reflect waiting for the overwrite confirmation: (parameter, the
     /// key it mirrors from, the opposite key it overwrites).
     pub(super) reflect: Option<(usize, f32, Option<f32>)>,
+    /// Delete asked for on a parameter still in use: (parameter, objects
+    /// bound on it, physics settings naming it), waiting for an answer.
+    pub(super) delete_ask: Option<(usize, usize, usize)>,
     adjust: Option<(usize, f32, f32)>,
     change: Option<(usize, usize)>,
 }
@@ -351,7 +354,7 @@ fn label(s: &Session, p: usize) -> String {
 
 impl EditorUi {
     /// The selection as edit targets, lasso picks included.
-    fn param_targets(&self) -> Vec<Target> {
+    pub(super) fn param_targets(&self) -> Vec<Target> {
         let mut out = Vec::new();
         match self.selected {
             Some(Sel::Mesh(i)) => out.push(Target::ArtMesh(i)),
@@ -859,6 +862,48 @@ impl EditorUi {
                 }
             } else if !open {
                 self.pmenu.corners = None;
+            }
+        }
+
+        if let Some((p, objects, physics)) = self.pmenu.delete_ask {
+            let mut open = true;
+            let mut go = false;
+            let mut cancel = false;
+            let name = names.get(p).cloned().unwrap_or_default();
+            crate::windows::Dialog::new("Delete Parameter").open(&mut open).width(360.0).show(
+                &ctx,
+                |ui| {
+                    let mut uses = Vec::new();
+                    if objects > 0 {
+                        uses.push(format!("{objects} object(s)"));
+                    }
+                    if physics > 0 {
+                        uses.push(format!("{physics} physics setting(s)"));
+                    }
+                    ui.label(format!("{name} is still used by {}.", uses.join(" and ")));
+                    ui.weak(
+                        "Unbind it everywhere and delete it? Every object keeps the shape it \
+                         has at the parameter's default, physics stops reading or driving it, \
+                         and a physics group left with nothing to do is removed. Undo puts it \
+                         all back.",
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Unbind and delete").clicked() {
+                            go = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                },
+            );
+            if go {
+                self.pmenu.delete_ask = None;
+                self.delete_parameter_unbinding(p);
+            } else if cancel || !open {
+                self.pmenu.delete_ask = None;
+                log::warn!("{name} was not deleted: it is still in use");
             }
         }
 

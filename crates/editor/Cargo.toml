@@ -16,6 +16,7 @@ ayatsuri-core = { workspace = true }
 ayatsuri-format = { workspace = true }
 ayatsuri-render = { workspace = true }
 ayatsuri-import = { workspace = true }
+ayatsuri-update = { workspace = true }
 openmoc3 = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }

@@ -150,6 +150,11 @@ pub struct EditorUi {
     tool: Tool,
     pub(crate) show_about: bool,
     pub(crate) about: crate::windows::about::AboutState,
+    /// What's known about newer releases (launcher's check, About's check).
+    pub(crate) update: crate::update::UpdateState,
+    /// An export waiting on "overwrite the model already in that folder?":
+    /// the options, the folder, and the model3.json names found there.
+    pub(crate) export_overwrite: Option<(ExportDlg, PathBuf, Vec<String>)>,
     pub(crate) show_settings: bool,
     pub(crate) show_api_window: bool,
     /// The keyboard settings' search text.
@@ -273,6 +278,16 @@ pub struct EditorUi {
     deformer_dialog: Option<deformer_dialog::DeformerDialog>,
     /// Extra meshes picked by the lasso, beyond `selected`.
     multi_sel: Vec<usize>,
+    /// Parts picked in the Parts palette (Ctrl toggles, Shift a range), and
+    /// the rows each Shift range starts from.
+    part_pick: Vec<usize>,
+    part_anchor: Option<usize>,
+    /// The Parts palette row under the pointer, outlined on the canvas.
+    palette_hover: Option<Sel>,
+    /// The Parts and Deformer palettes' search boxes.
+    part_search: String,
+    def_search: String,
+    mesh_anchor: Option<usize>,
     /// Picking clipping masks on the canvas for this mesh: each click on
     /// another mesh adds it (Shift keeps picking), Esc ends.
     clip_pick: Option<usize>,
@@ -607,6 +622,8 @@ struct PathPin {
 /// A Deformer palette menu choice, run once the palette is drawn.
 /// What a Parts palette mesh row's menu asked for.
 enum MeshRowCmd {
+    /// A click on the row; the palette applies Ctrl / Shift picking.
+    Click(usize),
     Delete(usize),
     ClipBy(usize),
 }
@@ -621,6 +638,10 @@ enum DefCmd {
     DeleteMesh(usize),
     /// Pick this art mesh's clipping masks on the canvas.
     ClipBy(usize),
+    /// A mesh's deform path at an edit level: open it with the path tool,
+    /// or remove it.
+    EditPath(usize, u8),
+    DeletePath(usize, u8),
     /// Move this object under that deformer (None: under no deformer).
     Reparent(Child, Option<usize>),
 }
@@ -640,6 +661,8 @@ pub(crate) enum PickFor {
     ImportMotion,
     /// A .psd or .kra added to the open model.
     ImportPaint,
+    /// An updated .psd or .kra whose art replaces the matching meshes' art.
+    ReimportPaint,
 }
 
 enum BgJob {
@@ -691,6 +714,7 @@ struct AnimNew {
 }
 
 /// The Export as moc3 dialog's working copy.
+#[derive(Clone)]
 pub(crate) struct ExportDlg {
     pub(crate) name: String,
     pub(crate) version: usize,
@@ -751,6 +775,7 @@ pub(crate) struct TextureHandleCache {
 impl Default for EditorUi {
     fn default() -> Self {
         let prefs = Prefs::load();
+        let check_updates = !prefs.update_check_off;
         let pending_import = if prefs.reopen_last { prefs.recents.first().cloned() } else { None };
         let layout = prefs.workspace_modeling.clone().unwrap_or_else(dock::default_workspace);
         Self {
@@ -767,6 +792,9 @@ impl Default for EditorUi {
             tool: Tool::Arrow,
             show_about: false,
             about: crate::windows::about::AboutState::default(),
+            // tests never reach the network
+            update: crate::update::UpdateState::new(check_updates && !cfg!(test)),
+            export_overwrite: None,
             show_settings: false,
             show_api_window: false,
             key_filter: String::new(),
@@ -852,6 +880,12 @@ impl Default for EditorUi {
             pmenu: param_menu::ParamMenuState::default(),
             deformer_dialog: None,
             multi_sel: Vec::new(),
+            part_pick: Vec::new(),
+            part_anchor: None,
+            palette_hover: None,
+            part_search: String::new(),
+            def_search: String::new(),
+            mesh_anchor: None,
             clip_pick: None,
             pending_create: None,
             mesh_edit: None,
@@ -1302,6 +1336,33 @@ impl EditorUi {
                 }
             }
             (PickFor::ImportMotion, Some(path)) => self.import_motion(&path),
+            (PickFor::ReimportPaint, Some(path)) => {
+                if self.mesh_edit.is_some() {
+                    log::warn!("leave Mesh Edit before re-importing artwork");
+                } else if let Some(s) = &mut self.session {
+                    match s.reimport_paint(ctx, &path) {
+                        Ok(r) => {
+                            log::info!("re-imported {}: new art on {} mesh(es)", r.file, r.updated);
+                            if !r.new_layers.is_empty() {
+                                log::warn!(
+                                    "{} layer(s) match no mesh (use Import PSD to add them): {}",
+                                    r.new_layers.len(),
+                                    r.new_layers.join(", ")
+                                );
+                            }
+                            if !r.missing.is_empty() {
+                                log::warn!(
+                                    "{} mesh(es) found no layer and kept their old art: {}",
+                                    r.missing.len(),
+                                    r.missing.join(", ")
+                                );
+                            }
+                            self.mesh_art = None;
+                        }
+                        Err(e) => log::error!("re-import artwork: {e}"),
+                    }
+                }
+            }
             (PickFor::ImportPaint, Some(path)) => {
                 if self.mesh_edit.is_some() {
                     log::warn!("leave Mesh Edit before importing artwork");
@@ -1614,6 +1675,10 @@ impl EditorUi {
                 self.run_key_action(&ui.ctx().clone(), id);
             }
         }
+        self.update.poll();
+        if self.update.checking() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
         if let Some(gi) = self.selected_glue
             && self.mesh_edit.is_none()
             && !ui.ctx().egui_wants_keyboard_input()
@@ -1768,6 +1833,22 @@ impl EditorUi {
                             rfd::FileDialog::new()
                                 .add_filter("Artwork", &["psd", "kra"])
                                 .set_title("Import PSD into this model")
+                                .pick_file()
+                        });
+                    }
+                    if ui
+                        .add_enabled(self.session.is_some(), egui::Button::new("Re-import PSD…"))
+                        .on_hover_text(
+                            "Swap in updated art from the PSD this model was made from: layers \
+                             match meshes by folder and name, and the rigging stays as it is",
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        self.pick_async(PickFor::ReimportPaint, || {
+                            rfd::FileDialog::new()
+                                .add_filter("Artwork", &["psd", "kra"])
+                                .set_title("Re-import PSD")
                                 .pick_file()
                         });
                     }
@@ -2255,10 +2336,35 @@ impl EditorUi {
                 {
                     self.physics_on = !self.physics_on;
                     log::debug!("physics {}", if self.physics_on { "on" } else { "off" });
-                    if self.physics_on
-                        && let Some(s) = &mut self.session
-                    {
-                        s.puppet.reset_physics();
+                    if let Some(s) = &mut self.session {
+                        if self.physics_on {
+                            s.puppet.reset_physics();
+                        } else {
+                            // off: the parameters physics drives go back to
+                            // rest, so they sit on their keys for editing
+                            let outputs: Vec<String> = s
+                                .puppet
+                                .model()
+                                .physics
+                                .iter()
+                                .flat_map(|rig| rig.groups.iter())
+                                .flat_map(|g| g.outputs.iter().map(|o| o.param.clone()))
+                                .collect();
+                            let rest: Vec<(usize, f32)> = s
+                                .puppet
+                                .model()
+                                .parameters
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, p)| outputs.contains(&p.id))
+                                .map(|(i, p)| (i, p.default))
+                                .collect();
+                            for (i, v) in &rest {
+                                s.puppet.set_value(*i, *v);
+                            }
+                            s.dirty = true;
+                            log::debug!("{} physics parameter(s) back to rest", rest.len());
+                        }
                     }
                 }
                 if ui
@@ -2567,6 +2673,7 @@ impl EditorUi {
         self.model_info_window(ui);
         self.new_anim_window(ui);
         self.export_window(ui);
+        self.export_overwrite_window(ui);
         self.close_confirm_window(ui);
         self.workspace_windows(ui);
         self.param_edit_window(ui);
@@ -2983,6 +3090,47 @@ impl EditorUi {
 
         let body = Rect::from_min_max(pos2(rect.min.x + 36.0, band.max.y + 18.0), rect.max);
         let mut ui = ui.new_child(UiBuilder::new().max_rect(body));
+        // a newer release: a full-width strip above everything, text on the
+        // left, Download and Later on the right; Later holds until the next
+        if let Some(latest) = self.update.available().cloned()
+            && self.prefs.update_dismissed.as_deref() != Some(latest.version.as_str())
+        {
+            let width = (ui.available_width() - 36.0).max(200.0);
+            egui::Frame::new()
+                .fill(theme::pal().accent.gamma_multiply(0.18))
+                .stroke(Stroke::new(1.0, theme::pal().accent.gamma_multiply(0.6)))
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::symmetric(14, 8))
+                .show(&mut ui, |ui| {
+                    ui.set_width(width - 28.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(egui_phosphor::regular::ARROW_CIRCLE_UP)
+                                .size(16.0)
+                                .color(theme::pal().accent),
+                        );
+                        ui.label(format!(
+                            "Ayatsuri2D {} is available (you have {}).",
+                            latest.version,
+                            crate::update::current()
+                        ));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button("Later")
+                                .on_hover_text("Hide this until the next release")
+                                .clicked()
+                            {
+                                self.prefs.update_dismissed = Some(latest.version.clone());
+                                self.prefs.save();
+                            }
+                            if ui.button("Download").clicked() {
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(latest.url.clone()));
+                            }
+                        });
+                    });
+                });
+            ui.add_space(14.0);
+        }
         ui.horizontal(|ui| {
             if ui.add_sized([150.0, 34.0], egui::Button::new("Open…")).clicked() {
                 self.import_dialog(&ui.ctx().clone());
@@ -3644,11 +3792,14 @@ impl EditorUi {
         }
     }
 
+    /// Add keys on the selected parameter to every selected object (the
+    /// whole mesh pick, as Cubism does), as one undo step.
     fn add_keys_to_selection(&mut self, values: Vec<f32>) {
-        let Some((target, name)) = self.edit_target() else {
+        let targets = self.param_targets();
+        if targets.is_empty() {
             log::warn!("select an object before adding keys");
             return;
-        };
+        }
         let Some(param) = self.sel_param else {
             log::warn!("select a parameter before adding keys");
             return;
@@ -3656,19 +3807,34 @@ impl EditorUi {
         if let Some(s) = &mut self.session {
             let pid =
                 s.puppet.model().parameters.get(param).map(|p| p.id.clone()).unwrap_or_default();
-            if s.edit(|m| ayatsuri_core::edit::add_keys(m, target, param, &values)) {
-                log::info!("added keys {values:?} on {pid} for {name}");
+            let mut n = 0;
+            s.edit(|m| {
+                for &t in &targets {
+                    n += ayatsuri_core::edit::add_keys(m, t, param, &values) as usize;
+                }
+                n > 0
+            });
+            if n > 0 {
+                log::info!("added keys {values:?} on {pid} for {n} object(s)");
             }
         }
     }
 
+    /// Delete the key at the parameter's value from every selected object.
     fn delete_key_on_selection(&mut self) {
-        let Some((target, name)) = self.edit_target() else { return };
+        let targets = self.param_targets();
         let Some(param) = self.sel_param else { return };
         if let Some(s) = &mut self.session {
             let at = s.puppet.value(param);
-            if s.edit(|m| ayatsuri_core::edit::delete_key(m, target, param, at)) {
-                log::info!("deleted key near {at:.3} for {name}");
+            let mut n = 0;
+            s.edit(|m| {
+                for &t in &targets {
+                    n += ayatsuri_core::edit::delete_key(m, t, param, at) as usize;
+                }
+                n > 0
+            });
+            if n > 0 {
+                log::info!("deleted the key near {at:.3} on {n} object(s)");
             }
         }
     }
@@ -3950,12 +4116,40 @@ impl EditorUi {
         self.auto_mesh_many(&[mi]);
     }
 
+    /// Delete a parameter; one still in use asks first whether to unbind it
+    /// everywhere (see `delete_parameter_unbinding`).
     fn delete_parameter(&mut self, pi: usize) {
         let Some(s) = &mut self.session else { return };
-        if !s.edit(|m| ayatsuri_core::edit::delete_parameter(m, pi)) {
-            log::warn!("parameter is still used by a binding or physics; unbind it first");
+        let (objects, physics) = ayatsuri_core::edit::param_users(s.puppet.model(), pi);
+        if objects + physics > 0 {
+            self.pmenu.delete_ask = Some((pi, objects, physics));
             return;
         }
+        if !s.edit(|m| ayatsuri_core::edit::delete_parameter(m, pi)) {
+            log::warn!("parameter could not be deleted");
+            return;
+        }
+        self.after_parameter_deleted(pi);
+    }
+
+    /// Unbind a parameter from everything that uses it, then delete it, as
+    /// one undo step.
+    fn delete_parameter_unbinding(&mut self, pi: usize) {
+        let Some(s) = &mut self.session else { return };
+        let done = s.edit(|m| {
+            ayatsuri_core::edit::unbind_parameter_everywhere(m, pi);
+            ayatsuri_core::edit::delete_parameter(m, pi)
+        });
+        if !done {
+            log::warn!("parameter could not be deleted");
+            return;
+        }
+        self.after_parameter_deleted(pi);
+    }
+
+    /// The palette's own bookkeeping once a parameter is gone.
+    fn after_parameter_deleted(&mut self, pi: usize) {
+        let Some(s) = &mut self.session else { return };
         if pi < s.param_names.len() {
             s.param_names.remove(pi);
         }
@@ -4895,6 +5089,36 @@ impl EditorUi {
             ui.weak("No model loaded.");
             return;
         };
+        search_box(ui, &mut self.part_search, "Search parts and meshes");
+        let query = self.part_search.trim().to_lowercase();
+        let searching = !query.is_empty();
+        let (part_shown_by_search, mesh_shown_by_search) = if searching {
+            let model = s.puppet.model();
+            let parents: Vec<Option<u32>> = model.parts.iter().map(|p| p.parent_part).collect();
+            let hits: Vec<bool> = model
+                .parts
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let name = s.part_names.get(i).cloned().unwrap_or_default();
+                    matches_search(&query, &[&p.id, &name])
+                })
+                .collect();
+            let leaf_parent: Vec<Option<u32>> =
+                model.art_meshes.iter().map(|m| m.parent_part).collect();
+            let leaf_hit: Vec<bool> = model
+                .art_meshes
+                .iter()
+                .enumerate()
+                .map(|(mi, m)| matches_search(&query, &[&m.id, &s.mesh_name(mi)]))
+                .collect();
+            search_keep(&parents, &hits, &leaf_parent, &leaf_hit)
+        } else {
+            (
+                vec![true; s.puppet.model().parts.len()],
+                vec![true; s.puppet.model().art_meshes.len()],
+            )
+        };
         // the real tree: children render under their parent, depth-indented
         let n = s.puppet.model().parts.len();
         let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -4913,8 +5137,12 @@ impl EditorUi {
         let mut stack: Vec<(usize, usize)> = roots.into_iter().rev().map(|i| (i, 0)).collect();
         let mut guard = 0;
         while let Some((i, depth)) = stack.pop() {
+            if !part_shown_by_search.get(i).copied().unwrap_or(true) {
+                continue;
+            }
             order.push((i, depth));
-            if !self.part_collapsed.contains(&i)
+            // a search opens every folded folder so its matches show
+            if (searching || !self.part_collapsed.contains(&i))
                 && let Some(kids) = children.get(i)
             {
                 for &k in kids.iter().rev() {
@@ -4957,6 +5185,9 @@ impl EditorUi {
         // a couple of renders per frame keeps the palette responsive
         let mut budget = 2usize;
         let ctx = ui.ctx().clone();
+        let part_rows: Vec<usize> = order.iter().map(|o| o.0).collect();
+        let mut mesh_rows: Vec<usize> = Vec::new();
+        let mut part_click: Option<usize> = None;
         ScrollArea::vertical().id_salt("parts").show(ui, |ui| {
             for (i, depth) in order {
                 let Some((id, parent)) =
@@ -4968,7 +5199,7 @@ impl EditorUi {
                 let shown = s.part_shown.get(i).copied().unwrap_or(true);
                 let row_w = ui.available_width();
                 let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 18.0), Sense::click());
-                if self.selected == Some(Sel::Part(i)) {
+                if self.selected == Some(Sel::Part(i)) || self.part_pick.contains(&i) {
                     ui.painter().rect_filled(rect, 0.0, theme::pal().select);
                 }
                 let effective = shown && ancestors_shown(s, parent);
@@ -5067,14 +5298,28 @@ impl EditorUi {
                     });
                 }
                 if resp.clicked() {
-                    self.selected = Some(Sel::Part(i));
+                    part_click = Some(i);
                 }
+                if resp.hovered() {
+                    self.palette_hover = Some(Sel::Part(i));
+                }
+                // a menu on a picked part acts on the whole pick
+                let targets: Vec<usize> =
+                    if self.part_pick.contains(&i) { self.part_pick.clone() } else { vec![i] };
                 resp.context_menu(|ui| {
-                    if ui.button(if shown { "Hide" } else { "Show" }).clicked() {
-                        if let Some(f) = s.part_shown.get_mut(i) {
-                            *f = !shown;
+                    let label = match (shown, targets.len()) {
+                        (true, 1) => "Hide".to_string(),
+                        (false, 1) => "Show".to_string(),
+                        (true, n) => format!("Hide {n} Parts"),
+                        (false, n) => format!("Show {n} Parts"),
+                    };
+                    if ui.button(label).clicked() {
+                        for &t in &targets {
+                            if let Some(f) = s.part_shown.get_mut(t) {
+                                *f = !shown;
+                            }
+                            s.puppet.set_part_opacity(t, if shown { 0.0 } else { 1.0 });
                         }
-                        s.puppet.set_part_opacity(i, if shown { 0.0 } else { 1.0 });
                         s.dirty = true;
                         ui.close();
                     }
@@ -5085,7 +5330,7 @@ impl EditorUi {
                 });
 
                 // the part's meshes, nested one level deeper, unless folded
-                if self.part_collapsed.contains(&i) {
+                if self.part_collapsed.contains(&i) && !searching {
                     continue;
                 }
                 let meshes: Vec<(usize, String)> = s
@@ -5094,11 +5339,15 @@ impl EditorUi {
                     .art_meshes
                     .iter()
                     .enumerate()
-                    .filter(|(_, m)| m.parent_part == Some(i as u32))
+                    .filter(|(mi, m)| {
+                        m.parent_part == Some(i as u32)
+                            && mesh_shown_by_search.get(*mi).copied().unwrap_or(true)
+                    })
                     .map(|(mi, _)| (mi, s.mesh_name(mi)))
                     .collect();
                 for (mi, mid) in meshes {
                     let x_off = 66.0 + depth as f32 * 14.0;
+                    mesh_rows.push(mi);
                     parts_mesh_row(
                         ui,
                         s,
@@ -5109,6 +5358,8 @@ impl EditorUi {
                         effective,
                         &stack,
                         &mut mesh_cmd,
+                        &self.multi_sel,
+                        &mut self.palette_hover,
                     );
                 }
             }
@@ -5120,10 +5371,14 @@ impl EditorUi {
                 .art_meshes
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| m.parent_part.is_none())
+                .filter(|(mi, m)| {
+                    m.parent_part.is_none()
+                        && mesh_shown_by_search.get(*mi).copied().unwrap_or(true)
+                })
                 .map(|(mi, _)| (mi, s.mesh_name(mi)))
                 .collect();
             for (mi, mid) in loose {
+                mesh_rows.push(mi);
                 parts_mesh_row(
                     ui,
                     s,
@@ -5134,6 +5389,8 @@ impl EditorUi {
                     true,
                     &stack,
                     &mut mesh_cmd,
+                    &self.multi_sel,
+                    &mut self.palette_hover,
                 );
             }
             // glue objects, as the reference palette lists them
@@ -5192,13 +5449,75 @@ impl EditorUi {
                 self.selected_glue = None;
             }
         });
+        let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
+        if let Some(i) = part_click {
+            self.pick_rows(i, shift, ctrl, &part_rows, true);
+            self.selected = Some(Sel::Part(i));
+            if !ctrl && !shift {
+                self.multi_sel.clear();
+            }
+        }
         match mesh_cmd {
+            Some(MeshRowCmd::Click(mi)) => {
+                self.pick_rows(mi, shift, ctrl, &mesh_rows, false);
+                self.selected = Some(Sel::Mesh(mi));
+                if !ctrl && !shift {
+                    self.multi_sel = vec![mi];
+                    self.part_pick.clear();
+                }
+            }
             Some(MeshRowCmd::Delete(mi)) => {
                 let meshes = self.mesh_pick_with(mi);
                 self.delete_meshes(meshes);
             }
             Some(MeshRowCmd::ClipBy(mi)) => self.start_clip_pick(mi),
             None => {}
+        }
+    }
+
+    /// The Parts palette's picking, for part rows (`parts`) or mesh rows:
+    /// a plain click picks one row, Ctrl+click toggles one, Shift+click
+    /// picks every row from the last plain or Ctrl click, in palette order.
+    fn pick_rows(&mut self, row: usize, shift: bool, ctrl: bool, order: &[usize], parts: bool) {
+        let (pick, anchor) = if parts {
+            (&mut self.part_pick, &mut self.part_anchor)
+        } else {
+            // the mesh pick starts from what the canvas had selected
+            if let Some(Sel::Mesh(m)) = self.selected {
+                if self.multi_sel.is_empty() {
+                    self.multi_sel.push(m);
+                }
+                if self.mesh_anchor.is_none() {
+                    self.mesh_anchor = Some(m);
+                }
+            }
+            (&mut self.multi_sel, &mut self.mesh_anchor)
+        };
+        let at = |r: usize| order.iter().position(|&x| x == r);
+        match (shift, ctrl) {
+            (true, _) => match (anchor.and_then(at), at(row)) {
+                (Some(a), Some(b)) => {
+                    let (lo, hi) = (a.min(b), a.max(b));
+                    *pick = order.get(lo..=hi).map(<[usize]>::to_vec).unwrap_or_default();
+                }
+                _ => {
+                    *pick = vec![row];
+                    *anchor = Some(row);
+                }
+            },
+            (false, true) => {
+                match pick.iter().position(|&x| x == row) {
+                    Some(p) => {
+                        pick.remove(p);
+                    }
+                    None => pick.push(row),
+                }
+                *anchor = Some(row);
+            }
+            (false, false) => {
+                *pick = vec![row];
+                *anchor = Some(row);
+            }
         }
     }
 
@@ -5345,9 +5664,29 @@ impl EditorUi {
             ui.weak("No model loaded.");
             return;
         };
+        search_box(ui, &mut self.def_search, "Search deformers and meshes");
+        let query = self.def_search.trim().to_lowercase();
+        let searching = !query.is_empty();
         // hierarchy: deformers under their parents, meshes under deformers
         let model = s.puppet.model();
         let nd = model.deformers.len();
+        let (def_shown, mesh_shown_by_search) = if searching {
+            let parents: Vec<Option<u32>> =
+                model.deformers.iter().map(|d| d.parent_deformer).collect();
+            let hits: Vec<bool> =
+                model.deformers.iter().map(|d| matches_search(&query, &[&d.id])).collect();
+            let leaf_parent: Vec<Option<u32>> =
+                model.art_meshes.iter().map(|m| m.parent_deformer).collect();
+            let leaf_hit: Vec<bool> = model
+                .art_meshes
+                .iter()
+                .enumerate()
+                .map(|(mi, m)| matches_search(&query, &[&m.id, &s.mesh_name(mi)]))
+                .collect();
+            search_keep(&parents, &hits, &leaf_parent, &leaf_hit)
+        } else {
+            (vec![true; nd], vec![true; model.art_meshes.len()])
+        };
         let mut children: Vec<Vec<usize>> = vec![Vec::new(); nd];
         let mut roots: Vec<usize> = Vec::new();
         for (i, d) in model.deformers.iter().enumerate() {
@@ -5364,8 +5703,12 @@ impl EditorUi {
         let mut stack: Vec<(usize, usize)> = roots.into_iter().rev().map(|i| (i, 0)).collect();
         let mut guard = 0;
         while let Some((i, depth)) = stack.pop() {
+            if !def_shown.get(i).copied().unwrap_or(true) {
+                continue;
+            }
             order.push((i, depth));
-            if !self.def_collapsed.contains(&i)
+            // a search opens every folded row so its matches show
+            if (searching || !self.def_collapsed.contains(&i))
                 && let Some(kids) = children.get(i)
             {
                 for &k in kids.iter().rev() {
@@ -5596,7 +5939,7 @@ impl EditorUi {
                 });
 
                 // this deformer's meshes, nested unless folded away
-                if self.def_collapsed.contains(&i) {
+                if self.def_collapsed.contains(&i) && !searching {
                     continue;
                 }
                 let meshes: Vec<(usize, String)> = s
@@ -5605,7 +5948,10 @@ impl EditorUi {
                     .art_meshes
                     .iter()
                     .enumerate()
-                    .filter(|(_, m)| m.parent_deformer == Some(i as u32))
+                    .filter(|(mi, m)| {
+                        m.parent_deformer == Some(i as u32)
+                            && mesh_shown_by_search.get(*mi).copied().unwrap_or(true)
+                    })
                     .map(|(mi, _)| (mi, s.mesh_name(mi)))
                     .collect();
                 for (mi, mid) in meshes {
@@ -5658,6 +6004,52 @@ impl EditorUi {
                             ui.close();
                         }
                     });
+                    // the mesh's deform paths, one row per edit level
+                    let mut levels: Vec<(u8, usize)> = self
+                        .deform_paths
+                        .iter()
+                        .filter(|((m, _), pins)| *m == mi && !pins.is_empty())
+                        .map(|((_, l), pins)| (*l, pins.len()))
+                        .collect();
+                    levels.sort_unstable();
+                    for (level, pins) in levels {
+                        let (prect, presp) = ui
+                            .allocate_exact_size(vec2(ui.available_width(), 15.0), Sense::click());
+                        let on = self.tool == Tool::DeformPath
+                            && self.edit_level == level
+                            && self.selected == Some(Sel::Mesh(mi));
+                        if on {
+                            ui.painter().rect_filled(prect, 0.0, theme::pal().select);
+                        }
+                        let px = prect.min.x + 76.0 + dep as f32 * 14.0;
+                        ui.painter().text(
+                            pos2(px, prect.center().y),
+                            Align2::LEFT_CENTER,
+                            egui_phosphor::regular::PATH,
+                            FontId::proportional(11.0),
+                            theme::pal().accent,
+                        );
+                        ui.painter().text(
+                            pos2(px + 14.0, prect.center().y),
+                            Align2::LEFT_CENTER,
+                            format!("Deform path · level {level} · {pins} pins"),
+                            FontId::proportional(10.0),
+                            theme::pal().text_faint,
+                        );
+                        if presp.clicked() {
+                            def_cmd = Some(DefCmd::EditPath(mi, level));
+                        }
+                        presp.context_menu(|ui| {
+                            if ui.button("Edit Deform Path").clicked() {
+                                def_cmd = Some(DefCmd::EditPath(mi, level));
+                                ui.close();
+                            }
+                            if ui.button("Delete Deform Path").clicked() {
+                                def_cmd = Some(DefCmd::DeletePath(mi, level));
+                                ui.close();
+                            }
+                        });
+                    }
                 }
             }
             // the empty space under the rows: create around the selection
@@ -5760,6 +6152,19 @@ impl EditorUi {
                 }
             }
             DefCmd::ClipBy(mi) => self.start_clip_pick(mi),
+            DefCmd::EditPath(mi, level) => {
+                self.selected = Some(Sel::Mesh(mi));
+                self.multi_sel = vec![mi];
+                self.edit_level = level;
+                self.tool = Tool::DeformPath;
+            }
+            DefCmd::DeletePath(mi, level) => {
+                if self.deform_paths.remove(&(mi, level)).is_some() {
+                    self.path_grab = None;
+                    let name = self.session.as_ref().map(|s| s.mesh_name(mi)).unwrap_or_default();
+                    log::info!("deleted the level {level} deform path on {name}");
+                }
+            }
             DefCmd::DeleteMesh(mi) => {
                 let meshes = self.mesh_pick_with(mi);
                 self.delete_meshes(meshes);
@@ -5901,7 +6306,22 @@ impl EditorUi {
                 ui.separator();
 
                 // the editable half, like Cubism's inspector
-                opacity_row(ui, s, ayatsuri_core::edit::Target::ArtMesh(i));
+                // with several meshes picked, opacity sets them all
+                let mut picked: Vec<usize> = self.multi_sel.clone();
+                if !picked.contains(&i) {
+                    picked = vec![i];
+                }
+                picked.sort_unstable();
+                picked.dedup();
+                if picked.len() > 1 {
+                    ui.weak(format!(
+                        "{} meshes selected: opacity and keys apply to all",
+                        picked.len()
+                    ));
+                }
+                let targets: Vec<ayatsuri_core::edit::Target> =
+                    picked.iter().map(|&m| ayatsuri_core::edit::Target::ArtMesh(m)).collect();
+                opacity_row(ui, s, &targets, self.sel_param);
                 use ayatsuri_format::model::flags;
                 let blend = if m.flags & flags::BLEND_ADDITIVE != 0 {
                     1
@@ -6098,7 +6518,7 @@ impl EditorUi {
                     .count();
                 row(ui, "Children", format!("{kids} meshes"));
                 ui.separator();
-                opacity_row(ui, s, ayatsuri_core::edit::Target::Deformer(i));
+                opacity_row(ui, s, &[ayatsuri_core::edit::Target::Deformer(i)], self.sel_param);
             }
             Some(Sel::Part(i)) => {
                 let Some(p) = s.puppet.model().parts.get(i) else { return };
@@ -6307,6 +6727,50 @@ impl EditorUi {
                 }
                 mesh.indices.extend(d.indices.iter().map(|&i| i as u32));
                 add_mesh_shape(&vp, mesh);
+            }
+        }
+
+        // a Parts palette row under the pointer: outline its meshes here, a
+        // group's whole contents or one mesh (taken, so it lasts one frame)
+        if let Some(h) = self.palette_hover.take() {
+            let model = s.puppet.model();
+            let under = |mi: usize, part: usize| {
+                let mut at = model.art_meshes.get(mi).and_then(|m| m.parent_part);
+                let mut hops = 0;
+                while let Some(p) = at {
+                    if p as usize == part {
+                        return true;
+                    }
+                    at = model.parts.get(p as usize).and_then(|x| x.parent_part);
+                    hops += 1;
+                    if hops > model.parts.len() {
+                        break;
+                    }
+                }
+                false
+            };
+            let meshes: Vec<usize> = match h {
+                Sel::Mesh(mi) => vec![mi],
+                Sel::Part(p) => (0..model.art_meshes.len()).filter(|&mi| under(mi, p)).collect(),
+                _ => Vec::new(),
+            };
+            let stroke = Stroke::new(1.0, theme::pal().accent.gamma_multiply(0.7));
+            for mi in meshes {
+                let Some(g) = s.puppet.mesh_geometry(mi) else { continue };
+                let (pos, _) = g.positions.as_chunks::<2>();
+                let (tris, _) = g.indices.as_chunks::<3>();
+                for &[a, b, cx] in tris {
+                    let (Some(p0), Some(p1), Some(p2)) =
+                        (pos.get(a as usize), pos.get(b as usize), pos.get(cx as usize))
+                    else {
+                        continue;
+                    };
+                    let (s0, s1, s2) =
+                        (to_screen(p0[0], p0[1]), to_screen(p1[0], p1[1]), to_screen(p2[0], p2[1]));
+                    vp.line_segment([s0, s1], stroke);
+                    vp.line_segment([s1, s2], stroke);
+                    vp.line_segment([s2, s0], stroke);
+                }
             }
         }
 
@@ -8873,58 +9337,206 @@ fn add_mesh_shape(painter: &egui::Painter, mesh: egui::Mesh) {
 /// parameters sit on (as in Cubism: move the parameters onto a key, then
 /// set it). Dragging previews live in place; letting go puts the stored
 /// number back and commits one edit, so undo sees a single change.
-fn opacity_row(ui: &mut Ui, s: &mut Session, target: ayatsuri_core::edit::Target) {
+fn opacity_row(
+    ui: &mut Ui,
+    s: &mut Session,
+    targets: &[ayatsuri_core::edit::Target],
+    across: Option<usize>,
+) {
     let values: Vec<f32> =
         (0..s.puppet.model().parameters.len()).map(|p| s.puppet.value(p)).collect();
-    let keyform = ayatsuri_core::keyform::keyform_at(s.puppet.model(), target, &values);
-    let stored = keyform.and_then(|k| s.puppet.opacity_mut(target, k).map(|o| *o));
+    // which keyforms an edit sets, per object: with a parameter selected that
+    // the object is keyed on, every keyform at that parameter's current key
+    // (a toggle reads the same at every head angle and physics swing);
+    // otherwise the one keyform the parameters sit on
+    let mut spread = false;
+    let sets: Vec<Option<Vec<usize>>> = targets
+        .iter()
+        .map(|&t| {
+            let model = s.puppet.model();
+            if let Some(p) = across
+                && let Some(all) = ayatsuri_core::keyform::keyforms_on_key(model, t, p, &values)
+            {
+                spread |= all.len() > 1;
+                return Some(all);
+            }
+            ayatsuri_core::keyform::keyform_at(model, t, &values).map(|k| vec![k])
+        })
+        .collect();
+    let first = targets
+        .first()
+        .copied()
+        .zip(sets.first().cloned().flatten().and_then(|v| v.first().copied()));
+    let stored = first.and_then(|(t, k)| s.puppet.opacity_mut(t, k).map(|o| *o));
+    let all_on_keys = !targets.is_empty() && sets.iter().all(Option::is_some);
     ui.horizontal(|ui| {
+        let label = if targets.len() > 1 {
+            format!("Opacity ({})", targets.len())
+        } else {
+            "Opacity".into()
+        };
         ui.add_sized(
             [74.0, 16.0],
-            egui::Label::new(
-                egui::RichText::new("Opacity").color(theme::pal().text_faint).size(11.0),
-            ),
+            egui::Label::new(egui::RichText::new(label).color(theme::pal().text_faint).size(11.0)),
         );
-        let (Some(k), Some(now)) = (keyform, stored) else {
+        let (true, Some(now)) = (all_on_keys, stored) else {
             ui.add_enabled(false, egui::Slider::new(&mut 100.0f32, 0.0..=100.0).suffix("%"))
                 .on_disabled_hover_text(
-                    "Between keys. Move the parameters onto a key to set opacity there.",
+                    "Between keys. Move the parameters onto a key to set opacity there \
+                     (every selected mesh must be on one).",
                 );
             return;
         };
-        let live_id = egui::Id::new(("opacity-live", target, k));
+        let pairs: Vec<(ayatsuri_core::edit::Target, usize)> = targets
+            .iter()
+            .copied()
+            .zip(sets.iter())
+            .flat_map(|(t, ks)| ks.iter().flatten().map(move |&k| (t, k)))
+            .collect();
+        let live_id = egui::Id::new(("opacity-live", pairs.clone()));
         let mut percent = now * 100.0;
         let resp =
             ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%").fixed_decimals(0));
         if resp.drag_started() {
-            ui.ctx().data_mut(|d| d.insert_temp(live_id, now));
+            let before: Vec<f32> = pairs
+                .iter()
+                .map(|&(t, k)| s.puppet.opacity_mut(t, k).map_or(1.0, |o| *o))
+                .collect();
+            ui.ctx().data_mut(|d| d.insert_temp(live_id, before));
         }
-        let original: Option<f32> = ui.ctx().data(|d| d.get_temp(live_id));
+        let original: Option<Vec<f32>> = ui.ctx().data(|d| d.get_temp(live_id));
+        let set_all = |m: &mut ayatsuri_format::Model, value: f32| {
+            let mut any = false;
+            for &(t, k) in &pairs {
+                any |= ayatsuri_core::edit::set_opacity(m, t, k, value);
+            }
+            any
+        };
         if resp.changed() {
             let value = (percent / 100.0).clamp(0.0, 1.0);
             if original.is_some() {
-                if let Some(slot) = s.puppet.opacity_mut(target, k) {
-                    *slot = value;
+                // live: the numbers change in place while dragging
+                for &(t, k) in &pairs {
+                    if let Some(slot) = s.puppet.opacity_mut(t, k) {
+                        *slot = value;
+                    }
                 }
                 s.dirty = true;
-            } else if s.edit(|m| ayatsuri_core::edit::set_opacity(m, target, k, value)) {
-                log::debug!("opacity of {target:?} keyform {k} set to {value:.2}");
+            } else if s.edit(|m| set_all(m, value)) {
+                log::debug!("opacity of {} object(s) set to {value:.2}", pairs.len());
             }
         }
         if resp.drag_stopped()
             && let Some(before) = original
         {
-            ui.ctx().data_mut(|d| d.remove::<f32>(live_id));
-            let value = s.puppet.opacity_mut(target, k).map(|o| *o).unwrap_or(before);
-            if let Some(slot) = s.puppet.opacity_mut(target, k) {
-                *slot = before;
+            ui.ctx().data_mut(|d| d.remove::<Vec<f32>>(live_id));
+            let value = (percent / 100.0).clamp(0.0, 1.0);
+            // put the stored numbers back, then one real edit
+            for (&(t, k), b) in pairs.iter().zip(&before) {
+                if let Some(slot) = s.puppet.opacity_mut(t, k) {
+                    *slot = *b;
+                }
             }
-            if s.edit(|m| ayatsuri_core::edit::set_opacity(m, target, k, value)) {
-                log::info!("opacity of {target:?} keyform {k} set to {:.0}%", value * 100.0);
+            if s.edit(|m| set_all(m, value)) {
+                log::info!("opacity of {} object(s) set to {:.0}%", pairs.len(), value * 100.0);
             }
             s.dirty = true;
         }
     });
+    if spread && let Some(p) = across {
+        let name = s.param_names.get(p).cloned().unwrap_or_default();
+        let at = s.puppet.value(p);
+        ui.weak(format!("Sets {name} = {at:.2} at every other key (head angles, physics…)"));
+    }
+}
+
+/// A palette search box, with a clear button once something is typed.
+fn search_box(ui: &mut Ui, text: &mut String, hint: &str) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(egui_phosphor::regular::MAGNIFYING_GLASS)
+                .color(theme::pal().text_faint),
+        );
+        let w = (ui.available_width() - 24.0).max(40.0);
+        ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(w));
+        if !text.is_empty()
+            && ui
+                .small_button(egui_phosphor::regular::X)
+                .on_hover_text("Clear the search")
+                .clicked()
+        {
+            text.clear();
+        }
+    });
+}
+
+/// What a palette search keeps: the rows that match, everything above them
+/// (so they show in place), and everything inside a row that matches.
+/// `parent[i]` is each node's parent node; `hits[i]` whether node i matches;
+/// `leaf_parent[m]` and `leaf_hit[m]` the same for the meshes hanging off
+/// the nodes. Returns (node shown, mesh shown).
+fn search_keep(
+    parent: &[Option<u32>],
+    hits: &[bool],
+    leaf_parent: &[Option<u32>],
+    leaf_hit: &[bool],
+) -> (Vec<bool>, Vec<bool>) {
+    let n = parent.len();
+    let up = |start: Option<u32>, keep: &mut Vec<bool>| {
+        let mut at = start;
+        let mut hops = 0;
+        while let Some(p) = at {
+            let Some(k) = keep.get_mut(p as usize) else { break };
+            *k = true;
+            at = parent.get(p as usize).copied().flatten();
+            hops += 1;
+            if hops > n {
+                break;
+            }
+        }
+    };
+    // a match keeps itself and its ancestors
+    let mut keep = vec![false; n];
+    for i in 0..n {
+        if hits.get(i).copied().unwrap_or(false) {
+            up(Some(i as u32), &mut keep);
+        }
+    }
+    for (m, hit) in leaf_hit.iter().enumerate() {
+        if *hit {
+            up(leaf_parent.get(m).copied().flatten(), &mut keep);
+        }
+    }
+    // a match also shows everything inside it
+    let inside = |i: usize| {
+        let mut at = Some(i as u32);
+        let mut hops = 0;
+        while let Some(p) = at {
+            if hits.get(p as usize).copied().unwrap_or(false) {
+                return true;
+            }
+            at = parent.get(p as usize).copied().flatten();
+            hops += 1;
+            if hops > n {
+                break;
+            }
+        }
+        false
+    };
+    let nodes: Vec<bool> =
+        (0..n).map(|i| keep.get(i).copied().unwrap_or(false) || inside(i)).collect();
+    let leaves: Vec<bool> = leaf_hit
+        .iter()
+        .enumerate()
+        .map(|(m, hit)| {
+            *hit || leaf_parent.get(m).copied().flatten().is_some_and(|p| inside(p as usize))
+        })
+        .collect();
+    (nodes, leaves)
+}
+
+fn matches_search(query: &str, names: &[&str]) -> bool {
+    names.iter().any(|n| n.to_lowercase().contains(query))
 }
 
 fn parts_mesh_row(
@@ -8937,9 +9549,11 @@ fn parts_mesh_row(
     parent_effective: bool,
     stack: &std::collections::HashMap<usize, usize>,
     cmd: &mut Option<MeshRowCmd>,
+    picked: &[usize],
+    hover: &mut Option<Sel>,
 ) {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
-    if *selected == Some(Sel::Mesh(mi)) {
+    if *selected == Some(Sel::Mesh(mi)) || picked.contains(&mi) {
         ui.painter().rect_filled(rect, 0.0, theme::pal().select);
     }
     let mesh_on = s.mesh_shown.get(mi).copied().unwrap_or(true);
@@ -8981,7 +9595,28 @@ fn parts_mesh_row(
         );
     }
     if resp.clicked() {
-        *selected = Some(Sel::Mesh(mi));
+        *cmd = Some(MeshRowCmd::Click(mi));
+    }
+    // hovering shows the mesh's own art big, as part rows do; rendered on
+    // first hover and kept until the model changes
+    if resp.hovered() {
+        *hover = Some(Sel::Mesh(mi));
+        if !s.mesh_previews.contains_key(&mi) {
+            let ctx = ui.ctx().clone();
+            let handle = crate::thumb::render_filtered(&s.puppet, &s.preview_tex, &|m| m == mi, 96)
+                .map(|(w, h, px)| {
+                    let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
+                    ctx.load_texture(format!("mesh-prev-{mi}"), img, egui::TextureOptions::LINEAR)
+                });
+            s.mesh_previews.insert(mi, handle);
+        }
+        if let Some(h) = s.mesh_previews.get(&mi).cloned().flatten() {
+            resp.clone().on_hover_ui(|ui| {
+                let sz = h.size_vec2();
+                let k = (160.0 / sz.x).min(200.0 / sz.y);
+                ui.image((h.id(), sz * k));
+            });
+        }
     }
     resp.context_menu(|ui| {
         if ui.button(if mesh_on { "Hide" } else { "Show" }).clicked() {
@@ -9291,8 +9926,13 @@ fn parameter_row(
         let dec = decimals.clamp(1, 4) as usize;
         let step = 0.1f32.powi(dec as i32);
         let mut dv = v;
-        let vresp = ui.add_sized(
-            [52.0, 16.0],
+        // the value box sits flush with the row's right edge at a fixed
+        // width, exactly where a pad row puts its boxes, so every value in
+        // the palette lines up in one column
+        let (rest, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+        let vr = Rect::from_min_size(pos2(rest.max.x - 52.0, rest.min.y), vec2(52.0, 16.0));
+        let vresp = ui.put(
+            vr,
             egui::DragValue::new(&mut dv)
                 .speed(step)
                 .range(min..=max)
@@ -9995,6 +10635,50 @@ mod key_cmd_tests {
     }
 
     #[test]
+    fn add_keys_goes_on_every_selected_mesh() {
+        let mut ed = editor();
+        // a second, unkeyed mesh beside the first
+        if let Some(s) = ed.session.as_mut() {
+            s.edit(|m| {
+                let mut other = m.art_meshes[0].clone();
+                other.id = "ArtMesh1".into();
+                other.binding = Default::default();
+                other.positions.truncate(2);
+                other.opacities = vec![1.0];
+                other.draw_orders = vec![500.0];
+                m.art_meshes.push(other);
+                true
+            });
+        }
+        ed.selected = Some(Sel::Mesh(1));
+        ed.multi_sel = vec![0, 1];
+        ed.sel_param = Some(0);
+        ed.add_keys_to_selection(vec![-1.0, 1.0]);
+        let s = ed.session.as_ref().unwrap();
+        let m = s.puppet.model();
+        assert_eq!(m.art_meshes[1].binding.axes.len(), 1, "the second mesh got keys too");
+        assert_eq!(m.art_meshes[1].opacities.len(), 2);
+    }
+
+    #[test]
+    fn deleting_a_used_parameter_asks_then_unbinds_and_deletes() {
+        let mut ed = editor();
+        ed.delete_parameter(0);
+        // still used by the mesh: nothing deleted yet, the question is up
+        assert_eq!(ed.pmenu.delete_ask, Some((0, 1, 0)));
+        assert_eq!(ed.session.as_ref().unwrap().puppet.model().parameters.len(), 1);
+        ed.pmenu.delete_ask = None;
+        ed.delete_parameter_unbinding(0);
+        let s = ed.session.as_mut().unwrap();
+        assert!(s.puppet.model().parameters.is_empty());
+        assert!(s.puppet.model().art_meshes[0].binding.axes.is_empty());
+        // one undo brings the parameter and the keys back
+        s.undo();
+        assert_eq!(s.puppet.model().parameters.len(), 1);
+        assert_eq!(s.puppet.model().art_meshes[0].binding.axes.len(), 1);
+    }
+
+    #[test]
     fn delete_keyform_removes_the_key_at_the_value() {
         let mut ed = editor();
         ed.session.as_mut().unwrap().puppet.set_value(0, 1.0);
@@ -10040,5 +10724,74 @@ mod point_paste_tests {
         let y: f32 = c.iter().zip(w).map(|(&i, wi)| pts[i].y * wi).sum();
         assert!((x - 0.5).abs() < 1e-5 && (y - 0.5).abs() < 1e-5, "{x},{y}");
         assert!(basis_weights(&pts[..3], pos2(0.5, 0.5)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod palette_pick_tests {
+    use super::*;
+
+    #[test]
+    fn click_ctrl_and_shift_pick_parts_in_palette_order() {
+        let mut ed = EditorUi::new();
+        // palette order differs from index order on purpose
+        let order = [4, 1, 3, 0, 2];
+        ed.pick_rows(1, false, false, &order, true);
+        assert_eq!(ed.part_pick, vec![1]);
+        ed.pick_rows(0, true, false, &order, true);
+        assert_eq!(ed.part_pick, vec![1, 3, 0]);
+        // Ctrl toggles one off and moves the anchor there
+        ed.pick_rows(3, false, true, &order, true);
+        assert_eq!(ed.part_pick, vec![1, 0]);
+        ed.pick_rows(4, true, false, &order, true);
+        assert_eq!(ed.part_pick, vec![4, 1, 3]);
+        ed.pick_rows(2, false, false, &order, true);
+        assert_eq!(ed.part_pick, vec![2]);
+    }
+
+    #[test]
+    fn mesh_rows_extend_what_the_canvas_selected() {
+        let mut ed = EditorUi::new();
+        ed.selected = Some(Sel::Mesh(5));
+        ed.pick_rows(7, false, true, &[5, 6, 7], false);
+        assert_eq!(ed.multi_sel, vec![5, 7]);
+        // Shift from a canvas selection runs from that mesh
+        let mut ed = EditorUi::new();
+        ed.selected = Some(Sel::Mesh(6));
+        ed.pick_rows(8, true, false, &[5, 6, 7, 8], false);
+        assert_eq!(ed.multi_sel, vec![6, 7, 8]);
+    }
+}
+
+#[cfg(test)]
+mod palette_search_tests {
+    use super::*;
+
+    #[test]
+    fn a_search_keeps_matches_their_ancestors_and_whats_inside_a_match() {
+        // 0 Head > 1 Face > 2 Eyes ; 3 Body
+        let parents = [None, Some(0), Some(1), None];
+        // meshes: iris (in Eyes), mouth (in Face), shirt (in Body)
+        let leaf_parent = [Some(2), Some(1), Some(3)];
+        // searching "iris": only the iris and the folders above it
+        let (nodes, leaves) = search_keep(
+            &parents,
+            &[false, false, false, false],
+            &leaf_parent,
+            &[true, false, false],
+        );
+        assert_eq!(nodes, vec![true, true, true, false]);
+        assert_eq!(leaves, vec![true, false, false]);
+        // searching "face": the Face folder shows all it holds
+        let (nodes, leaves) = search_keep(
+            &parents,
+            &[false, true, false, false],
+            &leaf_parent,
+            &[false, false, false],
+        );
+        assert_eq!(nodes, vec![true, true, true, false]);
+        assert_eq!(leaves, vec![true, true, false]);
+        assert!(matches_search("ey", &["Eye L", "ArtMesh3"]));
+        assert!(!matches_search("ey", &["Mouth"]));
     }
 }

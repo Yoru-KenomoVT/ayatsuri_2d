@@ -19,6 +19,7 @@ mod recovery;
 mod session;
 pub mod theme;
 mod thumb;
+mod update;
 mod windows;
 
 pub use panels::EditorUi;
