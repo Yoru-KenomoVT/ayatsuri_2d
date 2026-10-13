@@ -2,147 +2,204 @@
     <picture>
         <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
         <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.png">
-        <img alt="Ayatsuri2D Logo" src="assets/logo-light.png" width="400">
+        <img alt="Ayatsuri2D" src="assets/logo-light.png" width="380">
     </picture>
-</div>
-
-<div align="center">
 
 # 操り2D · Ayatsuri2D
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-2021-orange?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![C ABI](https://img.shields.io/badge/C-ABI-555?style=flat&logo=c&logoColor=white)](docs/integration.md)
-[![moc3](https://img.shields.io/badge/moc3-v3%20to%20v6-brightgreen?style=flat)](docs/format.md)
-[![Status](https://img.shields.io/badge/status-Early-red)](#status)
+**A free, open-source editor for rigging and animating 2D puppets.**<br>
+Bring in your layered artwork, rig it, give it physics, and export a model that
+runs in VTube Studio. On Windows, macOS and Linux.
 
-_Real-time 2D puppet animation and rigging. A cross-platform open alternative to Live2D Cubism, with full end to end moc3 support._
+[![Latest release](https://img.shields.io/github/v/release/Yoru-KenomoVT/ayatsuri_2d?include_prereleases&label=download&color=e85d8a)](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases)
+[![CI](https://github.com/Yoru-KenomoVT/ayatsuri_2d/actions/workflows/ci.yml/badge.svg)](https://github.com/Yoru-KenomoVT/ayatsuri_2d/actions/workflows/ci.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSING.md)
+![Platforms](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-555)
+![moc3](https://img.shields.io/badge/moc3-3.0%20to%205.3-brightgreen)
+[![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+
+[**Download**](#download) · [Features](#features) · [Status](#status) · [Build from source](#build-from-source) · [Docs](#documentation) · [Support the project](#support-the-project)
 
 </div>
 
+<p align="center">
+  <img src="docs/media/hero.png" alt="The Ayatsuri2D editor with a rigged model: mesh wireframe, parameters, deformers and parts" width="900">
+  <br><sub>A rigged model in the editor: mesh wireframe, keyed parameters, the deformer tree and parts.</sub>
+</p>
+
 ---
 
-`操り` (_ayatsuri_) is the working of a puppet: the strings, the hands, the craft
-of making a jointed figure move as though it were alive. It is what the software
-does, and what a rigger does.
+`操り` (*ayatsuri*) is the working of a puppet: the strings, the hands, the
+craft of making a jointed figure move as though it were alive. That is what
+this software does, and what a rigger does.
 
-## What it does
+## What is it?
 
-Layered artwork is deformed by parameter values sixty times a second, so a
-drawing turns its head, blinks, and its hair swings. A runtime does the moving;
-an editor does the rigging.
+Ayatsuri2D is a rigging editor for **Live2D-style models**, the moving 2D
+characters used by VTubers, games and visual novels. You start from a layered
+drawing, cut each layer into a mesh, and connect the meshes to **parameters**
+(head angle, eye open, mouth shape) through deformers. Move a slider and the
+drawing turns its head, blinks, and its hair swings.
 
-The runtime is the product, and **the C ABI is how it reaches anything**. Unity,
-Unreal, Godot, Python, JavaScript, or a C or C++ engine of your own: if it can
-call C, it can drive a puppet. The editor is how content gets into it.
+It reads and writes the formats the rest of the ecosystem already uses:
 
-That ABI is not a binding bolted on at the end. It is designed first and treated
-as the load-bearing piece, because a runtime nothing can embed is a runtime
-nobody uses. Every language binding holds an opaque handle and passes
-primitives; none of them owns model state or allocates per frame, so a puppet
-runs at the same speed from C as it does from Rust.
+- **Opens** Cubism models (`.model3.json` and `.moc3`, versions 3.0 to 5.3),
+  Photoshop `.psd` and Krita `.kra` files.
+- **Exports** a complete moc3 bundle (model, physics, motions, expressions,
+  textures) that loads in VTube Studio, OpenVT and anything built on the
+  Cubism SDK.
+- **Saves** its own `.aom` (Ayatsuri Open Model) format, a documented, open
+  superset of moc3.
+- **Talks** Cubism Editor's integration API, so tools made for Cubism Editor
+  (like VTube Studio's parameter sync) connect to it unchanged.
 
-Models are saved as **`.aom`**, the Ayatsuri Open Model: a MessagePack payload
-in the same container as Alterion's other formats, with bulk vertex and keyform
-data kept as flat blobs so it can be read without copying. It is a superset of
-`.moc3`, so everything moc3 can express round-trips back out, and everything
-added on top does not.
+It is an independent, clean-room project, not a clone and not affiliated with
+Live2D Inc. See [Provenance](#provenance).
 
-Every model exports as a moc3 bundle, so it runs in VTube Studio and any engine
-on the Cubism SDK today. Hosts that link `ayatsuri-capi` load `.aom` directly
-and get the features moc3 cannot carry.
-Live2D models import, and PSD import is the migration path for riggers who want
-the features moc3 cannot carry.
+## Download
+
+Grab the latest build from the
+[**releases page**](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases).
+
+| System | File | Notes |
+|---|---|---|
+| **Windows** 10 / 11 | `…-windows-x64-setup.exe` | Installer with Start Menu entry and `.aom` file association |
+| | `…-windows-x64.zip` | Portable: unzip and run `ayatsuri-launcher.exe` |
+| **macOS** 11+ | `…-macos-universal.dmg` | Apple Silicon and Intel |
+| **Linux** | `…-linux-x86_64.AppImage` | Any distro: mark it executable and run |
+| | `.deb` / `.rpm` | Debian, Ubuntu, Mint / Fedora, openSUSE |
+| | `.tar.gz` | Unpack and run `./install.sh` (per user, no root) |
+
+> [!NOTE]
+> The builds are not signed by Apple or Microsoft yet. On **macOS**, the first
+> time, right-click the app and choose **Open**. On **Windows**, SmartScreen may
+> warn: choose **More info**, then **Run anyway**. Every release lists SHA-256
+> checksums in `SHA256SUMS.txt`.
+
+## Features
+
+### From artwork to mesh
+
+<p align="center">
+  <img src="docs/media/mesh-edit.png" alt="Mesh Edit on a hair strand: its points and triangles over the art, with the Edit Mesh tools beside it" width="860">
+</p>
+
+- **PSD and Krita import**: folders become parts, layers become meshes packed
+  into texture atlases, clipping layers become masks. Import into a new model,
+  or add more art to a model you already have.
+- **Mesh editing**: auto mesh that follows the outline of the art (Standard,
+  Deform and Light presets), add and erase points, connect and cut edges, an
+  erase brush, 4-division. Points slide over the art instead of stretching it.
+- **Lasso, copy and paste points** between meshes, merging with the points
+  already there so two meshes line up.
+- **Glue** to stitch overlapping meshes together, with a weight brush.
+- **Clipping masks**, picked straight on the canvas.
+
+### Rigging
+
+<p align="center">
+  <img src="docs/media/rigging.png" alt="A warp deformer bending the head as the Angle X and Angle Y parameters move" width="860">
+</p>
+
+- **Parameters and keyforms**, with Cubism's palette tools: four-corner forms,
+  motion mirroring, Reflect, Adjust, Change, parameter folders and linked pads.
+- **Warp deformers** (grid points, the transform box, Bezier handles) and
+  **rotation deformers**. Re-parent by drag and drop; nothing on screen moves.
+- **Live, exact dragging**: the art follows every drag as it happens, and a
+  point lands exactly where you let go, even through bent warps.
+- **Deform paths**, **brush selection** with soft weights, keyed **opacity**
+  for meshes and deformers, blend modes, draw order.
+
+### Physics and animation
+
+<p align="center">
+  <img src="docs/media/physics.png" alt="The Physics page mid-swing: input and output settings, the pendulum preview and the model blinking" width="860">
+</p>
+<p align="center">
+  <img src="docs/media/animation.png" alt="The Animation workspace: a scene's keys on the timeline and the posed model" width="860">
+</p>
+
+- **Physics page** laid out like Cubism's, with a live pendulum preview that
+  follows the real parameters. Reads and writes `physics3.json`.
+- **Animation scenes** with curves: auto smooth, linear, stepped, inverse
+  stepped and free Bezier keys, events and fades. Reads and writes
+  `motion3.json` key for key.
+- **Expressions**: reads and writes `exp3.json` (Add, Multiply, Overwrite).
+
+### Built to work with what you already use
+
+- **moc3 export** in versions 3.0, 3.3, 4.0, 4.2, 5.0 and 5.3, checked against
+  real Cubism exports. 5.0 is the default because VTube Studio does not open
+  5.3 yet.
+- **Ayatsuri API**: Cubism Editor's External Application Integration API on a
+  port you choose (22033 by default). Apps must be allowed before they can
+  drive anything, and the API window shows connected apps and live traffic.
+- **Never loses work**: a crash undoes the edit it interrupted, saves a
+  recovery copy and a full log, and the next start offers to recover it.
+  Autosave every two minutes.
+
+### The app
+
+<p align="center">
+  <img src="docs/media/dashboard.png" alt="The Ayatsuri2D home screen with recent models" width="900">
+</p>
+
+- Dockable, rearrangeable panels and saved workspaces.
+- Light and dark themes, your own primary colour, interface scale, density and
+  rounded corners, reduce motion.
+- 30 rebindable shortcuts with Cubism's defaults.
+- English and Japanese installer, optional Discord Rich Presence.
 
 ## Status
 
-**Early.** The format research is done and verified; the code is being written.
+**Beta.** Ayatsuri2D is usable for real rigging today, and it is moving fast.
+Save often, keep backups of models you care about, and please
+[report what breaks](https://github.com/Yoru-KenomoVT/ayatsuri_2d/issues).
 
-```
-moc3 format          mapped and verified across 5 models, 3 versions
-openmoc3             parses and validates: header, offset table, counts,
-                     section extents, ID tables; rejects the CVE exploit
-                     model in the test suite
-import               .moc3 to the native model, every cross-pool index
-                     validated once at the boundary
-runtime              parameters, keyform interpolation, warp and rotation
-                     deformers, opacity, draw order; a real 356-mesh model
-                     evaluates in 0.45 ms mean, 1 ms p99.9
-editor               native egui app, dockable panels, live viewport with
-                     textures, parameter sliders driving the puppet
-still missing        glue, masking, blend shapes, physics, animation,
-                     .aom save, moc3 export, the C ABI
-```
+Not built yet:
 
-Nothing here is usable yet. The [documentation](docs/) is ahead of the code on
-purpose: the decisions that are expensive to reverse were made first.
+- the art path brush, texture atlas editor, skinning, model templates and the
+  temporary deform tool;
+- an expression editor and the full timeline (curve editor, graph view);
+- re-importing an updated PSD onto meshes you have already rigged;
+- the embeddable runtime's C ABI (below).
 
-## Install
-
-Packages are on the [releases page](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases).
-
-```
-Windows   ayatsuri2d-<version>-windows-x64-setup.exe   installer
-          ayatsuri2d-<version>-windows-x64.zip         portable, unzip and run
-macOS     ayatsuri2d-<version>-macos-universal.dmg     Apple Silicon and Intel
-Linux     .deb, .rpm, .AppImage, or the .tar.gz with install.sh
-```
-
-The macOS app is not notarized: the first time, right-click it and choose
-Open. To build the packages yourself, see `packaging/`.
-
-## Layout
-
-```
-crates/format       ayatsuri-format   the puppet format: types, versioning,
-                                      serialisation
-crates/core         ayatsuri-core     deformation, physics, masking, animation,
-                                      draw order; no I/O, no renderer, no
-                                      allocation after load
-crates/render       ayatsuri-render   renderer behind a trait
-crates/capi         ayatsuri-capi     the C ABI: ayatsuri.h, plus a static and
-                                      shared lib; the load-bearing wall, see
-                                      docs/integration.md
-crates/editor       ayatsuri-editor   the egui editor frontend: dockable panels,
-                                      viewport, parameters, timeline
-crates/openmoc3     openmoc3          standalone safe reader for Live2D .moc3
-apps/ayatsuri                         the desktop app
-apps/ayatsuri-launcher                launcher stub
-xtask                                 cargo xtask layers | ci
-```
-
-A planned `ayatsuri-psd` crate will handle PSD import.
-
-`ayatsuri-core` never depends on `openmoc3`. The moc3 parser is the
-hostile-input surface and is kept isolated, and `openmoc3` is useful on its own
-to people who will never adopt the rest of this.
+See the [changelog](CHANGELOG.md) for what each release added.
 
 ## Why
 
-Live2D Cubism is effectively the only option for this work, and:
+Live2D Cubism is effectively the only tool for this work, and:
 
 - its editor runs on **Windows and macOS only**;
-- its licence forbids using **your own exported files** with competing software;
-- its runtime reads offsets out of model files and dereferences them **without
-  bounds checking**, which is
-  [CVE-2023-27566](https://undeleted.ronsor.com/live2d-a-security-trainwreck/):
-  a `.moc3` is an arbitrary memory write, and VTuber models are routinely
+- its licence restricts using **your own exported files** with competing
+  software;
+- its runtime reads offsets out of model files and follows them **without
+  bounds checking**:
+  [CVE-2023-27566](https://undeleted.ronsor.com/live2d-a-security-trainwreck/)
+  makes a `.moc3` an arbitrary memory write, and VTuber models are routinely
   downloaded from strangers.
 
-## Two goals, both testable
+## Two goals
 
-**Never crashes.** Every model is treated as hostile: bounds-checked before any
-dereference, fuzzed in CI from a known-malicious corpus, and the runtime path
-forbids panics by lint rather than by discipline.
+**Never crashes.** Every model file is treated as hostile: every offset and
+index is bounds-checked once, at the import boundary, before anything uses it.
+The known-malicious CVE model is rejected in the test suite, and non-test code
+denies `unwrap`, `expect` and unchecked indexing by lint, not by discipline.
+Fuzzing in CI is planned.
 
-**Never lags.** Not fast, _predictable_. A stream at a steady 45fps beats 60fps
-that hitches every few seconds, because perception is tuned to the outliers.
-Allocation happens at load, the frame loop allocates nothing, and benchmarks
-assert p99.9 rather than the mean.
+**Never lags.** Not just fast, *predictable*: a steady 45 fps beats a 60 fps
+that hitches every few seconds. Allocation happens at load and the frame loop
+allocates nothing. A real 356-mesh model evaluates in about half a
+millisecond.
 
-Both are enforced as build failures. See [`docs/goals.md`](docs/goals.md).
+More in [`docs/goals.md`](docs/goals.md).
 
-## Using it from C
+## The runtime and the C ABI (planned)
+
+The long-term product is the **runtime**, the part that makes a puppet move,
+embeddable anywhere that can call C: Unity, Unreal, Godot, Python, JavaScript,
+or an engine of your own. The plan is a deliberately coarse ABI, arrays in and
+arrays out, so a binding never pays one call per parameter:
 
 ```c
 #include <ayatsuri.h>
@@ -153,33 +210,84 @@ ay2d_update(m, dt);
 ay2d_drawables(m, &out);                    /* or keep it on the GPU         */
 ```
 
-Coarse by design. A chatty ABI that costs one call per parameter would be 6000
-calls a second before anything is drawn, and every binding in every language
-would pay for it.
+Today `crates/capi` only exports `ay2d_abi_version()`. The design is in
+[`docs/integration.md`](docs/integration.md). Until it lands, every model
+exports to moc3, so it runs on the Cubism SDK in the meantime.
+
+## Build from source
+
+You need a recent stable [Rust](https://rustup.rs) toolchain.
+
+```sh
+git clone https://github.com/Yoru-KenomoVT/ayatsuri_2d.git
+cd ayatsuri_2d
+cargo run --release -p ayatsuri-launcher   # the launcher, which starts the editor
+cargo run --release -p ayatsuri            # or the editor on its own
+cargo xtask ci                             # everything CI checks
+```
+
+Packaging scripts for every platform are in [`packaging/`](packaging).
+
+<details>
+<summary><b>Project layout</b></summary>
+
+```
+crates/format       ayatsuri-format   the model types and the .aom format
+crates/core         ayatsuri-core     deformation, physics, masking, animation,
+                                      draw order, editing; no I/O, no renderer
+crates/import       ayatsuri-import   moc3, model3/physics3/motion3/exp3 JSON,
+                                      PSD and Krita in; moc3 out
+crates/openmoc3     openmoc3          standalone safe reader for .moc3 files
+crates/render       ayatsuri-render   the GPU renderer
+crates/editor       ayatsuri-editor   the editor: panels, canvas, windows, API
+crates/capi         ayatsuri-capi     the C ABI (planned, see above)
+apps/ayatsuri                         the editor app
+apps/ayatsuri-launcher                the launcher and splash
+packaging/                            Windows, macOS and Linux packages
+xtask                                 cargo xtask ci | layers | credits
+```
+
+`ayatsuri-core` never depends on `openmoc3`: the moc3 parser is the
+hostile-input surface and stays isolated, and `openmoc3` is useful on its own.
+
+</details>
 
 ## Documentation
 
-```
-docs/goals.md           what the project guarantees, and how those are tested
-docs/architecture.md    the crates, how they depend, and the C ABI
-docs/format.md          the puppet format, and moc3 compatibility
-docs/physics.md         how hair, cloth and accessories move
-docs/integration.md     embedding the runtime, and the plugin protocol
-docs/provenance.md      where the format knowledge came from
-```
+| | |
+|---|---|
+| [`docs/goals.md`](docs/goals.md) | what the project guarantees, and how it is tested |
+| [`docs/architecture.md`](docs/architecture.md) | the crates and how they depend on each other |
+| [`docs/format.md`](docs/format.md) | the model format, and moc3 compatibility |
+| [`docs/aom-format.md`](docs/aom-format.md) | the `.aom` file format, normative |
+| [`docs/physics.md`](docs/physics.md) | how hair, cloth and accessories move |
+| [`docs/integration.md`](docs/integration.md) | embedding the runtime, and the plugin protocol |
+| [`docs/provenance.md`](docs/provenance.md) | where the format knowledge came from |
+
+## Support the project
+
+Ayatsuri2D is free and always will be. If it saves you time or money, you can
+help keep it going:
+
+<p>
+  <a href="https://ko-fi.com/chaceberry"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
+  <a href="https://buymeacoffee.com/ChaceBerry"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
+</p>
+
+Reporting bugs, sharing what you rig with it, and starring the repo help too.
 
 ## Licensing
 
-Not uniform, deliberately. `openmoc3` is MIT so the work flows back to the
-community it came from; the project generally is GPL-3.0. Whether the runtime
-and C ABI should be permissive is still open, and it matters: a copyleft runtime
-cannot be embedded in a proprietary game, which is most of what a puppet runtime
-is for. See [`LICENSING.md`](LICENSING.md).
+Deliberately not uniform: the project is **GPL-3.0**, `openmoc3` is **MIT** so
+the format work flows back to the community it came from, and the C ABI is
+**Apache-2.0**. The runtime's licence is still an open question, because a
+copyleft runtime cannot be embedded in a proprietary game. See
+[`LICENSING.md`](LICENSING.md).
 
 ## Provenance
 
 No Live2D software has been installed, no Live2D binary disassembled, and no
-contributor has accepted a Live2D licence agreement. Format knowledge derives
+contributor has accepted a Live2D licence agreement. Format knowledge comes
 from Live2D's own published specifications, permissively licensed community
 work, and independent analysis of model files obtained under their creators'
 terms. See [`docs/provenance.md`](docs/provenance.md).
@@ -191,5 +299,6 @@ own findings more than once.
 
 ---
 
-Live2D and Cubism are trademarks of Live2D Inc. This project is not affiliated
-with, endorsed by, or supported by them. Please do not contact Live2D about it.
+<sub>Made by **Yoru_KenomoVT**. Live2D and Cubism are trademarks of Live2D Inc.
+This project is not affiliated with, endorsed by, or supported by them. Please
+do not contact Live2D about it.</sub>

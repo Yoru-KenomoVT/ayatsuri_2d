@@ -719,10 +719,12 @@ impl Puppet {
 
     fn sort_render_order(&mut self) {
         if self.model.draw_groups.is_empty() {
+            // draw orders are whole numbers, as in the grouped walk below:
+            // a blend that lands on 500.00003 must still tie with 500
             let orders = &self.mesh_draw_order;
             self.render_order.sort_unstable_by(|&a, &b| {
-                let oa = orders.get(a as usize).copied().unwrap_or(500.0);
-                let ob = orders.get(b as usize).copied().unwrap_or(500.0);
+                let oa = orders.get(a as usize).copied().unwrap_or(500.0).round();
+                let ob = orders.get(b as usize).copied().unwrap_or(500.0).round();
                 oa.total_cmp(&ob).then(a.cmp(&b))
             });
             return;

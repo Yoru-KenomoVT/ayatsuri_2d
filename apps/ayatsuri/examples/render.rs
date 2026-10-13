@@ -31,12 +31,25 @@ fn main() -> Result<(), String> {
     let model_path = std::env::args().nth(1).ok_or("usage: render <model.moc3> <out.png>")?;
     let out_path = std::env::args().nth(2).unwrap_or_else(|| "render.png".into());
     let bytes = std::fs::read(&model_path).map_err(|e| format!("{model_path}: {e}"))?;
-    let model = ayatsuri_import::from_moc3(&bytes).map_err(|e| format!("{model_path}: {e}"))?;
+    let mut textures: Vec<Tex> = Vec::new();
+    // an .aom carries its own model and textures
+    let aom = model_path.ends_with(".aom");
+    let model = if aom {
+        let payload = ayatsuri_format::read(&bytes).map_err(|e| format!("{model_path}: {e}"))?;
+        for png in &payload.textures {
+            let img = image::load_from_memory(png).map_err(|e| e.to_string())?.into_rgba8();
+            textures.push(Tex { w: img.width(), h: img.height(), rgba: img.into_raw() });
+        }
+        payload.model
+    } else {
+        ayatsuri_import::from_moc3(&bytes).map_err(|e| format!("{model_path}: {e}"))?
+    };
 
     // textures from the sibling model3.json, same rule as the editor
     let dir = Path::new(&model_path).parent().unwrap_or(Path::new("."));
-    let mut textures: Vec<Tex> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    if let Ok(entries) = std::fs::read_dir(dir)
+        && !aom
+    {
         let mut jsons: Vec<_> = entries
             .flatten()
             .map(|e| e.path())
@@ -78,16 +91,22 @@ fn main() -> Result<(), String> {
                 .and_then(|p| m.parts.get(p as usize))
                 .map(|p| p.id.clone())
                 .unwrap_or_default();
+            let id = m.art_meshes.get(d.mesh).map(|am| am.id.as_str()).unwrap_or("");
+            let masks: Vec<&str> = d
+                .masks
+                .iter()
+                .map(|&k| m.art_meshes.get(k as usize).map_or("?", |am| am.id.as_str()))
+                .collect();
             println!(
-                "{} part={part} opa={:.2} masks={:?} flags={:02x}",
-                d.mesh, d.opacity, d.masks, d.flags
+                "{} {id} part={part} opa={:.2} masks={masks:?} flags={:02x}",
+                d.mesh, d.opacity, d.flags
             );
         }
         return Ok(());
     }
 
     let c = puppet.model().canvas;
-    let out_w = 700usize;
+    let out_w: usize = std::env::var("RENDER_W").ok().and_then(|v| v.parse().ok()).unwrap_or(700);
     let scale = out_w as f32 / c.width.max(1.0);
     let out_h = (c.height * scale) as usize;
     let mut fb = vec![1.0f32; out_w * out_h * 4]; // white canvas
