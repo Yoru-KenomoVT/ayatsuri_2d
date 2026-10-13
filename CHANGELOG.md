@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.4 beta (2026-10-13)
+
+### Fixed
+
+- **Clipped layers no longer flicker, and nothing hides behind a sibling
+  it should cover.** Draw orders are now treated as whole numbers, as in
+  Cubism. A keyform blend that landed on 500.00003 drew a mesh above every
+  other mesh at 500 (an eye white covering its irises, say), and physics
+  nudging it either side of 500 made clipped layers flicker frame to frame.
+
+### Changed
+
+- New README with screenshots of a rigged model, Mesh Edit, warp
+  deformers, the Physics page, the timeline and the home screen.
+- Ko-fi and Buy Me a Coffee links, and a Sponsor button on the repository.
+
 ## 0.5.3 beta (2026-10-12)
 
 ### Added
