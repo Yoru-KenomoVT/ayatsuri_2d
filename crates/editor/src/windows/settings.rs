@@ -67,7 +67,7 @@ impl EditorUi {
         }
         let ctx = ui.ctx().clone();
         let mut open = true;
-        egui::Window::new("Settings")
+        egui::Window::new(crate::i18n::tr("Settings"))
             .title_bar(false)
             // only the header strip moves it; egui's own drag-anywhere
             // fought the pinned position and snapped back
@@ -94,7 +94,7 @@ impl EditorUi {
                 ui.painter().text(
                     rail.min + vec2(20.0, 24.0),
                     Align2::LEFT_CENTER,
-                    "Settings",
+                    crate::i18n::tr("Settings"),
                     FontId::proportional(16.0),
                     theme::pal().text,
                 );
@@ -122,7 +122,7 @@ impl EditorUi {
                     ui.painter().text(
                         r.left_center() + vec2(12.0, 0.0),
                         Align2::LEFT_CENTER,
-                        *name,
+                        crate::i18n::tr(name),
                         FontId::proportional(13.0),
                         if on { theme::pal().text } else { theme::pal().text_faint },
                     );
@@ -156,7 +156,9 @@ impl EditorUi {
                     egui::UiBuilder::new().max_rect(page).layout(Layout::top_down(Align::Min)),
                 );
                 let title = PAGES.get(self.settings_tab).copied().unwrap_or("Keyboard");
-                page_ui.label(RichText::new(title).size(18.0).color(theme::pal().text));
+                page_ui.label(
+                    RichText::new(crate::i18n::tr(title)).size(18.0).color(theme::pal().text),
+                );
                 page_ui.add_space(2.0);
                 ScrollArea::vertical()
                     .id_salt(("settings-page", self.settings_tab))
@@ -180,12 +182,75 @@ impl EditorUi {
 
     fn settings_general(&mut self, ui: &mut Ui) {
         let mut save = false;
-        section(ui, "STARTUP");
-        row(ui, "Reopen last model", "Open whatever you had open when you quit", |ui| {
-            save |= ui.checkbox(&mut self.prefs.reopen_last, "").changed();
-        });
+        section(ui, crate::i18n::tr("LANGUAGE"));
+        let langs = crate::i18n::languages();
+        let system = crate::i18n::system_language();
+        let system_name = langs
+            .iter()
+            .find(|l| l.code == system)
+            .map_or("English".to_string(), |l| l.name.clone());
+        let chosen = self.prefs.language.clone();
+        let label = match &chosen {
+            None => crate::i18n::trf("System ({language})", &[("language", &system_name)]),
+            Some(code) => {
+                langs.iter().find(|l| &l.code == code).map_or(code.clone(), |l| l.name.clone())
+            }
+        };
+        let mut pick: Option<Option<String>> = None;
+        row(
+            ui,
+            crate::i18n::tr("Language"),
+            crate::i18n::tr("System follows your computer's language"),
+            |ui| {
+                egui::ComboBox::from_id_salt("language").selected_text(label).show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(
+                            chosen.is_none(),
+                            crate::i18n::trf("System ({language})", &[("language", &system_name)]),
+                        )
+                        .clicked()
+                    {
+                        pick = Some(None);
+                    }
+                    for l in &langs {
+                        if ui
+                            .selectable_label(chosen.as_deref() == Some(l.code.as_str()), &l.name)
+                            .clicked()
+                        {
+                            pick = Some(Some(l.code.clone()));
+                        }
+                    }
+                });
+            },
+        );
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                "Languages other than English were translated with tools (AI and machine \
+                 translation such as Google Translate) and may have mistakes; corrections are \
+                 welcome on GitHub.",
+            ))
+            .size(11.0)
+            .color(crate::theme::pal().text_faint),
+        );
+        if let Some(choice) = pick {
+            self.prefs.language = choice;
+            crate::i18n::set_language(self.prefs.language.as_deref().unwrap_or("system"));
+            // fonts follow the language: its script's face goes first
+            crate::theme::set_look(ui.ctx(), self.prefs.look());
+            save = true;
+        }
+
+        section(ui, crate::i18n::tr("STARTUP"));
+        row(
+            ui,
+            crate::i18n::tr("Reopen last model"),
+            crate::i18n::tr("Open whatever you had open when you quit"),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.reopen_last, "").changed();
+            },
+        );
         let mut full = self.prefs.start_fullscreen;
-        row(ui, "Start in fullscreen", "", |ui| {
+        row(ui, crate::i18n::tr("Start in fullscreen"), "", |ui| {
             if ui.checkbox(&mut full, "").changed() {
                 self.prefs.start_fullscreen = full;
                 save = true;
@@ -193,28 +258,40 @@ impl EditorUi {
             }
         });
         let mut splash = !self.prefs.splash_off;
-        row(ui, "Splash screen", "Shown by the launcher while the editor loads", |ui| {
-            if ui.checkbox(&mut splash, "").changed() {
-                self.prefs.splash_off = !splash;
-                save = true;
-            }
-        });
-        let mut particles = !self.prefs.splash_particles_off;
-        row(ui, "Splash particles", "The drifting network behind the splash", |ui| {
-            ui.add_enabled_ui(splash, |ui| {
-                if ui.checkbox(&mut particles, "").changed() {
-                    self.prefs.splash_particles_off = !particles;
+        row(
+            ui,
+            crate::i18n::tr("Splash screen"),
+            crate::i18n::tr("Shown by the launcher while the editor loads"),
+            |ui| {
+                if ui.checkbox(&mut splash, "").changed() {
+                    self.prefs.splash_off = !splash;
                     save = true;
                 }
-            });
-        });
+            },
+        );
+        let mut particles = !self.prefs.splash_particles_off;
+        row(
+            ui,
+            crate::i18n::tr("Splash particles"),
+            crate::i18n::tr("The drifting network behind the splash"),
+            |ui| {
+                ui.add_enabled_ui(splash, |ui| {
+                    if ui.checkbox(&mut particles, "").changed() {
+                        self.prefs.splash_particles_off = !particles;
+                        save = true;
+                    }
+                });
+            },
+        );
 
-        section(ui, "UPDATES");
+        section(ui, crate::i18n::tr("UPDATES"));
         let mut check = !self.prefs.update_check_off;
         row(
             ui,
-            "Check for updates",
-            "Asks GitHub for a newer release when Ayatsuri2D starts; never installs anything",
+            crate::i18n::tr("Check for updates"),
+            crate::i18n::tr(
+                "Asks GitHub for a newer release when Ayatsuri2D starts; never installs anything",
+            ),
             |ui| {
                 if ui.checkbox(&mut check, "").changed() {
                     self.prefs.update_check_off = !check;
@@ -223,52 +300,77 @@ impl EditorUi {
             },
         );
 
-        section(ui, "DISCORD");
+        section(ui, crate::i18n::tr("DISCORD"));
         let mut on = !self.prefs.discord_off;
-        row(ui, "Rich Presence", "Needs the Discord app; reconnects on its own", |ui| {
-            if ui.checkbox(&mut on, "").changed() {
-                self.prefs.discord_off = !on;
-                save = true;
-            }
-        });
-        row(ui, "Show the model's name", "Off shows \"Editing a model\" instead", |ui| {
-            save |= ui.checkbox(&mut self.prefs.discord_show_name, "").changed();
-        });
-        row(ui, "Application ID", "Leave empty for Ayatsuri2D's own", |ui| {
-            save |= ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.prefs.discord_app_id)
-                        .hint_text("Ayatsuri2D")
-                        .desired_width(180.0),
-                )
-                .changed();
-        });
+        row(
+            ui,
+            crate::i18n::tr("Rich Presence"),
+            crate::i18n::tr("Needs the Discord app; reconnects on its own"),
+            |ui| {
+                if ui.checkbox(&mut on, "").changed() {
+                    self.prefs.discord_off = !on;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Show the model's name"),
+            crate::i18n::tr("Off shows \"Editing a model\" instead"),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.discord_show_name, "").changed();
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Application ID"),
+            crate::i18n::tr("Leave empty for Ayatsuri2D's own"),
+            |ui| {
+                save |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.prefs.discord_app_id)
+                            .hint_text(crate::i18n::tr("Ayatsuri2D"))
+                            .desired_width(180.0),
+                    )
+                    .changed();
+            },
+        );
 
-        section(ui, "FILES");
+        section(ui, crate::i18n::tr("FILES"));
         let n = self.prefs.recents.len();
-        row(ui, "Recent files", &format!("{n} remembered"), |ui| {
-            if ui.add_enabled(n > 0, egui::Button::new("Clear")).clicked() {
-                self.prefs.recents.clear();
-                save = true;
-            }
-        });
+        row(
+            ui,
+            crate::i18n::tr("Recent files"),
+            &crate::i18n::trf("{count} remembered", &[("count", &n)]),
+            |ui| {
+                if ui.add_enabled(n > 0, egui::Button::new(crate::i18n::tr("Clear"))).clicked() {
+                    self.prefs.recents.clear();
+                    save = true;
+                }
+            },
+        );
 
-        section(ui, "LOGGING");
+        section(ui, crate::i18n::tr("LOGGING"));
         let mut level = self.prefs.log_level.clone().unwrap_or_else(|| "info".into());
-        row(ui, "Log level", "More detail helps bug reports", |ui| {
-            let opts: Vec<(&str, &str)> =
-                ["error", "warn", "info", "debug", "trace"].iter().map(|n| (*n, *n)).collect();
-            let mut cur = level.as_str();
-            if segmented(ui, &mut cur, &opts) {
-                level = cur.to_string();
-                logging::set_level(logging::level_from_str(&level));
-                self.prefs.log_level = Some(level.clone());
-                save = true;
-            }
-        });
+        row(
+            ui,
+            crate::i18n::tr("Log level"),
+            crate::i18n::tr("More detail helps bug reports"),
+            |ui| {
+                let opts: Vec<(&str, &str)> =
+                    ["error", "warn", "info", "debug", "trace"].iter().map(|n| (*n, *n)).collect();
+                let mut cur = level.as_str();
+                if segmented(ui, &mut cur, &opts) {
+                    level = cur.to_string();
+                    logging::set_level(logging::level_from_str(&level));
+                    self.prefs.log_level = Some(level.clone());
+                    save = true;
+                }
+            },
+        );
         if let Some(p) = logging::log_path() {
-            row(ui, "Log file", &p.display().to_string(), |ui| {
-                if ui.button("Copy path").clicked() {
+            row(ui, crate::i18n::tr("Log file"), &p.display().to_string(), |ui| {
+                if ui.button(crate::i18n::tr("Copy path")).clicked() {
                     ui.ctx().copy_text(p.display().to_string());
                 }
             });
@@ -281,7 +383,7 @@ impl EditorUi {
     fn settings_appearance(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let mut save = false;
-        section(ui, "THEME");
+        section(ui, crate::i18n::tr("THEME"));
         #[derive(Clone, Copy, PartialEq)]
         enum Mode {
             Dark,
@@ -295,91 +397,143 @@ impl EditorUi {
         } else {
             Mode::Light
         };
-        row(ui, "Theme", "System follows your desktop's light or dark setting", |ui| {
-            if segmented(
-                ui,
-                &mut mode,
-                &[("Dark", Mode::Dark), ("Light", Mode::Light), ("System", Mode::System)],
-            ) {
-                self.prefs.follow_system = mode == Mode::System;
-                let dark = match mode {
-                    Mode::Dark => true,
-                    Mode::Light => false,
-                    Mode::System => ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark),
-                };
-                self.prefs.dark = Some(dark);
-                theme::set_dark(&ctx, dark);
-                save = true;
-            }
-        });
-        row(ui, "Primary colour", "Accents, selection, the launcher bar", |ui| {
-            // the same RGBA picker as the overlay colours
-            let c = theme::accent();
-            let mut pick = c;
-            if ui.color_edit_button_srgba(&mut pick).changed() {
-                let [r, g, b, a] = pick.to_srgba_unmultiplied();
-                theme::set_accent(&ctx, Some(pick));
-                self.prefs.accent = Some([r, g, b]);
-                self.prefs.accent_alpha = (a < 255).then_some(a);
-                save = true;
-            }
-            ui.add_space(6.0);
-            for (name, sw) in SWATCHES.iter().rev() {
-                let col = Color32::from_rgb(sw[0], sw[1], sw[2]);
-                let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                let picked = c == col;
-                ui.painter().circle_filled(r.center(), 7.0, col);
-                if picked || resp.hovered() {
-                    ui.painter().circle_stroke(
-                        r.center(),
-                        8.5,
-                        egui::Stroke::new(1.5, theme::pal().text),
-                    );
-                }
-                if resp.on_hover_text(*name).clicked() {
-                    let default = sw == &[0xF0, 0x8E, 0x1E];
-                    theme::set_accent(&ctx, if default { None } else { Some(col) });
-                    self.prefs.accent = if default { None } else { Some(*sw) };
-                    self.prefs.accent_alpha = None;
+        row(
+            ui,
+            crate::i18n::tr("Theme"),
+            crate::i18n::tr("System follows your desktop's light or dark setting"),
+            |ui| {
+                if segmented(
+                    ui,
+                    &mut mode,
+                    &[
+                        (crate::i18n::tr("Dark"), Mode::Dark),
+                        (crate::i18n::tr("Light"), Mode::Light),
+                        (crate::i18n::tr("System"), Mode::System),
+                    ],
+                ) {
+                    self.prefs.follow_system = mode == Mode::System;
+                    let dark = match mode {
+                        Mode::Dark => true,
+                        Mode::Light => false,
+                        Mode::System => ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark),
+                    };
+                    self.prefs.dark = Some(dark);
+                    theme::set_dark(&ctx, dark);
                     save = true;
                 }
-            }
-        });
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Primary colour"),
+            crate::i18n::tr("Accents, selection, the launcher bar"),
+            |ui| {
+                // the same RGBA picker as the overlay colours
+                let c = theme::accent();
+                let mut pick = c;
+                if ui.color_edit_button_srgba(&mut pick).changed() {
+                    let [r, g, b, a] = pick.to_srgba_unmultiplied();
+                    theme::set_accent(&ctx, Some(pick));
+                    self.prefs.accent = Some([r, g, b]);
+                    self.prefs.accent_alpha = (a < 255).then_some(a);
+                    save = true;
+                }
+                ui.add_space(6.0);
+                for (name, sw) in SWATCHES.iter().rev() {
+                    let col = Color32::from_rgb(sw[0], sw[1], sw[2]);
+                    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                    let picked = c == col;
+                    ui.painter().circle_filled(r.center(), 7.0, col);
+                    if picked || resp.hovered() {
+                        ui.painter().circle_stroke(
+                            r.center(),
+                            8.5,
+                            egui::Stroke::new(1.5, theme::pal().text),
+                        );
+                    }
+                    if resp.on_hover_text(crate::i18n::tr(name)).clicked() {
+                        let default = sw == &[0xF0, 0x8E, 0x1E];
+                        theme::set_accent(&ctx, if default { None } else { Some(col) });
+                        self.prefs.accent = if default { None } else { Some(*sw) };
+                        self.prefs.accent_alpha = None;
+                        save = true;
+                    }
+                }
+            },
+        );
 
-        section(ui, "LAYOUT");
+        section(ui, crate::i18n::tr("LAYOUT"));
         let mut scale = self.prefs.ui_scale.unwrap_or(1.0);
-        row(ui, "Interface scale", "Zooms everything; good for high-DPI screens", |ui| {
-            let opts = [("90%", 0.9), ("100%", 1.0), ("110%", 1.1), ("125%", 1.25), ("150%", 1.5)];
-            if segmented(ui, &mut scale, &opts) {
-                self.prefs.ui_scale = (scale != 1.0).then_some(scale);
-                ctx.set_zoom_factor(scale);
-                save = true;
-            }
-        });
+        row(
+            ui,
+            crate::i18n::tr("Interface scale"),
+            crate::i18n::tr("Zooms everything; good for high-DPI screens"),
+            |ui| {
+                let opts =
+                    [("90%", 0.9), ("100%", 1.0), ("110%", 1.1), ("125%", 1.25), ("150%", 1.5)];
+                if segmented(ui, &mut scale, &opts) {
+                    self.prefs.ui_scale = (scale != 1.0).then_some(scale);
+                    ctx.set_zoom_factor(scale);
+                    save = true;
+                }
+            },
+        );
         let mut look = self.prefs.look();
         let before = look;
-        row(ui, "Text size", "", |ui| {
+        row(ui, crate::i18n::tr("Text size"), "", |ui| {
             segmented(
                 ui,
                 &mut look.text,
-                &[("Small", 11.0), ("Normal", 12.0), ("Large", 13.5), ("Larger", 15.0)],
+                &[
+                    (crate::i18n::tr("Small"), 11.0),
+                    (crate::i18n::tr("Normal"), 12.0),
+                    (crate::i18n::tr("Large"), 13.5),
+                    (crate::i18n::tr("Larger"), 15.0),
+                ],
             );
         });
-        row(ui, "Density", "Space between rows and controls", |ui| {
-            segmented(
-                ui,
-                &mut look.density,
-                &[("Compact", 1.0), ("Comfortable", 1.3), ("Roomy", 1.6)],
-            );
-        });
-        row(ui, "Corners", "Rounding on buttons, menus and windows", |ui| {
-            segmented(ui, &mut look.corners, &[("Sharp", 0.0), ("Subtle", 3.0), ("Round", 6.0)]);
-        });
+        row(
+            ui,
+            crate::i18n::tr("Density"),
+            crate::i18n::tr("Space between rows and controls"),
+            |ui| {
+                segmented(
+                    ui,
+                    &mut look.density,
+                    &[
+                        (crate::i18n::tr("Compact"), 1.0),
+                        (crate::i18n::tr("Comfortable"), 1.3),
+                        (crate::i18n::tr("Roomy"), 1.6),
+                    ],
+                );
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Corners"),
+            crate::i18n::tr("Rounding on buttons, menus and windows"),
+            |ui| {
+                segmented(
+                    ui,
+                    &mut look.corners,
+                    &[
+                        (crate::i18n::tr("Sharp"), 0.0),
+                        (crate::i18n::tr("Subtle"), 3.0),
+                        (crate::i18n::tr("Round"), 6.0),
+                    ],
+                );
+            },
+        );
 
-        section(ui, "MOTION");
-        row(ui, "Reduce motion", "No animated menus, fades or smooth scrolling", |ui| {
-            ui.checkbox(&mut look.reduce_motion, "");
-        });
+        section(ui, crate::i18n::tr("MOTION"));
+        row(
+            ui,
+            crate::i18n::tr("Reduce motion"),
+            crate::i18n::tr("No animated menus, fades or smooth scrolling"),
+            |ui| {
+                ui.checkbox(&mut look.reduce_motion, "");
+            },
+        );
         if look != before {
             self.prefs.text_size = Some(look.text);
             self.prefs.density = Some(look.density);
@@ -395,7 +549,7 @@ impl EditorUi {
         // what used to be the View page: the canvas and its overlays
         self.settings_canvas(ui);
         ui.add_space(12.0);
-        if ui.button("Reset appearance").clicked() {
+        if ui.button(crate::i18n::tr("Reset appearance")).clicked() {
             self.prefs.follow_system = false;
             self.prefs.dark = Some(true);
             self.prefs.accent = None;
@@ -422,26 +576,33 @@ impl EditorUi {
 
     fn settings_canvas(&mut self, ui: &mut Ui) {
         let mut save = false;
-        section(ui, "CANVAS");
-        row(ui, "Background", "Behind the model's canvas", |ui| {
-            if ui.small_button("Reset").clicked() {
-                self.prefs.view_bg = None;
-                self.prefs.view_bg_alpha = None;
-                save = true;
-            }
-            let mut pick = self.prefs.view_bg_color().unwrap_or(theme::pal().canvas_bg);
-            if ui.color_edit_button_srgba(&mut pick).changed() {
-                let [r, g, b, a] = pick.to_srgba_unmultiplied();
-                self.prefs.view_bg = Some([r, g, b]);
-                self.prefs.view_bg_alpha = (a < 255).then_some(a);
-                save = true;
-            }
-        });
-        section(ui, "OVERLAYS");
+        section(ui, crate::i18n::tr("CANVAS"));
+        row(
+            ui,
+            crate::i18n::tr("Background"),
+            crate::i18n::tr("Behind the model's canvas"),
+            |ui| {
+                if ui.small_button(crate::i18n::tr("Reset")).clicked() {
+                    self.prefs.view_bg = None;
+                    self.prefs.view_bg_alpha = None;
+                    save = true;
+                }
+                let mut pick = self.prefs.view_bg_color().unwrap_or(theme::pal().canvas_bg);
+                if ui.color_edit_button_srgba(&mut pick).changed() {
+                    let [r, g, b, a] = pick.to_srgba_unmultiplied();
+                    self.prefs.view_bg = Some([r, g, b]);
+                    self.prefs.view_bg_alpha = (a < 255).then_some(a);
+                    save = true;
+                }
+            },
+        );
+        section(ui, crate::i18n::tr("OVERLAYS"));
         ui.label(
-            RichText::new("Mesh lines, deformer handles and weights on the canvas.")
-                .size(10.5)
-                .color(theme::pal().text_faint),
+            RichText::new(crate::i18n::tr(
+                "Mesh lines, deformer handles and weights on the canvas.",
+            ))
+            .size(10.5)
+            .color(theme::pal().text_faint),
         );
         ui.add_space(4.0);
         self.overlay_settings(ui);
@@ -452,34 +613,43 @@ impl EditorUi {
 
     fn settings_performance(&mut self, ui: &mut Ui) {
         let mut save = false;
-        section(ui, "THIS MODEL");
+        section(ui, crate::i18n::tr("THIS MODEL"));
         match &self.session {
             Some(s) => {
                 let verts: usize = s.puppet.drawables().map(|d| d.positions.len() / 2).sum();
                 for (k, v) in [
-                    ("Last evaluate", format!("{:.2} ms", s.last_update_ms)),
+                    (
+                        "Last evaluate",
+                        crate::i18n::trf(
+                            "{time} ms",
+                            &[("time", &format!("{:.2}", s.last_update_ms))],
+                        ),
+                    ),
                     ("Visible meshes", s.puppet.drawables().count().to_string()),
                     ("Vertices", verts.to_string()),
                 ] {
-                    row(ui, k, "", |ui| {
+                    row(ui, crate::i18n::tr(k), "", |ui| {
                         ui.label(RichText::new(v).color(theme::pal().text_faint));
                     });
                 }
             }
             None => {
-                ui.label(RichText::new("No model loaded.").color(theme::pal().text_faint));
+                ui.label(
+                    RichText::new(crate::i18n::tr("No model loaded."))
+                        .color(theme::pal().text_faint),
+                );
             }
         }
-        section(ui, "LIMITS");
+        section(ui, crate::i18n::tr("LIMITS"));
         row(
             ui,
-            "Animation frame cap",
-            "How often physics and follow redraw; 30 is easy on laptops",
+            crate::i18n::tr("Animation frame cap"),
+            crate::i18n::tr("How often physics and follow redraw; 30 is easy on laptops"),
             |ui| {
                 save |= segmented(
                     ui,
                     &mut self.prefs.fps_cap,
-                    &[("Off", 0u32), ("30", 30), ("60", 60), ("120", 120)],
+                    &[(crate::i18n::tr("Off"), 0u32), ("30", 30), ("60", 60), ("120", 120)],
                 );
             },
         );
@@ -489,17 +659,25 @@ impl EditorUi {
         };
         row(
             ui,
-            "Model anti-aliasing",
-            "Applies after a restart; steps down if the GPU can't do it",
+            crate::i18n::tr("Model anti-aliasing"),
+            crate::i18n::tr("Applies after a restart; steps down if the GPU can't do it"),
             |ui| {
-                if segmented(ui, &mut msaa, &[("Off", 1u32), ("2x", 2), ("4x", 4), ("8x", 8)]) {
+                if segmented(
+                    ui,
+                    &mut msaa,
+                    &[(crate::i18n::tr("Off"), 1u32), ("2x", 2), ("4x", 4), ("8x", 8)],
+                ) {
                     self.prefs.msaa = msaa;
                     save = true;
                 }
             },
         );
-        row(ui, "Renderer", "", |ui| {
-            let r = if self.gpu { "wgpu (GPU), shared with the UI" } else { "software fallback" };
+        row(ui, crate::i18n::tr("Renderer"), "", |ui| {
+            let r = if self.gpu {
+                crate::i18n::tr("wgpu (GPU), shared with the UI")
+            } else {
+                crate::i18n::tr("software fallback")
+            };
             ui.label(RichText::new(r).color(theme::pal().text_faint));
         });
         if save {
@@ -508,16 +686,21 @@ impl EditorUi {
     }
 
     fn settings_api(&mut self, ui: &mut Ui) {
-        section(ui, "SERVER");
+        section(ui, crate::i18n::tr("SERVER"));
         if self.api_settings_rows(ui) {
             self.prefs.save();
         }
-        row(ui, "API window", "Status, connected apps, the data coming in", |ui| {
-            if ui.button("Open…").clicked() {
-                self.show_api_window = true;
-            }
-        });
-        section(ui, "ALLOWED APPS");
+        row(
+            ui,
+            crate::i18n::tr("API window"),
+            crate::i18n::tr("Status, connected apps, the data coming in"),
+            |ui| {
+                if ui.button(crate::i18n::tr("Open…")).clicked() {
+                    self.show_api_window = true;
+                }
+            },
+        );
+        section(ui, crate::i18n::tr("ALLOWED APPS"));
         self.api_clients_ui(ui);
     }
 
@@ -553,17 +736,21 @@ impl EditorUi {
             ui.add(
                 egui::TextEdit::singleline(&mut self.key_filter)
                     .hint_text(format!(
-                        "{}  Search actions or keys",
-                        egui_phosphor::regular::MAGNIFYING_GLASS
+                        "{}  {}",
+                        egui_phosphor::regular::MAGNIFYING_GLASS,
+                        crate::i18n::tr("Search actions or keys")
                     ))
                     .desired_width(280.0),
             );
-            if !self.key_filter.is_empty() && ui.small_button("Clear").clicked() {
+            if !self.key_filter.is_empty() && ui.small_button(crate::i18n::tr("Clear")).clicked() {
                 self.key_filter.clear();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
-                    .add_enabled(!self.prefs.keybinds.is_empty(), egui::Button::new("Reset all"))
+                    .add_enabled(
+                        !self.prefs.keybinds.is_empty(),
+                        egui::Button::new(crate::i18n::tr("Reset all")),
+                    )
                     .clicked()
                 {
                     self.prefs.keybinds.clear();
@@ -572,9 +759,11 @@ impl EditorUi {
             });
         });
         ui.label(
-            RichText::new("Click a shortcut, then press the new keys. Esc cancels.")
-                .size(10.5)
-                .color(theme::pal().text_faint),
+            RichText::new(crate::i18n::tr(
+                "Click a shortcut, then press the new keys. Esc cancels.",
+            ))
+            .size(10.5)
+            .color(theme::pal().text_faint),
         );
 
         // a binding used twice gets flagged, so clashes are easy to spot
@@ -589,6 +778,7 @@ impl EditorUi {
         };
         let mut current = "";
         for (n, &(cat, action, label, _, _)) in KEY_ACTIONS.iter().enumerate() {
+            let (cat, label) = (crate::i18n::tr(cat), crate::i18n::tr(label));
             let text = texts.get(n).cloned().unwrap_or_default();
             if !matches(cat, label, &text) {
                 continue;
@@ -601,11 +791,11 @@ impl EditorUi {
             let clash = texts.iter().filter(|t| **t == text).count() > 1;
             let changed = self.prefs.keybinds.iter().any(|(a, _)| a == action);
             row(ui, label, "", |ui| {
-                if changed && ui.small_button("Reset").clicked() {
+                if changed && ui.small_button(crate::i18n::tr("Reset")).clicked() {
                     self.prefs.keybinds.retain(|(a, _)| a != action);
                     self.prefs.save();
                 }
-                let shown = if armed { "press keys…".to_string() } else { text };
+                let shown = if armed { crate::i18n::tr("press keys…").to_string() } else { text };
                 let rich = if armed {
                     RichText::new(shown).color(theme::pal().accent)
                 } else if clash {
@@ -614,8 +804,11 @@ impl EditorUi {
                     RichText::new(shown)
                 };
                 let btn = ui.add_sized(vec2(150.0, 20.0), egui::Button::new(rich));
-                let btn =
-                    if clash { btn.on_hover_text("Also used by another action") } else { btn };
+                let btn = if clash {
+                    btn.on_hover_text(crate::i18n::tr("Also used by another action"))
+                } else {
+                    btn
+                };
                 if btn.clicked() {
                     self.rebind = Some(action);
                 }
@@ -625,19 +818,20 @@ impl EditorUi {
         // fixed gestures, listed for reference but not rebindable
         let mut header = false;
         for (label, keys) in BUILT_IN {
-            if !matches("Built in", label, keys) {
+            let label = crate::i18n::tr(label);
+            if !matches(crate::i18n::tr("Built in"), label, keys) {
                 continue;
             }
             if !header {
                 header = true;
-                section(ui, "BUILT IN");
+                section(ui, crate::i18n::tr("BUILT IN"));
             }
             row(ui, label, "", |ui| {
                 ui.add_enabled_ui(false, |ui| {
                     ui.add_sized(vec2(150.0, 20.0), egui::Button::new(*keys));
                 })
                 .response
-                .on_disabled_hover_text("Built in, can't be changed");
+                .on_disabled_hover_text(crate::i18n::tr("Built in, can't be changed"));
             });
         }
     }

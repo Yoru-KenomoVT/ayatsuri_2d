@@ -17,6 +17,7 @@ ayatsuri-format = { workspace = true }
 ayatsuri-render = { workspace = true }
 ayatsuri-import = { workspace = true }
 ayatsuri-update = { workspace = true }
+sys-locale = "0.3"
 openmoc3 = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }

@@ -8,10 +8,22 @@
   their meshes by folder and name and swap in the new art; the rig stays
   exactly as it is. Layers and meshes that don't match are listed, and one
   undo puts the old art back.
-- **Update check**: the launcher asks GitHub for a newer release while the
-  splash shows, the home screen shows a banner with Download and Later,
-  and About has Check for updates. It only ever reports; turn it off in
-  Settings > General.
+- **Interface languages**: Afrikaans, Dutch, Japanese, Korean and
+  Simplified Chinese besides English, in Settings > General > Language
+  (follows the system by default). The translations were made with tools
+  (AI and machine translation such as Google Translate), so corrections
+  are welcome. Each language is one JSON file in `assets/i18n`; a file of
+  the same name in the config folder's `i18n` directory overrides it or
+  adds a new language without a rebuild. Chinese, Japanese and Korean use
+  the system's fonts.
+- **Updates**: the launcher asks GitHub for a newer release while the
+  splash shows, the home screen shows a banner, and About has Check for
+  updates. **Update now** downloads the release for your install, checks
+  it against the release's SHA256SUMS.txt, puts it in place (the AppImage,
+  the Linux tarball install, or the Windows installer run quietly) and
+  Restart now starts it. Package-manager installs, the portable zip and
+  macOS get the release page instead. Turn the check off in Settings >
+  General.
 - **Search** in the Parts and Deformer palettes.
 - **Multi-select in the Parts palette**: Ctrl+click and Shift+click for
   parts and meshes; Hide/Show acts on the whole pick.

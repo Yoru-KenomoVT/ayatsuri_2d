@@ -78,7 +78,11 @@ impl EditorUi {
                 .or_else(|| model.parts.get(i).map(|p| p.id.clone()))
                 .unwrap_or_default()
         };
-        let title = if dlg.warp { "New Warp Deformer" } else { "New Rotation Deformer" };
+        let title = if dlg.warp {
+            crate::i18n::tr("New Warp Deformer")
+        } else {
+            crate::i18n::tr("New Rotation Deformer")
+        };
         let mut open = true;
         let (mut create, mut keep_open, mut close) = (false, false, false);
         crate::windows::Dialog::new(title).open(&mut open).show(ui.ctx(), |ui| {
@@ -86,32 +90,35 @@ impl EditorUi {
             if !has_selection {
                 // an empty deformer moves nothing until something is under it
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(crate::i18n::tr(
                         "Nothing is selected, so this deformer will hold nothing and moving it \
                          won't move the model. Select meshes (or click one) first.",
-                    )
+                    ))
                     .size(11.0)
                     .color(crate::theme::pal().accent),
                 );
                 ui.add_space(6.0);
             }
             crate::windows::form(ui, "newdef", |ui| {
-                ui.label("Destination Part");
+                ui.label(crate::i18n::tr("Destination Part"));
                 egui::ComboBox::from_id_salt("newdef-part")
                     .width(200.0)
-                    .selected_text(dlg.part.map_or("(none)".into(), |p| part_label(p as usize)))
+                    .selected_text(
+                        dlg.part
+                            .map_or(crate::i18n::tr("(none)").into(), |p| part_label(p as usize)),
+                    )
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut dlg.part, None, "(none)");
+                        ui.selectable_value(&mut dlg.part, None, crate::i18n::tr("(none)"));
                         for i in 0..model.parts.len() {
                             ui.selectable_value(&mut dlg.part, Some(i as u32), part_label(i));
                         }
                     });
                 ui.end_row();
-                ui.label("Name");
+                ui.label(crate::i18n::tr("Name"));
                 ui.add(egui::TextEdit::singleline(&mut dlg.name).desired_width(200.0));
                 ui.end_row();
                 if dlg.warp {
-                    ui.label("Conversion divisions");
+                    ui.label(crate::i18n::tr("Conversion divisions"));
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut dlg.cols).range(1..=32).prefix("W "));
                         ui.add(egui::DragValue::new(&mut dlg.rows).range(1..=32).prefix("H "));
@@ -121,34 +128,44 @@ impl EditorUi {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label("Add");
+                ui.label(crate::i18n::tr("Add"));
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
                     ui.add_enabled_ui(has_selection, |ui| {
                         ui.radio_value(
                             &mut dlg.placement,
                             Placement::ParentOfSelection,
-                            "As Parent of Selected Object",
+                            crate::i18n::tr("As Parent of Selected Object"),
                         );
                     });
                     ui.add_enabled_ui(deformer_selected, |ui| {
                         ui.radio_value(
                             &mut dlg.placement,
                             Placement::ChildOfSelection,
-                            "As Child of Selected Object",
+                            crate::i18n::tr("As Child of Selected Object"),
                         );
                     });
-                    ui.radio_value(&mut dlg.placement, Placement::Manual, "Set Parent Manually");
+                    ui.radio_value(
+                        &mut dlg.placement,
+                        Placement::Manual,
+                        crate::i18n::tr("Set Parent Manually"),
+                    );
                     ui.add_enabled_ui(dlg.placement == Placement::Manual, |ui| {
                         let label = |p: Option<u32>| {
                             p.and_then(|i| model.deformers.get(i as usize))
-                                .map_or("Root Deformer".to_string(), |d| d.id.clone())
+                                .map_or(crate::i18n::tr("Root Deformer").to_string(), |d| {
+                                    d.id.clone()
+                                })
                         };
                         egui::ComboBox::from_id_salt("newdef-parent")
                             .width(180.0)
                             .selected_text(label(dlg.manual_parent))
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut dlg.manual_parent, None, "Root Deformer");
+                                ui.selectable_value(
+                                    &mut dlg.manual_parent,
+                                    None,
+                                    crate::i18n::tr("Root Deformer"),
+                                );
                                 for (i, d) in model.deformers.iter().enumerate() {
                                     ui.selectable_value(
                                         &mut dlg.manual_parent,
@@ -163,17 +180,19 @@ impl EditorUi {
             ui.separator();
             ui.horizontal(|ui| {
                 if ui
-                    .button("Continuous creation")
-                    .on_hover_text("Create, and keep this dialog open for the next one")
+                    .button(crate::i18n::tr("Continuous creation"))
+                    .on_hover_text(crate::i18n::tr(
+                        "Create, and keep this dialog open for the next one",
+                    ))
                     .clicked()
                 {
                     create = true;
                     keep_open = true;
                 }
-                if ui.button("Create").clicked() {
+                if ui.button(crate::i18n::tr("Create")).clicked() {
                     create = true;
                 }
-                if ui.button("Close").clicked() {
+                if ui.button(crate::i18n::tr("Close")).clicked() {
                     close = true;
                 }
             });

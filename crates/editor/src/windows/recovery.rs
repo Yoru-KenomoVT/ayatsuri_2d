@@ -30,50 +30,66 @@ impl EditorUi {
         let mut delete_one: Option<usize> = None;
         let mut delete_all = false;
         let mut later = false;
-        crate::windows::Dialog::new("Recover Unsaved Work").width(460.0).show(ui.ctx(), |ui| {
-            ui.label("Ayatsuri2D closed before this work was saved. Recover it?");
-            ui.label(
-                RichText::new("A recovered model opens unsaved, so Save asks where it goes.")
+        crate::windows::Dialog::new(crate::i18n::tr("Recover Unsaved Work")).width(460.0).show(
+            ui.ctx(),
+            |ui| {
+                ui.label(crate::i18n::tr(
+                    "Ayatsuri2D closed before this work was saved. Recover it?",
+                ));
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        "A recovered model opens unsaved, so Save asks where it goes.",
+                    ))
                     .size(10.5)
                     .color(theme::pal().text_faint),
-            );
-            ui.add_space(8.0);
-            for (i, f) in self.recovery.found.iter().enumerate() {
+                );
+                ui.add_space(8.0);
+                for (i, f) in self.recovery.found.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(250.0);
+                            ui.label(RichText::new(&f.name).strong());
+                            ui.label(
+                                RichText::new(crate::i18n::trf(
+                                    "{age}  ·  {size} MB",
+                                    &[
+                                        ("age", &crate::recovery::ago(f.age)),
+                                        ("size", &format!("{:.1}", f.bytes as f64 / 1_048_576.0)),
+                                    ],
+                                ))
+                                .size(10.5)
+                                .color(theme::pal().text_faint),
+                            );
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(crate::i18n::tr("Delete")).clicked() {
+                                delete_one = Some(i);
+                            }
+                            if ui
+                                .button(RichText::new(crate::i18n::tr("Recover")).strong())
+                                .clicked()
+                            {
+                                open_one = Some(i);
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                }
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(250.0);
-                        ui.label(RichText::new(&f.name).strong());
-                        ui.label(
-                            RichText::new(format!(
-                                "{}  ·  {:.1} MB",
-                                crate::recovery::ago(f.age),
-                                f.bytes as f64 / 1_048_576.0
-                            ))
-                            .size(10.5)
-                            .color(theme::pal().text_faint),
-                        );
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Delete").clicked() {
-                            delete_one = Some(i);
-                        }
-                        if ui.button(RichText::new("Recover").strong()).clicked() {
-                            open_one = Some(i);
-                        }
-                    });
+                    if ui.button(crate::i18n::tr("Delete All")).clicked() {
+                        delete_all = true;
+                    }
+                    if ui
+                        .button(crate::i18n::tr("Later"))
+                        .on_hover_text(crate::i18n::tr("Ask again next time"))
+                        .clicked()
+                    {
+                        later = true;
+                    }
                 });
-                ui.add_space(4.0);
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("Delete All").clicked() {
-                    delete_all = true;
-                }
-                if ui.button("Later").on_hover_text("Ask again next time").clicked() {
-                    later = true;
-                }
-            });
-        });
+            },
+        );
         if let Some(i) = open_one
             && i < self.recovery.found.len()
         {

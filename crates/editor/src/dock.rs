@@ -394,8 +394,11 @@ pub fn draw_group_chrome(ui: &mut Ui, g: &Group) -> Vec<DockAction> {
         let is_active = i == g.active;
         let color =
             if is_active { crate::theme::pal().text } else { crate::theme::pal().text_faint };
-        let galley =
-            painter.layout_no_wrap(p.title().to_string(), egui::FontId::proportional(12.0), color);
+        let galley = painter.layout_no_wrap(
+            crate::i18n::tr(p.title()).to_string(),
+            egui::FontId::proportional(12.0),
+            color,
+        );
         let w = galley.size().x + 16.0;
         let tab_rect = Rect::from_min_size(pos2(x, strip.min.y), vec2(w, theme::TAB_H));
         let resp = ui.interact(
@@ -476,7 +479,7 @@ pub fn drag_overlay(ui: &mut Ui, root: &mut DockNode, groups: &[Group]) {
         painter.text(
             pos + vec2(14.0, 2.0),
             Align2::LEFT_CENTER,
-            p.title(),
+            crate::i18n::tr(p.title()),
             egui::FontId::proportional(12.0),
             crate::theme::pal().text,
         );

@@ -9,68 +9,81 @@ impl EditorUi {
         let Some(dlg) = &mut self.export_dlg else { return };
         let mut open = true;
         let mut go = false;
-        crate::windows::Dialog::new("Export as moc3").open(&mut open).show(ui.ctx(), |ui| {
-            crate::windows::form(ui, "export", |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut dlg.name);
-                ui.end_row();
-                ui.label("moc3 version");
-                egui::ComboBox::from_id_salt("moc-ver")
-                    .selected_text(
-                        ayatsuri_import::ExportVersion::ALL
-                            .get(dlg.version)
-                            .map(|v| v.label())
-                            .unwrap_or("4.2"),
-                    )
-                    .show_ui(ui, |ui| {
-                        for (i, v) in ayatsuri_import::ExportVersion::ALL.iter().enumerate() {
-                            let item = ui.selectable_value(&mut dlg.version, i, v.label());
-                            if *v == ayatsuri_import::ExportVersion::V5_03 {
-                                item.on_hover_text(ayatsuri_import::VTS_NOTE);
+        crate::windows::Dialog::new(crate::i18n::tr("Export as moc3")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                crate::windows::form(ui, "export", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut dlg.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("moc3 version"));
+                    egui::ComboBox::from_id_salt("moc-ver")
+                        .selected_text(
+                            ayatsuri_import::ExportVersion::ALL
+                                .get(dlg.version)
+                                .map(|v| v.label())
+                                .unwrap_or("4.2"),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (i, v) in ayatsuri_import::ExportVersion::ALL.iter().enumerate() {
+                                let item = ui.selectable_value(&mut dlg.version, i, v.label());
+                                if *v == ayatsuri_import::ExportVersion::V5_03 {
+                                    item.on_hover_text(ayatsuri_import::VTS_NOTE);
+                                }
                             }
-                        }
+                        });
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Include"));
+                    ui.vertical(|ui| {
+                        ui.checkbox(&mut dlg.physics, crate::i18n::tr("physics3.json"));
+                        ui.checkbox(
+                            &mut dlg.motions,
+                            crate::i18n::tr("motion3.json for each animation"),
+                        );
+                        ui.checkbox(
+                            &mut dlg.expressions,
+                            crate::i18n::tr("exp3.json for each expression"),
+                        );
                     });
-                ui.end_row();
-                ui.label("Include");
-                ui.vertical(|ui| {
-                    ui.checkbox(&mut dlg.physics, "physics3.json");
-                    ui.checkbox(&mut dlg.motions, "motion3.json for each animation");
-                    ui.checkbox(&mut dlg.expressions, "exp3.json for each expression");
+                    ui.end_row();
                 });
-                ui.end_row();
-            });
-            ui.weak("Writes <name>.moc3, .model3.json, .cdi3.json and the textures.");
-            if let (Some(s), Some(v)) =
-                (&self.session, ayatsuri_import::ExportVersion::ALL.get(dlg.version))
-            {
-                for w in ayatsuri_import::export_warnings(s.puppet.model(), *v) {
-                    let lossy = !w.starts_with("physics");
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} {w}",
-                            if lossy {
-                                egui_phosphor::regular::WARNING
+                ui.weak(crate::i18n::tr(
+                    "Writes <name>.moc3, .model3.json, .cdi3.json and the textures.",
+                ));
+                if let (Some(s), Some(v)) =
+                    (&self.session, ayatsuri_import::ExportVersion::ALL.get(dlg.version))
+                {
+                    for w in ayatsuri_import::export_warnings(s.puppet.model(), *v) {
+                        let lossy = !w.starts_with("physics");
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {w}",
+                                if lossy {
+                                    egui_phosphor::regular::WARNING
+                                } else {
+                                    egui_phosphor::regular::INFO
+                                }
+                            ))
+                            .size(11.0)
+                            .color(if lossy {
+                                theme::pal().accent
                             } else {
-                                egui_phosphor::regular::INFO
-                            }
-                        ))
-                        .size(11.0)
-                        .color(if lossy {
-                            theme::pal().accent
-                        } else {
-                            theme::pal().text_faint
-                        }),
-                    );
+                                theme::pal().text_faint
+                            }),
+                        );
+                    }
                 }
-            }
-            if ui.button(egui::RichText::new("Export…").strong()).clicked() {
-                go = true;
-            }
-        });
+                if ui.button(egui::RichText::new(crate::i18n::tr("Export…")).strong()).clicked() {
+                    go = true;
+                }
+            },
+        );
         if go {
             let Some(dlg) = self.export_dlg.take() else { return };
             self.pick_async(crate::panels::PickFor::ExportMoc3(Box::new(dlg)), || {
-                rfd::FileDialog::new().set_title("Export as moc3: choose a folder").pick_folder()
+                rfd::FileDialog::new()
+                    .set_title(crate::i18n::tr("Export as moc3: choose a folder"))
+                    .pick_folder()
             });
         } else if !open {
             self.export_dlg = None;
@@ -99,26 +112,29 @@ impl EditorUi {
         let mut open = true;
         let mut go = false;
         let mut cancel = false;
-        crate::windows::Dialog::new("Overwrite Export").open(&mut open).width(380.0).show(
-            ui.ctx(),
-            |ui| {
-                ui.label(format!("{} already has a model: {}.", dir.display(), names.join(", ")));
-                ui.weak(
+        crate::windows::Dialog::new(crate::i18n::tr("Overwrite Export"))
+            .open(&mut open)
+            .width(380.0)
+            .show(ui.ctx(), |ui| {
+                ui.label(crate::i18n::trf(
+                    "{folder} already has a model: {names}.",
+                    &[("folder", &dir.display()), ("names", &names.join(", "))],
+                ));
+                ui.weak(crate::i18n::tr(
                     "Overwrite it with a fresh export? The files that model lists (moc3, \
                      textures, physics, motions, expressions...) are replaced; anything else \
                      in the folder, like VTube Studio's settings, stays as it is.",
-                );
+                ));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Overwrite").clicked() {
+                    if ui.button(crate::i18n::tr("Overwrite")).clicked() {
                         go = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(crate::i18n::tr("Cancel")).clicked() {
                         cancel = true;
                     }
                 });
-            },
-        );
+            });
         if go && let Some((dlg, dir, _)) = self.export_overwrite.take() {
             match crate::export::clear_previous(&dir) {
                 Ok(n) => {

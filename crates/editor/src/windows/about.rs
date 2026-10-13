@@ -131,7 +131,7 @@ impl EditorUi {
         let logo_size = self.logo.as_ref().map(|c| c.handle.size_vec2()).unwrap_or(vec2(1.0, 1.0));
         let gpu = self.gpu;
         let mut open = true;
-        egui::Window::new("About Ayatsuri2D")
+        egui::Window::new(crate::i18n::tr("About Ayatsuri2D"))
             .title_bar(false)
             // only the header strip moves it; egui's own drag-anywhere
             // fought the pinned position and snapped back
@@ -183,7 +183,7 @@ impl EditorUi {
                     rail_ui.painter().text(
                         r.left_center() + vec2(12.0, 0.0),
                         egui::Align2::LEFT_CENTER,
-                        label,
+                        crate::i18n::tr(label),
                         FontId::proportional(13.0),
                         if on { theme::pal().text } else { theme::pal().text_faint },
                     );
@@ -271,14 +271,14 @@ impl EditorUi {
         p.text(
             pos2(left + 2.0, header.max.y - 18.0),
             egui::Align2::LEFT_BOTTOM,
-            "Open 2D puppet studio",
+            crate::i18n::tr("Open 2D puppet studio"),
             FontId::proportional(12.5),
             theme::pal().text_faint,
         );
         p.text(
             pos2(header.max.x - 24.0, header.max.y - 18.0),
             egui::Align2::RIGHT_BOTTOM,
-            format!("Version {}", env!("CARGO_PKG_VERSION")),
+            crate::i18n::trf("Version {version}", &[("version", &env!("CARGO_PKG_VERSION"))]),
             FontId::proportional(12.0),
             theme::pal().text_faint,
         );
@@ -312,35 +312,59 @@ fn faint(ui: &mut Ui, text: impl Into<String>) {
 }
 
 fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
-    heading(ui, "Ayatsuri2D");
-    ui.label(
+    heading(ui, crate::i18n::tr("Ayatsuri2D"));
+    ui.label(crate::i18n::tr(
         "An open, native 2D puppet studio: rig, animate and run Live2D-style models, \
          with full moc3 import and export and .aom as its own format.",
-    );
+    ));
     ui.add_space(14.0);
     let info = [
         ("Version", env!("CARGO_PKG_VERSION").to_string()),
         ("Platform", format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)),
-        ("Renderer", if gpu { "wgpu (GPU)".into() } else { "software fallback".into() }),
-        ("moc3 export", "3.0 to 5.3".into()),
-        ("Crates", format!("{} open-source", crates().len())),
+        (
+            "Renderer",
+            if gpu {
+                crate::i18n::tr("wgpu (GPU)").into()
+            } else {
+                crate::i18n::tr("software fallback").into()
+            },
+        ),
+        ("moc3 export", crate::i18n::trf("{from} to {to}", &[("from", &"3.0"), ("to", &"5.3")])),
+        ("Crates", crate::i18n::trf("{count} open-source", &[("count", &crates().len())])),
     ];
     egui::Grid::new("about-info").num_columns(2).spacing(vec2(18.0, 6.0)).show(ui, |ui| {
         for (k, v) in &info {
-            ui.label(RichText::new(*k).color(theme::pal().text_faint));
+            ui.label(RichText::new(crate::i18n::tr(k)).color(theme::pal().text_faint));
             ui.label(v);
             ui.end_row();
         }
     });
     ui.add_space(16.0);
     ui.horizontal(|ui| {
-        if ui.button(format!("{}  GitHub", egui_phosphor::regular::GITHUB_LOGO)).clicked() {
+        if ui
+            .button(format!(
+                "{}  {}",
+                egui_phosphor::regular::GITHUB_LOGO,
+                crate::i18n::tr("GitHub")
+            ))
+            .clicked()
+        {
             ui.ctx().open_url(egui::OpenUrl::new_tab(GITHUB));
         }
-        if ui.button(format!("{}  Report an issue", egui_phosphor::regular::BUG)).clicked() {
+        if ui
+            .button(format!(
+                "{}  {}",
+                egui_phosphor::regular::BUG,
+                crate::i18n::tr("Report an issue")
+            ))
+            .clicked()
+        {
             ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{GITHUB}/issues")));
         }
-        if ui.button(format!("{}  Copy info", egui_phosphor::regular::COPY)).clicked() {
+        if ui
+            .button(format!("{}  {}", egui_phosphor::regular::COPY, crate::i18n::tr("Copy info")))
+            .clicked()
+        {
             let text = info.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
             ui.ctx().copy_text(format!("Ayatsuri2D\n{text}"));
         }
@@ -348,25 +372,32 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
     // updates: ask on request; only ever points at the release page
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        let label = format!("{}  Check for updates", egui_phosphor::regular::ARROWS_CLOCKWISE);
+        let label = format!(
+            "{}  {}",
+            egui_phosphor::regular::ARROWS_CLOCKWISE,
+            crate::i18n::tr("Check for updates")
+        );
         if ui.add_enabled(!update.checking(), egui::Button::new(label)).clicked() {
             update.start();
         }
         if update.checking() {
             ui.spinner();
-            faint(ui, "Checking…");
+            faint(ui, crate::i18n::tr("Checking…"));
         } else if let Some(latest) = update.available().cloned() {
             ui.label(
-                RichText::new(format!("Ayatsuri2D {} is available", latest.version))
-                    .color(theme::pal().accent),
+                RichText::new(crate::i18n::trf(
+                    "Ayatsuri2D {version} is available",
+                    &[("version", &latest.version)],
+                ))
+                .color(theme::pal().accent),
             );
-            if ui.button("Download").clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(latest.url));
-            }
+            crate::update::actions(ui, update, &latest);
         } else {
             match &update.status {
-                Some(Ok(())) => faint(ui, "You have the latest version."),
-                Some(Err(e)) => faint(ui, format!("Couldn't check: {e}")),
+                Some(Ok(())) => faint(ui, crate::i18n::tr("You have the latest version.")),
+                Some(Err(e)) => {
+                    faint(ui, crate::i18n::trf("Couldn't check: {error}", &[("error", e)]))
+                }
                 None => {}
             }
         }
@@ -374,19 +405,23 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
         faint(
             ui,
-            "Clean-room: built from published specifications and permissively licensed work only.",
+            crate::i18n::tr("Clean-room: built from published specifications and permissively licensed work only."),
         );
-        faint(ui, "Made by Yoru_KenomoVT.");
+        faint(ui, crate::i18n::tr("Made by Yoru_KenomoVT."));
     });
 }
 
 fn credits_page(ui: &mut Ui, search: &mut String) {
     ui.horizontal(|ui| {
-        heading(ui, "Credits");
+        heading(ui, crate::i18n::tr("Credits"));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add(
                 egui::TextEdit::singleline(search)
-                    .hint_text(format!("{}  Search", egui_phosphor::regular::MAGNIFYING_GLASS))
+                    .hint_text(format!(
+                        "{}  {}",
+                        egui_phosphor::regular::MAGNIFYING_GLASS,
+                        crate::i18n::tr("Search")
+                    ))
                     .desired_width(170.0),
             );
         });
@@ -401,14 +436,19 @@ fn credits_page(ui: &mut Ui, search: &mut String) {
     let list: Vec<&Crate> = crates().iter().filter(|c| hit(&c.name, &c.licence)).collect();
     ScrollArea::vertical().id_salt("about-credits").auto_shrink([false, false]).show(ui, |ui| {
         if !refs.is_empty() {
-            section(ui, "Built on");
+            section(ui, crate::i18n::tr("Built on"));
             for (name, what, licence, link) in refs {
-                credit_row(ui, name, licence, link, Some(what));
+                credit_row(ui, name, crate::i18n::tr(licence), link, Some(crate::i18n::tr(what)));
             }
             ui.add_space(12.0);
         }
-        section(ui, &format!("Open-source crates ({})", list.len()));
-        faint(ui, "Everything compiled into the app. Thank you to everyone who wrote them.");
+        section(ui, &crate::i18n::trf("Open-source crates ({count})", &[("count", &list.len())]));
+        faint(
+            ui,
+            crate::i18n::tr(
+                "Everything compiled into the app. Thank you to everyone who wrote them.",
+            ),
+        );
         ui.add_space(4.0);
         for c in list {
             credit_row(ui, &c.name, &format!("{}  ·  {}", c.version, c.licence), &c.link, None);
@@ -472,13 +512,15 @@ fn credit_row(ui: &mut Ui, name: &str, right: &str, link: &str, what: Option<&st
 }
 
 fn licence_page(ui: &mut Ui) {
-    heading(ui, "Licence");
-    ui.label(
+    heading(ui, crate::i18n::tr("Licence"));
+    ui.label(crate::i18n::tr(
         "Ayatsuri2D is free software: you can redistribute it and modify it under the \
          terms of the GNU General Public License, version 3.",
-    );
+    ));
     ui.add_space(6.0);
-    ui.label("Two parts are licensed more permissively on purpose, so others can build on them:");
+    ui.label(crate::i18n::tr(
+        "Two parts are licensed more permissively on purpose, so others can build on them:",
+    ));
     ui.add_space(4.0);
     egui::Grid::new("about-licences").num_columns(2).spacing(vec2(18.0, 6.0)).show(ui, |ui| {
         for (part, lic) in [
@@ -486,7 +528,7 @@ fn licence_page(ui: &mut Ui) {
             ("openmoc3 (the moc3 reader)", "MIT"),
             ("C ABI (ayatsuri-capi)", "Apache-2.0"),
         ] {
-            ui.label(part);
+            ui.label(crate::i18n::tr(part));
             ui.label(RichText::new(lic).color(theme::pal().accent));
             ui.end_row();
         }
@@ -494,23 +536,27 @@ fn licence_page(ui: &mut Ui) {
     ui.add_space(12.0);
     faint(
         ui,
-        "This program is distributed in the hope that it will be useful, but WITHOUT ANY \
+        crate::i18n::tr(
+            "This program is distributed in the hope that it will be useful, but WITHOUT ANY \
          WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A \
          PARTICULAR PURPOSE. See the GNU General Public License for more details.",
+        ),
     );
     ui.add_space(12.0);
     ui.horizontal(|ui| {
-        if ui.button("Read the GPL-3.0").clicked() {
+        if ui.button(crate::i18n::tr("Read the GPL-3.0")).clicked() {
             ui.ctx().open_url(egui::OpenUrl::new_tab("https://www.gnu.org/licenses/gpl-3.0.html"));
         }
-        if ui.button("Source code").clicked() {
+        if ui.button(crate::i18n::tr("Source code")).clicked() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(GITHUB));
         }
     });
     ui.add_space(12.0);
     faint(
         ui,
-        "Live2D and Cubism are trademarks of Live2D Inc. Ayatsuri2D is an independent project \
+        crate::i18n::tr(
+            "Live2D and Cubism are trademarks of Live2D Inc. Ayatsuri2D is an independent project \
          and is not affiliated with or endorsed by Live2D Inc.",
+        ),
     );
 }

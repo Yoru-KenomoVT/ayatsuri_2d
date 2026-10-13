@@ -74,9 +74,11 @@ impl EditorUi {
             match Server::start(port, self.prefs.api_remote, self.prefs.api_clients.clone()) {
                 Ok(s) => self.api.server = Some(s),
                 Err(e) => {
-                    let msg = format!("could not listen on port {port}: {e}");
-                    log::error!("Ayatsuri API {msg}");
-                    self.api.failed = Some(msg);
+                    log::error!("Ayatsuri API could not listen on port {port}: {e}");
+                    self.api.failed = Some(crate::i18n::trf(
+                        "could not listen on port {port}: {error}",
+                        &[("port", &port), ("error", &e)],
+                    ));
                 }
             }
         } else if (!want || !running_ok) && self.api.server.is_some() {
@@ -240,21 +242,23 @@ impl EditorUi {
     /// The API menu in the menu bar: switch it on or off, open its window.
     pub(crate) fn api_menu(&mut self, ui: &mut Ui) {
         let status = match (&self.api.server, &self.api.failed) {
-            (Some(s), _) => format!("Listening on port {}", s.addr.port()),
-            (None, Some(_)) => "Could not start; see the API window".into(),
-            (None, None) => "Off".into(),
+            (Some(s), _) => {
+                crate::i18n::trf("Listening on port {port}", &[("port", &s.addr.port())])
+            }
+            (None, Some(_)) => crate::i18n::tr("Could not start; see the API window").into(),
+            (None, None) => crate::i18n::tr("Off").into(),
         };
-        if ui.checkbox(&mut self.prefs.api_enabled, "Ayatsuri API").changed() {
+        if ui.checkbox(&mut self.prefs.api_enabled, crate::i18n::tr("Ayatsuri API")).changed() {
             self.api.failed = None;
             self.prefs.save();
         }
         ui.label(RichText::new(status).size(10.5).color(theme::pal().text_faint));
         ui.separator();
-        if ui.button("API Window…").clicked() {
+        if ui.button(crate::i18n::tr("API Window…")).clicked() {
             self.show_api_window = true;
             ui.close();
         }
-        if ui.button("API Settings…").clicked() {
+        if ui.button(crate::i18n::tr("API Settings…")).clicked() {
             self.show_settings = true;
             self.settings_tab = 4;
             ui.close();
@@ -267,8 +271,8 @@ impl EditorUi {
         let mut save = false;
         row(
             ui,
-            "Ayatsuri API",
-            "Cubism Editor's integration API, for VTube Studio and others",
+            crate::i18n::tr("Ayatsuri API"),
+            crate::i18n::tr("Cubism Editor's integration API, for VTube Studio and others"),
             |ui| {
                 if ui.checkbox(&mut self.prefs.api_enabled, "").changed() {
                     self.api.failed = None;
@@ -277,40 +281,50 @@ impl EditorUi {
             },
         );
         let mut port = wanted_port(self.prefs.api_port);
-        row(ui, "Port", "22033 is Cubism's; change it if Cubism runs too", |ui| {
-            if ui.small_button("Default").clicked() {
-                self.prefs.api_port = 0;
-                self.api.failed = None;
-                save = true;
-            }
-            if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
-                self.prefs.api_port = port;
-                self.api.failed = None;
-                save = true;
-            }
-        });
-        row(ui, "Allow remote connections", "Off: only apps on this computer can connect", |ui| {
-            if ui.checkbox(&mut self.prefs.api_remote, "").changed() {
-                // takes effect on the next start
-                self.api.server = None;
-                self.api.failed = None;
-                save = true;
-            }
-        });
+        row(
+            ui,
+            crate::i18n::tr("Port"),
+            crate::i18n::tr("22033 is Cubism's; change it if Cubism runs too"),
+            |ui| {
+                if ui.small_button(crate::i18n::tr("Default")).clicked() {
+                    self.prefs.api_port = 0;
+                    self.api.failed = None;
+                    save = true;
+                }
+                if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
+                    self.prefs.api_port = port;
+                    self.api.failed = None;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Allow remote connections"),
+            crate::i18n::tr("Off: only apps on this computer can connect"),
+            |ui| {
+                if ui.checkbox(&mut self.prefs.api_remote, "").changed() {
+                    // takes effect on the next start
+                    self.api.server = None;
+                    self.api.failed = None;
+                    save = true;
+                }
+            },
+        );
         save
     }
 
     /// Registered apps with their Allow switch, Disconnect and Forget.
     pub(crate) fn api_clients_ui(&mut self, ui: &mut Ui) {
         let Some(server) = &self.api.server else {
-            ui.weak("Turn the API on to see apps.");
+            ui.weak(crate::i18n::tr("Turn the API on to see apps."));
             return;
         };
         let shared = server.shared.clone();
         let live = lock(&shared.live).clone();
         let mut clients = lock(&shared.clients).clone();
         if clients.is_empty() {
-            ui.weak("No apps yet. They appear here when they connect.");
+            ui.weak(crate::i18n::tr("No apps yet. They appear here when they connect."));
             return;
         }
         let mut forget: Option<usize> = None;
@@ -327,21 +341,23 @@ impl EditorUi {
                     theme::pal().warp_green
                 };
                 ui.label(RichText::new("●").color(dot)).on_hover_text(if online.is_empty() {
-                    "not connected".to_string()
+                    crate::i18n::tr("not connected").to_string()
                 } else {
-                    format!("connected from {peers}")
+                    crate::i18n::trf("connected from {peers}", &[("peers", &peers)])
                 });
                 changed |= ui.checkbox(&mut c.allowed, &c.name).on_hover_text(&c.path).changed();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .small_button("Forget")
-                        .on_hover_text("Remove; it must ask again")
+                        .small_button(crate::i18n::tr("Forget"))
+                        .on_hover_text(crate::i18n::tr("Remove; it must ask again"))
                         .clicked()
                     {
                         lock(&shared.kick).extend(online.iter().copied());
                         forget = Some(i);
                     }
-                    if !online.is_empty() && ui.small_button("Disconnect").clicked() {
+                    if !online.is_empty()
+                        && ui.small_button(crate::i18n::tr("Disconnect")).clicked()
+                    {
                         lock(&shared.kick).extend(online.iter().copied());
                     }
                 });
@@ -370,18 +386,18 @@ impl EditorUi {
             return;
         };
         let mut answer: Option<bool> = None;
-        crate::windows::Dialog::new("Allow connection").width(360.0).show(ctx, |ui| {
+        crate::windows::Dialog::new(crate::i18n::tr("Allow connection")).width(360.0).show(ctx, |ui| {
             ui.label(RichText::new(&client.name).strong().size(14.0));
-            ui.label("wants to connect to the Ayatsuri API. It will be able to read and drive this model's parameters.");
+            ui.label(crate::i18n::tr("wants to connect to the Ayatsuri API. It will be able to read and drive this model's parameters."));
             if !client.path.is_empty() {
                 ui.label(RichText::new(&client.path).size(10.5).color(theme::pal().text_faint));
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button(RichText::new("Allow").strong()).clicked() {
+                if ui.button(RichText::new(crate::i18n::tr("Allow")).strong()).clicked() {
                     answer = Some(true);
                 }
-                if ui.button("Deny").clicked() {
+                if ui.button(crate::i18n::tr("Deny")).clicked() {
                     answer = Some(false);
                 }
             });

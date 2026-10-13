@@ -20,9 +20,15 @@ fn is_stream(method: &str) -> bool {
 
 fn uptime(secs: u64) -> String {
     match secs {
-        0..=59 => format!("{secs} s"),
-        60..=3599 => format!("{} min {} s", secs / 60, secs % 60),
-        _ => format!("{} h {} min", secs / 3600, (secs % 3600) / 60),
+        0..=59 => crate::i18n::trf("{secs} s", &[("secs", &secs)]),
+        60..=3599 => crate::i18n::trf(
+            "{mins} min {secs} s",
+            &[("mins", &(secs / 60)), ("secs", &(secs % 60))],
+        ),
+        _ => crate::i18n::trf(
+            "{hours} h {mins} min",
+            &[("hours", &(secs / 3600)), ("mins", &((secs % 3600) / 60))],
+        ),
     }
 }
 
@@ -33,9 +39,12 @@ impl EditorUi {
         }
         let ctx = ui.ctx().clone();
         let mut open = true;
-        crate::windows::Dialog::new("Ayatsuri API").open(&mut open).width(680.0).show(&ctx, |ui| {
-            self.api_window_body(ui);
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("Ayatsuri API"))
+            .open(&mut open)
+            .width(680.0)
+            .show(&ctx, |ui| {
+                self.api_window_body(ui);
+            });
         self.show_api_window = open;
         // the log and the values move while it is open
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
@@ -45,15 +54,18 @@ impl EditorUi {
         use crate::windows::settings::row;
         // ---- status ----
         let (state, col) = match (&self.api.server, &self.api.failed) {
-            (Some(s), _) => (format!("Listening on ws://{}", s.addr), theme::pal().warp_green),
+            (Some(s), _) => (
+                crate::i18n::trf("Listening on ws://{address}", &[("address", &s.addr)]),
+                theme::pal().warp_green,
+            ),
             (None, Some(e)) => (e.clone(), theme::pal().rotation_red),
-            (None, None) => ("Off".into(), theme::pal().text_faint),
+            (None, None) => (crate::i18n::tr("Off").into(), theme::pal().text_faint),
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new("●").color(col));
             ui.label(RichText::new(&state).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.checkbox(&mut self.prefs.api_enabled, "Enabled").changed() {
+                if ui.checkbox(&mut self.prefs.api_enabled, crate::i18n::tr("Enabled")).changed() {
                     self.api.failed = None;
                     self.prefs.save();
                 }
@@ -61,7 +73,7 @@ impl EditorUi {
         });
         let Some(server) = &self.api.server else {
             ui.add_space(6.0);
-            ui.weak("Turn the API on to accept apps such as VTube Studio.");
+            ui.weak(crate::i18n::tr("Turn the API on to accept apps such as VTube Studio."));
             return;
         };
         let shared = server.shared.clone();
@@ -85,29 +97,47 @@ impl EditorUi {
         }
         let (rin, rout) = self.api.win_rate;
         let faint = |s: String| RichText::new(s).color(theme::pal().text_faint);
-        row(ui, "Up for", "", |ui| {
+        row(ui, crate::i18n::tr("Up for"), "", |ui| {
             ui.label(faint(uptime(started.elapsed().as_secs())));
         });
-        row(ui, "Messages", "In and out since it started, and per second now", |ui| {
-            ui.label(faint(format!("in {ins} ({rin:.0}/s)   out {outs} ({rout:.0}/s)")));
-        });
-        row(ui, "Reachable from", "", |ui| {
+        row(
+            ui,
+            crate::i18n::tr("Messages"),
+            crate::i18n::tr("In and out since it started, and per second now"),
+            |ui| {
+                ui.label(faint(crate::i18n::trf(
+                    "in {ins} ({rate_in}/s)   out {outs} ({rate_out}/s)",
+                    &[
+                        ("ins", &ins),
+                        ("rate_in", &format!("{rin:.0}")),
+                        ("outs", &outs),
+                        ("rate_out", &format!("{rout:.0}")),
+                    ],
+                )));
+            },
+        );
+        row(ui, crate::i18n::tr("Reachable from"), "", |ui| {
             ui.label(faint(if addr.ip().is_loopback() {
-                "this computer only".into()
+                crate::i18n::tr("this computer only").into()
             } else {
-                "the network".into()
+                crate::i18n::tr("the network").into()
             }));
         });
 
         // ---- apps ----
         ui.add_space(6.0);
-        ui.label(RichText::new("APPS").size(11.5).strong().color(theme::pal().accent));
+        ui.label(
+            RichText::new(crate::i18n::tr("APPS")).size(11.5).strong().color(theme::pal().accent),
+        );
         self.api_clients_ui(ui);
 
         // ---- incoming values ----
         ui.add_space(6.0);
         ui.label(
-            RichText::new("PARAMETERS BEING DRIVEN").size(11.5).strong().color(theme::pal().accent),
+            RichText::new(crate::i18n::tr("PARAMETERS BEING DRIVEN"))
+                .size(11.5)
+                .strong()
+                .color(theme::pal().accent),
         );
         let mut driven: Vec<(String, f32, f32)> = lock(&shared.overrides)
             .iter()
@@ -115,7 +145,9 @@ impl EditorUi {
             .collect();
         driven.sort_by(|a, b| a.0.cmp(&b.0));
         if driven.is_empty() {
-            ui.weak("Nothing right now. Values an app sends show here while they are live.");
+            ui.weak(crate::i18n::tr(
+                "Nothing right now. Values an app sends show here while they are live.",
+            ));
         } else {
             ScrollArea::vertical().id_salt("api-driven").max_height(150.0).show(ui, |ui| {
                 egui::Grid::new("api-driven-grid")
@@ -126,7 +158,13 @@ impl EditorUi {
                         for (id, v, age) in driven.iter().take(500) {
                             ui.label(RichText::new(id).monospace().size(11.0));
                             ui.label(RichText::new(format!("{v:>9.3}")).monospace().size(11.0));
-                            ui.label(faint(format!("{:.0} ms ago", age * 1000.0)).size(10.5));
+                            ui.label(
+                                faint(crate::i18n::trf(
+                                    "{time} ms ago",
+                                    &[("time", &format!("{:.0}", age * 1000.0))],
+                                ))
+                                .size(10.5),
+                            );
                             ui.end_row();
                         }
                     });
@@ -136,20 +174,30 @@ impl EditorUi {
         // ---- traffic ----
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("TRAFFIC").size(11.5).strong().color(theme::pal().accent));
+            ui.label(
+                RichText::new(crate::i18n::tr("TRAFFIC"))
+                    .size(11.5)
+                    .strong()
+                    .color(theme::pal().accent),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Clear").clicked() {
+                if ui.small_button(crate::i18n::tr("Clear")).clicked() {
                     lock(&shared.traffic).clear();
                     self.api.win_frozen = None;
                     self.api.win_pick = None;
                 }
                 let mut paused = self.api.win_frozen.is_some();
-                if ui.checkbox(&mut paused, "Pause").changed() {
+                if ui.checkbox(&mut paused, crate::i18n::tr("Pause")).changed() {
                     self.api.win_frozen =
                         paused.then(|| lock(&shared.traffic).iter().cloned().collect());
                 }
-                ui.checkbox(&mut self.api.win_show_stream, "Show parameter stream")
-                    .on_hover_text("SetParameterValues and friends, which apps send every frame");
+                ui.checkbox(
+                    &mut self.api.win_show_stream,
+                    crate::i18n::tr("Show parameter stream"),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    "SetParameterValues and friends, which apps send every frame",
+                ));
             });
         });
         let log: Vec<crate::api::server::Traffic> = match &self.api.win_frozen {
@@ -168,7 +216,7 @@ impl EditorUi {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 if shown.is_empty() {
-                    ui.weak("No messages yet.");
+                    ui.weak(crate::i18n::tr("No messages yet."));
                 }
                 for (i, t) in &shown {
                     let at = t.at.saturating_duration_since(started).as_secs_f32();

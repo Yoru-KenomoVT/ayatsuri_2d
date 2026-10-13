@@ -64,13 +64,13 @@ pub(crate) fn display_name(path: &Path) -> String {
 pub(crate) fn ago(age: Duration) -> String {
     let m = age.as_secs() / 60;
     match m {
-        0 => "just now".into(),
-        1 => "a minute ago".into(),
-        2..=59 => format!("{m} minutes ago"),
-        60..=119 => "an hour ago".into(),
-        120..=1439 => format!("{} hours ago", m / 60),
-        1440..=2879 => "yesterday".into(),
-        _ => format!("{} days ago", m / 1440),
+        0 => crate::i18n::tr("just now").into(),
+        1 => crate::i18n::tr("a minute ago").into(),
+        2..=59 => crate::i18n::trf("{count} minutes ago", &[("count", &m)]),
+        60..=119 => crate::i18n::tr("an hour ago").into(),
+        120..=1439 => crate::i18n::trf("{count} hours ago", &[("count", &(m / 60))]),
+        1440..=2879 => crate::i18n::tr("yesterday").into(),
+        _ => crate::i18n::trf("{count} days ago", &[("count", &(m / 1440))]),
     }
 }
 

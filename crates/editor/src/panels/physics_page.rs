@@ -99,13 +99,13 @@ fn param_combo(ui: &mut Ui, salt: String, current: &mut String, ids: &[String], 
 
 fn kind_combo(ui: &mut Ui, salt: String, kind: &mut PhysicsIo) {
     let label = match kind {
-        PhysicsIo::Angle => "Angle",
-        PhysicsIo::X => "Position X",
-        PhysicsIo::Y => "Position Y",
+        PhysicsIo::Angle => crate::i18n::tr("Angle"),
+        PhysicsIo::X => crate::i18n::tr("Position X"),
+        PhysicsIo::Y => crate::i18n::tr("Position Y"),
     };
     egui::ComboBox::from_id_salt(salt).selected_text(label).width(80.0).show_ui(ui, |ui| {
-        ui.selectable_value(kind, PhysicsIo::X, "Position X");
-        ui.selectable_value(kind, PhysicsIo::Angle, "Angle");
+        ui.selectable_value(kind, PhysicsIo::X, crate::i18n::tr("Position X"));
+        ui.selectable_value(kind, PhysicsIo::Angle, crate::i18n::tr("Angle"));
     });
 }
 
@@ -195,7 +195,7 @@ fn tab_strip(ui: &mut Ui, labels: &[&str], active: &mut usize, enabled: &[bool])
                 *active = i;
             }
             if !ok {
-                resp.on_hover_text(NOT_YET);
+                resp.on_hover_text(crate::i18n::tr(NOT_YET));
             }
         }
         // the baseline the inactive tabs sit on runs to the edge
@@ -225,7 +225,7 @@ impl EditorUi {
         ui.painter().text(
             pos2(bar.min.x + 12.0, bar.center().y),
             Align2::LEFT_CENTER,
-            "Physics Settings",
+            crate::i18n::tr("Physics Settings"),
             FontId::proportional(12.5),
             theme::pal().text,
         );
@@ -235,7 +235,7 @@ impl EditorUi {
         ui.painter().text(
             close.center(),
             Align2::CENTER_CENTER,
-            "Close",
+            crate::i18n::tr("Close"),
             FontId::proportional(11.0),
             Color32::WHITE,
         );
@@ -254,13 +254,13 @@ impl EditorUi {
         let mut tui = ui.new_child(UiBuilder::new().max_rect(tools.shrink2(vec2(8.0, 3.0))));
         tui.horizontal_centered(|ui| {
             ui.add_enabled_ui(false, |ui| {
-                ui.label("Playlist:");
+                ui.label(crate::i18n::tr("Playlist:"));
                 egui::ComboBox::from_id_salt("phys-playlist")
                     .selected_text("")
                     .width(120.0)
                     .show_ui(ui, |_| {});
                 egui::ComboBox::from_id_salt("phys-pattern")
-                    .selected_text("[Pattern A]")
+                    .selected_text(crate::i18n::tr("[Pattern A]"))
                     .width(90.0)
                     .show_ui(ui, |_| {});
                 for g in [
@@ -270,22 +270,27 @@ impl EditorUi {
                 ] {
                     let _ = ui.button(g);
                 }
-                ui.label("Fading:");
+                ui.label(crate::i18n::tr("Fading:"));
                 egui::ComboBox::from_id_salt("phys-fade")
-                    .selected_text("None")
+                    .selected_text(crate::i18n::tr("None"))
                     .width(70.0)
                     .show_ui(ui, |_| {});
-                ui.label("Fading Time(ms):");
+                ui.label(crate::i18n::tr("Fading Time(ms):"));
                 ui.add(egui::DragValue::new(&mut 1000.0f32));
             })
             .response
-            .on_disabled_hover_text("Playlists are not built yet");
+            .on_disabled_hover_text(crate::i18n::tr("Playlists are not built yet"));
         });
         let tabs =
             Rect::from_min_size(pos2(content.min.x, tools.max.y), vec2(content.width(), 24.0));
         let mut tabui = ui.new_child(UiBuilder::new().max_rect(tabs.shrink2(vec2(8.0, 2.0))));
         let mut page_tab = 0usize;
-        tab_strip(&mut tabui, &["Physics", "Playlist"], &mut page_tab, &[true, false]);
+        tab_strip(
+            &mut tabui,
+            &[crate::i18n::tr("Physics"), crate::i18n::tr("Playlist")],
+            &mut page_tab,
+            &[true, false],
+        );
         ui.painter().line_segment(
             [pos2(content.min.x, tabs.max.y), pos2(content.max.x, tabs.max.y)],
             Stroke::new(1.0, theme::pal().border),
@@ -373,15 +378,21 @@ impl EditorUi {
     }
 
     fn physics_menus(&mut self, ui: &mut Ui) {
-        ui.menu_button("Edit", |ui| {
-            if ui.add(egui::Button::new("Undo").shortcut_text(self.sc("undo"))).clicked() {
+        ui.menu_button(crate::i18n::tr("Edit"), |ui| {
+            if ui
+                .add(egui::Button::new(crate::i18n::tr("Undo")).shortcut_text(self.sc("undo")))
+                .clicked()
+            {
                 ui.close();
                 if let Some(s) = &mut self.session {
                     s.undo();
                 }
                 self.phys_edit = None;
             }
-            if ui.add(egui::Button::new("Redo").shortcut_text(self.sc("redo"))).clicked() {
+            if ui
+                .add(egui::Button::new(crate::i18n::tr("Redo")).shortcut_text(self.sc("redo")))
+                .clicked()
+            {
                 ui.close();
                 if let Some(s) = &mut self.session {
                     s.redo();
@@ -389,21 +400,24 @@ impl EditorUi {
                 self.phys_edit = None;
             }
         });
-        ui.menu_button("Physics", |ui| {
+        ui.menu_button(crate::i18n::tr("Physics"), |ui| {
             let rig = self.phys_edit.get_or_insert_with(|| {
                 self.session
                     .as_ref()
                     .and_then(|s| s.puppet.model().physics.clone())
                     .unwrap_or_default()
             });
-            if ui.button("Add group").clicked() {
+            if ui.button(crate::i18n::tr("Add group")).clicked() {
                 let n = rig.groups.len() + 1;
                 rig.groups.push(default_physics_group(n));
                 self.phys_sel = rig.groups.len() - 1;
                 ui.close();
             }
             if ui
-                .add_enabled(self.phys_sel < rig.groups.len(), egui::Button::new("Duplicate group"))
+                .add_enabled(
+                    self.phys_sel < rig.groups.len(),
+                    egui::Button::new(crate::i18n::tr("Duplicate group")),
+                )
                 .clicked()
             {
                 if let Some(g) = rig.groups.get(self.phys_sel).cloned() {
@@ -417,7 +431,10 @@ impl EditorUi {
                 ui.close();
             }
             if ui
-                .add_enabled(self.phys_sel < rig.groups.len(), egui::Button::new("Delete group"))
+                .add_enabled(
+                    self.phys_sel < rig.groups.len(),
+                    egui::Button::new(crate::i18n::tr("Delete group")),
+                )
                 .clicked()
             {
                 rig.groups.remove(self.phys_sel);
@@ -425,24 +442,28 @@ impl EditorUi {
                 ui.close();
             }
             ui.separator();
-            if ui.button("Initialize FPS").clicked() {
+            if ui.button(crate::i18n::tr("Initialize FPS")).clicked() {
                 rig.fps = 60.0;
                 ui.close();
             }
         });
-        ui.menu_button("Playlist", |ui| {
-            ui.add_enabled(false, egui::Button::new("Playlists are not built yet"));
+        ui.menu_button(crate::i18n::tr("Playlist"), |ui| {
+            ui.add_enabled(
+                false,
+                egui::Button::new(crate::i18n::tr("Playlists are not built yet")),
+            );
         });
-        ui.menu_button("Preview", |ui| {
-            if ui.checkbox(&mut self.physics_on, "Run physics").changed() {
+        ui.menu_button(crate::i18n::tr("Preview"), |ui| {
+            if ui.checkbox(&mut self.physics_on, crate::i18n::tr("Run physics")).changed() {
                 ui.close();
             }
-            if ui.checkbox(&mut self.follow_cursor, "Follow the cursor").changed() {
+            if ui.checkbox(&mut self.follow_cursor, crate::i18n::tr("Follow the cursor")).changed()
+            {
                 ui.close();
             }
             if ui
                 .add(
-                    egui::Button::new("Reset Parameter to Default")
+                    egui::Button::new(crate::i18n::tr("Reset Parameter to Default"))
                         .shortcut_text(self.sc("reset-params")),
                 )
                 .clicked()
@@ -451,7 +472,7 @@ impl EditorUi {
                 self.reset_parameters();
             }
             ui.separator();
-            ui.label(egui::RichText::new("Wind").weak());
+            ui.label(egui::RichText::new(crate::i18n::tr("Wind")).weak());
             let rig = self.phys_edit.get_or_insert_with(|| {
                 self.session
                     .as_ref()
@@ -461,8 +482,8 @@ impl EditorUi {
             ui.add(egui::Slider::new(&mut rig.wind_x, -10.0..=10.0).text("X"));
             ui.add(egui::Slider::new(&mut rig.wind_y, -10.0..=10.0).text("Y"));
         });
-        ui.menu_button("Help", |ui| {
-            if ui.button("About Physics (online manual)").clicked() {
+        ui.menu_button(crate::i18n::tr("Help"), |ui| {
+            if ui.button(crate::i18n::tr("About Physics (online manual)")).clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(
                     "https://docs.live2d.com/en/cubism-editor-manual/physics-operation/",
                 ));
@@ -504,7 +525,7 @@ impl EditorUi {
         ui.spacing_mut().item_spacing = vec2(5.0, 4.0);
 
         ui.horizontal(|ui| {
-            ui.label("Calculate FPS:");
+            ui.label(crate::i18n::tr("Calculate FPS:"));
             let mut fps = if rig.fps > 0.0 { rig.fps } else { 60.0 };
             egui::ComboBox::from_id_salt("phys-fps")
                 .selected_text(format!("{fps:.0}"))
@@ -517,9 +538,12 @@ impl EditorUi {
             rig.fps = fps;
         });
         ui.horizontal(|ui| {
-            ui.label("Group:");
-            let current =
-                rig.groups.get(self.phys_sel).map(group_label).unwrap_or_else(|| "(none)".into());
+            ui.label(crate::i18n::tr("Group:"));
+            let current = rig
+                .groups
+                .get(self.phys_sel)
+                .map(group_label)
+                .unwrap_or_else(|| crate::i18n::tr("(none)").into());
             egui::ComboBox::from_id_salt("phys-group")
                 .selected_text(truncate(&current, 18))
                 .width(140.0)
@@ -535,19 +559,24 @@ impl EditorUi {
                 });
             let mut on = group_on;
             if ui
-                .checkbox(&mut on, "Enable")
-                .on_hover_text("Temporarily mute this group; resets when the page closes")
+                .checkbox(&mut on, crate::i18n::tr("Enable"))
+                .on_hover_text(crate::i18n::tr(
+                    "Temporarily mute this group; resets when the page closes",
+                ))
                 .changed()
             {
                 toggle_enable = true;
             }
-            if ui.button("Add…").clicked() {
+            if ui.button(crate::i18n::tr("Add…")).clicked() {
                 let n = rig.groups.len() + 1;
                 rig.groups.push(default_physics_group(n));
                 self.phys_sel = rig.groups.len() - 1;
             }
             if ui
-                .add_enabled(self.phys_sel < rig.groups.len(), egui::Button::new("Duplicate…"))
+                .add_enabled(
+                    self.phys_sel < rig.groups.len(),
+                    egui::Button::new(crate::i18n::tr("Duplicate…")),
+                )
                 .clicked()
                 && let Some(g) = rig.groups.get(self.phys_sel).cloned()
             {
@@ -559,7 +588,10 @@ impl EditorUi {
                 self.phys_sel = rig.groups.len() - 1;
             }
             if ui
-                .add_enabled(self.phys_sel < rig.groups.len(), egui::Button::new("Group editing…"))
+                .add_enabled(
+                    self.phys_sel < rig.groups.len(),
+                    egui::Button::new(crate::i18n::tr("Group editing…")),
+                )
                 .clicked()
                 && let Some(g) = rig.groups.get(self.phys_sel)
             {
@@ -571,7 +603,7 @@ impl EditorUi {
         let reach = rig_groups_reach(&rig, self.phys_sel);
         let sel = self.phys_sel;
         let Some(g) = rig.groups.get_mut(sel) else {
-            ui.weak("Add a group to begin (Add… above, or Physics > Add group).");
+            ui.weak(crate::i18n::tr("Add a group to begin (Add… above, or Physics > Add group)."));
             self.phys_edit = Some(rig);
             return;
         };
@@ -628,7 +660,7 @@ impl EditorUi {
         panel(ui, r_tabs, "phys-p-tabs", |ui| {
             tab_strip(
                 ui,
-                &["Input settings", "Output settings"],
+                &[crate::i18n::tr("Input settings"), crate::i18n::tr("Output settings")],
                 &mut self.phys_tab,
                 &[true, true],
             );
@@ -640,7 +672,7 @@ impl EditorUi {
             }
         });
         panel(ui, r_model, "phys-p-model", |ui| {
-            ui.label(egui::RichText::new("Physics model settings").size(11.5));
+            ui.label(egui::RichText::new(crate::i18n::tr("Physics model settings")).size(11.5));
             self.physics_model(ui, g);
         });
         let nodes_copy = g.nodes.clone();
@@ -648,7 +680,7 @@ impl EditorUi {
         let live_chain = self.session.as_ref().and_then(|s| s.puppet.physics_group_nodes(sel));
         let prev_size = vec2((r_prev.width() - 16.0).max(60.0), (r_prev.height() - 52.0).max(60.0));
         panel(ui, r_prev, "phys-p-prev", |ui| {
-            ui.label(egui::RichText::new("Pendulum preview").size(11.5));
+            ui.label(egui::RichText::new(crate::i18n::tr("Pendulum preview")).size(11.5));
             self.pendulum_preview(ui, reach, &nodes_copy, prev_size, live_chain);
         });
 
@@ -717,13 +749,20 @@ impl EditorUi {
         // as in Cubism's Input settings tab
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                group_box(ui, "Preset", |ui| {
+                group_box(ui, crate::i18n::tr("Preset"), |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        let names = ["Head input", "Torso input", "Chest input"];
+                        ui.label(crate::i18n::tr("Name:"));
+                        let names = [
+                            crate::i18n::tr("Head input"),
+                            crate::i18n::tr("Torso input"),
+                            crate::i18n::tr("Chest input"),
+                        ];
                         egui::ComboBox::from_id_salt("phys-in-preset")
                             .selected_text(
-                                names.get(self.phys_preset).copied().unwrap_or("Head input"),
+                                names
+                                    .get(self.phys_preset)
+                                    .copied()
+                                    .unwrap_or(crate::i18n::tr("Head input")),
                             )
                             .width(110.0)
                             .show_ui(ui, |ui| {
@@ -731,32 +770,34 @@ impl EditorUi {
                                     ui.selectable_value(&mut self.phys_preset, i, *n);
                                 }
                             });
-                        if ui.button("Import").clicked() {
+                        if ui.button(crate::i18n::tr("Import")).clicked() {
                             g.inputs = input_preset(self.phys_preset);
                         }
                     });
                     ui.horizontal(|ui| {
                         for b in ["Add…", "Overwrite Save", "Rename…", "Delete"] {
-                            ui.add_enabled(false, egui::Button::new(b))
-                                .on_disabled_hover_text("Custom presets are not built yet");
+                            ui.add_enabled(false, egui::Button::new(crate::i18n::tr(b)))
+                                .on_disabled_hover_text(crate::i18n::tr(
+                                    "Custom presets are not built yet",
+                                ));
                         }
                     });
                 });
                 ui.add_space(4.0);
-                group_box(ui, "Normalization of input", |ui| {
+                group_box(ui, crate::i18n::tr("Normalization of input"), |ui| {
                     egui::Grid::new("phys-norm").num_columns(4).spacing([6.0, 2.0]).show(
                         ui,
                         |ui| {
                             head(ui, "", 64.0);
-                            head(ui, "Minimum", 60.0);
-                            head(ui, "Center", 60.0);
-                            head(ui, "Maximum", 60.0);
+                            head(ui, crate::i18n::tr("Minimum"), 60.0);
+                            head(ui, crate::i18n::tr("Center"), 60.0);
+                            head(ui, crate::i18n::tr("Maximum"), 60.0);
                             ui.end_row();
                             for (label, r) in [
                                 ("Angle:", &mut g.norm_angle),
                                 ("Position X:", &mut g.norm_position),
                             ] {
-                                ui.label(label);
+                                ui.label(crate::i18n::tr(label));
                                 ui.add_sized(
                                     [60.0, 18.0],
                                     egui::DragValue::new(&mut r.min).speed(0.5),
@@ -778,7 +819,7 @@ impl EditorUi {
             ui.add_space(6.0);
             group_box(ui, "", |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Add…").clicked() {
+                    if ui.button(crate::i18n::tr("Add…")).clicked() {
                         g.inputs.push(PhysicsInput {
                             param: ids.first().cloned().unwrap_or_default(),
                             weight: 100.0,
@@ -788,7 +829,9 @@ impl EditorUi {
                         self.phys_page.in_sel = Some(g.inputs.len() - 1);
                     }
                     let sel = self.phys_page.in_sel.filter(|&i| i < g.inputs.len());
-                    if ui.add_enabled(sel.is_some(), egui::Button::new("Delete")).clicked()
+                    if ui
+                        .add_enabled(sel.is_some(), egui::Button::new(crate::i18n::tr("Delete")))
+                        .clicked()
                         && let Some(i) = sel
                     {
                         g.inputs.remove(i);
@@ -812,10 +855,10 @@ impl EditorUi {
                         .striped(true)
                         .show(ui, |ui| {
                             head(ui, "", 18.0);
-                            head(ui, "Input", 126.0);
-                            head(ui, "Type", 84.0);
-                            head(ui, "Effectiveness", 70.0);
-                            head(ui, "Reflect", 40.0);
+                            head(ui, crate::i18n::tr("Input"), 126.0);
+                            head(ui, crate::i18n::tr("Type"), 84.0);
+                            head(ui, crate::i18n::tr("Effectiveness"), 70.0);
+                            head(ui, crate::i18n::tr("Reflect"), 40.0);
                             ui.end_row();
                             for (i, inp) in g.inputs.iter_mut().enumerate() {
                                 if row_pick(
@@ -852,7 +895,7 @@ impl EditorUi {
         let mut reset = false;
         let n_nodes = g.nodes.len().saturating_sub(1).max(1) as u32;
         ui.horizontal(|ui| {
-            if ui.button("Add…").clicked() {
+            if ui.button(crate::i18n::tr("Add…")).clicked() {
                 g.outputs.push(PhysicsOutput {
                     param: ids.first().cloned().unwrap_or_default(),
                     vertex: n_nodes,
@@ -864,7 +907,7 @@ impl EditorUi {
                 self.phys_page.out_sel = Some(g.outputs.len() - 1);
             }
             let sel = self.phys_page.out_sel.filter(|&i| i < g.outputs.len());
-            if ui.add_enabled(sel.is_some(), egui::Button::new("Delete")).clicked()
+            if ui.add_enabled(sel.is_some(), egui::Button::new(crate::i18n::tr("Delete"))).clicked()
                 && let Some(i) = sel
             {
                 g.outputs.remove(i);
@@ -880,19 +923,19 @@ impl EditorUi {
             {
                 self.phys_page.out_sel = Some(shift(&mut g.outputs, i, false));
             }
-            ui.checkbox(&mut self.phys_auto_max, "Auto Update the Output Maximum");
+            ui.checkbox(&mut self.phys_auto_max, crate::i18n::tr("Auto Update the Output Maximum"));
         });
         let mut menu_cmd: Option<u8> = None;
         table(ui, |ui| {
             egui::Grid::new("phys-out").num_columns(6).spacing([4.0, 2.0]).striped(true).show(
                 ui,
                 |ui| {
-                    head(ui, "Pendulum No.", 72.0);
-                    head(ui, "Output", 126.0);
-                    head(ui, "Effectiveness", 66.0);
-                    head(ui, "Reflect", 40.0);
-                    head(ui, "Scale", 56.0);
-                    head(ui, "Output Max (%)", 76.0);
+                    head(ui, crate::i18n::tr("Pendulum No."), 72.0);
+                    head(ui, crate::i18n::tr("Output"), 126.0);
+                    head(ui, crate::i18n::tr("Effectiveness"), 66.0);
+                    head(ui, crate::i18n::tr("Reflect"), 40.0);
+                    head(ui, crate::i18n::tr("Scale"), 56.0);
+                    head(ui, crate::i18n::tr("Output Max (%)"), 76.0);
                     ui.end_row();
                     for (i, out) in g.outputs.iter_mut().enumerate() {
                         let r = ui.add_sized(
@@ -942,7 +985,7 @@ impl EditorUi {
                             .iter()
                             .enumerate()
                             {
-                                if ui.button(*label).clicked() {
+                                if ui.button(crate::i18n::tr(label)).clicked() {
                                     menu_cmd = Some(n as u8);
                                     ui.close();
                                 }
@@ -985,16 +1028,16 @@ impl EditorUi {
                 }
             };
             if ui
-                .button("Increase Output (up)")
-                .on_hover_text("Scale outputs that peak under 100% up to 100%")
+                .button(crate::i18n::tr("Increase Output (up)"))
+                .on_hover_text(crate::i18n::tr("Scale outputs that peak under 100% up to 100%"))
                 .clicked()
             {
                 adjust(&mut g.outputs, true);
                 reset = true;
             }
             if ui
-                .button("Increase Output (down)")
-                .on_hover_text("Scale outputs that overshoot 100% down to it")
+                .button(crate::i18n::tr("Increase Output (down)"))
+                .on_hover_text(crate::i18n::tr("Scale outputs that overshoot 100% down to it"))
                 .clicked()
             {
                 adjust(&mut g.outputs, false);
@@ -1002,12 +1045,12 @@ impl EditorUi {
             }
         });
         ui.horizontal(|ui| {
-            if ui.button("Reset scale").clicked() {
+            if ui.button(crate::i18n::tr("Reset scale")).clicked() {
                 for o in &mut g.outputs {
                     o.scale = 1.0;
                 }
             }
-            if ui.button("Reset maximum output").clicked() {
+            if ui.button(crate::i18n::tr("Reset maximum output")).clicked() {
                 reset = true;
             }
         });
@@ -1015,28 +1058,30 @@ impl EditorUi {
     }
 
     fn physics_model(&mut self, ui: &mut Ui, g: &mut PhysicsGroup) {
-        group_box(ui, "Preset", |ui| {
+        group_box(ui, crate::i18n::tr("Preset"), |ui| {
             ui.horizontal(|ui| {
-                ui.label("Name:");
+                ui.label(crate::i18n::tr("Name:"));
                 ui.add_enabled_ui(false, |ui| {
                     egui::ComboBox::from_id_salt("phys-model-preset")
                         .selected_text("")
                         .width(110.0)
                         .show_ui(ui, |_| {});
-                    let _ = ui.button("Import");
+                    let _ = ui.button(crate::i18n::tr("Import"));
                 });
             });
             ui.horizontal(|ui| {
                 for b in ["Add…", "Overwrite Save", "Rename…", "Delete"] {
-                    ui.add_enabled(false, egui::Button::new(b))
-                        .on_disabled_hover_text("Custom presets are not built yet");
+                    ui.add_enabled(false, egui::Button::new(crate::i18n::tr(b)))
+                        .on_disabled_hover_text(crate::i18n::tr(
+                            "Custom presets are not built yet",
+                        ));
                 }
             });
         });
         ui.add_space(4.0);
-        group_box(ui, "Pendulum settings", |ui| {
+        group_box(ui, crate::i18n::tr("Pendulum settings"), |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Add").clicked() {
+                if ui.button(crate::i18n::tr("Add")).clicked() {
                     let last = g.nodes.last().cloned().unwrap_or(PhysicsNode {
                         x: 0.0,
                         y: 10.0,
@@ -1048,14 +1093,19 @@ impl EditorUi {
                     g.nodes.push(last);
                 }
                 let sel = self.phys_page.node_sel.filter(|&i| i >= 1 && i < g.nodes.len());
-                if ui.add_enabled(sel.is_some(), egui::Button::new("Duplicate")).clicked()
+                if ui
+                    .add_enabled(sel.is_some(), egui::Button::new(crate::i18n::tr("Duplicate")))
+                    .clicked()
                     && let Some(i) = sel
                     && let Some(n) = g.nodes.get(i).cloned()
                 {
                     g.nodes.push(n);
                 }
                 if ui
-                    .add_enabled(sel.is_some() && g.nodes.len() > 2, egui::Button::new("Delete"))
+                    .add_enabled(
+                        sel.is_some() && g.nodes.len() > 2,
+                        egui::Button::new(crate::i18n::tr("Delete")),
+                    )
                     .clicked()
                     && let Some(i) = sel
                 {
@@ -1085,11 +1135,11 @@ impl EditorUi {
                 egui::Grid::new("phys-nodes").num_columns(5).spacing([4.0, 2.0]).striped(true).show(
                     ui,
                     |ui| {
-                        head(ui, "No.", 30.0);
-                        head(ui, "Duration", 64.0);
-                        head(ui, "Ease of swinging", 92.0);
-                        head(ui, "Reaction time", 78.0);
-                        head(ui, "Speed of convergence", 112.0);
+                        head(ui, crate::i18n::tr("No."), 30.0);
+                        head(ui, crate::i18n::tr("Duration"), 64.0);
+                        head(ui, crate::i18n::tr("Ease of swinging"), 92.0);
+                        head(ui, crate::i18n::tr("Reaction time"), 78.0);
+                        head(ui, crate::i18n::tr("Speed of convergence"), 112.0);
                         ui.end_row();
                         for (i, n) in g.nodes.iter_mut().enumerate().skip(1) {
                             if row_pick(
@@ -1145,20 +1195,23 @@ impl EditorUi {
         let Some((name, id)) = &mut self.phys_page.group_edit else { return };
         let mut open = true;
         let (mut ok, mut delete) = (false, false);
-        crate::windows::Dialog::new("Group editing").open(&mut open).show(ui.ctx(), |ui| {
-            crate::windows::form(ui, "pg-edit", |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(name);
-                ui.end_row();
-                ui.label("ID");
-                ui.text_edit_singleline(id);
-                ui.end_row();
-            });
-            ui.horizontal(|ui| {
-                ok = ui.button("OK").clicked();
-                delete = ui.button("Delete group").clicked();
-            });
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("Group editing")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                crate::windows::form(ui, "pg-edit", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("ID"));
+                    ui.text_edit_singleline(id);
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    ok = ui.button(crate::i18n::tr("OK")).clicked();
+                    delete = ui.button(crate::i18n::tr("Delete group")).clicked();
+                });
+            },
+        );
         if ok || delete {
             let (name, id) = (name.clone(), id.clone());
             self.phys_page.group_edit = None;

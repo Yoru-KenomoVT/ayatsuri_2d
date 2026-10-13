@@ -123,7 +123,7 @@ const LABEL_COLORS: [[u8; 3]; 6] = [
 /// pick: Some(Some(rgb)) for a colour, Some(None) for clear.
 fn color_menu(ui: &mut Ui) -> Option<Option<[u8; 3]>> {
     let mut out = None;
-    ui.menu_button("Label color", |ui| {
+    ui.menu_button(crate::i18n::tr("Label color"), |ui| {
         ui.horizontal(|ui| {
             for c in LABEL_COLORS {
                 let (rect, resp) =
@@ -135,7 +135,7 @@ fn color_menu(ui: &mut Ui) -> Option<Option<[u8; 3]>> {
                 }
             }
         });
-        if ui.button("Clear").clicked() {
+        if ui.button(crate::i18n::tr("Clear")).clicked() {
             out = Some(None);
             ui.close();
         }
@@ -166,29 +166,37 @@ pub(super) fn name_menu(
     subject: Option<Moving>,
 ) -> Option<ParamCmd> {
     let mut out = None;
-    item(ui, true, "Edit Parameter…", ParamCmd::Edit(pi), &mut out);
-    item(ui, true, "Create Parameter…", ParamCmd::Create(None), &mut out);
-    item(ui, true, "Replicate parameters", ParamCmd::Replicate(pi), &mut out);
-    item(ui, true, "Create folder", ParamCmd::CreateFolder, &mut out);
-    item(ui, true, "Delete", ParamCmd::Delete(pi), &mut out);
+    item(ui, true, crate::i18n::tr("Edit Parameter…"), ParamCmd::Edit(pi), &mut out);
+    item(ui, true, crate::i18n::tr("Create Parameter…"), ParamCmd::Create(None), &mut out);
+    item(ui, true, crate::i18n::tr("Replicate parameters"), ParamCmd::Replicate(pi), &mut out);
+    item(ui, true, crate::i18n::tr("Create folder"), ParamCmd::CreateFolder, &mut out);
+    item(ui, true, crate::i18n::tr("Delete"), ParamCmd::Delete(pi), &mut out);
     ui.separator();
     if s.combined.iter().any(|&(a, b)| a == pi || b == pi) {
-        item(ui, true, "Unlink parameters", ParamCmd::Uncombine(pi), &mut out);
+        item(ui, true, crate::i18n::tr("Unlink parameters"), ParamCmd::Uncombine(pi), &mut out);
     } else {
-        item(ui, true, "Link with parameter below", ParamCmd::Combine(pi), &mut out);
+        item(
+            ui,
+            true,
+            crate::i18n::tr("Link with parameter below"),
+            ParamCmd::Combine(pi),
+            &mut out,
+        );
     }
     // a right-click on a picked row acts on the whole pick
     let n = if s.param_picked.contains(&pi) { s.param_picked.len().max(1) } else { 1 };
-    let what = if n > 1 { format!("{n} Parameters") } else { String::new() };
-    let move_label =
-        if n > 1 { format!("Select {what} for Movement") } else { "Select for Movement".into() };
+    let move_label = if n > 1 {
+        crate::i18n::trf("Select {count} Parameters for Movement", &[("count", &n)])
+    } else {
+        crate::i18n::tr("Select for Movement").into()
+    };
     item(ui, true, &move_label, ParamCmd::MoveSubject(pi), &mut out);
     let can_move = subject.is_some_and(|m| m != Moving::Param(pi));
-    item(ui, can_move, "Move Here", ParamCmd::MoveHere(pi), &mut out);
+    item(ui, can_move, crate::i18n::tr("Move Here"), ParamCmd::MoveHere(pi), &mut out);
     let group_label = if n > 1 {
-        format!("Group {what} into New Folder…")
+        crate::i18n::trf("Group {count} Parameters into New Folder…", &[("count", &n)])
     } else {
-        "Group into New Folder…".into()
+        crate::i18n::tr("Group into New Folder…").into()
     };
     item(ui, true, &group_label, ParamCmd::GroupSelected(pi), &mut out);
     let folders: Vec<(usize, String)> = s
@@ -199,14 +207,14 @@ pub(super) fn name_menu(
         .map(|(gi, g)| (gi, g.name.clone()))
         .collect();
     ui.add_enabled_ui(!folders.is_empty(), |ui| {
-        ui.menu_button("Move to Folder", |ui| {
+        ui.menu_button(crate::i18n::tr("Move to Folder"), |ui| {
             for (gi, name) in &folders {
                 item(ui, true, name, ParamCmd::MoveSelectedTo(pi, *gi), &mut out);
             }
         });
     });
     ui.separator();
-    if ui.button("Reset to default").clicked() {
+    if ui.button(crate::i18n::tr("Reset to default")).clicked() {
         let d = s.puppet.model().parameters.get(pi).map(|p| p.default).unwrap_or(0.0);
         s.puppet.set_value(pi, d);
         s.dirty = true;
@@ -225,15 +233,15 @@ pub(super) fn name_menu(
 /// Change, which work on the selected objects.
 pub(super) fn slider_menu(ui: &mut Ui, pi: usize, v: f32, can_edit: bool) -> Option<ParamCmd> {
     let mut out = None;
-    item(ui, can_edit, "Add Single Keyform", ParamCmd::AddSingle(pi, v), &mut out);
-    item(ui, can_edit, "Delete Keyform", ParamCmd::DeleteKey(pi), &mut out);
+    item(ui, can_edit, crate::i18n::tr("Add Single Keyform"), ParamCmd::AddSingle(pi, v), &mut out);
+    item(ui, can_edit, crate::i18n::tr("Delete Keyform"), ParamCmd::DeleteKey(pi), &mut out);
     ui.separator();
-    item(ui, true, "Select", ParamCmd::Select(pi), &mut out);
-    item(ui, can_edit, "Reflect", ParamCmd::Reflect(pi), &mut out);
-    item(ui, can_edit, "Adjust…", ParamCmd::Adjust(pi), &mut out);
-    item(ui, can_edit, "Change…", ParamCmd::Change(pi), &mut out);
+    item(ui, true, crate::i18n::tr("Select"), ParamCmd::Select(pi), &mut out);
+    item(ui, can_edit, crate::i18n::tr("Reflect"), ParamCmd::Reflect(pi), &mut out);
+    item(ui, can_edit, crate::i18n::tr("Adjust…"), ParamCmd::Adjust(pi), &mut out);
+    item(ui, can_edit, crate::i18n::tr("Change…"), ParamCmd::Change(pi), &mut out);
     ui.separator();
-    item(ui, can_edit, "Motion Mirroring…", ParamCmd::Mirror(pi), &mut out);
+    item(ui, can_edit, crate::i18n::tr("Motion Mirroring…"), ParamCmd::Mirror(pi), &mut out);
     out
 }
 
@@ -252,21 +260,33 @@ pub(super) fn group_menu(
         g.color = pick;
         s.modified = true;
     }
-    item(ui, true, "Create Parameter…", ParamCmd::Create(Some(gi)), &mut out);
-    item(ui, true, "Replicate parameters", ParamCmd::ReplicateGroup(gi), &mut out);
-    item(ui, true, "Create folder", ParamCmd::CreateFolder, &mut out);
-    item(ui, true, "Delete", ParamCmd::DeleteGroup(gi), &mut out);
+    item(ui, true, crate::i18n::tr("Create Parameter…"), ParamCmd::Create(Some(gi)), &mut out);
+    item(ui, true, crate::i18n::tr("Replicate parameters"), ParamCmd::ReplicateGroup(gi), &mut out);
+    item(ui, true, crate::i18n::tr("Create folder"), ParamCmd::CreateFolder, &mut out);
+    item(ui, true, crate::i18n::tr("Delete"), ParamCmd::DeleteGroup(gi), &mut out);
     ui.separator();
-    item(ui, true, "Select for Movement", ParamCmd::MoveGroupSubject(gi), &mut out);
+    item(
+        ui,
+        true,
+        crate::i18n::tr("Select for Movement"),
+        ParamCmd::MoveGroupSubject(gi),
+        &mut out,
+    );
     let can_move = subject.is_some_and(|m| m != Moving::Group(gi));
-    item(ui, can_move, "Move Here", ParamCmd::MoveIntoGroup(gi), &mut out);
+    item(ui, can_move, crate::i18n::tr("Move Here"), ParamCmd::MoveIntoGroup(gi), &mut out);
     ui.separator();
-    item(ui, true, "Rename…        (double-click)", ParamCmd::RenameGroup(gi), &mut out);
-    if ui.button("Expand all").clicked() {
+    item(
+        ui,
+        true,
+        crate::i18n::tr("Rename…        (double-click)"),
+        ParamCmd::RenameGroup(gi),
+        &mut out,
+    );
+    if ui.button(crate::i18n::tr("Expand all")).clicked() {
         s.groups.iter_mut().for_each(|g| g.open = true);
         ui.close();
     }
-    if ui.button("Collapse all").clicked() {
+    if ui.button(crate::i18n::tr("Collapse all")).clicked() {
         s.groups.iter_mut().for_each(|g| g.open = false);
         ui.close();
     }
@@ -281,28 +301,46 @@ pub(super) fn panel_menu(
     sc: &dyn Fn(&str) -> String,
 ) -> Option<ParamCmd> {
     let mut out = None;
-    item(ui, true, "Create Parameter…", ParamCmd::Create(None), &mut out);
-    item(ui, true, "Create folder", ParamCmd::CreateFolder, &mut out);
+    item(ui, true, crate::i18n::tr("Create Parameter…"), ParamCmd::Create(None), &mut out);
+    item(ui, true, crate::i18n::tr("Create folder"), ParamCmd::CreateFolder, &mut out);
     ui.separator();
-    item_sc(ui, "Reset to default values", &sc("reset-params"), ParamCmd::ResetAll, &mut out);
     item_sc(
         ui,
-        "Automatic Generation of Four Corner Forms…",
+        crate::i18n::tr("Reset to default values"),
+        &sc("reset-params"),
+        ParamCmd::ResetAll,
+        &mut out,
+    );
+    item_sc(
+        ui,
+        crate::i18n::tr("Automatic Generation of Four Corner Forms…"),
         &sc("four-corners"),
         ParamCmd::FourCorners,
         &mut out,
     );
-    if ui.button("Expand all").clicked() {
+    if ui.button(crate::i18n::tr("Expand all")).clicked() {
         s.groups.iter_mut().for_each(|g| g.open = true);
         ui.close();
     }
-    if ui.button("Collapse all").clicked() {
+    if ui.button(crate::i18n::tr("Collapse all")).clicked() {
         s.groups.iter_mut().for_each(|g| g.open = false);
         ui.close();
     }
     ui.separator();
-    item(ui, true, "Delete empty parameters", ParamCmd::DeleteEmptyParams, &mut out);
-    item(ui, true, "Delete empty parameter groups", ParamCmd::DeleteEmptyGroups, &mut out);
+    item(
+        ui,
+        true,
+        crate::i18n::tr("Delete empty parameters"),
+        ParamCmd::DeleteEmptyParams,
+        &mut out,
+    );
+    item(
+        ui,
+        true,
+        crate::i18n::tr("Delete empty parameter groups"),
+        ParamCmd::DeleteEmptyGroups,
+        &mut out,
+    );
     out
 }
 
@@ -750,15 +788,18 @@ impl EditorUi {
         if let Some((gi, name)) = &mut self.pmenu.rename {
             let mut open = true;
             let mut ok = false;
-            crate::windows::Dialog::new("Rename Folder").open(&mut open).show(&ctx, |ui| {
-                let r = ui.text_edit_singleline(name);
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    ok = true;
-                }
-                if ui.button("OK").clicked() {
-                    ok = true;
-                }
-            });
+            crate::windows::Dialog::new(crate::i18n::tr("Rename Folder")).open(&mut open).show(
+                &ctx,
+                |ui| {
+                    let r = ui.text_edit_singleline(name);
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        ok = true;
+                    }
+                    if ui.button(crate::i18n::tr("OK")).clicked() {
+                        ok = true;
+                    }
+                },
+            );
             if ok {
                 let (gi, name) = (*gi, name.trim().to_string());
                 self.pmenu.rename = None;
@@ -793,39 +834,39 @@ impl EditorUi {
         if let Some(c) = &mut self.pmenu.corners {
             let mut open = true;
             let mut run = false;
-            crate::windows::Dialog::new("Automatic Generation of Four Corner Forms").open(&mut open).show(&ctx, |ui| {
+            crate::windows::Dialog::new(crate::i18n::tr("Automatic Generation of Four Corner Forms")).open(&mut open).show(&ctx, |ui| {
                     crate::windows::form(ui, "corners", |ui| {
-                        ui.label("Parameter 1 (left/right)");
+                        ui.label(crate::i18n::tr("Parameter 1 (left/right)"));
                         pick(ui, "c-pa", &mut c.pa);
                         ui.end_row();
-                        ui.label("Parameter 2 (down/up)");
+                        ui.label(crate::i18n::tr("Parameter 2 (down/up)"));
                         pick(ui, "c-pb", &mut c.pb);
                         ui.end_row();
-                        ui.label("Parameter value to reference");
+                        ui.label(crate::i18n::tr("Parameter value to reference"));
                         ui.horizontal(|ui| {
-                            ui.radio_value(&mut c.centre, false, "Default value");
-                            ui.radio_value(&mut c.centre, true, "Center of parameters");
+                            ui.radio_value(&mut c.centre, false, crate::i18n::tr("Default value"));
+                            ui.radio_value(&mut c.centre, true, crate::i18n::tr("Center of parameters"));
                         });
                         ui.end_row();
-                        ui.label("Overwrite key");
+                        ui.label(crate::i18n::tr("Overwrite key"));
                         egui::Grid::new("corners-ow").show(ui, |ui| {
-                            ui.checkbox(&mut c.overwrite[0], "Top left");
-                            ui.checkbox(&mut c.overwrite[1], "Top right");
+                            ui.checkbox(&mut c.overwrite[0], crate::i18n::tr("Top left"));
+                            ui.checkbox(&mut c.overwrite[1], crate::i18n::tr("Top right"));
                             ui.end_row();
-                            ui.checkbox(&mut c.overwrite[2], "Bottom left");
-                            ui.checkbox(&mut c.overwrite[3], "Bottom right");
+                            ui.checkbox(&mut c.overwrite[2], crate::i18n::tr("Bottom left"));
+                            ui.checkbox(&mut c.overwrite[3], crate::i18n::tr("Bottom right"));
                             ui.end_row();
                         });
                         ui.end_row();
-                        ui.label("Target");
+                        ui.label(crate::i18n::tr("Target"));
                         ui.vertical(|ui| {
-                            ui.radio_value(&mut c.all, false, "Selected objects");
-                            ui.radio_value(&mut c.all, true, "All objects keyed on both");
+                            ui.radio_value(&mut c.all, false, crate::i18n::tr("Selected objects"));
+                            ui.radio_value(&mut c.all, true, crate::i18n::tr("All objects keyed on both"));
                         });
                         ui.end_row();
                     });
-                    ui.weak("Each corner becomes its left/right form plus its up/down form minus the centre. Make the four directions first.");
-                    if ui.button("OK").clicked() {
+                    ui.weak(crate::i18n::tr("Each corner becomes its left/right form plus its up/down form minus the centre. Make the four directions first."));
+                    if ui.button(crate::i18n::tr("OK")).clicked() {
                         run = true;
                     }
                 });
@@ -870,34 +911,40 @@ impl EditorUi {
             let mut go = false;
             let mut cancel = false;
             let name = names.get(p).cloned().unwrap_or_default();
-            crate::windows::Dialog::new("Delete Parameter").open(&mut open).width(360.0).show(
-                &ctx,
-                |ui| {
+            crate::windows::Dialog::new(crate::i18n::tr("Delete Parameter"))
+                .open(&mut open)
+                .width(360.0)
+                .show(&ctx, |ui| {
                     let mut uses = Vec::new();
                     if objects > 0 {
-                        uses.push(format!("{objects} object(s)"));
+                        uses.push(crate::i18n::trf("{count} object(s)", &[("count", &objects)]));
                     }
                     if physics > 0 {
-                        uses.push(format!("{physics} physics setting(s)"));
+                        uses.push(crate::i18n::trf(
+                            "{count} physics setting(s)",
+                            &[("count", &physics)],
+                        ));
                     }
-                    ui.label(format!("{name} is still used by {}.", uses.join(" and ")));
-                    ui.weak(
+                    ui.label(crate::i18n::trf(
+                        "{name} is still used by {uses}.",
+                        &[("name", &name), ("uses", &uses.join(crate::i18n::tr(" and ")))],
+                    ));
+                    ui.weak(crate::i18n::tr(
                         "Unbind it everywhere and delete it? Every object keeps the shape it \
                          has at the parameter's default, physics stops reading or driving it, \
                          and a physics group left with nothing to do is removed. Undo puts it \
                          all back.",
-                    );
+                    ));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Unbind and delete").clicked() {
+                        if ui.button(crate::i18n::tr("Unbind and delete")).clicked() {
                             go = true;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(crate::i18n::tr("Cancel")).clicked() {
                             cancel = true;
                         }
                     });
-                },
-            );
+                });
             if go {
                 self.pmenu.delete_ask = None;
                 self.delete_parameter_unbinding(p);
@@ -911,35 +958,40 @@ impl EditorUi {
             let mut open = true;
             let mut run = false;
             let name = names.get(p).cloned().unwrap_or_default();
-            crate::windows::Dialog::new("Reflect").open(&mut open).width(340.0).show(&ctx, |ui| {
-                match opposite {
+            crate::windows::Dialog::new(crate::i18n::tr("Reflect"))
+                .open(&mut open)
+                .width(340.0)
+                .show(&ctx, |ui| match opposite {
                     Some(to) => {
-                        ui.label(format!(
+                        ui.label(crate::i18n::trf(
                             "The keyform at {to} on {name} will be overwritten with a mirror \
-                             image of the keyform at {from}."
+                             image of the keyform at {from}.",
+                            &[("to", &to), ("name", &name), ("from", &from)],
                         ));
-                        ui.weak("This applies to the selected objects. Undo brings it back.");
+                        ui.weak(crate::i18n::tr(
+                            "This applies to the selected objects. Undo brings it back.",
+                        ));
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Overwrite").clicked() {
+                            if ui.button(crate::i18n::tr("Overwrite")).clicked() {
                                 run = true;
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(crate::i18n::tr("Cancel")).clicked() {
                                 self.pmenu.reflect = None;
                             }
                         });
                     }
                     None => {
-                        ui.label(format!(
+                        ui.label(crate::i18n::trf(
                             "Move {name} onto a key other than the default, on an object that \
-                             also has the opposite key."
+                             also has the opposite key.",
+                            &[("name", &name)],
                         ));
-                        if ui.button("Close").clicked() {
+                        if ui.button(crate::i18n::tr("Close")).clicked() {
                             self.pmenu.reflect = None;
                         }
                     }
-                }
-            });
+                });
             if run {
                 self.pmenu.reflect = None;
                 self.reflect_into_opposite(p, from);
@@ -951,22 +1003,22 @@ impl EditorUi {
         if let Some(mi) = &mut self.pmenu.mirror {
             let mut open = true;
             let mut run = false;
-            crate::windows::Dialog::new("Motion Mirroring").open(&mut open).show(
+            crate::windows::Dialog::new(crate::i18n::tr("Motion Mirroring")).open(&mut open).show(
                 &ctx,
                 |ui| {
                     crate::windows::form(ui, "mirror", |ui| {
-                        ui.label("Parameter");
+                        ui.label(crate::i18n::tr("Parameter"));
                         pick(ui, "m-p", &mut mi.param);
                         ui.end_row();
-                        ui.label("Flip settings");
+                        ui.label(crate::i18n::tr("Flip settings"));
                         ui.vertical(|ui| {
-                            ui.checkbox(&mut mi.horizontal, "Flip horizontally");
-                            ui.checkbox(&mut mi.vertical, "Flip vertically");
+                            ui.checkbox(&mut mi.horizontal, crate::i18n::tr("Flip horizontally"));
+                            ui.checkbox(&mut mi.vertical, crate::i18n::tr("Flip vertically"));
                         });
                         ui.end_row();
                     });
-                    ui.weak("The key at the current value is mirrored across the default into the opposite key, on the selected objects, parents first. Warps mirror around their centre; meshes mirror their movement in place.");
-                    if ui.button("OK").clicked() {
+                    ui.weak(crate::i18n::tr("The key at the current value is mirrored across the default into the opposite key, on the selected objects, parents first. Warps mirror around their centre; meshes mirror their movement in place."));
+                    if ui.button(crate::i18n::tr("OK")).clicked() {
                         run = true;
                     }
                 },
@@ -1008,21 +1060,26 @@ impl EditorUi {
         if let Some((p, from, to)) = &mut self.pmenu.adjust {
             let mut open = true;
             let mut ok = false;
-            crate::windows::Dialog::new("Adjust Value").open(&mut open).show(&ctx, |ui| {
-                ui.label(names.get(*p).cloned().unwrap_or_default());
-                crate::windows::form(ui, "p-adjust", |ui| {
-                    ui.label("Key value");
-                    ui.add(egui::DragValue::new(from).speed(0.1));
-                    ui.end_row();
-                    ui.label("New value");
-                    ui.add(egui::DragValue::new(to).speed(0.1));
-                    ui.end_row();
-                });
-                ui.weak("Moves the key (on the selected objects) keeping its form.");
-                if ui.button("OK").clicked() {
-                    ok = true;
-                }
-            });
+            crate::windows::Dialog::new(crate::i18n::tr("Adjust Value")).open(&mut open).show(
+                &ctx,
+                |ui| {
+                    ui.label(names.get(*p).cloned().unwrap_or_default());
+                    crate::windows::form(ui, "p-adjust", |ui| {
+                        ui.label(crate::i18n::tr("Key value"));
+                        ui.add(egui::DragValue::new(from).speed(0.1));
+                        ui.end_row();
+                        ui.label(crate::i18n::tr("New value"));
+                        ui.add(egui::DragValue::new(to).speed(0.1));
+                        ui.end_row();
+                    });
+                    ui.weak(crate::i18n::tr(
+                        "Moves the key (on the selected objects) keeping its form.",
+                    ));
+                    if ui.button(crate::i18n::tr("OK")).clicked() {
+                        ok = true;
+                    }
+                },
+            );
             if ok {
                 let (p, from, to) = (*p, *from, *to);
                 self.pmenu.adjust = None;
@@ -1049,22 +1106,25 @@ impl EditorUi {
         if let Some((from, to)) = &mut self.pmenu.change {
             let mut open = true;
             let mut ok = false;
-            crate::windows::Dialog::new("Change Parameters").open(&mut open).show(&ctx, |ui| {
-                ui.label(format!(
-                    "Move the keys of {} to:",
-                    names.get(*from).cloned().unwrap_or_default()
-                ));
-                egui::ComboBox::from_id_salt("p-change")
-                    .selected_text(names.get(*to).cloned().unwrap_or_default())
-                    .show_ui(ui, |ui| {
-                        for (i, n) in names.iter().enumerate() {
-                            ui.selectable_value(to, i, n);
-                        }
-                    });
-                if ui.button("OK").clicked() {
-                    ok = true;
-                }
-            });
+            crate::windows::Dialog::new(crate::i18n::tr("Change Parameters")).open(&mut open).show(
+                &ctx,
+                |ui| {
+                    ui.label(crate::i18n::trf(
+                        "Move the keys of {name} to:",
+                        &[("name", &names.get(*from).cloned().unwrap_or_default())],
+                    ));
+                    egui::ComboBox::from_id_salt("p-change")
+                        .selected_text(names.get(*to).cloned().unwrap_or_default())
+                        .show_ui(ui, |ui| {
+                            for (i, n) in names.iter().enumerate() {
+                                ui.selectable_value(to, i, n);
+                            }
+                        });
+                    if ui.button(crate::i18n::tr("OK")).clicked() {
+                        ok = true;
+                    }
+                },
+            );
             if ok {
                 let (from, to) = (*from, *to);
                 self.pmenu.change = None;

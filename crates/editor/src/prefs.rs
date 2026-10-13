@@ -57,6 +57,9 @@ pub struct Prefs {
     /// The launcher reads these: skip the splash, or keep it but still.
     pub splash_off: bool,
     pub splash_particles_off: bool,
+    /// Interface language code ("ja", "ko", "zh-CN"...); None follows the
+    /// operating system.
+    pub language: Option<String>,
     /// Don't ask GitHub for a newer release at start (launcher and editor).
     pub update_check_off: bool,
     /// The release the user said "Later" to; its banner stays hidden.

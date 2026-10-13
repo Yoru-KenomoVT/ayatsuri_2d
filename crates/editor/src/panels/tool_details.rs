@@ -55,7 +55,8 @@ const NOT_YET: &str = "Not built yet";
 
 /// A section header: title, a rule, and an info button whose popup holds
 /// the how-to text, so the palette itself stays short.
-fn section(ui: &mut Ui, title: &str, info: &str) {
+fn section(ui: &mut Ui, title: &str, info: &'static str) {
+    let info = if info.is_empty() { info } else { crate::i18n::tr(info) };
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(title).size(11.0).strong().color(theme::pal().text_faint));
@@ -71,7 +72,7 @@ fn section(ui: &mut Ui, title: &str, info: &str) {
                     }
                 })
                 .response
-                .on_hover_text("How this works");
+                .on_hover_text(crate::i18n::tr("How this works"));
             }
             let r = ui.available_rect_before_wrap();
             let y = r.center().y;
@@ -85,7 +86,7 @@ fn section(ui: &mut Ui, title: &str, info: &str) {
 }
 
 /// A square tool icon, the way Cubism's Tool Details shows sub-tools.
-fn icon(ui: &mut Ui, on: bool, enabled: bool, glyph: &str, tip: &str) -> egui::Response {
+fn icon(ui: &mut Ui, on: bool, enabled: bool, glyph: &str, tip: &'static str) -> egui::Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 26.0), sense);
     let bg = if on {
@@ -106,7 +107,9 @@ fn icon(ui: &mut Ui, on: bool, enabled: bool, glyph: &str, tip: &str) -> egui::R
     }
     let fg = if enabled { theme::pal().text } else { theme::pal().text_faint.gamma_multiply(0.5) };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(16.0), fg);
-    let tip = if enabled { tip.to_string() } else { format!("{tip} ({NOT_YET})") };
+    let tip = crate::i18n::tr(tip);
+    let tip =
+        if enabled { tip.to_string() } else { format!("{tip} ({})", crate::i18n::tr(NOT_YET)) };
     resp.on_hover_text(tip)
 }
 
@@ -127,14 +130,15 @@ fn grid(ui: &mut Ui, _id: &str, body: impl FnOnce(&mut Ui)) {
     });
 }
 
-fn greyed(ui: &mut Ui, label: &str) {
-    ui.add_enabled(false, egui::Checkbox::new(&mut false, label)).on_disabled_hover_text(NOT_YET);
+fn greyed(ui: &mut Ui, label: &'static str) {
+    ui.add_enabled(false, egui::Checkbox::new(&mut false, crate::i18n::tr(label)))
+        .on_disabled_hover_text(crate::i18n::tr(NOT_YET));
 }
 
 impl EditorUi {
     pub(super) fn tool_details_panel(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(self.tool.label()).size(12.5).strong());
+            ui.label(egui::RichText::new(crate::i18n::tr(self.tool.label())).size(12.5).strong());
         });
         let mut action: Option<MeshAction> = None;
         egui::ScrollArea::vertical().id_salt("tool-details").auto_shrink([false, false]).show(
@@ -148,7 +152,11 @@ impl EditorUi {
                 Tool::BrushSelect | Tool::DeformBrush => self.td_brush(ui),
                 Tool::ArtPath => td_artpath(ui),
                 Tool::TextureAtlas => {
-                    section(ui, "Texture atlas", "The texture atlas editor is not built yet.");
+                    section(
+                        ui,
+                        crate::i18n::tr("Texture atlas"),
+                        "The texture atlas editor is not built yet.",
+                    );
                 }
             },
         );
@@ -160,13 +168,13 @@ impl EditorUi {
     fn td_select(&mut self, ui: &mut Ui) {
         section(
             ui,
-            "Selection",
+            crate::i18n::tr("Selection"),
             "Click selects. Shift or Ctrl+click adds to the selection. Alt+click walks up the deformer chain.\n\nLasso: with a mesh or warp selected, draw around points to pick them (Shift adds), then use the box to move, scale or rotate them. With nothing selected it selects whole meshes.",
         );
 
         section(
             ui,
-            "Warp deformer",
+            crate::i18n::tr("Warp deformer"),
             "The edit level (keys 1, 2, 3) picks what you edit. Level 1: division points; pick them with a click, Shift+click or a rectangle and drag. Level 2: Bezier control points at the Bezier division; drag a green anchor (it brings its handles) or a handle. Level 3: one Bezier patch over the outer frame, for big shape changes.\n\nThe box: drag inside to move, a red dot to scale (Shift keeps the aspect, Alt scales from the centre), just outside to rotate (Shift snaps to 15 degrees).\n\nEdits go into the keyform the parameters sit on; between keys nothing changes. Esc clears the pick.",
         );
         // the edit level picks what a warp shows for editing (keys 1, 2, 3)
@@ -199,10 +207,10 @@ impl EditorUi {
             let cur = self.bezier_div.get(&di).copied().unwrap_or((2.min(cols), 2.min(rows)));
             let (mut bw, mut bh) = cur;
             grid(ui, "td-warp", |ui| {
-                row(ui, "Conversion division", |ui| {
+                row(ui, crate::i18n::tr("Conversion division"), |ui| {
                     ui.label(format!("{cols} × {rows}"));
                 });
-                row(ui, "Bezier division", |ui| {
+                row(ui, crate::i18n::tr("Bezier division"), |ui| {
                     ui.add_enabled_ui(self.edit_level == 2, |ui| {
                         ui.horizontal(|ui| {
                             ui.add(egui::DragValue::new(&mut bw).range(1..=cols.max(1)));
@@ -231,11 +239,11 @@ impl EditorUi {
         let mut changed = false;
         section(
             ui,
-            "ArtMesh display settings",
+            crate::i18n::tr("ArtMesh display settings"),
             "Mesh line colour follows your primary colour until you pick one here.",
         );
         grid(ui, "td-disp-mesh", |ui| {
-            row(ui, "Mesh line width", |ui| {
+            row(ui, crate::i18n::tr("Mesh line width"), |ui| {
                 if ui
                     .add(egui::DragValue::new(&mut d.mesh_width).range(0.5..=4.0).speed(0.05))
                     .changed()
@@ -244,41 +252,41 @@ impl EditorUi {
                     changed = true;
                 }
             });
-            row(ui, "Mesh line color", |ui| {
+            row(ui, crate::i18n::tr("Mesh line color"), |ui| {
                 if ui.color_edit_button_srgba(&mut d.mesh_color).changed() {
                     self.prefs.overlay.mesh_color = rgba(d.mesh_color);
                     changed = true;
                 }
             });
         });
-        section(ui, "Warp deformer display settings", "");
+        section(ui, crate::i18n::tr("Warp deformer display settings"), "");
         grid(ui, "td-disp-warp", |ui| {
-            row(ui, "Grid color", |ui| {
+            row(ui, crate::i18n::tr("Grid color"), |ui| {
                 if ui.color_edit_button_srgba(&mut d.warp_color).changed() {
                     self.prefs.overlay.warp_color = rgba(d.warp_color);
                     changed = true;
                 }
             });
         });
-        section(ui, "Rotation deformer display settings", "");
+        section(ui, crate::i18n::tr("Rotation deformer display settings"), "");
         grid(ui, "td-disp-rot", |ui| {
-            row(ui, "Handle color", |ui| {
+            row(ui, crate::i18n::tr("Handle color"), |ui| {
                 if ui.color_edit_button_srgba(&mut d.rotation_color).changed() {
                     self.prefs.overlay.rotation_color = rgba(d.rotation_color);
                     changed = true;
                 }
             });
         });
-        section(ui, "Brush selection display settings", "");
+        section(ui, crate::i18n::tr("Brush selection display settings"), "");
         grid(ui, "td-disp-weight", |ui| {
-            row(ui, "Weight color", |ui| {
+            row(ui, crate::i18n::tr("Weight color"), |ui| {
                 if ui.color_edit_button_srgba(&mut d.weight_color).changed() {
                     self.prefs.overlay.weight_color = rgba(d.weight_color);
                     changed = true;
                 }
             });
         });
-        if ui.small_button("Reset display settings").clicked() {
+        if ui.small_button(crate::i18n::tr("Reset display settings")).clicked() {
             self.prefs.overlay = crate::prefs::Overlay::default();
             changed = true;
         }
@@ -292,7 +300,7 @@ impl EditorUi {
     pub(super) fn td_mesh(&mut self, ui: &mut Ui, action: &mut Option<MeshAction>) {
         section(
             ui,
-            "Edit mesh manually",
+            crate::i18n::tr("Edit mesh manually"),
             "Select / Edit drags points. Lasso select picks points: Ctrl+C copies them, and Ctrl+V pastes them into the mesh being edited at the same spots (points landing on existing ones merge, ready for glue); Delete removes them. Eraser deletes everything it sweeps ([ and ] resize it).\n\nThe actions work on the mesh being edited, or on the selected meshes.",
         );
         ui.horizontal_wrapped(|ui| {
@@ -360,25 +368,30 @@ impl EditorUi {
             }
         });
         grid(ui, "td-mesh", |ui| {
-            row(ui, "Auto connect", |ui| {
+            row(ui, crate::i18n::tr("Auto connect"), |ui| {
                 ui.vertical(|ui| {
-                    ui.checkbox(&mut self.connect_rebuild, "Mesh reconstruction").on_hover_text(
-                        "On: redo every face from the points. Off: keep the lines you built",
-                    );
-                    ui.checkbox(&mut self.connect_protect, "Protect edge exterior").on_hover_text(
+                    ui.checkbox(&mut self.connect_rebuild, crate::i18n::tr("Mesh reconstruction"))
+                        .on_hover_text(crate::i18n::tr(
+                            "On: redo every face from the points. Off: keep the lines you built",
+                        ));
+                    ui.checkbox(
+                        &mut self.connect_protect,
+                        crate::i18n::tr("Protect edge exterior"),
+                    )
+                    .on_hover_text(crate::i18n::tr(
                         "No faces over empty texture, so hair and lashes don't get bridged",
-                    );
+                    ));
                 });
             });
-            row(ui, "New points", |ui| {
-                ui.checkbox(&mut self.mesh_autoconnect, "Connect automatically");
+            row(ui, crate::i18n::tr("New points"), |ui| {
+                ui.checkbox(&mut self.mesh_autoconnect, crate::i18n::tr("Connect automatically"));
             });
-            row(ui, "Selection range on click", |ui| {
+            row(ui, crate::i18n::tr("Selection range on click"), |ui| {
                 ui.add(egui::DragValue::new(&mut self.pick_radius).range(2.0..=40.0).suffix(" px"));
             });
         });
 
-        section(ui, "Vertices and edges", "");
+        section(ui, crate::i18n::tr("Vertices and edges"), "");
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (mode, glyph, tip) in [
@@ -393,25 +406,24 @@ impl EditorUi {
             }
         });
         if self.mesh_mode == 6 || self.point_clip.is_some() {
-            section(ui, "Lasso select", "");
-            ui.weak(format!(
-                "{} point(s) picked. Ctrl+C copies, Delete removes them.",
-                self.mesh_picked.len()
+            section(ui, crate::i18n::tr("Lasso select"), "");
+            ui.weak(crate::i18n::trf(
+                "{count} point(s) picked. Ctrl+C copies, Delete removes them.",
+                &[("count", &self.mesh_picked.len())],
             ));
             match &self.point_clip {
-                Some(c) => ui.weak(format!(
-                    "{} point(s) from {} on the clipboard: Ctrl+V pastes them into the mesh \
-                     being edited.",
-                    c.points.len(),
-                    super::truncate(&c.from, 20)
+                Some(c) => ui.weak(crate::i18n::trf(
+                    "{count} point(s) from {mesh} on the clipboard: Ctrl+V pastes them into the \
+                     mesh being edited.",
+                    &[("count", &c.points.len()), ("mesh", &super::truncate(&c.from, 20))],
                 )),
-                None => ui.weak("Nothing copied yet."),
+                None => ui.weak(crate::i18n::tr("Nothing copied yet.")),
             };
         }
         if self.mesh_mode == 5 {
-            section(ui, "Eraser", "");
+            section(ui, crate::i18n::tr("Eraser"), "");
             grid(ui, "td-eraser", |ui| {
-                row(ui, "Size", |ui| {
+                row(ui, crate::i18n::tr("Size"), |ui| {
                     ui.add(
                         egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
                             .logarithmic(true)
@@ -421,18 +433,18 @@ impl EditorUi {
             });
         }
 
-        section(ui, "Mirror edit", "");
+        section(ui, crate::i18n::tr("Mirror edit"), "");
         greyed(ui, "Mirror edit");
 
         section(
             ui,
-            "Automatic mesh",
+            crate::i18n::tr("Automatic mesh"),
             "Traces the outline of the layer's pixels and fills it with points. Outline spacing sets the gap between outline points, inner spacing the gap inside, margin how far the outline stands off the art.",
         );
         let o = &mut self.tool_opts;
         ui.horizontal_wrapped(|ui| {
             for (i, (name, outline, inner, margin)) in Self::AUTO_PRESETS.iter().enumerate() {
-                if ui.selectable_label(o.auto_preset == i, *name).clicked() {
+                if ui.selectable_label(o.auto_preset == i, crate::i18n::tr(name)).clicked() {
                     o.auto_preset = i;
                     o.auto_spacing = *outline;
                     o.auto_inner = *inner;
@@ -441,13 +453,13 @@ impl EditorUi {
             }
         });
         grid(ui, "td-auto", |ui| {
-            row(ui, "Outline spacing", |ui| {
+            row(ui, crate::i18n::tr("Outline spacing"), |ui| {
                 ui.add(egui::DragValue::new(&mut o.auto_spacing).range(4.0..=256.0).suffix(" px"));
             });
-            row(ui, "Inner spacing", |ui| {
+            row(ui, crate::i18n::tr("Inner spacing"), |ui| {
                 ui.add(egui::DragValue::new(&mut o.auto_inner).range(4.0..=512.0).suffix(" px"));
             });
-            row(ui, "Margin", |ui| {
+            row(ui, crate::i18n::tr("Margin"), |ui| {
                 ui.add(egui::DragValue::new(&mut o.auto_margin).range(0.0..=128.0).suffix(" px"));
             });
         });
@@ -456,7 +468,7 @@ impl EditorUi {
     fn td_glue(&mut self, ui: &mut Ui, action: &mut Option<MeshAction>) {
         section(
             ui,
-            "Edit glue",
+            crate::i18n::tr("Edit glue"),
             "Select two meshes and Bind (Ctrl+G) to glue their overlapping points, or pick a glue in the Part palette.\n\nA:B drags the weight toward red A (Shift+drag toward green B). A and B change one side only; Re-merge rejoins points they pulled apart.",
         );
         ui.horizontal_wrapped(|ui| {
@@ -473,28 +485,28 @@ impl EditorUi {
             }
         });
         grid(ui, "td-glue", |ui| {
-            row(ui, "Weight", |ui| {
+            row(ui, crate::i18n::tr("Weight"), |ui| {
                 ui.add(
                     egui::Slider::new(&mut self.glue_strength, 0.01..=1.0)
                         .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
                 );
             });
-            row(ui, "Range", |ui| {
+            row(ui, crate::i18n::tr("Range"), |ui| {
                 ui.add(
                     egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
                         .logarithmic(true)
                         .suffix(" px"),
                 );
             });
-            row(ui, "Opacity of weight", |ui| {
+            row(ui, crate::i18n::tr("Opacity of weight"), |ui| {
                 ui.add_enabled(false, egui::Slider::new(&mut 1.0f32, 0.0..=1.0))
                     .on_disabled_hover_text(NOT_YET);
             });
-            row(ui, "Bind distance", |ui| {
+            row(ui, crate::i18n::tr("Bind distance"), |ui| {
                 ui.add(
                     egui::DragValue::new(&mut self.glue_tolerance).range(0.1..=64.0).suffix(" px"),
                 )
-                .on_hover_text("How close two points must be to bind");
+                .on_hover_text(crate::i18n::tr("How close two points must be to bind"));
             });
         });
         ui.horizontal(|ui| {
@@ -508,14 +520,14 @@ impl EditorUi {
             }
         });
         if let Some(gi) = self.selected_glue {
-            ui.weak(format!("Editing Glue{gi}"));
+            ui.weak(crate::i18n::trf("Editing {name}", &[("name", &format!("Glue{gi}"))]));
         }
     }
 
     fn td_path(&mut self, ui: &mut Ui) {
         section(
             ui,
-            "Deform path edit",
+            crate::i18n::tr("Deform path edit"),
             "Click on the selected mesh to add a control point, drag one to move it, Alt+click deletes, Backspace removes the last. Placing a path deforms nothing.\n\nSwitch to the arrow tool and drag a control point: points inside the red circle follow the path, keeping their shape fully inside the blue one. Edits go into the keyform the parameters sit on.\n\nEdit levels 2 and 3 each keep their own path for the same mesh (for example opening and closing a mouth); level 1 hides paths.",
         );
         let key = match self.selected {
@@ -547,14 +559,14 @@ impl EditorUi {
             let _ = icon(ui, false, false, ph::LINE_SEGMENTS, "Fold line");
         });
         grid(ui, "td-path", |ui| {
-            row(ui, "Deform path width", |ui| {
+            row(ui, crate::i18n::tr("Deform path width"), |ui| {
                 ui.add(
                     egui::Slider::new(&mut self.path_width, 4.0..=600.0)
                         .logarithmic(true)
                         .suffix(" px"),
                 );
             });
-            row(ui, "Hardness", |ui| {
+            row(ui, crate::i18n::tr("Hardness"), |ui| {
                 ui.add(
                     egui::Slider::new(&mut self.path_hardness, 0.0..=1.0)
                         .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
@@ -562,7 +574,7 @@ impl EditorUi {
             });
         });
         if self.edit_level < 2 {
-            ui.weak("Edit level 1 hides deform paths; press 2 or 3.");
+            ui.weak(crate::i18n::tr("Edit level 1 hides deform paths; press 2 or 3."));
         }
     }
 
@@ -570,7 +582,11 @@ impl EditorUi {
         let warp = self.tool == Tool::WarpCreate;
         section(
             ui,
-            if warp { "New warp deformer" } else { "New rotation deformer" },
+            if warp {
+                crate::i18n::tr("New warp deformer")
+            } else {
+                crate::i18n::tr("New rotation deformer")
+            },
             if warp {
                 "Create opens the dialog: part, name, and whether the deformer wraps the selection, goes under the selected deformer, or under a parent you pick. Clicking the canvas with objects selected opens it too."
             } else {
@@ -580,7 +596,7 @@ impl EditorUi {
         if warp {
             let o = &mut self.tool_opts;
             grid(ui, "td-create", |ui| {
-                row(ui, "Conversion division", |ui| {
+                row(ui, crate::i18n::tr("Conversion division"), |ui| {
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut o.warp_cols).range(1..=32));
                         ui.label("×");
@@ -589,14 +605,14 @@ impl EditorUi {
                 });
             });
         }
-        if ui.button("Create…").clicked() {
+        if ui.button(crate::i18n::tr("Create…")).clicked() {
             self.pending_create = Some((warp, None));
         }
     }
 
     fn td_brush(&mut self, ui: &mut Ui) {
         if self.tool == Tool::DeformBrush {
-            section(ui, "Deform brushes", "The deform brushes are not built yet.");
+            section(ui, crate::i18n::tr("Deform brushes"), "The deform brushes are not built yet.");
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let _ = icon(ui, false, false, ph::PAINT_BRUSH, "Deform brush");
@@ -606,17 +622,17 @@ impl EditorUi {
         }
         section(
             ui,
-            "Brush selection",
+            crate::i18n::tr("Brush selection"),
             "Paint a soft selection onto the selected meshes' points, or a selected warp's division points. Drag adds weight; Alt+drag takes it away; B+drag sizes the brush; Esc clears.\n\nThen switch to the arrow tool: dragging moves every painted point by its weight, and the box scales and rotates them the same way. Edits land in the keyform the parameters sit on.",
         );
         grid(ui, "td-brush", |ui| {
-            row(ui, "Weight", |ui| {
+            row(ui, crate::i18n::tr("Weight"), |ui| {
                 ui.add(
                     egui::Slider::new(&mut self.brush_weight, 0.01..=1.0)
                         .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
                 );
             });
-            row(ui, "Brush size", |ui| {
+            row(ui, crate::i18n::tr("Brush size"), |ui| {
                 ui.add(
                     egui::Slider::new(&mut self.tool_opts.brush_size, 2.0..=400.0)
                         .logarithmic(true)
@@ -624,14 +640,14 @@ impl EditorUi {
                 );
             });
         });
-        if ui.button("Clear selection").clicked() {
+        if ui.button(crate::i18n::tr("Clear selection")).clicked() {
             self.brush_w.clear();
         }
     }
 }
 
 fn td_artpath(ui: &mut Ui) {
-    section(ui, "ArtPath tools", "ArtPaths are not built yet.");
+    section(ui, crate::i18n::tr("ArtPath tools"), "ArtPaths are not built yet.");
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (glyph, tip) in [

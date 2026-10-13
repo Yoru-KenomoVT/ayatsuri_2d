@@ -202,37 +202,96 @@ pub fn install(ctx: &Context) {
     // face; built together so nothing resets anything else
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    if let Some(data) = system_cjk() {
-        fonts.font_data.insert("system-cjk".into(), std::sync::Arc::new(data));
+    // Chinese, Japanese and Korean faces, the interface language's first so
+    // its shapes win where the scripts share characters
+    for (name, data) in cjk_fonts(&crate::i18n::current()) {
+        fonts.font_data.insert(name.clone(), std::sync::Arc::new(data));
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             if let Some(list) = fonts.families.get_mut(&family) {
-                list.push("system-cjk".into());
+                list.push(name.clone());
             }
         }
     }
     ctx.set_fonts(fonts);
 }
 
-// Names in model files are usually Japanese or Chinese and egui's default
-// fonts have neither. Candidate paths per platform; packaging will embed a
-// face instead.
-fn system_cjk() -> Option<egui::epaint::text::FontData> {
-    const CANDIDATES: &[(&str, u32)] = &[
-        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
-        ("/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf", 0),
-        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
-        ("C:/Windows/Fonts/YuGothM.ttc", 0),
-        ("C:/Windows/Fonts/msyh.ttc", 0),
-    ];
-    for (path, index) in CANDIDATES {
-        if let Ok(bytes) = std::fs::read(path) {
-            return Some(egui::epaint::text::FontData {
-                font: std::borrow::Cow::Owned(bytes),
-                index: *index,
-                tweak: Default::default(),
-            });
+// Model names are usually Japanese or Chinese, and the interface can be in
+// Japanese, Korean or Chinese, while egui's own fonts have none of them. One
+// face per script from the system, tried in order; a font file holding
+// several faces (Noto Sans CJK) is read once and shared between them.
+const CJK: &[(&str, &[(&str, u32)])] = &[
+    (
+        "ja",
+        &[
+            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf", 0),
+            ("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", 0),
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+            ("C:/Windows/Fonts/YuGothM.ttc", 0),
+            ("C:/Windows/Fonts/meiryo.ttc", 0),
+            ("C:/Windows/Fonts/msgothic.ttc", 0),
+        ],
+    ),
+    (
+        "ko",
+        &[
+            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 1),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
+            ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 1),
+            ("/usr/share/fonts/noto-cjk/NotoSansCJKkr-Regular.otf", 0),
+            ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
+            ("C:/Windows/Fonts/malgun.ttf", 0),
+        ],
+    ),
+    (
+        "zh-CN",
+        &[
+            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 2),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),
+            ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 2),
+            ("/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf", 0),
+            ("/System/Library/Fonts/PingFang.ttc", 0),
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+            ("C:/Windows/Fonts/msyh.ttc", 0),
+            ("C:/Windows/Fonts/simsun.ttc", 0),
+        ],
+    ),
+];
+
+/// A font file's bytes, read once for the life of the app.
+fn font_bytes(path: &str) -> Option<&'static [u8]> {
+    static CACHE: std::sync::Mutex<Vec<(String, &'static [u8])>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, b)) = cache.iter().find(|(p, _)| p == path) {
+        return Some(b);
+    }
+    let bytes: &'static [u8] = Box::leak(std::fs::read(path).ok()?.into_boxed_slice());
+    cache.push((path.to_string(), bytes));
+    Some(bytes)
+}
+
+/// One face per script, the interface language's script first.
+fn cjk_fonts(language: &str) -> Vec<(String, egui::epaint::text::FontData)> {
+    let mut order: Vec<&(&str, &[(&str, u32)])> = CJK.iter().collect();
+    order.sort_by_key(|(code, _)| *code != language);
+    let mut out = Vec::new();
+    for (code, candidates) in order {
+        for (path, index) in candidates.iter() {
+            if let Some(bytes) = font_bytes(path) {
+                out.push((
+                    format!("cjk-{code}"),
+                    egui::epaint::text::FontData {
+                        font: std::borrow::Cow::Borrowed(bytes),
+                        index: *index,
+                        tweak: Default::default(),
+                    },
+                ));
+                break;
+            }
         }
     }
-    None
+    out
 }

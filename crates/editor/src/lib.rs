@@ -11,6 +11,7 @@ mod discord;
 pub mod dock;
 mod export;
 mod gpu_view;
+pub(crate) mod i18n;
 pub mod logging;
 mod panels;
 mod point_edit;

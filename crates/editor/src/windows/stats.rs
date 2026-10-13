@@ -11,42 +11,51 @@ impl EditorUi {
             return;
         }
         let mut open = self.show_stats;
-        crate::windows::Dialog::new("Model Statistics").open(&mut open).show(ui.ctx(), |ui| {
-            let Some(s) = &self.session else {
-                ui.weak("No model loaded.");
-                return;
-            };
-            let m = s.puppet.model();
-            let (mut verts, mut tris, mut keyforms) = (0usize, 0usize, 0usize);
-            for am in &m.art_meshes {
-                verts += am.vertex_count as usize;
-                tris += am.indices.len() / 3;
-                let stride = (am.vertex_count as usize).saturating_mul(2);
-                keyforms += am.positions.len().checked_div(stride).unwrap_or(0);
-            }
-            let warps =
-                m.deformers.iter().filter(|d| matches!(d.kind, DeformerKind::Warp(_))).count();
-            ui.set_width(260.0);
-            crate::windows::form(ui, "stats", |ui| {
-                for (label, value) in [
-                    ("Canvas", format!("{} × {} px", m.canvas.width, m.canvas.height)),
-                    ("Parameters", m.parameters.len().to_string()),
-                    ("Parts", m.parts.len().to_string()),
-                    ("Deformers", m.deformers.len().to_string()),
-                    ("  Warp", warps.to_string()),
-                    ("  Rotation", (m.deformers.len() - warps).to_string()),
-                    ("ArtMeshes", m.art_meshes.len().to_string()),
-                    ("Vertices", verts.to_string()),
-                    ("Triangles", tris.to_string()),
-                    ("Keyforms", keyforms.to_string()),
-                    ("Textures", s.texture_names.len().to_string()),
-                ] {
-                    ui.weak(label);
-                    ui.label(value);
-                    ui.end_row();
+        crate::windows::Dialog::new(crate::i18n::tr("Model Statistics")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                let Some(s) = &self.session else {
+                    ui.weak(crate::i18n::tr("No model loaded."));
+                    return;
+                };
+                let m = s.puppet.model();
+                let (mut verts, mut tris, mut keyforms) = (0usize, 0usize, 0usize);
+                for am in &m.art_meshes {
+                    verts += am.vertex_count as usize;
+                    tris += am.indices.len() / 3;
+                    let stride = (am.vertex_count as usize).saturating_mul(2);
+                    keyforms += am.positions.len().checked_div(stride).unwrap_or(0);
                 }
-            });
-        });
+                let warps =
+                    m.deformers.iter().filter(|d| matches!(d.kind, DeformerKind::Warp(_))).count();
+                ui.set_width(260.0);
+                crate::windows::form(ui, "stats", |ui| {
+                    for (label, value) in [
+                        (
+                            "Canvas",
+                            crate::i18n::trf(
+                                "{width} × {height} px",
+                                &[("width", &m.canvas.width), ("height", &m.canvas.height)],
+                            ),
+                        ),
+                        ("Parameters", m.parameters.len().to_string()),
+                        ("Parts", m.parts.len().to_string()),
+                        ("Deformers", m.deformers.len().to_string()),
+                        ("  Warp", warps.to_string()),
+                        ("  Rotation", (m.deformers.len() - warps).to_string()),
+                        ("ArtMeshes", m.art_meshes.len().to_string()),
+                        ("Vertices", verts.to_string()),
+                        ("Triangles", tris.to_string()),
+                        ("Keyforms", keyforms.to_string()),
+                        ("Textures", s.texture_names.len().to_string()),
+                    ] {
+                        ui.weak(crate::i18n::tr(label));
+                        ui.label(value);
+                        ui.end_row();
+                    }
+                });
+            },
+        );
         self.show_stats = open;
     }
 }

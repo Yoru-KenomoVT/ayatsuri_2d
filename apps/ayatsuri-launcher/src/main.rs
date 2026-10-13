@@ -424,6 +424,8 @@ fn main() -> eframe::Result {
             .with_icon(window_icon().unwrap_or_default()),
         ..Default::default()
     };
+    // the version an update replaced waits beside us as .old until now
+    ayatsuri_update::install::sweep_previous();
     let open_arg = std::env::args().nth(1);
     let prefs = editor_prefs();
     // splash turned off in Settings: just start the editor, no window

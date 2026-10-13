@@ -123,13 +123,13 @@ enum Workspace {
 impl Workspace {
     fn name(&self, prefs: &Prefs) -> String {
         match self {
-            Workspace::Modeling => "Modeling".into(),
-            Workspace::Animation => "Animation".into(),
+            Workspace::Modeling => crate::i18n::tr("Modeling").into(),
+            Workspace::Animation => crate::i18n::tr("Animation").into(),
             Workspace::Custom(i) => prefs
                 .custom_workspaces
                 .get(*i)
                 .map(|(n, _)| n.clone())
-                .unwrap_or_else(|| "Custom".into()),
+                .unwrap_or_else(|| crate::i18n::tr("Custom").into()),
         }
     }
 }
@@ -776,6 +776,7 @@ impl Default for EditorUi {
     fn default() -> Self {
         let prefs = Prefs::load();
         let check_updates = !prefs.update_check_off;
+        crate::i18n::set_language(prefs.language.as_deref().unwrap_or("system"));
         let pending_import = if prefs.reopen_last { prefs.recents.first().cloned() } else { None };
         let layout = prefs.workspace_modeling.clone().unwrap_or_else(dock::default_workspace);
         Self {
@@ -952,6 +953,7 @@ impl EditorUi {
         for p in crate::take_crash_copies() {
             let _ = std::fs::remove_file(p);
         }
+        crate::update::finish(&self.update);
     }
 
     /// Last line of defence: the app is going down past every guard (eframe
@@ -1001,7 +1003,7 @@ impl EditorUi {
             message: info
                 .as_ref()
                 .map(|c| c.message.clone())
-                .unwrap_or_else(|| "unknown error".into()),
+                .unwrap_or_else(|| crate::i18n::tr("unknown error").into()),
             location: info.map(|c| c.location).unwrap_or_default(),
             recovery,
             count,
@@ -1013,7 +1015,7 @@ impl EditorUi {
         let mut keep = true;
         let mut copy = false;
         let mut open_dir = false;
-        crate::windows::Dialog::new("Something went wrong").show(ui.ctx(), |ui| {
+        crate::windows::Dialog::new(crate::i18n::tr("Something went wrong")).show(ui.ctx(), |ui| {
                 ui.set_width(440.0);
                 ui.label(
                     egui::RichText::new(format!("{} {}", egui_phosphor::regular::WARNING, c.message))
@@ -1021,33 +1023,42 @@ impl EditorUi {
                         .strong(),
                 );
                 if !c.location.is_empty() {
-                    ui.weak(format!("at {}", c.location));
+                    ui.weak(crate::i18n::trf("at {location}", &[("location", &c.location)]));
                 }
                 ui.add_space(6.0);
-                ui.label("The editor caught the error and kept running. The step that failed was undone where possible.");
+                ui.label(crate::i18n::tr("The editor caught the error and kept running. The step that failed was undone where possible."));
                 match &c.recovery {
                     Some(p) => {
-                        ui.label(format!("Your model was saved to {}", p.display()));
+                        ui.label(crate::i18n::trf(
+                            "Your model was saved to {path}",
+                            &[("path", &p.display())],
+                        ));
                     }
                     None => {
-                        ui.weak("No model was open, nothing needed rescuing.");
+                        ui.weak(crate::i18n::tr("No model was open, nothing needed rescuing."));
                     }
                 }
                 if let Some(p) = logging::log_path() {
-                    ui.weak(format!("Full details, with a backtrace, are in {}", p.display()));
+                    ui.weak(crate::i18n::trf(
+                        "Full details, with a backtrace, are in {path}",
+                        &[("path", &p.display())],
+                    ));
                 }
                 if c.count > 1 {
-                    ui.weak(format!("This has happened {} times this session.", c.count));
+                    ui.weak(crate::i18n::trf(
+                        "This has happened {count} times this session.",
+                        &[("count", &c.count)],
+                    ));
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Copy details").clicked() {
+                    if ui.button(crate::i18n::tr("Copy details")).clicked() {
                         copy = true;
                     }
-                    if ui.button("Open log folder").clicked() {
+                    if ui.button(crate::i18n::tr("Open log folder")).clicked() {
                         open_dir = true;
                     }
-                    if ui.button(egui::RichText::new("Keep working").strong()).clicked() {
+                    if ui.button(egui::RichText::new(crate::i18n::tr("Keep working")).strong()).clicked() {
                         keep = false;
                     }
                 });
@@ -1135,10 +1146,13 @@ impl EditorUi {
         let ctx2 = ctx.clone();
         let spawned = std::thread::Builder::new().name("file-picker".into()).spawn(move || {
             let picked = rfd::FileDialog::new()
-                .add_filter("All supported", &["aom", "moc3", "json", "psd", "kra"])
-                .add_filter("Ayatsuri / Live2D model", &["aom", "moc3", "json"])
-                .add_filter("Artwork (Photoshop, Krita)", &["psd", "kra"])
-                .set_title("Open model or artwork")
+                .add_filter(
+                    crate::i18n::tr("All supported"),
+                    &["aom", "moc3", "json", "psd", "kra"],
+                )
+                .add_filter(crate::i18n::tr("Ayatsuri / Live2D model"), &["aom", "moc3", "json"])
+                .add_filter(crate::i18n::tr("Artwork (Photoshop, Krita)"), &["psd", "kra"])
+                .set_title(crate::i18n::tr("Open model or artwork"))
                 .pick_file();
             let _ = tx.send(BgJob::Picked(picked));
             ctx2.request_repaint();
@@ -1233,7 +1247,7 @@ impl EditorUi {
                     |ui| {
                         ui.horizontal(|ui| {
                             ui.add(egui::Spinner::new().size(18.0));
-                            ui.label(format!("Opening {name}…"));
+                            ui.label(crate::i18n::trf("Opening {name}…", &[("name", &name)]));
                         });
                     },
                 );
@@ -1257,9 +1271,9 @@ impl EditorUi {
                 let file = format!("{}.aom", s.name);
                 self.pick_async(PickFor::SaveAs { then_close }, move || {
                     rfd::FileDialog::new()
-                        .add_filter("Ayatsuri Open Model", &["aom"])
+                        .add_filter(crate::i18n::tr("Ayatsuri Open Model"), &["aom"])
                         .set_file_name(file)
-                        .set_title("Save model")
+                        .set_title(crate::i18n::tr("Save model"))
                         .save_file()
                 });
             }
@@ -1712,16 +1726,22 @@ impl EditorUi {
 
         Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
+                ui.menu_button(crate::i18n::tr("File"), |ui| {
                     if ui
-                        .add(egui::Button::new("New…").shortcut_text(self.sc("new-model")))
+                        .add(
+                            egui::Button::new(crate::i18n::tr("New…"))
+                                .shortcut_text(self.sc("new-model")),
+                        )
                         .clicked()
                     {
                         ui.close();
                         self.new_model = Some(ModelNew::default());
                     }
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("New Animation…"))
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("New Animation…")),
+                        )
                         .clicked()
                     {
                         ui.close();
@@ -1732,15 +1752,20 @@ impl EditorUi {
                             looped: true,
                         });
                     }
-                    if ui.add(egui::Button::new("Open…").shortcut_text(self.sc("open"))).clicked()
+                    if ui
+                        .add(
+                            egui::Button::new(crate::i18n::tr("Open…"))
+                                .shortcut_text(self.sc("open")),
+                        )
+                        .clicked()
                     {
                         ui.close();
                         self.import_dialog(&ui.ctx().clone());
                     }
-                    ui.menu_button("Open Recent", |ui| {
+                    ui.menu_button(crate::i18n::tr("Open Recent"), |ui| {
                         let recents = self.prefs.recents.clone();
                         if recents.is_empty() {
-                            ui.weak("empty");
+                            ui.weak(crate::i18n::tr("empty"));
                         }
                         for r in recents {
                             let name = r
@@ -1757,7 +1782,8 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new("Save").shortcut_text(self.sc("save")),
+                            egui::Button::new(crate::i18n::tr("Save"))
+                                .shortcut_text(self.sc("save")),
                         )
                         .clicked()
                     {
@@ -1767,7 +1793,8 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new("Save As…").shortcut_text(self.sc("save-as")),
+                            egui::Button::new(crate::i18n::tr("Save As…"))
+                                .shortcut_text(self.sc("save-as")),
                         )
                         .clicked()
                     {
@@ -1778,7 +1805,7 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new("Export Image…")
+                            egui::Button::new(crate::i18n::tr("Export Image…"))
                                 .shortcut_text(self.sc("export-image")),
                         )
                         .clicked()
@@ -1789,7 +1816,7 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new("Export as moc3…")
+                            egui::Button::new(crate::i18n::tr("Export as moc3…"))
                                 .shortcut_text(self.sc("export-moc3")),
                         )
                         .clicked()
@@ -1806,73 +1833,88 @@ impl EditorUi {
                         });
                     }
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("Import Motion…"))
-                        .on_hover_text("Add a .motion3.json as a scene")
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Import Motion…")),
+                        )
+                        .on_hover_text(crate::i18n::tr("Add a .motion3.json as a scene"))
                         .clicked()
                     {
                         ui.close();
                         self.pick_async(PickFor::ImportMotion, || {
                             rfd::FileDialog::new()
-                                .add_filter("Live2D motion", &["json"])
-                                .set_title("Import motion3.json")
+                                .add_filter(crate::i18n::tr("Live2D motion"), &["json"])
+                                .set_title(crate::i18n::tr("Import motion3.json"))
                                 .pick_files()
                                 .map(|v| v.into_iter().next())
                                 .unwrap_or_default()
                         });
                     }
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("Import PSD…"))
-                        .on_hover_text(
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Import PSD…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
                             "Add a Photoshop or Krita file's layers to this model as new parts \
                              and meshes",
-                        )
+                        ))
                         .clicked()
                     {
                         ui.close();
                         self.pick_async(PickFor::ImportPaint, || {
                             rfd::FileDialog::new()
-                                .add_filter("Artwork", &["psd", "kra"])
-                                .set_title("Import PSD into this model")
+                                .add_filter(crate::i18n::tr("Artwork"), &["psd", "kra"])
+                                .set_title(crate::i18n::tr("Import PSD into this model"))
                                 .pick_file()
                         });
                     }
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("Re-import PSD…"))
-                        .on_hover_text(
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Re-import PSD…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
                             "Swap in updated art from the PSD this model was made from: layers \
                              match meshes by folder and name, and the rigging stays as it is",
-                        )
+                        ))
                         .clicked()
                     {
                         ui.close();
                         self.pick_async(PickFor::ReimportPaint, || {
                             rfd::FileDialog::new()
-                                .add_filter("Artwork", &["psd", "kra"])
-                                .set_title("Re-import PSD")
+                                .add_filter(crate::i18n::tr("Artwork"), &["psd", "kra"])
+                                .set_title(crate::i18n::tr("Re-import PSD"))
                                 .pick_file()
                         });
                     }
                     ui.separator();
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("Model Info…"))
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Model Info…")),
+                        )
                         .clicked()
                     {
                         self.show_model_info = true;
                         ui.close();
                     }
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("Model Statistics…"))
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Model Statistics…")),
+                        )
                         .clicked()
                     {
                         self.show_stats = true;
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Environment Settings…").clicked() {
+                    if ui.button(crate::i18n::tr("Environment Settings…")).clicked() {
                         self.show_settings = true;
                         ui.close();
                     }
-                    if ui.button("Keyboard Shortcuts…").clicked() {
+                    if ui.button(crate::i18n::tr("Keyboard Shortcuts…")).clicked() {
                         self.show_settings = true;
                         self.settings_tab = 3;
                         ui.close();
@@ -1881,7 +1923,8 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new("Close").shortcut_text(self.sc("close")),
+                            egui::Button::new(crate::i18n::tr("Close"))
+                                .shortcut_text(self.sc("close")),
                         )
                         .clicked()
                     {
@@ -1892,37 +1935,43 @@ impl EditorUi {
                             self.close_session();
                         }
                     }
-                    if ui.button("Exit").clicked() {
+                    if ui.button(crate::i18n::tr("Exit")).clicked() {
                         ui.close();
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                ui.menu_button("Edit", |ui| {
+                ui.menu_button(crate::i18n::tr("Edit"), |ui| {
                     let (can_undo, can_redo) = self
                         .session
                         .as_ref()
                         .map(|s| (s.can_undo(), s.can_redo()))
                         .unwrap_or((false, false));
-                    if ui.add_enabled(can_undo, egui::Button::new("Undo")).clicked() {
+                    if ui
+                        .add_enabled(can_undo, egui::Button::new(crate::i18n::tr("Undo")))
+                        .clicked()
+                    {
                         ui.close();
                         if let Some(s) = &mut self.session {
                             s.undo();
                         }
                     }
-                    if ui.add_enabled(can_redo, egui::Button::new("Redo")).clicked() {
+                    if ui
+                        .add_enabled(can_redo, egui::Button::new(crate::i18n::tr("Redo")))
+                        .clicked()
+                    {
                         ui.close();
                         if let Some(s) = &mut self.session {
                             s.redo();
                         }
                     }
                     ui.separator();
-                    let _ = ui.add_enabled(false, egui::Button::new("Cut"));
+                    let _ = ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Cut")));
                     // in Mesh Edit these copy and paste the picked points
                     let editing = self.mesh_edit.is_some();
                     if ui
                         .add_enabled(
                             editing && !self.mesh_picked.is_empty(),
-                            egui::Button::new("Copy").shortcut_text("Ctrl+C"),
+                            egui::Button::new(crate::i18n::tr("Copy")).shortcut_text("Ctrl+C"),
                         )
                         .clicked()
                     {
@@ -1932,7 +1981,7 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             editing && self.point_clip.is_some(),
-                            egui::Button::new("Paste").shortcut_text("Ctrl+V"),
+                            egui::Button::new(crate::i18n::tr("Paste")).shortcut_text("Ctrl+V"),
                         )
                         .clicked()
                     {
@@ -1940,39 +1989,47 @@ impl EditorUi {
                         ui.close();
                     }
                 });
-                ui.menu_button("Show", |ui| {
+                ui.menu_button(crate::i18n::tr("Show"), |ui| {
                     let has = self.session.is_some();
-                    if ui.add_enabled(has, egui::Button::new("Zoom In")).clicked() {
+                    if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Zoom In"))).clicked()
+                    {
                         self.view_zoom = (self.view_zoom * 1.25).clamp(0.02, 40.0);
                         ui.close();
                     }
-                    if ui.add_enabled(has, egui::Button::new("Zoom Out")).clicked() {
+                    if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Zoom Out"))).clicked()
+                    {
                         self.view_zoom = (self.view_zoom / 1.25).clamp(0.02, 40.0);
                         ui.close();
                     }
-                    if ui.add_enabled(has, egui::Button::new("Fit")).clicked() {
+                    if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Fit"))).clicked() {
                         self.view_zoom = 1.0;
                         self.view_pan = Vec2::ZERO;
                         ui.close();
                     }
                 });
-                ui.menu_button("Modeling", |ui| {
-                    if ui.button("Modeling Workspace").clicked() {
+                ui.menu_button(crate::i18n::tr("Modeling"), |ui| {
+                    if ui.button(crate::i18n::tr("Modeling Workspace")).clicked() {
                         self.set_workspace(Workspace::Modeling);
                         ui.close();
                     }
                     ui.separator();
                     let has_sel = !self.selection_meshes().is_empty();
-                    ui.menu_button("Deformer", |ui| {
+                    ui.menu_button(crate::i18n::tr("Deformer"), |ui| {
                         if ui
-                            .add_enabled(has_sel, egui::Button::new("Create Warp Deformer"))
+                            .add_enabled(
+                                has_sel,
+                                egui::Button::new(crate::i18n::tr("Create Warp Deformer")),
+                            )
                             .clicked()
                         {
                             self.pending_create = Some((true, None));
                             ui.close();
                         }
                         if ui
-                            .add_enabled(has_sel, egui::Button::new("Create Rotation Deformer"))
+                            .add_enabled(
+                                has_sel,
+                                egui::Button::new(crate::i18n::tr("Create Rotation Deformer")),
+                            )
                             .clicked()
                         {
                             self.pending_create = Some((false, None));
@@ -1980,9 +2037,12 @@ impl EditorUi {
                         }
                     });
                     let can_keys = self.edit_target().is_some() && self.sel_param.is_some();
-                    ui.menu_button("Parameter", |ui| {
+                    ui.menu_button(crate::i18n::tr("Parameter"), |ui| {
                         if ui
-                            .add_enabled(can_keys, egui::Button::new("Add Keys at Min and Max"))
+                            .add_enabled(
+                                can_keys,
+                                egui::Button::new(crate::i18n::tr("Add Keys at Min and Max")),
+                            )
                             .clicked()
                         {
                             ui.close();
@@ -1998,7 +2058,9 @@ impl EditorUi {
                         if ui
                             .add_enabled(
                                 can_keys,
-                                egui::Button::new("Add Keys at Min, Default and Max"),
+                                egui::Button::new(crate::i18n::tr(
+                                    "Add Keys at Min, Default and Max",
+                                )),
                             )
                             .clicked()
                         {
@@ -2013,7 +2075,10 @@ impl EditorUi {
                             }
                         }
                         if ui
-                            .add_enabled(can_keys, egui::Button::new("Delete Nearest Key"))
+                            .add_enabled(
+                                can_keys,
+                                egui::Button::new(crate::i18n::tr("Delete Nearest Key")),
+                            )
                             .clicked()
                         {
                             ui.close();
@@ -2023,7 +2088,7 @@ impl EditorUi {
                         if ui
                             .add_enabled(
                                 self.session.is_some(),
-                                egui::Button::new("Reset to Default")
+                                egui::Button::new(crate::i18n::tr("Reset to Default"))
                                     .shortcut_text(self.sc("reset-params")),
                             )
                             .clicked()
@@ -2035,8 +2100,10 @@ impl EditorUi {
                         if ui
                             .add_enabled(
                                 self.session.is_some(),
-                                egui::Button::new("Automatic Generation of Four Corner Forms…")
-                                    .shortcut_text(self.sc("four-corners")),
+                                egui::Button::new(crate::i18n::tr(
+                                    "Automatic Generation of Four Corner Forms…",
+                                ))
+                                .shortcut_text(self.sc("four-corners")),
                             )
                             .clicked()
                         {
@@ -2046,9 +2113,9 @@ impl EditorUi {
                         if ui
                             .add_enabled(
                                 self.session.is_some() && self.sel_param.is_some(),
-                                egui::Button::new("Motion Mirroring…"),
+                                egui::Button::new(crate::i18n::tr("Motion Mirroring…")),
                             )
-                            .on_disabled_hover_text("Select a parameter first")
+                            .on_disabled_hover_text(crate::i18n::tr("Select a parameter first"))
                             .clicked()
                             && let Some(pi) = self.sel_param
                         {
@@ -2057,11 +2124,12 @@ impl EditorUi {
                         }
                     });
                     let mesh_sel = matches!(self.selected, Some(Sel::Mesh(_)));
-                    ui.menu_button("ArtMesh", |ui| {
+                    ui.menu_button(crate::i18n::tr("ArtMesh"), |ui| {
                         if ui
                             .add_enabled(
                                 mesh_sel,
-                                egui::Button::new("Edit Mesh").shortcut_text(self.sc("mesh-edit")),
+                                egui::Button::new(crate::i18n::tr("Edit Mesh"))
+                                    .shortcut_text(self.sc("mesh-edit")),
                             )
                             .clicked()
                         {
@@ -2074,7 +2142,10 @@ impl EditorUi {
                             }
                         }
                         if ui
-                            .add_enabled(mesh_sel, egui::Button::new("Auto Mesh Generation"))
+                            .add_enabled(
+                                mesh_sel,
+                                egui::Button::new(crate::i18n::tr("Auto Mesh Generation")),
+                            )
                             .clicked()
                         {
                             ui.close();
@@ -2082,16 +2153,23 @@ impl EditorUi {
                                 self.auto_mesh(mi);
                             }
                         }
-                        let _ = ui.add_enabled(false, egui::Button::new("Convert to ArtPath"));
+                        let _ = ui.add_enabled(
+                            false,
+                            egui::Button::new(crate::i18n::tr("Convert to ArtPath")),
+                        );
                     });
-                    ui.menu_button("ArtPath", |ui| {
-                        let _ = ui.add_enabled(false, egui::Button::new("Create ArtPath"));
+                    ui.menu_button(crate::i18n::tr("ArtPath"), |ui| {
+                        let _ = ui.add_enabled(
+                            false,
+                            egui::Button::new(crate::i18n::tr("Create ArtPath")),
+                        );
                     });
-                    ui.menu_button("Glue", |ui| {
+                    ui.menu_button(crate::i18n::tr("Glue"), |ui| {
                         if ui
                             .add_enabled(
                                 self.session.is_some(),
-                                egui::Button::new("Bind Glue").shortcut_text(self.sc("glue-bind")),
+                                egui::Button::new(crate::i18n::tr("Bind Glue"))
+                                    .shortcut_text(self.sc("glue-bind")),
                             )
                             .clicked()
                         {
@@ -2101,7 +2179,7 @@ impl EditorUi {
                         if ui
                             .add_enabled(
                                 self.session.is_some(),
-                                egui::Button::new("Unbind Glue")
+                                egui::Button::new(crate::i18n::tr("Unbind Glue"))
                                     .shortcut_text(self.sc("glue-unbind")),
                             )
                             .clicked()
@@ -2110,15 +2188,21 @@ impl EditorUi {
                             self.run_mesh_action(MeshAction::Unbind);
                         }
                     });
-                    ui.menu_button("Skinning", |ui| {
-                        let _ = ui.add_enabled(false, egui::Button::new("Apply Skinning…"));
+                    ui.menu_button(crate::i18n::tr("Skinning"), |ui| {
+                        let _ = ui.add_enabled(
+                            false,
+                            egui::Button::new(crate::i18n::tr("Apply Skinning…")),
+                        );
                     });
-                    ui.menu_button("Edit Form", |ui| {
+                    ui.menu_button(crate::i18n::tr("Edit Form"), |ui| {
                         let flippable = self.edit_target().is_some();
                         for (label, horizontal) in
                             [("Flip Horizontally", true), ("Flip Vertically", false)]
                         {
-                            if ui.add_enabled(flippable, egui::Button::new(label)).clicked() {
+                            if ui
+                                .add_enabled(flippable, egui::Button::new(crate::i18n::tr(label)))
+                                .clicked()
+                            {
                                 ui.close();
                                 self.flip_selection(horizontal);
                             }
@@ -2126,7 +2210,9 @@ impl EditorUi {
                         if ui
                             .add_enabled(
                                 self.session.is_some(),
-                                egui::Button::new("Automatic Generation of Four Corner Forms…"),
+                                egui::Button::new(crate::i18n::tr(
+                                    "Automatic Generation of Four Corner Forms…",
+                                )),
                             )
                             .clicked()
                         {
@@ -2134,12 +2220,15 @@ impl EditorUi {
                             self.run_param_cmd(ParamCmd::FourCorners);
                         }
                     });
-                    let _ = ui.add_enabled(false, egui::Button::new("Temporary Deform Tool"));
+                    let _ = ui.add_enabled(
+                        false,
+                        egui::Button::new(crate::i18n::tr("Temporary Deform Tool")),
+                    );
                     ui.separator();
                     if ui
                         .add_enabled(
                             !self.selection_meshes().is_empty(),
-                            egui::Button::new("Show/Hide Selected")
+                            egui::Button::new(crate::i18n::tr("Show/Hide Selected"))
                                 .shortcut_text(self.sc("toggle-visible")),
                         )
                         .clicked()
@@ -2150,7 +2239,7 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new("Lock/Unlock Selected")
+                            egui::Button::new(crate::i18n::tr("Lock/Unlock Selected"))
                                 .shortcut_text(self.sc("lock-selected")),
                         )
                         .clicked()
@@ -2159,10 +2248,13 @@ impl EditorUi {
                         self.toggle_selected_lock();
                     }
                     ui.separator();
-                    ui.menu_button("Edit Level", |ui| {
+                    ui.menu_button(crate::i18n::tr("Edit Level"), |ui| {
                         for lvl in 1..=3u8 {
                             if ui
-                                .selectable_label(self.edit_level == lvl, format!("Level {lvl}"))
+                                .selectable_label(
+                                    self.edit_level == lvl,
+                                    crate::i18n::trf("Level {level}", &[("level", &lvl)]),
+                                )
                                 .clicked()
                             {
                                 self.edit_level = lvl;
@@ -2172,24 +2264,32 @@ impl EditorUi {
                     });
                     ui.separator();
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("Physics Settings…"))
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Physics Settings…")),
+                        )
                         .clicked()
                     {
                         self.show_physics = true;
                         ui.close();
                     }
                     ui.separator();
-                    let _ = ui.add_enabled(false, egui::Button::new("Texture Atlas…"));
-                    let _ = ui.add_enabled(false, egui::Button::new("Model Template…"));
+                    let _ =
+                        ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Texture Atlas…")));
+                    let _ = ui
+                        .add_enabled(false, egui::Button::new(crate::i18n::tr("Model Template…")));
                 });
-                ui.menu_button("Animation", |ui| {
-                    if ui.button("Animation Workspace").clicked() {
+                ui.menu_button(crate::i18n::tr("Animation"), |ui| {
+                    if ui.button(crate::i18n::tr("Animation Workspace")).clicked() {
                         self.set_workspace(Workspace::Animation);
                         ui.close();
                     }
                     ui.separator();
                     if ui
-                        .add_enabled(self.session.is_some(), egui::Button::new("New Animation…"))
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("New Animation…")),
+                        )
                         .clicked()
                     {
                         ui.close();
@@ -2204,22 +2304,26 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             has_anim,
-                            egui::Button::new(if self.anim_playing { "Pause" } else { "Play" }),
+                            egui::Button::new(if self.anim_playing {
+                                crate::i18n::tr("Pause")
+                            } else {
+                                crate::i18n::tr("Play")
+                            }),
                         )
                         .clicked()
                     {
                         ui.close();
                         self.anim_playing = !self.anim_playing;
                     }
-                    ui.checkbox(&mut self.anim_autokey, "Auto key");
+                    ui.checkbox(&mut self.anim_autokey, crate::i18n::tr("Auto key"));
                 });
-                ui.menu_button("Window", |ui| {
+                ui.menu_button(crate::i18n::tr("Window"), |ui| {
                     // one checkbox per palette; the menu stays open so several
                     // can be toggled in one go
                     for p in PanelKind::ALL {
                         let was = self.layout.contains(p);
                         let mut open = was;
-                        if ui.checkbox(&mut open, p.title()).changed() {
+                        if ui.checkbox(&mut open, crate::i18n::tr(p.title())).changed() {
                             if was {
                                 self.layout.close(p);
                             } else {
@@ -2229,47 +2333,47 @@ impl EditorUi {
                         }
                     }
                     ui.separator();
-                    if ui.button("Settings…").clicked() {
+                    if ui.button(crate::i18n::tr("Settings…")).clicked() {
                         self.show_settings = true;
                         ui.close();
                     }
                     ui.separator();
-                    ui.menu_button("Workspace", |ui| {
-                        if ui.button("Save as New Workspace…").clicked() {
+                    ui.menu_button(crate::i18n::tr("Workspace"), |ui| {
+                        if ui.button(crate::i18n::tr("Save as New Workspace…")).clicked() {
                             self.show_ws_save = true;
                             ui.close();
                         }
-                        if ui.button("Manage Workspaces…").clicked() {
+                        if ui.button(crate::i18n::tr("Manage Workspaces…")).clicked() {
                             self.show_ws_manage = true;
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Export Current Layout…").clicked() {
+                        if ui.button(crate::i18n::tr("Export Current Layout…")).clicked() {
                             ui.close();
                             self.pick_async(PickFor::WorkspaceExport, || {
                                 rfd::FileDialog::new()
-                                    .add_filter("Workspace", &["json"])
+                                    .add_filter(crate::i18n::tr("Workspace"), &["json"])
                                     .set_file_name("workspace.json")
                                     .save_file()
                             });
                         }
-                        if ui.button("Import Layout…").clicked() {
+                        if ui.button(crate::i18n::tr("Import Layout…")).clicked() {
                             ui.close();
                             self.pick_async(PickFor::WorkspaceImport, || {
                                 rfd::FileDialog::new()
-                                    .add_filter("Workspace", &["json"])
+                                    .add_filter(crate::i18n::tr("Workspace"), &["json"])
                                     .pick_file()
                             });
                         }
                     });
-                    if ui.button("Reset Current Layout").clicked() {
+                    if ui.button(crate::i18n::tr("Reset Current Layout")).clicked() {
                         self.reset_workspace();
                         ui.close();
                     }
                 });
-                ui.menu_button("API", |ui| self.api_menu(ui));
-                ui.menu_button("Help", |ui| {
-                    if ui.button("About Ayatsuri2D").clicked() {
+                ui.menu_button(crate::i18n::tr("API"), |ui| self.api_menu(ui));
+                ui.menu_button(crate::i18n::tr("Help"), |ui| {
+                    if ui.button(crate::i18n::tr("About Ayatsuri2D")).clicked() {
                         self.show_about = true;
                         ui.close();
                     }
@@ -2287,13 +2391,19 @@ impl EditorUi {
                     .width(130.0)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(self.workspace == Workspace::Modeling, "Modeling")
+                            .selectable_label(
+                                self.workspace == Workspace::Modeling,
+                                crate::i18n::tr("Modeling"),
+                            )
                             .clicked()
                         {
                             pick = Some(Workspace::Modeling);
                         }
                         if ui
-                            .selectable_label(self.workspace == Workspace::Animation, "Animation")
+                            .selectable_label(
+                                self.workspace == Workspace::Animation,
+                                crate::i18n::tr("Animation"),
+                            )
                             .clicked()
                         {
                             pick = Some(Workspace::Animation);
@@ -2307,10 +2417,10 @@ impl EditorUi {
                             }
                         }
                         ui.separator();
-                        if ui.button("Save as new workspace…").clicked() {
+                        if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
                             self.show_ws_save = true;
                         }
-                        if ui.button("Manage workspaces…").clicked() {
+                        if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
                             self.show_ws_manage = true;
                         }
                     });
@@ -2318,7 +2428,7 @@ impl EditorUi {
                     self.set_workspace(w);
                 }
                 ui.separator();
-                ui.weak("Edit Level:");
+                ui.weak(crate::i18n::tr("Edit Level:"));
                 for lvl in 1..=3u8 {
                     if ui.selectable_label(self.edit_level == lvl, lvl.to_string()).clicked() {
                         self.edit_level = lvl;
@@ -2328,8 +2438,11 @@ impl EditorUi {
                 let has_physics = self.session.as_ref().is_some_and(|s| s.puppet.has_physics());
                 if ui
                     .add_enabled_ui(has_physics, |ui| {
-                        ui.selectable_label(self.physics_on && has_physics, "Physics")
-                            .on_hover_text("Tick the pendulum rig (physics3)")
+                        ui.selectable_label(
+                            self.physics_on && has_physics,
+                            crate::i18n::tr("Physics"),
+                        )
+                        .on_hover_text(crate::i18n::tr("Tick the pendulum rig (physics3)"))
                     })
                     .inner
                     .clicked()
@@ -2368,8 +2481,10 @@ impl EditorUi {
                     }
                 }
                 if ui
-                    .selectable_label(self.follow_cursor, "Follow")
-                    .on_hover_text("Drive the standard face parameters with the cursor")
+                    .selectable_label(self.follow_cursor, crate::i18n::tr("Follow"))
+                    .on_hover_text(crate::i18n::tr(
+                        "Drive the standard face parameters with the cursor",
+                    ))
                     .clicked()
                 {
                     self.follow_cursor = !self.follow_cursor;
@@ -2692,13 +2807,16 @@ impl EditorUi {
         let mut done = false;
         let mut cancel = false;
         let mut dialog_action: Option<MeshAction> = None;
-        crate::windows::Dialog::new("Edit Mesh")
+        crate::windows::Dialog::new(crate::i18n::tr("Edit Mesh"))
             .width(290.0)
             // beside the canvas, not over the mesh being edited
             .at(ui.ctx().content_rect().right_top() + vec2(-200.0, 220.0))
             .show(ui.ctx(), |ui| {
                 ui.label(truncate(&id, 28));
-                ui.weak(format!("{verts} vertices · {tris} triangles"));
+                ui.weak(crate::i18n::trf(
+                    "{verts} vertices · {tris} triangles",
+                    &[("verts", &verts), ("tris", &tris)],
+                ));
                 // the same controls as Tool Details' mesh section, so both match
                 egui::ScrollArea::vertical()
                     .id_salt("edit-mesh-popup")
@@ -2706,14 +2824,17 @@ impl EditorUi {
                     .show(ui, |ui| self.td_mesh(ui, &mut dialog_action));
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("Done").color(Color32::WHITE)).clicked() {
+                    if ui
+                        .button(egui::RichText::new(crate::i18n::tr("Done")).color(Color32::WHITE))
+                        .clicked()
+                    {
                         done = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(crate::i18n::tr("Cancel")).clicked() {
                         cancel = true;
                     }
                 });
-                ui.weak("Esc finishes too; Ctrl+Z steps back");
+                ui.weak(crate::i18n::tr("Esc finishes too; Ctrl+Z steps back"));
             });
         if let Some(a) = dialog_action {
             self.run_mesh_action(a);
@@ -2758,7 +2879,7 @@ impl EditorUi {
     /// The page's live parameter rail: drive anything while physics runs,
     /// with the reference's Reset Parameter to Default button up top.
     fn physics_param_rail(&mut self, ui: &mut Ui) {
-        if ui.button("Reset Parameter to Default").clicked() {
+        if ui.button(crate::i18n::tr("Reset Parameter to Default")).clicked() {
             self.reset_parameters();
         }
         ui.separator();
@@ -2928,18 +3049,24 @@ impl EditorUi {
         pp.text(
             pos2(prect.min.x + 6.0, prect.min.y + 4.0),
             Align2::LEFT_TOP,
-            format!("Scale: {:.1}\nAngle: {:.1}", self.phys_zoom * 10.0, -self.phys_page.prev_rot),
+            crate::i18n::trf(
+                "Scale: {scale}\nAngle: {angle}",
+                &[
+                    ("scale", &format!("{:.1}", self.phys_zoom * 10.0)),
+                    ("angle", &format!("{:.1}", -self.phys_page.prev_rot)),
+                ],
+            ),
             FontId::proportional(9.5),
             ink,
         );
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            if ui.small_button("1:1").on_hover_text("Full scale").clicked() {
+            if ui.small_button("1:1").on_hover_text(crate::i18n::tr("Full scale")).clicked() {
                 self.phys_zoom = 1.0;
             }
             if ui
                 .small_button(egui_phosphor::regular::CORNERS_OUT)
-                .on_hover_text("All: fit the whole pendulum")
+                .on_hover_text(crate::i18n::tr("All: fit the whole pendulum"))
                 .clicked()
             {
                 self.phys_zoom = 1.0;
@@ -2947,19 +3074,23 @@ impl EditorUi {
             }
             if ui
                 .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
-                .on_hover_text("Rotate left 45°")
+                .on_hover_text(crate::i18n::tr("Rotate left 45°"))
                 .clicked()
             {
                 self.phys_page.prev_rot -= 45.0;
             }
             if ui
                 .small_button(egui_phosphor::regular::ARROW_CLOCKWISE)
-                .on_hover_text("Rotate right 45°")
+                .on_hover_text(crate::i18n::tr("Rotate right 45°"))
                 .clicked()
             {
                 self.phys_page.prev_rot += 45.0;
             }
-            if ui.small_button("Swing").on_hover_text("Give the pendulum a push").clicked() {
+            if ui
+                .small_button(crate::i18n::tr("Swing"))
+                .on_hover_text(crate::i18n::tr("Give the pendulum a push"))
+                .clicked()
+            {
                 self.phys_prev_drive = reach * 0.4;
                 self.phys_prev_until = ui.input(|i| i.time) + 4.0;
             }
@@ -2968,48 +3099,54 @@ impl EditorUi {
     fn workspace_windows(&mut self, ui: &mut Ui) {
         let mut open = self.show_ws_save;
         let mut saved = false;
-        crate::windows::Dialog::new("Save Workspace").open(&mut open).show(ui.ctx(), |ui| {
-            ui.label("Name");
-            ui.text_edit_singleline(&mut self.ws_name);
-            if ui.button("Save").clicked() && !self.ws_name.trim().is_empty() {
-                let name = self.ws_name.trim().to_string();
-                self.prefs.custom_workspaces.push((name, self.layout.clone()));
-                let idx = self.prefs.custom_workspaces.len() - 1;
-                self.workspace = Workspace::Custom(idx);
-                self.prefs.save();
-                self.ws_name.clear();
-                saved = true;
-            }
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("Save Workspace")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.label(crate::i18n::tr("Name"));
+                ui.text_edit_singleline(&mut self.ws_name);
+                if ui.button(crate::i18n::tr("Save")).clicked() && !self.ws_name.trim().is_empty() {
+                    let name = self.ws_name.trim().to_string();
+                    self.prefs.custom_workspaces.push((name, self.layout.clone()));
+                    let idx = self.prefs.custom_workspaces.len() - 1;
+                    self.workspace = Workspace::Custom(idx);
+                    self.prefs.save();
+                    self.ws_name.clear();
+                    saved = true;
+                }
+            },
+        );
         self.show_ws_save = open && !saved;
 
         let mut open = self.show_ws_manage;
-        crate::windows::Dialog::new("Workspaces").open(&mut open).show(ui.ctx(), |ui| {
-            let mut delete: Option<usize> = None;
-            if self.prefs.custom_workspaces.is_empty() {
-                ui.weak("No custom workspaces yet.");
-            }
-            for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(name);
-                    if ui.small_button("Delete").clicked() {
-                        delete = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = delete {
-                self.prefs.custom_workspaces.remove(i);
-                if self.workspace == Workspace::Custom(i) {
-                    self.workspace = Workspace::Modeling;
-                    self.layout = self
-                        .prefs
-                        .workspace_modeling
-                        .clone()
-                        .unwrap_or_else(dock::default_workspace);
+        crate::windows::Dialog::new(crate::i18n::tr("Workspaces")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                let mut delete: Option<usize> = None;
+                if self.prefs.custom_workspaces.is_empty() {
+                    ui.weak(crate::i18n::tr("No custom workspaces yet."));
                 }
-                self.prefs.save();
-            }
-        });
+                for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(name);
+                        if ui.small_button(crate::i18n::tr("Delete")).clicked() {
+                            delete = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = delete {
+                    self.prefs.custom_workspaces.remove(i);
+                    if self.workspace == Workspace::Custom(i) {
+                        self.workspace = Workspace::Modeling;
+                        self.layout = self
+                            .prefs
+                            .workspace_modeling
+                            .clone()
+                            .unwrap_or_else(dock::default_workspace);
+                    }
+                    self.prefs.save();
+                }
+            },
+        );
         self.show_ws_manage = open;
     }
 
@@ -3083,7 +3220,10 @@ impl EditorUi {
         ui.painter().text(
             pos2(band.min.x + 38.0, band.max.y - 24.0),
             Align2::LEFT_CENTER,
-            format!("Ayatsuri2D {} · open 2D puppet studio", env!("CARGO_PKG_VERSION")),
+            crate::i18n::trf(
+                "Ayatsuri2D {version} · open 2D puppet studio",
+                &[("version", &env!("CARGO_PKG_VERSION"))],
+            ),
             FontId::proportional(12.5),
             theme::pal().text_faint,
         );
@@ -3091,7 +3231,7 @@ impl EditorUi {
         let body = Rect::from_min_max(pos2(rect.min.x + 36.0, band.max.y + 18.0), rect.max);
         let mut ui = ui.new_child(UiBuilder::new().max_rect(body));
         // a newer release: a full-width strip above everything, text on the
-        // left, Download and Later on the right; Later holds until the next
+        // left, Later and the update buttons on the right; Later holds until the next
         if let Some(latest) = self.update.available().cloned()
             && self.prefs.update_dismissed.as_deref() != Some(latest.version.as_str())
         {
@@ -3109,37 +3249,38 @@ impl EditorUi {
                                 .size(16.0)
                                 .color(theme::pal().accent),
                         );
-                        ui.label(format!(
-                            "Ayatsuri2D {} is available (you have {}).",
-                            latest.version,
-                            crate::update::current()
+                        ui.label(crate::i18n::trf(
+                            "Ayatsuri2D {version} is available (you have {current}).",
+                            &[("version", &latest.version), ("current", &crate::update::current())],
                         ));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
-                                .button("Later")
-                                .on_hover_text("Hide this until the next release")
+                                .button(crate::i18n::tr("Later"))
+                                .on_hover_text(crate::i18n::tr("Hide this until the next release"))
                                 .clicked()
                             {
                                 self.prefs.update_dismissed = Some(latest.version.clone());
                                 self.prefs.save();
                             }
-                            if ui.button("Download").clicked() {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(latest.url.clone()));
-                            }
+                            crate::update::actions(ui, &mut self.update, &latest);
                         });
                     });
                 });
             ui.add_space(14.0);
         }
         ui.horizontal(|ui| {
-            if ui.add_sized([150.0, 34.0], egui::Button::new("Open…")).clicked() {
+            if ui.add_sized([150.0, 34.0], egui::Button::new(crate::i18n::tr("Open…"))).clicked()
+            {
                 self.import_dialog(&ui.ctx().clone());
             }
-            if ui.add_sized([150.0, 34.0], egui::Button::new("New model…")).clicked() {
+            if ui
+                .add_sized([150.0, 34.0], egui::Button::new(crate::i18n::tr("New model…")))
+                .clicked()
+            {
                 self.new_model = Some(ModelNew::default());
             }
             ui.add_space(10.0);
-            ui.weak("or drop a .aom / .moc3 / .model3.json anywhere");
+            ui.weak(crate::i18n::tr("or drop a .aom / .moc3 / .model3.json anywhere"));
         });
         if let Some(note) = &self.home_note {
             ui.add_space(6.0);
@@ -3148,10 +3289,10 @@ impl EditorUi {
         ui.add_space(16.0);
 
         if self.prefs.recents.is_empty() {
-            ui.weak("Models you open appear here.");
+            ui.weak(crate::i18n::tr("Models you open appear here."));
             return;
         }
-        ui.label(egui::RichText::new("Recent").size(13.0).strong());
+        ui.label(egui::RichText::new(crate::i18n::tr("Recent")).size(13.0).strong());
         ui.add_space(8.0);
         let recents: Vec<PathBuf> = self.prefs.recents.iter().take(8).cloned().collect();
         let mut open_this: Option<PathBuf> = None;
@@ -3226,7 +3367,7 @@ impl EditorUi {
                         ui.painter().text(
                             card.center(),
                             Align2::CENTER_CENTER,
-                            "File not found",
+                            crate::i18n::tr("File not found"),
                             FontId::proportional(12.0),
                             theme::pal().text_faint,
                         );
@@ -3255,12 +3396,18 @@ impl EditorUi {
                 let spawned = std::env::current_exe()
                     .and_then(|exe| std::process::Command::new(exe).arg(&p).spawn());
                 if let Err(e) = spawned {
-                    self.home_note = Some(format!("Could not open a new window: {e}"));
+                    self.home_note = Some(crate::i18n::trf(
+                        "Could not open a new window: {error}",
+                        &[("error", &e)],
+                    ));
                 }
             }
             HomeCmd::ShowInFolder(p) => {
                 if let Err(e) = show_in_folder(&p) {
-                    self.home_note = Some(format!("Could not open the folder: {e}"));
+                    self.home_note = Some(crate::i18n::trf(
+                        "Could not open the folder: {error}",
+                        &[("error", &e)],
+                    ));
                 }
             }
             HomeCmd::CopyPath(p) => ctx.copy_text(p.display().to_string()),
@@ -3276,7 +3423,10 @@ impl EditorUi {
                     self.prefs.recents.truncate(8);
                     self.prefs.save();
                 }
-                Err(e) => self.home_note = Some(format!("Could not duplicate: {e}")),
+                Err(e) => {
+                    self.home_note =
+                        Some(crate::i18n::trf("Could not duplicate: {error}", &[("error", &e)]))
+                }
             },
             HomeCmd::Remove(p) => {
                 self.prefs.recents.retain(|r| r != &p);
@@ -3301,7 +3451,7 @@ impl EditorUi {
         let Some((path, mut name)) = self.home_rename.take() else { return };
         let mut keep = true;
         let mut commit = false;
-        crate::windows::Dialog::new("Rename").show(ctx, |ui| {
+        crate::windows::Dialog::new(crate::i18n::tr("Rename")).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let edit = ui.add(egui::TextEdit::singleline(&mut name).desired_width(220.0));
                 if !edit.has_focus() && !edit.lost_focus() {
@@ -3314,10 +3464,10 @@ impl EditorUi {
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("Rename").clicked() {
+                if ui.button(crate::i18n::tr("Rename")).clicked() {
                     commit = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(crate::i18n::tr("Cancel")).clicked() {
                     keep = false;
                 }
             });
@@ -3336,7 +3486,10 @@ impl EditorUi {
                     self.home_thumbs.remove(&path);
                     self.prefs.save();
                 }
-                Err(e) => self.home_note = Some(format!("Could not rename: {e}")),
+                Err(e) => {
+                    self.home_note =
+                        Some(crate::i18n::trf("Could not rename: {error}", &[("error", &e)]))
+                }
             }
             keep = false;
         }
@@ -3410,7 +3563,7 @@ impl EditorUi {
                     self.tool_strip(ui);
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new(self.tool.label())
+                        egui::RichText::new(crate::i18n::tr(self.tool.label()))
                             .size(11.0)
                             .color(theme::pal().text_faint),
                     );
@@ -3433,14 +3586,15 @@ impl EditorUi {
             PanelKind::Timeline => self.timeline_panel(ui),
             PanelKind::Log => {
                 ui.horizontal(|ui| {
-                    ui.weak("Show:");
+                    ui.weak(crate::i18n::tr("Show:"));
                     for (name, lv) in [
                         ("Error", log::Level::Error),
                         ("Warn", log::Level::Warn),
                         ("Info", log::Level::Info),
                         ("Debug", log::Level::Debug),
                     ] {
-                        if ui.selectable_label(self.log_view == lv, name).clicked() {
+                        if ui.selectable_label(self.log_view == lv, crate::i18n::tr(name)).clicked()
+                        {
                             self.log_view = lv;
                         }
                     }
@@ -3467,13 +3621,13 @@ impl EditorUi {
 
     fn timeline_panel(&mut self, ui: &mut Ui) {
         let Some(s) = &mut self.session else {
-            ui.weak("No model loaded.");
+            ui.weak(crate::i18n::tr("No model loaded."));
             return;
         };
         if s.animations.is_empty() {
             ui.horizontal(|ui| {
-                ui.weak("No animation yet.");
-                if ui.button("New Animation…").clicked() {
+                ui.weak(crate::i18n::tr("No animation yet."));
+                if ui.button(crate::i18n::tr("New Animation…")).clicked() {
                     self.new_anim = Some(AnimNew {
                         name: "idle".into(),
                         fps: 30.0,
@@ -3510,10 +3664,18 @@ impl EditorUi {
                         }
                     }
                 });
-            if ui.button(egui_phosphor::regular::SKIP_BACK).on_hover_text("To start").clicked() {
+            if ui
+                .button(egui_phosphor::regular::SKIP_BACK)
+                .on_hover_text(crate::i18n::tr("To start"))
+                .clicked()
+            {
                 seek = Some(0.0);
             }
-            if ui.button(egui_phosphor::regular::MINUS).on_hover_text("Previous frame").clicked() {
+            if ui
+                .button(egui_phosphor::regular::MINUS)
+                .on_hover_text(crate::i18n::tr("Previous frame"))
+                .clicked()
+            {
                 seek = Some((self.anim_time - frame).max(0.0));
             }
             let play_icon = if self.anim_playing {
@@ -3524,10 +3686,18 @@ impl EditorUi {
             if ui.button(play_icon).clicked() {
                 self.anim_playing = !self.anim_playing;
             }
-            if ui.button(egui_phosphor::regular::PLUS).on_hover_text("Next frame").clicked() {
+            if ui
+                .button(egui_phosphor::regular::PLUS)
+                .on_hover_text(crate::i18n::tr("Next frame"))
+                .clicked()
+            {
                 seek = Some((self.anim_time + frame).min(duration));
             }
-            if ui.button(egui_phosphor::regular::SKIP_FORWARD).on_hover_text("To end").clicked() {
+            if ui
+                .button(egui_phosphor::regular::SKIP_FORWARD)
+                .on_hover_text(crate::i18n::tr("To end"))
+                .clicked()
+            {
                 seek = Some(duration);
             }
             ui.label(format!(
@@ -3536,10 +3706,10 @@ impl EditorUi {
                 (duration * fps).round()
             ));
             ui.separator();
-            ui.checkbox(&mut self.anim_autokey, "Auto key");
+            ui.checkbox(&mut self.anim_autokey, crate::i18n::tr("Auto key"));
             if let Some(a) = s.animations.get_mut(ai) {
-                ui.checkbox(&mut a.looped, "Loop");
-                ui.weak("Len");
+                ui.checkbox(&mut a.looped, crate::i18n::tr("Loop"));
+                ui.weak(crate::i18n::tr("Len"));
                 if ui
                     .add(
                         egui::DragValue::new(&mut a.duration)
@@ -3616,9 +3786,9 @@ impl EditorUi {
         let rows_top = ui.cursor().min.y;
         ScrollArea::vertical().id_salt("anim-rows").show(ui, |ui| {
             if names.is_empty() {
-                ui.weak(
+                ui.weak(crate::i18n::tr(
                     "Move a parameter to record a key (Auto key), or press K on a selected row.",
-                );
+                ));
             }
             for (param, label) in &names {
                 let (row, _) = ui.allocate_exact_size(vec2(avail, 16.0), Sense::hover());
@@ -3664,7 +3834,7 @@ impl EditorUi {
                         self.anim_playing = false;
                     }
                     kresp.context_menu(|ui| {
-                        if ui.button("Delete key").clicked() {
+                        if ui.button(crate::i18n::tr("Delete key")).clicked() {
                             delete = Some((param.clone(), t));
                             ui.close();
                         }
@@ -3726,31 +3896,36 @@ impl EditorUi {
         let Some(new) = &mut self.new_anim else { return };
         let mut open = true;
         let mut create = false;
-        crate::windows::Dialog::new("New Animation").open(&mut open).show(ui.ctx(), |ui| {
-            crate::windows::form(ui, "anew", |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut new.name);
-                ui.end_row();
-                ui.label("FPS");
-                ui.add(egui::DragValue::new(&mut new.fps).range(1.0..=120.0));
-                ui.end_row();
-                ui.label("Length");
-                ui.add(
-                    egui::DragValue::new(&mut new.duration)
-                        .range(0.1..=600.0)
-                        .speed(0.05)
-                        .suffix(" s"),
-                );
-                ui.end_row();
-                ui.label("Loop");
-                ui.checkbox(&mut new.looped, "");
-                ui.end_row();
-            });
-            ui.weak("Saved inside the .aom; exported as motions/<name>.motion3.json.");
-            if ui.button("Create").clicked() {
-                create = true;
-            }
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("New Animation")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                crate::windows::form(ui, "anew", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut new.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("FPS"));
+                    ui.add(egui::DragValue::new(&mut new.fps).range(1.0..=120.0));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Length"));
+                    ui.add(
+                        egui::DragValue::new(&mut new.duration)
+                            .range(0.1..=600.0)
+                            .speed(0.05)
+                            .suffix(" s"),
+                    );
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Loop"));
+                    ui.checkbox(&mut new.looped, "");
+                    ui.end_row();
+                });
+                ui.weak(crate::i18n::tr(
+                    "Saved inside the .aom; exported as motions/<name>.motion3.json.",
+                ));
+                if ui.button(crate::i18n::tr("Create")).clicked() {
+                    create = true;
+                }
+            },
+        );
         if create {
             if let (Some(n), Some(s)) = (self.new_anim.take(), &mut self.session) {
                 let name = if n.name.trim().is_empty() { "motion".into() } else { n.name };
@@ -4181,32 +4356,44 @@ impl EditorUi {
         let Some(new) = &mut self.new_model else { return };
         let mut open = true;
         let mut create = false;
-        crate::windows::Dialog::new("New Model").open(&mut open).show(ui.ctx(), |ui| {
-            ui.set_width(300.0);
-            crate::windows::form(ui, "mnew", |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut new.name);
-                ui.end_row();
-                ui.label("Author");
-                ui.text_edit_singleline(&mut new.author);
-                ui.end_row();
-                ui.label("Canvas width");
-                ui.add(egui::DragValue::new(&mut new.width).range(64.0..=16384.0).suffix(" px"));
-                ui.end_row();
-                ui.label("Canvas height");
-                ui.add(egui::DragValue::new(&mut new.height).range(64.0..=16384.0).suffix(" px"));
-                ui.end_row();
-                ui.label("Pixels per unit");
-                ui.add(egui::DragValue::new(&mut new.ppu).range(1.0..=8192.0));
-                ui.end_row();
-            });
-            ui.checkbox(&mut new.std_params, "Start with the standard parameter set");
-            ui.weak("Angle, eyes, mouth, body and breath, the ids trackers expect.");
-            ui.add_space(6.0);
-            if ui.button("Create").clicked() {
-                create = true;
-            }
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("New Model")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(300.0);
+                crate::windows::form(ui, "mnew", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut new.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Author"));
+                    ui.text_edit_singleline(&mut new.author);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Canvas width"));
+                    ui.add(
+                        egui::DragValue::new(&mut new.width).range(64.0..=16384.0).suffix(" px"),
+                    );
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Canvas height"));
+                    ui.add(
+                        egui::DragValue::new(&mut new.height).range(64.0..=16384.0).suffix(" px"),
+                    );
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Pixels per unit"));
+                    ui.add(egui::DragValue::new(&mut new.ppu).range(1.0..=8192.0));
+                    ui.end_row();
+                });
+                ui.checkbox(
+                    &mut new.std_params,
+                    crate::i18n::tr("Start with the standard parameter set"),
+                );
+                ui.weak(crate::i18n::tr(
+                    "Angle, eyes, mouth, body and breath, the ids trackers expect.",
+                ));
+                ui.add_space(6.0);
+                if ui.button(crate::i18n::tr("Create")).clicked() {
+                    create = true;
+                }
+            },
+        );
         if create {
             let Some(new) = self.new_model.take() else { return };
             let mut model = Model::new();
@@ -4271,43 +4458,52 @@ impl EditorUi {
             .map(|s| {
                 s.groups
                     .iter()
-                    .map(|g| if g.name.is_empty() { "Parameters".into() } else { g.name.clone() })
+                    .map(|g| {
+                        if g.name.is_empty() {
+                            crate::i18n::tr("Parameters").into()
+                        } else {
+                            g.name.clone()
+                        }
+                    })
                     .collect()
             })
             .unwrap_or_default();
-        crate::windows::Dialog::new("New Parameter").open(&mut open).show(ui.ctx(), |ui| {
-            ui.set_width(280.0);
-            crate::windows::form(ui, "pnew", |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut new.name);
-                ui.end_row();
-                ui.label("ID");
-                ui.text_edit_singleline(&mut new.id);
-                ui.end_row();
-                ui.label("Minimum");
-                ui.add(egui::DragValue::new(&mut new.min).speed(0.1));
-                ui.end_row();
-                ui.label("Default");
-                ui.add(egui::DragValue::new(&mut new.default).speed(0.1));
-                ui.end_row();
-                ui.label("Maximum");
-                ui.add(egui::DragValue::new(&mut new.max).speed(0.1));
-                ui.end_row();
-                ui.label("Folder");
-                egui::ComboBox::from_id_salt("pnew-group")
-                    .selected_text(group_names.get(new.group).cloned().unwrap_or_default())
-                    .show_ui(ui, |ui| {
-                        for (i, n) in group_names.iter().enumerate() {
-                            ui.selectable_value(&mut new.group, i, n);
-                        }
-                    });
-                ui.end_row();
-            });
-            ui.add_space(6.0);
-            if ui.button("Create").clicked() {
-                create = true;
-            }
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("New Parameter")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(280.0);
+                crate::windows::form(ui, "pnew", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut new.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("ID"));
+                    ui.text_edit_singleline(&mut new.id);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Minimum"));
+                    ui.add(egui::DragValue::new(&mut new.min).speed(0.1));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Default"));
+                    ui.add(egui::DragValue::new(&mut new.default).speed(0.1));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Maximum"));
+                    ui.add(egui::DragValue::new(&mut new.max).speed(0.1));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Folder"));
+                    egui::ComboBox::from_id_salt("pnew-group")
+                        .selected_text(group_names.get(new.group).cloned().unwrap_or_default())
+                        .show_ui(ui, |ui| {
+                            for (i, n) in group_names.iter().enumerate() {
+                                ui.selectable_value(&mut new.group, i, n);
+                            }
+                        });
+                    ui.end_row();
+                });
+                ui.add_space(6.0);
+                if ui.button(crate::i18n::tr("Create")).clicked() {
+                    create = true;
+                }
+            },
+        );
         if create {
             let (name, id, min, default, max, group) = {
                 let n = self.new_param.take();
@@ -4416,13 +4612,16 @@ impl EditorUi {
         let Some(name) = &mut self.new_folder else { return };
         let mut open = true;
         let mut create = false;
-        crate::windows::Dialog::new("New Folder").open(&mut open).show(ui.ctx(), |ui| {
-            ui.set_width(220.0);
-            ui.text_edit_singleline(name);
-            if ui.button("Create").clicked() {
-                create = true;
-            }
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("New Folder")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(220.0);
+                ui.text_edit_singleline(name);
+                if ui.button(crate::i18n::tr("Create")).clicked() {
+                    create = true;
+                }
+            },
+        );
         if create {
             let from = std::mem::take(&mut self.folder_from);
             if let (Some(s), Some(name)) = (&mut self.session, self.new_folder.take()) {
@@ -4467,18 +4666,21 @@ impl EditorUi {
         let Some(action) = self.confirm_close else { return };
         let name = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let mut choice: Option<u8> = None; // 0 cancel, 1 save, 2 discard
-        crate::windows::Dialog::new("Unsaved Changes").show(ui.ctx(), |ui| {
+        crate::windows::Dialog::new(crate::i18n::tr("Unsaved Changes")).show(ui.ctx(), |ui| {
             ui.set_width(300.0);
-            ui.label(format!("Save changes to {name} before closing?"));
+            ui.label(crate::i18n::trf(
+                "Save changes to {name} before closing?",
+                &[("name", &name)],
+            ));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button(egui::RichText::new("Save").strong()).clicked() {
+                if ui.button(egui::RichText::new(crate::i18n::tr("Save")).strong()).clicked() {
                     choice = Some(1);
                 }
-                if ui.button("Don't Save").clicked() {
+                if ui.button(crate::i18n::tr("Don't Save")).clicked() {
                     choice = Some(2);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(crate::i18n::tr("Cancel")).clicked() {
                     choice = Some(0);
                 }
             });
@@ -4724,7 +4926,10 @@ impl EditorUi {
         let Some(s) = &self.session else { return };
         let file = format!("{}.png", s.name);
         self.pick_async(PickFor::ExportImage, move || {
-            rfd::FileDialog::new().add_filter("PNG image", &["png"]).set_file_name(file).save_file()
+            rfd::FileDialog::new()
+                .add_filter(crate::i18n::tr("PNG image"), &["png"])
+                .set_file_name(file)
+                .save_file()
         });
     }
 
@@ -4905,7 +5110,7 @@ impl EditorUi {
 
     fn parameters_panel(&mut self, ui: &mut Ui) {
         if self.session.is_none() {
-            ui.weak("No model loaded.");
+            ui.weak(crate::i18n::tr("No model loaded."));
             return;
         }
 
@@ -4917,7 +5122,10 @@ impl EditorUi {
             } else {
                 egui_phosphor::regular::CARET_DOWN
             };
-            if ui.button(chev).on_hover_text("Collapse or expand all groups").clicked()
+            if ui
+                .button(chev)
+                .on_hover_text(crate::i18n::tr("Collapse or expand all groups"))
+                .clicked()
                 && let Some(s) = &mut self.session
             {
                 for g in &mut s.groups {
@@ -4928,19 +5136,19 @@ impl EditorUi {
             let have_target = self.edit_target().is_some() && self.sel_param.is_some();
             let two = ui
                 .add_enabled(have_target, egui::Button::new("••+"))
-                .on_hover_text("Add keys at min and max (selected object)");
+                .on_hover_text(crate::i18n::tr("Add keys at min and max (selected object)"));
             let three = ui
                 .add_enabled(have_target, egui::Button::new("•••+"))
-                .on_hover_text("Add keys at min, default and max");
+                .on_hover_text(crate::i18n::tr("Add keys at min, default and max"));
             let one = ui
                 .add_enabled(have_target, egui::Button::new("•+"))
-                .on_hover_text("Add a key at the current value");
+                .on_hover_text(crate::i18n::tr("Add a key at the current value"));
             let minus = ui
                 .add_enabled(have_target, egui::Button::new("•−"))
-                .on_hover_text("Delete the key nearest the current value");
+                .on_hover_text(crate::i18n::tr("Delete the key nearest the current value"));
             let unbind = ui
                 .add_enabled(have_target, egui::Button::new(egui_phosphor::regular::LINK_BREAK))
-                .on_hover_text("Remove the whole binding");
+                .on_hover_text(crate::i18n::tr("Remove the whole binding"));
             if let Some(param) = self.sel_param
                 && let Some(meta) = self
                     .session
@@ -4967,7 +5175,7 @@ impl EditorUi {
             }
             match self.edit_target() {
                 Some((_, name)) => ui.weak(truncate(&name, 14)),
-                None => ui.weak("no object selected"),
+                None => ui.weak(crate::i18n::tr("no object selected")),
             };
         });
         ui.separator();
@@ -4981,7 +5189,11 @@ impl EditorUi {
         // the footer: new parameters and folders live here, like Cubism
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button(egui_phosphor::regular::PLUS).on_hover_text("Add a parameter").clicked() {
+            if ui
+                .button(egui_phosphor::regular::PLUS)
+                .on_hover_text(crate::i18n::tr("Add a parameter"))
+                .clicked()
+            {
                 self.new_param = Some(ParamNew {
                     name: String::new(),
                     id: String::new(),
@@ -4997,7 +5209,7 @@ impl EditorUi {
             }
             if ui
                 .button(egui_phosphor::regular::FOLDER_PLUS)
-                .on_hover_text("Add a folder")
+                .on_hover_text(crate::i18n::tr("Add a folder"))
                 .clicked()
             {
                 self.new_folder = Some(String::new());
@@ -5005,7 +5217,7 @@ impl EditorUi {
             let deletable = self.sel_param.is_some();
             if ui
                 .add_enabled(deletable, egui::Button::new(egui_phosphor::regular::TRASH))
-                .on_hover_text("Delete the selected parameter (must be unused)")
+                .on_hover_text(crate::i18n::tr("Delete the selected parameter (must be unused)"))
                 .clicked()
                 && let Some(pi) = self.sel_param
             {
@@ -5026,35 +5238,38 @@ impl EditorUi {
         let Some(edit) = &mut self.param_edit else { return };
         let mut open = true;
         let mut apply = false;
-        crate::windows::Dialog::new("Edit Parameter").open(&mut open).show(ui.ctx(), |ui| {
-            ui.set_width(280.0);
-            crate::windows::form(ui, "pedit", |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut edit.name);
-                ui.end_row();
-                ui.label("ID");
-                ui.text_edit_singleline(&mut edit.id);
-                ui.end_row();
-                ui.label("Minimum");
-                ui.add(egui::DragValue::new(&mut edit.min).speed(0.1));
-                ui.end_row();
-                ui.label("Default");
-                ui.add(egui::DragValue::new(&mut edit.default).speed(0.1));
-                ui.end_row();
-                ui.label("Maximum");
-                ui.add(egui::DragValue::new(&mut edit.max).speed(0.1));
-                ui.end_row();
-                ui.label("Repeat");
-                ui.checkbox(&mut edit.repeat, "");
-                ui.end_row();
-            });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
-                    apply = true;
-                }
-            });
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("Edit Parameter")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(280.0);
+                crate::windows::form(ui, "pedit", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut edit.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("ID"));
+                    ui.text_edit_singleline(&mut edit.id);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Minimum"));
+                    ui.add(egui::DragValue::new(&mut edit.min).speed(0.1));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Default"));
+                    ui.add(egui::DragValue::new(&mut edit.default).speed(0.1));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Maximum"));
+                    ui.add(egui::DragValue::new(&mut edit.max).speed(0.1));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Repeat"));
+                    ui.checkbox(&mut edit.repeat, "");
+                    ui.end_row();
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button(crate::i18n::tr("OK")).clicked() {
+                        apply = true;
+                    }
+                });
+            },
+        );
         if apply {
             let Some(edit) = self.param_edit.take() else { return };
             if let Some(s) = &mut self.session {
@@ -5086,10 +5301,10 @@ impl EditorUi {
 
     fn parts_panel(&mut self, ui: &mut Ui) {
         let Some(s) = &mut self.session else {
-            ui.weak("No model loaded.");
+            ui.weak(crate::i18n::tr("No model loaded."));
             return;
         };
-        search_box(ui, &mut self.part_search, "Search parts and meshes");
+        search_box(ui, &mut self.part_search, crate::i18n::tr("Search parts and meshes"));
         let query = self.part_search.trim().to_lowercase();
         let searching = !query.is_empty();
         let (part_shown_by_search, mesh_shown_by_search) = if searching {
@@ -5308,10 +5523,10 @@ impl EditorUi {
                     if self.part_pick.contains(&i) { self.part_pick.clone() } else { vec![i] };
                 resp.context_menu(|ui| {
                     let label = match (shown, targets.len()) {
-                        (true, 1) => "Hide".to_string(),
-                        (false, 1) => "Show".to_string(),
-                        (true, n) => format!("Hide {n} Parts"),
-                        (false, n) => format!("Show {n} Parts"),
+                        (true, 1) => crate::i18n::tr("Hide").to_string(),
+                        (false, 1) => crate::i18n::tr("Show").to_string(),
+                        (true, n) => crate::i18n::trf("Hide {count} Parts", &[("count", &n)]),
+                        (false, n) => crate::i18n::trf("Show {count} Parts", &[("count", &n)]),
                     };
                     if ui.button(label).clicked() {
                         for &t in &targets {
@@ -5323,7 +5538,7 @@ impl EditorUi {
                         s.dirty = true;
                         ui.close();
                     }
-                    if ui.button("Select").clicked() {
+                    if ui.button(crate::i18n::tr("Select")).clicked() {
                         self.selected = Some(Sel::Part(i));
                         ui.close();
                     }
@@ -5420,7 +5635,7 @@ impl EditorUi {
                 ui.painter().text(
                     tag.center(),
                     Align2::CENTER_CENTER,
-                    "Glue",
+                    crate::i18n::tr("Glue"),
                     FontId::proportional(9.0),
                     Color32::BLACK,
                 );
@@ -5436,7 +5651,7 @@ impl EditorUi {
                     self.tool = Tool::Glue;
                 }
                 resp.context_menu(|ui| {
-                    if ui.button("Delete glue").clicked() {
+                    if ui.button(crate::i18n::tr("Delete glue")).clicked() {
                         delete = Some(gi);
                         ui.close();
                     }
@@ -5590,12 +5805,19 @@ impl EditorUi {
     /// The toolbar's right-click menu, wherever on the bar it opens.
     fn toolbar_menu(&mut self, ui: &mut Ui) {
         let docked = self.prefs.toolbar_docked;
-        if ui.button(if docked { "Float Toolbar" } else { "Dock Toolbar" }).clicked() {
+        if ui
+            .button(if docked {
+                crate::i18n::tr("Float Toolbar")
+            } else {
+                crate::i18n::tr("Dock Toolbar")
+            })
+            .clicked()
+        {
             self.prefs.toolbar_docked = !docked;
             self.prefs.save();
             ui.close();
         }
-        if !docked && ui.button("Reset Toolbar Position").clicked() {
+        if !docked && ui.button(crate::i18n::tr("Reset Toolbar Position")).clicked() {
             self.prefs.toolbar_pos = None;
             self.toolbar_reset = true;
             self.prefs.save();
@@ -5610,7 +5832,7 @@ impl EditorUi {
             ui.painter().text(
                 nr.left_center() + vec2(2.0, 0.0),
                 Align2::LEFT_CENTER,
-                self.tool.label(),
+                crate::i18n::tr(self.tool.label()),
                 FontId::proportional(11.0),
                 theme::pal().text,
             );
@@ -5650,7 +5872,7 @@ impl EditorUi {
                     );
                 }
                 resp.context_menu(|ui| self.toolbar_menu(ui));
-                let resp = resp.on_hover_text(t.label());
+                let resp = resp.on_hover_text(crate::i18n::tr(t.label()));
                 if resp.clicked() {
                     self.tool = t;
                 }
@@ -5661,10 +5883,10 @@ impl EditorUi {
     fn deformers_panel(&mut self, ui: &mut Ui) {
         let mut def_cmd: Option<DefCmd> = None;
         let Some(s) = &mut self.session else {
-            ui.weak("No model loaded.");
+            ui.weak(crate::i18n::tr("No model loaded."));
             return;
         };
-        search_box(ui, &mut self.def_search, "Search deformers and meshes");
+        search_box(ui, &mut self.def_search, crate::i18n::tr("Search deformers and meshes"));
         let query = self.def_search.trim().to_lowercase();
         let searching = !query.is_empty();
         // hierarchy: deformers under their parents, meshes under deformers
@@ -5892,36 +6114,38 @@ impl EditorUi {
                 }
                 resp.context_menu(|ui| {
                     if ui
-                        .button("Create Warp Deformer…")
-                        .on_hover_text("Around this deformer")
+                        .button(crate::i18n::tr("Create Warp Deformer…"))
+                        .on_hover_text(crate::i18n::tr("Around this deformer"))
                         .clicked()
                     {
                         def_cmd = Some(DefCmd::Create(true, Sel::Deformer(i)));
                         ui.close();
                     }
                     if ui
-                        .button("Create Rotation Deformer…")
-                        .on_hover_text("Around this deformer")
+                        .button(crate::i18n::tr("Create Rotation Deformer…"))
+                        .on_hover_text(crate::i18n::tr("Around this deformer"))
                         .clicked()
                     {
                         def_cmd = Some(DefCmd::Create(false, Sel::Deformer(i)));
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Rename…").clicked() {
+                    if ui.button(crate::i18n::tr("Rename…")).clicked() {
                         def_cmd = Some(DefCmd::Rename(i));
                         ui.close();
                     }
                     if ui
-                        .button("Delete")
-                        .on_hover_text("Its meshes and deformers move up to its parent, unchanged")
+                        .button(crate::i18n::tr("Delete"))
+                        .on_hover_text(crate::i18n::tr(
+                            "Its meshes and deformers move up to its parent, unchanged",
+                        ))
                         .clicked()
                     {
                         def_cmd = Some(DefCmd::Delete(i));
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Select children").clicked() {
+                    if ui.button(crate::i18n::tr("Select children")).clicked() {
                         self.multi_sel = s
                             .puppet
                             .model()
@@ -5986,20 +6210,20 @@ impl EditorUi {
                         self.selected = Some(Sel::Mesh(mi));
                     }
                     resp.context_menu(|ui| {
-                        if ui.button("Create Warp Deformer…").clicked() {
+                        if ui.button(crate::i18n::tr("Create Warp Deformer…")).clicked() {
                             def_cmd = Some(DefCmd::Create(true, Sel::Mesh(mi)));
                             ui.close();
                         }
-                        if ui.button("Create Rotation Deformer…").clicked() {
+                        if ui.button(crate::i18n::tr("Create Rotation Deformer…")).clicked() {
                             def_cmd = Some(DefCmd::Create(false, Sel::Mesh(mi)));
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Clip by…").clicked() {
+                        if ui.button(crate::i18n::tr("Clip by…")).clicked() {
                             def_cmd = Some(DefCmd::ClipBy(mi));
                             ui.close();
                         }
-                        if ui.button("Delete Art Mesh").clicked() {
+                        if ui.button(crate::i18n::tr("Delete Art Mesh")).clicked() {
                             def_cmd = Some(DefCmd::DeleteMesh(mi));
                             ui.close();
                         }
@@ -6032,7 +6256,10 @@ impl EditorUi {
                         ui.painter().text(
                             pos2(px + 14.0, prect.center().y),
                             Align2::LEFT_CENTER,
-                            format!("Deform path · level {level} · {pins} pins"),
+                            crate::i18n::trf(
+                                "Deform path · level {level} · {pins} pins",
+                                &[("level", &level), ("pins", &pins)],
+                            ),
                             FontId::proportional(10.0),
                             theme::pal().text_faint,
                         );
@@ -6040,11 +6267,11 @@ impl EditorUi {
                             def_cmd = Some(DefCmd::EditPath(mi, level));
                         }
                         presp.context_menu(|ui| {
-                            if ui.button("Edit Deform Path").clicked() {
+                            if ui.button(crate::i18n::tr("Edit Deform Path")).clicked() {
                                 def_cmd = Some(DefCmd::EditPath(mi, level));
                                 ui.close();
                             }
-                            if ui.button("Delete Deform Path").clicked() {
+                            if ui.button(crate::i18n::tr("Delete Deform Path")).clicked() {
                                 def_cmd = Some(DefCmd::DeletePath(mi, level));
                                 ui.close();
                             }
@@ -6069,11 +6296,11 @@ impl EditorUi {
                 def_cmd = Some(DefCmd::Reparent(*p, None));
             }
             bg.context_menu(|ui| {
-                if ui.button("Create Warp Deformer…").clicked() {
+                if ui.button(crate::i18n::tr("Create Warp Deformer…")).clicked() {
                     def_cmd = Some(DefCmd::CreateForSelection(true));
                     ui.close();
                 }
-                if ui.button("Create Rotation Deformer…").clicked() {
+                if ui.button(crate::i18n::tr("Create Rotation Deformer…")).clicked() {
                     def_cmd = Some(DefCmd::CreateForSelection(false));
                     ui.close();
                 }
@@ -6196,15 +6423,18 @@ impl EditorUi {
     fn def_rename_window(&mut self, ctx: &egui::Context) {
         let Some((i, name)) = &mut self.def_rename else { return };
         let (i, mut open, mut ok) = (*i, true, false);
-        crate::windows::Dialog::new("Rename Deformer").open(&mut open).show(ctx, |ui| {
-            let edit = ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
-            if !edit.has_focus() && !edit.lost_focus() {
-                edit.request_focus();
-            }
-            ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
-            ui.add_space(6.0);
-            ok |= ui.button("Rename").clicked();
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("Rename Deformer")).open(&mut open).show(
+            ctx,
+            |ui| {
+                let edit = ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
+                if !edit.has_focus() && !edit.lost_focus() {
+                    edit.request_focus();
+                }
+                ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
+                ui.add_space(6.0);
+                ok |= ui.button(crate::i18n::tr("Rename")).clicked();
+            },
+        );
         if ok {
             let name = name.clone();
             if let Some(s) = &mut self.session {
@@ -6225,7 +6455,7 @@ impl EditorUi {
 
     fn inspector_contents(&mut self, ui: &mut Ui) {
         let Some(s) = &mut self.session else {
-            ui.weak("Nothing selected.");
+            ui.weak(crate::i18n::tr("Nothing selected."));
             return;
         };
         // a glue being edited shows first, the way the reference inspector
@@ -6236,19 +6466,19 @@ impl EditorUi {
             let mesh = |i: u32| s.mesh_name(i as usize);
             let (name_a, name_b) = (mesh(g.art_mesh_a), mesh(g.art_mesh_b));
             crate::windows::form(ui, "glue-props", |ui| {
-                ui.weak("Glue");
+                ui.weak(crate::i18n::tr("Glue"));
                 ui.label(&g.id);
                 ui.end_row();
-                ui.weak("Mesh A (red)");
+                ui.weak(crate::i18n::tr("Mesh A (red)"));
                 ui.label(&name_a);
                 ui.end_row();
-                ui.weak("Mesh B (green)");
+                ui.weak(crate::i18n::tr("Mesh B (green)"));
                 ui.label(&name_b);
                 ui.end_row();
-                ui.weak("Bound pairs");
+                ui.weak(crate::i18n::tr("Bound pairs"));
                 ui.label((g.indices.len() / 2).to_string());
                 ui.end_row();
-                ui.weak("Compatibility");
+                ui.weak(crate::i18n::tr("Compatibility"));
                 let current = g.intensities.first().copied().unwrap_or(1.0);
                 let mut v = self.glue_compat.unwrap_or(current);
                 let r = ui.add(
@@ -6266,7 +6496,9 @@ impl EditorUi {
                 }
                 ui.end_row();
             });
-            ui.weak("Lower compatibility weakens the glue; key it per parameter for blends.");
+            ui.weak(crate::i18n::tr(
+                "Lower compatibility weakens the glue; key it per parameter for blends.",
+            ));
             ui.separator();
         }
         let row = |ui: &mut Ui, k: &str, v: String| {
@@ -6283,26 +6515,30 @@ impl EditorUi {
         match self.selected {
             Some(Sel::Mesh(i)) => {
                 let Some(m) = s.puppet.model().art_meshes.get(i).cloned() else { return };
-                row(ui, "Name", s.mesh_name(i));
-                row(ui, "ID", m.id.clone());
+                row(ui, crate::i18n::tr("Name"), s.mesh_name(i));
+                row(ui, crate::i18n::tr("ID"), m.id.clone());
                 row(
                     ui,
-                    "Part",
+                    crate::i18n::tr("Part"),
                     m.parent_part
                         .and_then(|p| s.part_names.get(p as usize).cloned())
                         .unwrap_or_else(|| "-".into()),
                 );
                 row(
                     ui,
-                    "Deformer",
+                    crate::i18n::tr("Deformer"),
                     m.parent_deformer
                         .and_then(|d| s.puppet.model().deformers.get(d as usize))
                         .map_or("-".into(), |d| d.id.clone()),
                 );
-                row(ui, "Texture", format!("{}", m.texture));
-                row(ui, "Vertices", format!("{}", m.vertex_count));
+                row(ui, crate::i18n::tr("Texture"), format!("{}", m.texture));
+                row(ui, crate::i18n::tr("Vertices"), format!("{}", m.vertex_count));
                 let stack = s.puppet.drawables().position(|d| d.mesh == i);
-                row(ui, "Render #", stack.map_or("hidden".into(), |n| format!("{n}")));
+                row(
+                    ui,
+                    crate::i18n::tr("Render #"),
+                    stack.map_or(crate::i18n::tr("hidden").into(), |n| format!("{n}")),
+                );
                 ui.separator();
 
                 // the editable half, like Cubism's inspector
@@ -6314,9 +6550,9 @@ impl EditorUi {
                 picked.sort_unstable();
                 picked.dedup();
                 if picked.len() > 1 {
-                    ui.weak(format!(
-                        "{} meshes selected: opacity and keys apply to all",
-                        picked.len()
+                    ui.weak(crate::i18n::trf(
+                        "{count} meshes selected: opacity and keys apply to all",
+                        &[("count", &picked.len())],
                     ));
                 }
                 let targets: Vec<ayatsuri_core::edit::Target> =
@@ -6335,22 +6571,22 @@ impl EditorUi {
                     ui.add_sized(
                         [74.0, 16.0],
                         egui::Label::new(
-                            egui::RichText::new("Blend mode")
+                            egui::RichText::new(crate::i18n::tr("Blend mode"))
                                 .color(theme::pal().text_faint)
                                 .size(11.0),
                         ),
                     );
                     egui::ComboBox::from_id_salt(("blend", i))
-                        .selected_text(
+                        .selected_text(crate::i18n::tr(
                             ["Normal", "Additive", "Multiply"]
                                 .get(new_blend.min(2))
                                 .copied()
                                 .unwrap_or("Normal"),
-                        )
+                        ))
                         .show_ui(ui, |ui| {
                             for (bi, name) in ["Normal", "Additive", "Multiply"].iter().enumerate()
                             {
-                                ui.selectable_value(&mut new_blend, bi, *name);
+                                ui.selectable_value(&mut new_blend, bi, crate::i18n::tr(name));
                             }
                         });
                 });
@@ -6358,11 +6594,11 @@ impl EditorUi {
                 let mut inverted = m.flags & flags::INVERTED_MASK != 0;
                 ui.horizontal(|ui| {
                     ui.add_space(78.0);
-                    ui.checkbox(&mut double_sided, "Double-sided");
+                    ui.checkbox(&mut double_sided, crate::i18n::tr("Double-sided"));
                 });
                 ui.horizontal(|ui| {
                     ui.add_space(78.0);
-                    ui.checkbox(&mut inverted, "Invert mask");
+                    ui.checkbox(&mut inverted, crate::i18n::tr("Invert mask"));
                 });
                 let base_order = m.draw_orders.first().copied().unwrap_or(500.0);
                 let mut order = base_order;
@@ -6370,7 +6606,7 @@ impl EditorUi {
                     ui.add_sized(
                         [74.0, 16.0],
                         egui::Label::new(
-                            egui::RichText::new("Draw order")
+                            egui::RichText::new(crate::i18n::tr("Draw order"))
                                 .color(theme::pal().text_faint)
                                 .size(11.0),
                         ),
@@ -6403,13 +6639,13 @@ impl EditorUi {
                     ui.add_sized(
                         [74.0, 16.0],
                         egui::Label::new(
-                            egui::RichText::new("Clip by")
+                            egui::RichText::new(crate::i18n::tr("Clip by"))
                                 .color(theme::pal().text_faint)
                                 .size(11.0),
                         ),
                     );
                     if masks.is_empty() {
-                        ui.weak("none");
+                        ui.weak(crate::i18n::tr("none"));
                     }
                     let mut drop: Option<usize> = None;
                     for (at, &x) in masks.iter().enumerate() {
@@ -6422,7 +6658,11 @@ impl EditorUi {
                         )
                         .corner_radius(8.0)
                         .small();
-                        if ui.add(chip).on_hover_text("Stop clipping by this mesh").clicked() {
+                        if ui
+                            .add(chip)
+                            .on_hover_text(crate::i18n::tr("Stop clipping by this mesh"))
+                            .clicked()
+                        {
                             drop = Some(at);
                         }
                     }
@@ -6435,8 +6675,8 @@ impl EditorUi {
                     ui.add_space(78.0);
                     let picking = self.clip_pick == Some(i);
                     if ui
-                        .selectable_label(picking, "Pick on canvas")
-                        .on_hover_text("Click the mask mesh on the canvas. Shift+click adds several, Esc ends.")
+                        .selectable_label(picking, crate::i18n::tr("Pick on canvas"))
+                        .on_hover_text(crate::i18n::tr("Click the mask mesh on the canvas. Shift+click adds several, Esc ends."))
                         .clicked()
                     {
                         self.clip_pick = if picking { None } else { Some(i) };
@@ -6457,7 +6697,7 @@ impl EditorUi {
                         });
                     })
                     .response
-                    .on_hover_text("Add a clipping mask from the list");
+                    .on_hover_text(crate::i18n::tr("Add a clipping mask from the list"));
                 });
                 if changed_masks && s.edit(|model| ayatsuri_core::edit::set_masks(model, i, &masks))
                 {
@@ -6483,30 +6723,37 @@ impl EditorUi {
             }
             Some(Sel::Deformer(i)) => {
                 let Some(d) = s.puppet.model().deformers.get(i) else { return };
-                row(ui, "ID", d.id.clone());
+                row(ui, crate::i18n::tr("ID"), d.id.clone());
                 row(
                     ui,
-                    "Part",
+                    crate::i18n::tr("Part"),
                     d.parent_part
                         .and_then(|p| s.part_names.get(p as usize).cloned())
                         .unwrap_or_else(|| "-".into()),
                 );
                 row(
                     ui,
-                    "Deformer",
+                    crate::i18n::tr("Deformer"),
                     d.parent_deformer
                         .and_then(|p| s.puppet.model().deformers.get(p as usize))
                         .map_or("-".into(), |p| p.id.clone()),
                 );
                 match &d.kind {
                     DeformerKind::Warp(w) => {
-                        row(ui, "Type", format!("Warp {}x{}", w.cols, w.rows));
-                        row(ui, "Keyforms", format!("{}", w.opacities.len()));
+                        row(
+                            ui,
+                            crate::i18n::tr("Type"),
+                            crate::i18n::trf(
+                                "Warp {cols}x{rows}",
+                                &[("cols", &w.cols), ("rows", &w.rows)],
+                            ),
+                        );
+                        row(ui, crate::i18n::tr("Keyforms"), format!("{}", w.opacities.len()));
                     }
                     DeformerKind::Rotation(r) => {
-                        row(ui, "Type", "Rotation".into());
-                        row(ui, "Base angle", format!("{:.1}", r.base_angle));
-                        row(ui, "Keyforms", format!("{}", r.opacities.len()));
+                        row(ui, crate::i18n::tr("Type"), crate::i18n::tr("Rotation").into());
+                        row(ui, crate::i18n::tr("Base angle"), format!("{:.1}", r.base_angle));
+                        row(ui, crate::i18n::tr("Keyforms"), format!("{}", r.opacities.len()));
                     }
                 }
                 let kids = s
@@ -6516,17 +6763,21 @@ impl EditorUi {
                     .iter()
                     .filter(|m| m.parent_deformer == Some(i as u32))
                     .count();
-                row(ui, "Children", format!("{kids} meshes"));
+                row(
+                    ui,
+                    crate::i18n::tr("Children"),
+                    crate::i18n::trf("{count} meshes", &[("count", &kids)]),
+                );
                 ui.separator();
                 opacity_row(ui, s, &[ayatsuri_core::edit::Target::Deformer(i)], self.sel_param);
             }
             Some(Sel::Part(i)) => {
                 let Some(p) = s.puppet.model().parts.get(i) else { return };
-                row(ui, "Name", s.part_names.get(i).cloned().unwrap_or_default());
-                row(ui, "ID", p.id.clone());
+                row(ui, crate::i18n::tr("Name"), s.part_names.get(i).cloned().unwrap_or_default());
+                row(ui, crate::i18n::tr("ID"), p.id.clone());
                 row(
                     ui,
-                    "Parent",
+                    crate::i18n::tr("Parent"),
                     p.parent_part
                         .and_then(|q| s.part_names.get(q as usize).cloned())
                         .unwrap_or_else(|| "-".into()),
@@ -6537,7 +6788,7 @@ impl EditorUi {
                     ui.add_sized(
                         [74.0, 16.0],
                         egui::Label::new(
-                            egui::RichText::new("View opacity")
+                            egui::RichText::new(crate::i18n::tr("View opacity"))
                                 .color(theme::pal().text_faint)
                                 .size(11.0),
                         ),
@@ -6546,12 +6797,12 @@ impl EditorUi {
                         egui::Slider::new(&mut opacity, 0.0..=100.0).suffix("%").fixed_decimals(0);
                     if ui
                         .add(slider)
-                        .on_hover_text(
+                        .on_hover_text(crate::i18n::tr(
                             "Only changes what you see while editing; it is not saved or \
                              exported, because moc3 parts have no opacity. To fade a part by a \
                              parameter, put its meshes under a deformer and key that \
                              deformer's Opacity.",
-                        )
+                        ))
                         .changed()
                     {
                         s.puppet.set_part_opacity(i, opacity / 100.0);
@@ -6564,25 +6815,44 @@ impl EditorUi {
             }
             Some(Sel::Parameter(i)) => {
                 let Some(p) = s.puppet.model().parameters.get(i) else { return };
-                row(ui, "Name", s.param_names.get(i).cloned().unwrap_or_default());
-                row(ui, "ID", p.id.clone());
-                row(ui, "Range", format!("{} to {}", p.min, p.max));
-                row(ui, "Default", format!("{}", p.default));
-                row(ui, "Keys", format!("{}", s.param_keys.get(i).map_or(0, Vec::len)));
-                row(ui, "Repeat", if p.repeat { "yes".into() } else { "no".into() });
+                row(ui, crate::i18n::tr("Name"), s.param_names.get(i).cloned().unwrap_or_default());
+                row(ui, crate::i18n::tr("ID"), p.id.clone());
+                row(
+                    ui,
+                    crate::i18n::tr("Range"),
+                    crate::i18n::trf("{from} to {to}", &[("from", &p.min), ("to", &p.max)]),
+                );
+                row(ui, crate::i18n::tr("Default"), format!("{}", p.default));
+                row(
+                    ui,
+                    crate::i18n::tr("Keys"),
+                    format!("{}", s.param_keys.get(i).map_or(0, Vec::len)),
+                );
+                row(
+                    ui,
+                    crate::i18n::tr("Repeat"),
+                    if p.repeat {
+                        crate::i18n::tr("yes").into()
+                    } else {
+                        crate::i18n::tr("no").into()
+                    },
+                );
             }
             None => {
                 if self.multi_sel.len() > 1 {
-                    ui.weak(format!("{} meshes selected", self.multi_sel.len()));
+                    ui.weak(crate::i18n::trf(
+                        "{count} meshes selected",
+                        &[("count", &self.multi_sel.len())],
+                    ));
                 } else {
-                    ui.weak("Nothing selected.");
+                    ui.weak(crate::i18n::tr("Nothing selected."));
                 }
             }
         }
     }
     fn textures_panel(&mut self, ui: &mut Ui) {
         let Some(s) = &self.session else {
-            ui.weak("No textures.");
+            ui.weak(crate::i18n::tr("No textures."));
             return;
         };
         ScrollArea::vertical().id_salt("textures").show(ui, |ui| {
@@ -6599,7 +6869,7 @@ impl EditorUi {
                         ui.image((t.id(), vec2(w, w * size.y / size.x.max(1.0))));
                     }
                     None => {
-                        ui.weak(format!("{i}: failed to load"));
+                        ui.weak(crate::i18n::trf("{index}: failed to load", &[("index", &i)]));
                     }
                 }
             }
@@ -6622,7 +6892,7 @@ impl EditorUi {
             painter.text(
                 view.center(),
                 Align2::CENTER_CENTER,
-                "操り2D · drop a .moc3 or .model3.json here",
+                crate::i18n::tr("操り2D · drop a .moc3 or .model3.json here"),
                 FontId::proportional(13.0),
                 theme::pal().text_faint,
             );
@@ -6644,12 +6914,12 @@ impl EditorUi {
             self.view_pan += resp.drag_delta();
         }
         resp.context_menu(|ui| {
-            if ui.button("Fit").clicked() {
+            if ui.button(crate::i18n::tr("Fit")).clicked() {
                 self.view_zoom = 1.0;
                 self.view_pan = Vec2::ZERO;
                 ui.close();
             }
-            if ui.button("Reset view").clicked() {
+            if ui.button(crate::i18n::tr("Reset view")).clicked() {
                 self.view_zoom = 1.0;
                 self.view_pan = Vec2::ZERO;
                 ui.close();
@@ -6916,9 +7186,9 @@ impl EditorUi {
             {
                 self.clip_pick = None;
             } else {
-                let text = format!(
-                    "Click the mesh that clips {}  ·  Shift+click for more  ·  Esc to finish",
-                    s.mesh_name(target)
+                let text = crate::i18n::trf(
+                    "Click the mesh that clips {mesh}  ·  Shift+click for more  ·  Esc to finish",
+                    &[("mesh", &s.mesh_name(target))],
                 );
                 let at = content.center_top() + vec2(0.0, 14.0);
                 let galley = vp.layout_no_wrap(text, FontId::proportional(12.0), Color32::WHITE);
@@ -8684,7 +8954,13 @@ impl EditorUi {
             vp.text(
                 pos2(bar.min.x + 10.0, bar.center().y),
                 Align2::LEFT_CENTER,
-                format!("Editing {}", truncate(mesh_id.as_deref().unwrap_or("mesh"), 24)),
+                crate::i18n::trf(
+                    "Editing {name}",
+                    &[(
+                        "name",
+                        &truncate(mesh_id.as_deref().unwrap_or(crate::i18n::tr("mesh")), 24),
+                    )],
+                ),
                 FontId::proportional(11.5),
                 theme::pal().text,
             );
@@ -8695,7 +8971,7 @@ impl EditorUi {
             vp.text(
                 done.center(),
                 Align2::CENTER_CENTER,
-                "Done",
+                crate::i18n::tr("Done"),
                 FontId::proportional(11.0),
                 Color32::WHITE,
             );
@@ -8871,7 +9147,7 @@ impl EditorUi {
                     vp.text(
                         tag.center(),
                         Align2::CENTER_CENTER,
-                        "Glue",
+                        crate::i18n::tr("Glue"),
                         FontId::proportional(10.0),
                         Color32::BLACK,
                     );
@@ -8888,7 +9164,7 @@ impl EditorUi {
                         self.tool = Tool::Glue;
                     }
                     tresp.context_menu(|ui| {
-                        if ui.button("Delete glue").clicked() {
+                        if ui.button(crate::i18n::tr("Delete glue")).clicked() {
                             self.selected_glue = Some(gi);
                             ui.close();
                         }
@@ -8962,7 +9238,7 @@ impl EditorUi {
                 self.view_zoom = 1.0 / fit;
                 self.view_pan = Vec2::ZERO;
             }
-            if ui.small_button("Fit").clicked() {
+            if ui.small_button(crate::i18n::tr("Fit")).clicked() {
                 self.view_zoom = 1.0;
                 self.view_pan = Vec2::ZERO;
             }
@@ -9371,9 +9647,9 @@ fn opacity_row(
     let all_on_keys = !targets.is_empty() && sets.iter().all(Option::is_some);
     ui.horizontal(|ui| {
         let label = if targets.len() > 1 {
-            format!("Opacity ({})", targets.len())
+            crate::i18n::trf("Opacity ({count})", &[("count", &targets.len())])
         } else {
-            "Opacity".into()
+            crate::i18n::tr("Opacity").into()
         };
         ui.add_sized(
             [74.0, 16.0],
@@ -9381,10 +9657,10 @@ fn opacity_row(
         );
         let (true, Some(now)) = (all_on_keys, stored) else {
             ui.add_enabled(false, egui::Slider::new(&mut 100.0f32, 0.0..=100.0).suffix("%"))
-                .on_disabled_hover_text(
+                .on_disabled_hover_text(crate::i18n::tr(
                     "Between keys. Move the parameters onto a key to set opacity there \
                      (every selected mesh must be on one).",
-                );
+                ));
             return;
         };
         let pairs: Vec<(ayatsuri_core::edit::Target, usize)> = targets
@@ -9446,7 +9722,10 @@ fn opacity_row(
     if spread && let Some(p) = across {
         let name = s.param_names.get(p).cloned().unwrap_or_default();
         let at = s.puppet.value(p);
-        ui.weak(format!("Sets {name} = {at:.2} at every other key (head angles, physics…)"));
+        ui.weak(crate::i18n::trf(
+            "Sets {name} = {value} at every other key (head angles, physics…)",
+            &[("name", &name), ("value", &format!("{at:.2}"))],
+        ));
     }
 }
 
@@ -9462,7 +9741,7 @@ fn search_box(ui: &mut Ui, text: &mut String, hint: &str) {
         if !text.is_empty()
             && ui
                 .small_button(egui_phosphor::regular::X)
-                .on_hover_text("Clear the search")
+                .on_hover_text(crate::i18n::tr("Clear the search"))
                 .clicked()
         {
             text.clear();
@@ -9619,7 +9898,10 @@ fn parts_mesh_row(
         }
     }
     resp.context_menu(|ui| {
-        if ui.button(if mesh_on { "Hide" } else { "Show" }).clicked() {
+        if ui
+            .button(if mesh_on { crate::i18n::tr("Hide") } else { crate::i18n::tr("Show") })
+            .clicked()
+        {
             if let Some(f) = s.mesh_shown.get_mut(mi) {
                 *f = !mesh_on;
             }
@@ -9627,20 +9909,20 @@ fn parts_mesh_row(
             s.dirty = true;
             ui.close();
         }
-        if ui.button("Select").clicked() {
+        if ui.button(crate::i18n::tr("Select")).clicked() {
             *selected = Some(Sel::Mesh(mi));
             ui.close();
         }
         if ui
-            .button("Clip by…")
-            .on_hover_text("Pick this mesh's clipping masks on the canvas")
+            .button(crate::i18n::tr("Clip by…"))
+            .on_hover_text(crate::i18n::tr("Pick this mesh's clipping masks on the canvas"))
             .clicked()
         {
             *cmd = Some(MeshRowCmd::ClipBy(mi));
             ui.close();
         }
         ui.separator();
-        if ui.button("Delete Art Mesh").clicked() {
+        if ui.button(crate::i18n::tr("Delete Art Mesh")).clicked() {
             *cmd = Some(MeshRowCmd::Delete(mi));
             ui.close();
         }
@@ -9867,7 +10149,10 @@ fn parameter_row(
                 FontId::proportional(11.0),
                 lcol.gamma_multiply(if lresp.hovered() { 1.0 } else { 0.6 }),
             );
-            if lresp.on_hover_text("Link with the parameter below (2D pad)").clicked() {
+            if lresp
+                .on_hover_text(crate::i18n::tr("Link with the parameter below (2D pad)"))
+                .clicked()
+            {
                 actions.push(ParamAction::Cmd(ParamCmd::Combine(pi)));
             }
         }
@@ -10027,7 +10312,7 @@ fn combined_pad(
         FontId::proportional(11.0),
         if uresp.hovered() { theme::pal().text } else { theme::pal().text_faint },
     );
-    if menus && uresp.on_hover_text("Unlink into two sliders").clicked() {
+    if menus && uresp.on_hover_text(crate::i18n::tr("Unlink into two sliders")).clicked() {
         actions.push(ParamAction::Cmd(ParamCmd::Uncombine(pa)));
     }
     let col_left = block.min.x + 14.0 + name_w + 6.0;
@@ -10104,7 +10389,7 @@ fn combined_pad(
             }
         });
         ui.separator();
-        if ui.button("Reset both").clicked() {
+        if ui.button(crate::i18n::tr("Reset both")).clicked() {
             let da = s.puppet.model().parameters.get(pa).map(|p| p.default).unwrap_or(0.0);
             let db = s.puppet.model().parameters.get(pb).map(|p| p.default).unwrap_or(0.0);
             s.puppet.set_value(pa, da);
@@ -10192,8 +10477,8 @@ enum HomeCmd {
 
 fn home_card_menu(ui: &mut Ui, path: &Path, exists: bool, cmd: &mut Option<HomeCmd>) {
     let p = || path.to_path_buf();
-    let mut pick = |ui: &mut Ui, label: &str, enabled: bool, c: HomeCmd| {
-        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+    let mut pick = |ui: &mut Ui, label: &'static str, enabled: bool, c: HomeCmd| {
+        if ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label))).clicked() {
             *cmd = Some(c);
             ui.close();
         }
@@ -10229,14 +10514,20 @@ fn card_name(path: &Path) -> String {
 fn rename_file(path: &Path, stem: &str) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     if stem.is_empty() || stem.contains(['/', '\\']) || stem == "." || stem == ".." {
-        return Err(Error::new(ErrorKind::InvalidInput, "that is not a valid file name"));
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            crate::i18n::tr("that is not a valid file name"),
+        ));
     }
     let target = path.with_file_name(format!("{stem}{}", full_extension(path)));
     if target == path {
         return Ok(target);
     }
     if target.exists() {
-        return Err(Error::new(ErrorKind::AlreadyExists, "a file with that name already exists"));
+        return Err(Error::new(
+            ErrorKind::AlreadyExists,
+            crate::i18n::tr("a file with that name already exists"),
+        ));
     }
     let old_thumb = crate::thumb::cache_path(path);
     std::fs::rename(path, &target)?;
@@ -10256,7 +10547,7 @@ fn duplicate_file(path: &Path) -> std::io::Result<PathBuf> {
             path.with_file_name(format!("{stem}{suffix}{ext}"))
         })
         .find(|t| !t.exists())
-        .ok_or_else(|| std::io::Error::other("too many copies"))?;
+        .ok_or_else(|| std::io::Error::other(crate::i18n::tr("too many copies")))?;
     std::fs::copy(path, &target)?;
     Ok(target)
 }

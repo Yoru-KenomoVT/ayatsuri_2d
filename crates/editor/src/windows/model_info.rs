@@ -9,26 +9,32 @@ impl EditorUi {
             return;
         }
         let mut open = self.show_model_info;
-        crate::windows::Dialog::new("Model Info").open(&mut open).show(ui.ctx(), |ui| {
-            let Some(s) = &mut self.session else {
-                ui.weak("No model loaded.");
-                return;
-            };
-            ui.set_width(280.0);
-            crate::windows::form(ui, "minfo", |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut s.name);
-                ui.end_row();
-                ui.label("Author");
-                ui.text_edit_singleline(&mut s.author);
-                ui.end_row();
-                let c = s.puppet.model().canvas;
-                ui.label("Canvas");
-                ui.weak(format!("{} × {} px, {} px/unit", c.width, c.height, c.pixels_per_unit));
-                ui.end_row();
-            });
-            ui.weak("Name and author save into the .aom meta block.");
-        });
+        crate::windows::Dialog::new(crate::i18n::tr("Model Info")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                let Some(s) = &mut self.session else {
+                    ui.weak(crate::i18n::tr("No model loaded."));
+                    return;
+                };
+                ui.set_width(280.0);
+                crate::windows::form(ui, "minfo", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut s.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Author"));
+                    ui.text_edit_singleline(&mut s.author);
+                    ui.end_row();
+                    let c = s.puppet.model().canvas;
+                    ui.label(crate::i18n::tr("Canvas"));
+                    ui.weak(crate::i18n::trf(
+                        "{width} × {height} px, {ppu} px/unit",
+                        &[("width", &c.width), ("height", &c.height), ("ppu", &c.pixels_per_unit)],
+                    ));
+                    ui.end_row();
+                });
+                ui.weak(crate::i18n::tr("Name and author save into the .aom meta block."));
+            },
+        );
         self.show_model_info = open;
     }
 }

@@ -181,10 +181,19 @@ Not built yet:
 - the art path brush, texture atlas editor, skinning, model templates and the
   temporary deform tool;
 - an expression editor and the full timeline (curve editor, graph view);
-- re-importing an updated PSD onto meshes you have already rigged;
 - the embeddable runtime's C ABI (below).
 
 See the [changelog](CHANGELOG.md) for what each release added.
+
+### Languages
+
+The interface is in English, Afrikaans, Dutch, Japanese, Korean and
+Simplified Chinese (Settings > General > Language; it follows your system by default). The
+translations were made with tools (AI and machine translation such as Google
+Translate), so expect some odd wording. Corrections are very welcome: each
+language is one JSON file in [`assets/i18n`](assets/i18n), and a file with the
+same name in your config folder's `i18n` directory overrides it without a
+rebuild. Model data (parameter, part and mesh names) is never translated.
 
 ## Why
 
