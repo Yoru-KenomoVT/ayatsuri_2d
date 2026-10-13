@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.5 beta (2026-10-14)
+
+### Added
+
+- **Re-import PSD** (File > Re-import PSD…): an updated PSD's layers find
+  their meshes by folder and name and swap in the new art; the rig stays
+  exactly as it is. Layers and meshes that don't match are listed, and one
+  undo puts the old art back.
+- **Update check**: the launcher asks GitHub for a newer release while the
+  splash shows, the home screen shows a banner with Download and Later,
+  and About has Check for updates. It only ever reports; turn it off in
+  Settings > General.
+- **Search** in the Parts and Deformer palettes.
+- **Multi-select in the Parts palette**: Ctrl+click and Shift+click for
+  parts and meshes; Hide/Show acts on the whole pick.
+- Hovering a Parts row outlines its meshes on the canvas, and a mesh row
+  shows its art enlarged.
+- Deform paths show under their mesh in the Deformer palette, with edit
+  and delete.
+
+### Changed
+
+- Add keys, Delete key and Opacity act on **every selected mesh**.
+- A deformer created over pieces under different deformers goes under
+  their shared parent and wraps their branches, so a toggle warp can sit
+  above several physics warps.
+- Deleting a parameter that is still used asks to unbind it everywhere,
+  keeping each object's default shape, as one undo step.
+- Exporting to a folder that already has a model asks to overwrite, then
+  replaces exactly the files the old model listed; VTube Studio's settings
+  and other files stay.
+- Turning Physics off returns physics-driven parameters to rest, so they
+  sit on their keys for editing.
+- Parameter value boxes line up in one column.
+- README: system requirements measured on 2 cores and integrated graphics.
+
 ## 0.5.4 beta (2026-10-13)
 
 ### Fixed
