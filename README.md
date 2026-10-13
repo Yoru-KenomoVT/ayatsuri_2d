@@ -58,8 +58,12 @@ Live2D Inc. See [Provenance](#provenance).
 
 ## Download
 
+[![Latest version](https://img.shields.io/github/v/release/Yoru-KenomoVT/ayatsuri_2d?include_prereleases&label=latest&style=for-the-badge&color=e85d8a)](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases)
+[![Release date](https://img.shields.io/github/release-date-pre/Yoru-KenomoVT/ayatsuri_2d?label=released&style=for-the-badge)](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases)
+
 Grab the latest build from the
 [**releases page**](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases).
+These badges always show the newest version, betas included.
 
 | System | File | Notes |
 |---|---|---|
