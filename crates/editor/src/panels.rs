@@ -357,6 +357,11 @@ pub struct EditorUi {
 
     /// Bezier divisions per warp, columns by rows.
     bezier_div: std::collections::HashMap<usize, (usize, usize)>,
+    /// Bezier handles as last left, per (warp, keyform). The model only
+    /// keeps the grid, and a fit from it always puts handles at a third of
+    /// each span, so a shortened handle would spring back; these are used
+    /// again while the grid still is what they made.
+    bezier_nets: std::collections::HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     bez_drag: Option<BezierDrag>,
 
     rot_drag: Option<RotDrag>,
@@ -924,6 +929,7 @@ impl Default for EditorUi {
             brush_last: None,
 
             bezier_div: std::collections::HashMap::new(),
+            bezier_nets: std::collections::HashMap::new(),
             bez_drag: None,
 
             rot_drag: None,
@@ -7850,15 +7856,40 @@ impl EditorUi {
                                 .unwrap_or((2.min(cols as usize), 2.min(rows as usize)))
                         };
                         let inp = point_edit::PtInput::read(ui, &resp);
+                        let values: Vec<f32> = (0..s.puppet.model().parameters.len())
+                            .map(|i| s.puppet.value(i))
+                            .collect();
+                        let keyform = ayatsuri_core::keyform::keyform_at(
+                            s.puppet.model(),
+                            ayatsuri_core::edit::Target::Deformer(di),
+                            &values,
+                        );
+                        // the handles as last left, while the grid is still theirs
+                        let kept = keyform
+                            .and_then(|k| self.bezier_nets.get(&(di, k)))
+                            .filter(|l| l.bw == bw && l.bh == bh)
+                            .filter(|l| {
+                                let made = l.to_grid(cols as usize, rows as usize);
+                                let extent =
+                                    local.iter().fold(0.0f32, |a, v| a.max(v.abs())).max(1e-6);
+                                made.len() == local.len()
+                                    && made
+                                        .iter()
+                                        .zip(&local)
+                                        .all(|(a, b)| (a - b).abs() <= extent * 1e-4)
+                            })
+                            .cloned();
                         let mut lat = match &self.bez_drag {
                             Some(d) if d.deformer == di => d.lattice.clone(),
-                            _ => ayatsuri_core::bezier::Lattice::fit(
-                                &local,
-                                cols as usize,
-                                rows as usize,
-                                bw,
-                                bh,
-                            ),
+                            _ => kept.unwrap_or_else(|| {
+                                ayatsuri_core::bezier::Lattice::fit(
+                                    &local,
+                                    cols as usize,
+                                    rows as usize,
+                                    bw,
+                                    bh,
+                                )
+                            }),
                         };
                         let net_s: Vec<Pos2> = lat.net.iter().map(|&(x, y)| to_scr(x, y)).collect();
                         // a drag decides its grab where the button went down
@@ -7939,6 +7970,13 @@ impl EditorUi {
                                 self.bez_drag = None;
                                 bez_busy = false;
                                 warp_commit = Some(moves);
+                                // keep the handles as dropped for next time
+                                if let Some(k) = keyform {
+                                    if self.bezier_nets.len() > 256 {
+                                        self.bezier_nets.clear();
+                                    }
+                                    self.bezier_nets.insert((di, k), lat.clone());
+                                }
                             }
                         }
                         let net_now: Vec<Pos2> =
