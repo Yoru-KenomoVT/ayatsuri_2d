@@ -5687,9 +5687,8 @@ impl EditorUi {
         match mesh_cmd {
             Some(MeshRowCmd::Click(mi)) => {
                 self.pick_rows(mi, shift, ctrl, &mesh_rows, false);
-                self.selected = Some(Sel::Mesh(mi));
+                self.after_mesh_pick(mi, ctrl, shift);
                 if !ctrl && !shift {
-                    self.multi_sel = vec![mi];
                     self.part_pick.clear();
                 }
             }
@@ -5699,6 +5698,20 @@ impl EditorUi {
             }
             Some(MeshRowCmd::ClipBy(mi)) => self.start_clip_pick(mi),
             None => {}
+        }
+    }
+
+    /// After a mesh row was clicked (and `pick_rows` updated the pick): the
+    /// main selection follows. A Ctrl+click that took the mesh out leaves
+    /// the last one still picked selected, or nothing.
+    fn after_mesh_pick(&mut self, mi: usize, ctrl: bool, shift: bool) {
+        if !ctrl && !shift {
+            self.multi_sel = vec![mi];
+            self.selected = Some(Sel::Mesh(mi));
+        } else if self.multi_sel.contains(&mi) {
+            self.selected = Some(Sel::Mesh(mi));
+        } else {
+            self.selected = self.multi_sel.last().copied().map(Sel::Mesh);
         }
     }
 
@@ -5894,6 +5907,9 @@ impl EditorUi {
 
     fn deformers_panel(&mut self, ui: &mut Ui) {
         let mut def_cmd: Option<DefCmd> = None;
+        // mesh rows in the order drawn, for Shift ranges, and the one clicked
+        let mut def_mesh_rows: Vec<usize> = Vec::new();
+        let mut def_mesh_click: Option<usize> = None;
         let Some(s) = &mut self.session else {
             ui.weak(crate::i18n::tr("No model loaded."));
             return;
@@ -6202,7 +6218,8 @@ impl EditorUi {
                     if let Some(p) = resp.dnd_release_payload::<Child>() {
                         def_cmd = Some(DefCmd::Reparent(*p, Some(i)));
                     }
-                    if self.selected == Some(Sel::Mesh(mi)) {
+                    def_mesh_rows.push(mi);
+                    if self.selected == Some(Sel::Mesh(mi)) || self.multi_sel.contains(&mi) {
                         ui.painter().rect_filled(rect, 0.0, theme::pal().select);
                     }
                     let x = rect.min.x + 62.0 + dep as f32 * 14.0;
@@ -6219,7 +6236,7 @@ impl EditorUi {
                         theme::pal().text,
                     );
                     if resp.clicked() {
-                        self.selected = Some(Sel::Mesh(mi));
+                        def_mesh_click = Some(mi);
                     }
                     resp.context_menu(|ui| {
                         if ui.button(crate::i18n::tr("Create Warp Deformer…")).clicked() {
@@ -6340,6 +6357,12 @@ impl EditorUi {
         }
         if let Some(cmd) = def_cmd {
             self.run_def_cmd(cmd);
+        }
+        // Ctrl+click toggles, Shift+click picks a range, as in the Parts list
+        if let Some(mi) = def_mesh_click {
+            let (shift, ctrl) = ui.ctx().input(|i| (i.modifiers.shift, i.modifiers.command));
+            self.pick_rows(mi, shift, ctrl, &def_mesh_rows, false);
+            self.after_mesh_pick(mi, ctrl, shift);
         }
     }
 
@@ -7120,8 +7143,11 @@ impl EditorUi {
             }
             // a click on the selected warp's points or box handles belongs
             // to warp editing, not to picking the mesh underneath
+            // Ctrl+click always picks meshes, even over a mesh's edit box
+            // (the point tool has no use for Ctrl)
+            let ctrl_now = ui.ctx().input(|i| i.modifiers.command);
             if resp.clicked()
-                && !self.pts.hot
+                && (!self.pts.hot || ctrl_now)
                 && let Some(ptr) = resp.interact_pointer_pos()
             {
                 let (ux, uy) = unit_of(ptr);
