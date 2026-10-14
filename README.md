@@ -103,7 +103,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 <p align="center">
   <img src="docs/media/mesh-edit.png" alt="Mesh Edit on a cheek blush: an automatic mesh over the art, with the Edit Mesh tools beside it" width="860">
 </p>
-<p align="center"><sub>Art by <a href="https://www.pixiv.net/users/99163365">マパ*MAPA</a> (pixiv 99163365), used with permission</sub></p>
+<p align="center">Model art by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!</p>
 
 - **PSD and Krita import**: folders become parts, layers become meshes packed
   into texture atlases, clipping layers become masks. Import into a new model,
@@ -121,7 +121,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 <p align="center">
   <img src="docs/media/rigging.png" alt="A warp deformer on the head with its Bezier handles, keyed to the Head X parameter" width="860">
 </p>
-<p align="center"><sub>Art by <a href="https://www.pixiv.net/users/99163365">マパ*MAPA</a> (pixiv 99163365), used with permission</sub></p>
+<p align="center">Model art by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!</p>
 
 - **Parameters and keyforms**, with Cubism's palette tools: four-corner forms,
   motion mirroring, Reflect, Adjust, Change, parameter folders and linked pads.
