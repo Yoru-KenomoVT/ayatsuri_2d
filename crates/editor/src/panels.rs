@@ -7395,6 +7395,141 @@ impl EditorUi {
         // overlays for whatever is selected
         let mut warp_hot = false;
         match self.selected {
+            // several meshes picked: their points as one set, so the box
+            // moves, scales and rotates them together and points picked
+            // across meshes move as one, in one undo step. The wireframes
+            // follow the pointer; the art catches up on release.
+            Some(Sel::Mesh(_)) if self.multi_sel.len() > 1 => {
+                let group: Vec<usize> = self
+                    .multi_sel
+                    .iter()
+                    .copied()
+                    .filter(|m| !self.mesh_locked.contains(m))
+                    .collect();
+                let any_weight = group.iter().any(|m| self.brush_w.contains_key(&(1, *m)));
+                let mut owner: Vec<(usize, usize)> = Vec::new();
+                let mut pts: Vec<Pos2> = Vec::new();
+                let mut weights: Vec<f32> = Vec::new();
+                let mut wires: Vec<(Vec<u16>, usize)> = Vec::new();
+                for &gm in &group {
+                    let Some(g) = s.puppet.mesh_geometry(gm) else { continue };
+                    let base = pts.len();
+                    let w = self.brush_w.get(&(1, gm));
+                    for (vi, xy) in g.positions.as_chunks::<2>().0.iter().enumerate() {
+                        pts.push(to_screen(xy[0], xy[1]));
+                        owner.push((gm, vi));
+                        if any_weight {
+                            weights.push(w.and_then(|w| w.get(vi)).copied().unwrap_or(0.0));
+                        }
+                    }
+                    wires.push((g.indices.to_vec(), base));
+                }
+                let editable = matches!(self.tool, Tool::Arrow | Tool::Lasso)
+                    && !space
+                    && self.mesh_edit.is_none()
+                    && !pts.is_empty();
+                // the point tool's memory belongs to this exact group
+                let key =
+                    group.iter().fold(0x9e37_usize, |h, m| h.wrapping_mul(31).wrapping_add(*m));
+                let mut grab_hot = None;
+                if editable {
+                    self.pts.bind((3, key));
+                    self.pts.weights = weights;
+                    let inp = point_edit::PtInput::read(ui, &resp);
+                    let opts = point_edit::PtOpts {
+                        whole_box: true,
+                        marquee: true,
+                        lasso: self.tool == Tool::Lasso,
+                        reach: 7.0,
+                        pad: 0.0,
+                    };
+                    let out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                    warp_hot |= self.pts.hot;
+                    grab_hot = out.hover_grab;
+                    if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.pts.picked.clear();
+                    }
+                    if let Some(moved) = out.commit {
+                        let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                        let values: Vec<f32> = (0..s.puppet.model().parameters.len())
+                            .map(|i| s.puppet.value(i))
+                            .collect();
+                        let mut per: std::collections::BTreeMap<usize, Vec<(usize, f32, f32)>> =
+                            std::collections::BTreeMap::new();
+                        let mut locals: std::collections::HashMap<usize, Vec<f32>> =
+                            std::collections::HashMap::new();
+                        for &(i, d) in &moved {
+                            let Some(&(gm, vi)) = owner.get(i) else { continue };
+                            let local = locals.entry(gm).or_insert_with(|| {
+                                s.puppet.mesh_local_positions(gm).unwrap_or_default()
+                            });
+                            let px = local.get(vi * 2).copied().unwrap_or(0.0);
+                            let py = local.get(vi * 2 + 1).copied().unwrap_or(0.0);
+                            let parent =
+                                s.puppet.model().art_meshes.get(gm).and_then(|m| m.parent_deformer);
+                            let (dx, dy) =
+                                parent_delta(&s.puppet, parent, px, py, d.x * k_unit, d.y * k_unit);
+                            per.entry(gm).or_default().push((vi, dx, dy));
+                        }
+                        let mut plan = Vec::new();
+                        let mut between = 0usize;
+                        for (gm, moves) in per {
+                            let target = ayatsuri_core::edit::Target::ArtMesh(gm);
+                            match ayatsuri_core::keyform::keyform_at(
+                                s.puppet.model(),
+                                target,
+                                &values,
+                            ) {
+                                Some(k) => plan.push((gm, k, moves)),
+                                None => between += 1,
+                            }
+                        }
+                        let count = plan.len();
+                        if !plan.is_empty()
+                            && s.edit(|m| {
+                                let mut any = false;
+                                for (gm, k, moves) in &plan {
+                                    any |= ayatsuri_core::edit::move_vertices_in(
+                                        m,
+                                        *gm,
+                                        Some(*k),
+                                        moves,
+                                    );
+                                }
+                                any
+                            })
+                        {
+                            log::debug!("{count} meshes moved together");
+                        }
+                        if between > 0 {
+                            log::warn!(
+                                "{between} mesh(es) sit between keys and did not move: put the parameters on a key"
+                            );
+                        }
+                    }
+                }
+                let stroke = Stroke::new(self.disp.mesh_width, self.disp.mesh_color);
+                for (idx, base) in &wires {
+                    for t in idx.as_chunks::<3>().0 {
+                        let (Some(&a), Some(&b), Some(&c2)) = (
+                            pts.get(base + t[0] as usize),
+                            pts.get(base + t[1] as usize),
+                            pts.get(base + t[2] as usize),
+                        ) else {
+                            continue;
+                        };
+                        vp.line_segment([a, b], stroke);
+                        vp.line_segment([b, c2], stroke);
+                        vp.line_segment([c2, a], stroke);
+                    }
+                }
+                for p in &pts {
+                    vp.circle_filled(*p, 1.8, self.disp.mesh_color);
+                }
+                if editable {
+                    point_edit::draw_overlay(&self.pts, &vp, &pts, true, 0.0, grab_hot);
+                }
+            }
             Some(Sel::Mesh(mi)) => {
                 if let Some((gpos, gidx)) =
                     s.puppet.mesh_geometry(mi).map(|g| (g.positions.to_vec(), g.indices.to_vec()))
