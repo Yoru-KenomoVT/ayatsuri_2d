@@ -336,6 +336,15 @@ pub struct EditorUi {
     /// Deform paths per (mesh, edit level 2 or 3), as in Cubism.
     deform_paths: std::collections::HashMap<(usize, u8), Vec<PathPin>>,
     path_grab: Option<PathGrab>,
+    /// The Deform Brush stroke in progress.
+    dbrush: Option<DeformStroke>,
+    /// How much of the brush pushes at full strength (the rest fades), and
+    /// how hard it pushes overall.
+    dbrush_hardness: f32,
+    dbrush_strength: f32,
+    /// Guides drawn (Show > Guides), and the one being dragged.
+    show_guides: bool,
+    guide_drag: Option<usize>,
     /// Path width in canvas pixels (the red circle) and the share of it that
     /// keeps its shape fully (the blue circle).
     path_width: f32,
@@ -503,6 +512,44 @@ struct RotDrag {
 enum LiveTarget {
     Mesh(usize),
     Warp(usize),
+}
+
+/// A Deform Brush stroke: per object it moves, the live preview, its
+/// points' screen positions when the stroke began, and how far the brush
+/// has pushed each one so far. Lands as one edit on release.
+/// Per object a stroke moved: what it is, the keyform, and its moves.
+type BrushPlan = Vec<(LiveTarget, usize, Vec<(usize, f32, f32)>)>;
+
+struct DeformStroke {
+    parts: Vec<(LiveDrag, Vec<Pos2>, Vec<Vec2>)>,
+    last: Pos2,
+}
+
+/// The brush's pull at `t` (distance over radius): full inside the hard
+/// core, then a smooth fade to nothing at the edge.
+fn brush_falloff(t: f32, hardness: f32) -> f32 {
+    if t >= 1.0 {
+        0.0
+    } else if t <= hardness {
+        1.0
+    } else {
+        let u = (1.0 - t) / (1.0 - hardness).max(1e-4);
+        u * u * (3.0 - 2.0 * u)
+    }
+}
+
+/// A point dropped near a guide lands on it (canvas pixels).
+fn snap_to_guides(guides: &[(bool, f32)], q: [f32; 2], tolerance: f32) -> [f32; 2] {
+    let mut out = q;
+    for &(vertical, at) in guides {
+        if vertical && (q[0] - at).abs() < tolerance {
+            out[0] = at;
+        }
+        if !vertical && (q[1] - at).abs() < tolerance {
+            out[1] = at;
+        }
+    }
+    out
 }
 
 /// A point drag shown live on the model: the keyform being edited, its
@@ -918,6 +965,11 @@ impl Default for EditorUi {
             mesh_snapshot: None,
             deform_paths: std::collections::HashMap::new(),
             path_grab: None,
+            dbrush: None,
+            dbrush_hardness: 0.3,
+            dbrush_strength: 0.7,
+            show_guides: true,
+            guide_drag: None,
             path_width: 80.0,
             path_hardness: 0.5,
 
@@ -2010,6 +2062,19 @@ impl EditorUi {
                     if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Fit"))).clicked() {
                         self.view_zoom = 1.0;
                         self.view_pan = Vec2::ZERO;
+                        ui.close();
+                    }
+                    ui.separator();
+                    ui.checkbox(&mut self.show_guides, crate::i18n::tr("Guides"))
+                        .on_hover_text(crate::i18n::tr(
+                            "Rulers on the canvas edges: drag out of the top one for a horizontal guide, the left one for a vertical guide",
+                        ));
+                    let any = self.session.as_ref().is_some_and(|s| !s.guides.is_empty());
+                    if ui.add_enabled(any, egui::Button::new(crate::i18n::tr("Clear guides"))).clicked() {
+                        if let Some(s) = &mut self.session {
+                            s.guides.clear();
+                            s.modified = true;
+                        }
                         ui.close();
                     }
                 });
@@ -8390,6 +8455,187 @@ impl EditorUi {
 
         self.pts.hot = warp_hot;
 
+        // a Deform Brush stroke left behind by a tool change puts its
+        // preview back
+        if self.tool != Tool::DeformBrush
+            && let Some(st) = self.dbrush.take()
+        {
+            for (live, _, _) in &st.parts {
+                live.restore(&mut s.puppet);
+            }
+            s.dirty = true;
+        }
+        // the Deform Brush pushes points along the stroke, like Liquify:
+        // the selected meshes' points, or a selected warp's grid. Full
+        // strength inside the hard core, fading to the edge; the art
+        // follows live and the stroke lands in the current keyform as one
+        // undo step. B + drag or [ and ] size it.
+        if self.tool == Tool::DeformBrush && !space && self.mesh_edit.is_none() {
+            let sizing = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 4.0);
+            let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
+            let (ptr, any_down) =
+                ui.ctx().input(|i| (i.pointer.latest_pos(), i.pointer.any_down()));
+            let k_unit = 1.0 / (scale * c.pixels_per_unit);
+            if resp.drag_started()
+                && !sizing
+                && let Some(p) = ptr
+            {
+                let targets: Vec<LiveTarget> = match self.selected {
+                    Some(Sel::Deformer(d)) if s.puppet.warp_grid(d).is_some() => {
+                        vec![LiveTarget::Warp(d)]
+                    }
+                    _ => {
+                        let mut v = self.multi_sel.clone();
+                        if let Some(Sel::Mesh(m)) = self.selected
+                            && !v.contains(&m)
+                        {
+                            v.push(m);
+                        }
+                        v.into_iter()
+                            .filter(|m| !self.mesh_locked.contains(m))
+                            .map(LiveTarget::Mesh)
+                            .collect()
+                    }
+                };
+                if targets.is_empty() {
+                    log::info!("Deform Brush: select meshes or a warp deformer first");
+                }
+                let mut parts = Vec::new();
+                let mut between = 0usize;
+                for t in targets {
+                    let screen: Vec<Pos2> = match t {
+                        LiveTarget::Mesh(m) => s
+                            .puppet
+                            .mesh_geometry(m)
+                            .map(|g| {
+                                g.positions
+                                    .as_chunks::<2>()
+                                    .0
+                                    .iter()
+                                    .map(|q| to_screen(q[0], q[1]))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        LiveTarget::Warp(d) => s
+                            .puppet
+                            .warp_grid(d)
+                            .map(|(g, _, _)| {
+                                g.as_chunks::<2>().0.iter().map(|q| to_screen(q[0], q[1])).collect()
+                            })
+                            .unwrap_or_default(),
+                    };
+                    match LiveDrag::start(&mut s.puppet, t) {
+                        Some(live) => {
+                            let n = screen.len();
+                            parts.push((live, screen, vec![Vec2::ZERO; n]));
+                        }
+                        None => between += 1,
+                    }
+                }
+                if between > 0 {
+                    log::warn!(
+                        "Deform Brush: {between} object(s) sit between keys; put the parameters on a key to brush them"
+                    );
+                }
+                self.dbrush = Some(DeformStroke { parts, last: p });
+            }
+            if !sizing
+                && resp.dragged()
+                && let (Some(st), Some(p)) = (&mut self.dbrush, ptr)
+            {
+                let delta = p - st.last;
+                let from = st.last;
+                st.last = p;
+                if delta.length_sq() > 0.0 {
+                    let (hard, strength) = (self.dbrush_hardness, self.dbrush_strength);
+                    for (live, start, shifts) in &mut st.parts {
+                        for (j, sh) in shifts.iter_mut().enumerate() {
+                            let Some(&p0) = start.get(j) else { continue };
+                            let t = (p0 + *sh).distance(from) / r;
+                            let w = brush_falloff(t, hard) * strength;
+                            if w > 0.0 {
+                                *sh += delta * w;
+                            }
+                        }
+                        let moved: Vec<(usize, Vec2)> = shifts
+                            .iter()
+                            .copied()
+                            .enumerate()
+                            .filter(|(_, d)| d.length_sq() > 0.0)
+                            .collect();
+                        live.show(&mut s.puppet, &moved, k_unit);
+                    }
+                    s.dirty = true;
+                }
+            }
+            if (resp.drag_stopped() || !any_down)
+                && let Some(st) = self.dbrush.take()
+            {
+                for (live, _, _) in &st.parts {
+                    live.restore(&mut s.puppet);
+                }
+                let plan: BrushPlan = st
+                    .parts
+                    .iter()
+                    .map(|(live, _, shifts)| {
+                        let moves: Vec<(usize, f32, f32)> = shifts
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, d)| d.length_sq() > 1e-6)
+                            .map(|(i, d)| {
+                                let px = live.local.get(i * 2).copied().unwrap_or(0.0);
+                                let py = live.local.get(i * 2 + 1).copied().unwrap_or(0.0);
+                                let (dx, dy) = parent_delta(
+                                    &s.puppet,
+                                    live.parent,
+                                    px,
+                                    py,
+                                    d.x * k_unit,
+                                    d.y * k_unit,
+                                );
+                                (i, dx, dy)
+                            })
+                            .collect();
+                        (live.target, live.keyform, moves)
+                    })
+                    .filter(|(_, _, moves)| !moves.is_empty())
+                    .collect();
+                let points: usize = plan.iter().map(|(_, _, m)| m.len()).sum();
+                if !plan.is_empty()
+                    && s.edit(|m| {
+                        let mut any = false;
+                        for (target, k, moves) in &plan {
+                            any |= match target {
+                                LiveTarget::Mesh(mi) => {
+                                    ayatsuri_core::edit::move_vertices_in(m, *mi, Some(*k), moves)
+                                }
+                                LiveTarget::Warp(d) => {
+                                    ayatsuri_core::edit::move_warp_points(m, *d, Some(*k), moves)
+                                }
+                            };
+                        }
+                        any
+                    })
+                {
+                    log::debug!("Deform Brush moved {points} point(s)");
+                }
+                s.dirty = true;
+            }
+            if let Some(p) = ptr
+                && view.contains(p)
+            {
+                vp.circle_stroke(p, r, Stroke::new(1.2, theme::pal().accent));
+                if self.dbrush_hardness > 0.02 {
+                    vp.circle_stroke(
+                        p,
+                        r * self.dbrush_hardness,
+                        Stroke::new(1.0, theme::pal().accent.gamma_multiply(0.5)),
+                    );
+                }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+        }
+
         // Brush Selection: paint a soft selection onto the selected meshes' or
         // warp's points. Drag adds weight (Alt takes it away), dabs spaced
         // by distance so the speed of the stroke doesn't matter; B + drag
@@ -9430,6 +9676,146 @@ impl EditorUi {
                             );
                         }
                     }
+                }
+            }
+        }
+
+        // guides: rulers along the top and left of the canvas. Drag out of
+        // the top ruler for a horizontal guide, the left one for a vertical
+        // guide; drag a guide's marker to move it, back onto a ruler or off
+        // the canvas (or right-click it) to delete it. Saved with the model.
+        if self.show_guides {
+            const RULER: f32 = 14.0;
+            let top = Rect::from_min_max(view.min, pos2(view.max.x, view.min.y + RULER));
+            let left = Rect::from_min_max(
+                pos2(view.min.x, view.min.y + RULER),
+                pos2(view.min.x + RULER, view.max.y),
+            );
+            let green = theme::pal().warp_green;
+            let canvas_x = |x: f32| (x - origin.x) / scale;
+            let canvas_y = |y: f32| (y - origin.y) / scale;
+            let screen_x = |x: f32| origin.x + x * scale;
+            let screen_y = |y: f32| origin.y + y * scale;
+            for &(vertical, at) in &s.guides {
+                let line = if vertical {
+                    [pos2(screen_x(at), view.min.y), pos2(screen_x(at), view.max.y)]
+                } else {
+                    [pos2(view.min.x, screen_y(at)), pos2(view.max.x, screen_y(at))]
+                };
+                vp.line_segment(line, Stroke::new(1.0, green.gamma_multiply(0.85)));
+            }
+            let chrome = theme::pal().chrome;
+            vp.rect_filled(top, 0.0, chrome);
+            vp.rect_filled(left, 0.0, chrome);
+            // ticks: a step that keeps labels about 60 px apart
+            let step = [10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0]
+                .into_iter()
+                .find(|s| s * scale >= 60.0)
+                .unwrap_or(10000.0);
+            let faint = theme::pal().text_faint;
+            let mut x = (canvas_x(top.min.x) / step).floor() * step;
+            while screen_x(x) <= top.max.x {
+                let sx = screen_x(x);
+                if sx >= left.max.x {
+                    vp.line_segment(
+                        [pos2(sx, top.max.y - 5.0), pos2(sx, top.max.y)],
+                        Stroke::new(1.0, faint),
+                    );
+                    vp.text(
+                        pos2(sx + 2.0, top.min.y + 1.0),
+                        Align2::LEFT_TOP,
+                        format!("{x:.0}"),
+                        FontId::proportional(8.5),
+                        faint,
+                    );
+                }
+                x += step;
+            }
+            let mut y = (canvas_y(left.min.y) / step).floor() * step;
+            while screen_y(y) <= left.max.y {
+                let sy = screen_y(y);
+                if sy >= left.min.y {
+                    vp.line_segment(
+                        [pos2(left.max.x - 5.0, sy), pos2(left.max.x, sy)],
+                        Stroke::new(1.0, faint),
+                    );
+                }
+                y += step;
+            }
+            // markers: vertical guides on the top ruler, horizontal on the left
+            for &(vertical, at) in &s.guides {
+                let tip = if vertical {
+                    pos2(screen_x(at), top.max.y)
+                } else {
+                    pos2(left.max.x, screen_y(at))
+                };
+                let pts = if vertical {
+                    vec![tip, tip + vec2(-5.0, -8.0), tip + vec2(5.0, -8.0)]
+                } else {
+                    vec![tip, tip + vec2(-8.0, -5.0), tip + vec2(-8.0, 5.0)]
+                };
+                vp.add(egui::Shape::convex_polygon(pts, green, Stroke::NONE));
+            }
+            let top_r = ui.interact(top, egui::Id::new("guide-ruler-top"), Sense::click_and_drag());
+            let left_r =
+                ui.interact(left, egui::Id::new("guide-ruler-left"), Sense::click_and_drag());
+            // which guide's marker is at a pointer on a ruler
+            let marker_at = |guides: &[(bool, f32)], p: Pos2, on_top: bool| -> Option<usize> {
+                guides.iter().position(|&(vertical, at)| {
+                    if on_top {
+                        vertical && (screen_x(at) - p.x).abs() <= 5.0
+                    } else {
+                        !vertical && (screen_y(at) - p.y).abs() <= 5.0
+                    }
+                })
+            };
+            for (r, on_top) in [(&top_r, true), (&left_r, false)] {
+                let at = r.interact_pointer_pos().or(r.hover_pos());
+                if r.drag_started()
+                    && let Some(p) = at
+                {
+                    self.guide_drag = match marker_at(&s.guides, p, on_top) {
+                        Some(i) => Some(i),
+                        None => {
+                            // out of the top ruler: a horizontal guide
+                            s.guides.push((
+                                !on_top,
+                                if on_top { canvas_y(p.y) } else { canvas_x(p.x) },
+                            ));
+                            Some(s.guides.len() - 1)
+                        }
+                    };
+                }
+                if r.secondary_clicked()
+                    && let Some(p) = at
+                    && let Some(i) = marker_at(&s.guides, p, on_top)
+                {
+                    s.guides.remove(i);
+                    s.modified = true;
+                }
+                if r.hovered() && at.is_some_and(|p| marker_at(&s.guides, p, on_top).is_some()) {
+                    ui.ctx().set_cursor_icon(if on_top {
+                        egui::CursorIcon::ResizeHorizontal
+                    } else {
+                        egui::CursorIcon::ResizeVertical
+                    });
+                }
+            }
+            if let Some(i) = self.guide_drag {
+                let (ptr, down) =
+                    ui.ctx().input(|i| (i.pointer.latest_pos(), i.pointer.any_down()));
+                if let (Some(p), Some(g)) = (ptr, s.guides.get_mut(i)) {
+                    g.1 = if g.0 { canvas_x(p.x) } else { canvas_y(p.y) }.round();
+                    s.modified = true;
+                }
+                if !down {
+                    // dropped on a ruler or off the canvas: gone
+                    if ptr.is_none_or(|p| !view.contains(p) || top.contains(p) || left.contains(p))
+                        && i < s.guides.len()
+                    {
+                        s.guides.remove(i);
+                    }
+                    self.guide_drag = None;
                 }
             }
         }

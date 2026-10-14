@@ -222,4 +222,7 @@ pub struct DisplayInfo {
     /// ids, kept so an export writes back what the model came with. None
     /// in older files and models that never had any.
     pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
+    /// Canvas guide lines: (vertical, position in canvas pixels). Empty in
+    /// older files.
+    pub guides: Vec<(bool, f32)>,
 }

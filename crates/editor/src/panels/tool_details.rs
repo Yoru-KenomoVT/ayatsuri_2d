@@ -612,11 +612,31 @@ impl EditorUi {
 
     fn td_brush(&mut self, ui: &mut Ui) {
         if self.tool == Tool::DeformBrush {
-            section(ui, crate::i18n::tr("Deform brushes"), "The deform brushes are not built yet.");
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                let _ = icon(ui, false, false, ph::PAINT_BRUSH, "Deform brush");
-                let _ = icon(ui, false, false, ph::GRID_NINE, "Warp deformer shaping brush");
+            section(
+                ui,
+                crate::i18n::tr("Deform Brush"),
+                "Drag over the selected meshes, or a selected warp deformer's grid, to push their points along the stroke. Points inside the hard core move fully, the rest less toward the edge. The art follows as you paint; the stroke lands in the keyform the parameters sit on, as one undo step.\n\nB + drag or [ and ] size the brush.",
+            );
+            grid(ui, "td-dbrush", |ui| {
+                row(ui, crate::i18n::tr("Brush size"), |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.tool_opts.brush_size, 4.0..=400.0)
+                            .logarithmic(true)
+                            .suffix(" px"),
+                    );
+                });
+                row(ui, crate::i18n::tr("Strength"), |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.dbrush_strength, 0.05..=1.0)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    );
+                });
+                row(ui, crate::i18n::tr("Hardness"), |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.dbrush_hardness, 0.0..=0.95)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    );
+                });
             });
             return;
         }

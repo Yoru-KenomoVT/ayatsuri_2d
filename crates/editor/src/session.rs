@@ -187,6 +187,9 @@ pub struct Session {
     /// The model3.json Groups the model came with (target, name, ids);
     /// None when it had none, and export then writes the standard ones.
     pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
+    /// Guide lines on the canvas: (vertical, canvas pixels). Saved with the
+    /// model, not part of undo.
+    pub guides: Vec<(bool, f32)>,
     undo: Vec<Model>,
     redo: Vec<Model>,
 }
@@ -603,6 +606,7 @@ impl Session {
         self.groups = old.groups;
         self.combined = old.combined;
         self.model_groups = old.model_groups;
+        self.guides = old.guides;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
         self.undo = old.undo;
@@ -679,6 +683,7 @@ impl Session {
         self.groups = old.groups;
         self.combined = old.combined;
         self.model_groups = old.model_groups;
+        self.guides = old.guides;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
         self.undo = old.undo;
@@ -723,6 +728,7 @@ impl Session {
         s.expressions = payload.expressions;
         if let Some(d) = payload.display {
             s.model_groups = d.model_groups.clone();
+            s.guides = d.guides.clone();
             let n = s.puppet.model().parameters.len();
             if !d.part_names.is_empty() && d.part_names.len() == s.part_names.len() {
                 s.part_names = d.part_names.clone();
@@ -1060,6 +1066,7 @@ impl Session {
             full_tex: vec![None; n_tex],
             combined,
             model_groups: None,
+            guides: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -1275,6 +1282,7 @@ impl Session {
                 mesh_names: self.mesh_names.clone(),
                 combined: Some(self.combined.iter().map(|&(a, b)| (a as u32, b as u32)).collect()),
                 model_groups: self.model_groups.clone(),
+                guides: self.guides.clone(),
             }),
         }
     }
