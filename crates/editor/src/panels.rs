@@ -6953,6 +6953,10 @@ impl EditorUi {
             pos2(origin.x + px * scale, origin.y + py * scale)
         };
 
+        // the full-size page Mesh Edit uses goes when it ends
+        if self.mesh_edit.is_none() {
+            s.drop_full_textures();
+        }
         if self.gpu {
             // keep offering the textures until the renderer has them
             if s.gpu_pending.is_some() && s.gpu_uploaded.load(std::sync::atomic::Ordering::Acquire)

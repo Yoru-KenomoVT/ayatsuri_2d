@@ -1065,9 +1065,17 @@ impl Session {
         })
     }
 
-    /// Run a model edit with undo. The closure returns whether it changed
-    /// anything; unchanged edits cost nothing.
-    /// The full-size texture for one slot, decoding it on first use.
+    /// Let go of the full-size Mesh Edit page, if one is held.
+    pub fn drop_full_textures(&mut self) {
+        for slot in &mut self.full_tex {
+            if slot.take().is_some() {
+                debug!("full-size texture released");
+            }
+        }
+    }
+
+    /// The full-size texture for one slot, decoding it on first use; the
+    /// one decoded before it is let go.
     pub fn full_texture(&mut self, ctx: &Context, i: usize) -> Option<&TextureHandle> {
         if self.full_tex.get(i).is_some_and(|t| t.is_none())
             && let Some(png) = self.texture_pngs.get(i)
@@ -1080,6 +1088,12 @@ impl Session {
                 mipmap_mode: Some(egui::TextureFilter::Linear),
                 ..TextureOptions::LINEAR
             };
+            // one full-size page at a time: each is a second GPU copy of a
+            // page (64 MB at 4096), so keeping every page ever edited would
+            // fill a small GPU's memory
+            for slot in &mut self.full_tex {
+                *slot = None;
+            }
             let handle = ctx.load_texture(format!("full-{i}"), color, opts);
             debug!("full texture {i} decoded: {}x{}", size[0], size[1]);
             if let Some(slot) = self.full_tex.get_mut(i) {
