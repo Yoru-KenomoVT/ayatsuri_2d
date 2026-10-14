@@ -409,12 +409,15 @@ impl Physics {
                 let Some(slot) = values.get_mut(o.param) else { continue };
                 let (min, max, default) = meta_of(o.param);
                 let target = (default + o.last).clamp(min, max);
+                let was = *slot;
                 *slot += (target - *slot) * o.weight;
                 let half = if o.last >= 0.0 { max - default } else { default - min };
                 if half > 1e-6 {
                     o.peak = o.peak.max(o.last.abs() / half * 100.0);
                 }
-                any = true;
+                // a settled rig reports no motion, so the editor can stop
+                // drawing until the next input
+                any |= (*slot - was).abs() > 1e-4;
             }
         }
         any

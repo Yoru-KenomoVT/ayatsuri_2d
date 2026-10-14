@@ -2662,6 +2662,7 @@ impl EditorUi {
         // they run just ahead of the per-frame evaluate
         if let Some(s) = &mut self.session {
             let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+            let mut following = false;
             if self.follow_cursor {
                 let rect = ui.ctx().content_rect();
                 let target = ui
@@ -2675,8 +2676,14 @@ impl EditorUi {
                     })
                     .unwrap_or(Vec2::ZERO);
                 let ease = 1.0 - (-dt * 8.0).exp();
-                self.follow = self.follow + (target - self.follow) * ease;
+                let before = self.follow;
+                // once the head has caught up with the pointer, stop: no new
+                // values, no evaluation, no repaint until the pointer moves
+                following = (target - self.follow).length() > 1e-3;
+                self.follow =
+                    if following { self.follow + (target - self.follow) * ease } else { target };
                 let f = self.follow;
+                let changed = (f - before).length() > 1e-5;
                 // the published standard parameter set every tracker expects
                 for (id, v) in [
                     ("ParamAngleX", f.x * 30.0),
@@ -2686,15 +2693,19 @@ impl EditorUi {
                     ("ParamEyeBallX", f.x),
                     ("ParamEyeBallY", -f.y),
                 ] {
-                    if let Some(i) = s.puppet.model().parameters.iter().position(|p| p.id == id) {
+                    if changed
+                        && let Some(i) = s.puppet.model().parameters.iter().position(|p| p.id == id)
+                    {
                         s.puppet.set_value(i, v);
                         s.dirty = true;
                     }
                 }
             }
-            let animating = self.follow_cursor || (self.physics_on && s.puppet.has_physics());
             let physics_moved =
                 self.physics_on && s.puppet.has_physics() && s.puppet.step_physics(dt);
+            // keep ticking only while something is in motion; a settled rig
+            // waits for the next input (which repaints by itself)
+            let animating = following || physics_moved;
             if physics_moved {
                 s.dirty = true;
             }
