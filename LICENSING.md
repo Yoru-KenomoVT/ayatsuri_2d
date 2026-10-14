@@ -6,6 +6,10 @@ This repository is not uniformly licensed, deliberately.
     crates/openmoc3/LICENSE     MIT           see crates/openmoc3/NOTICE
     crates/ayatsumi_abi/LICENSE Apache-2.0    the C ABI
 
+Screenshots in `docs/media` that show third-party artwork are not covered by
+any of these: the art belongs to its artist and is used with permission
+(see Artwork in README.md for who drew what).
+
 `openmoc3` is a standalone reader for Live2D `.moc3` files. It is MIT because
 it derives in part from [PurismCore](https://github.com/SakuraMotion/PurismCore),
 which is MIT, and because it is useful to people who will never adopt the rest

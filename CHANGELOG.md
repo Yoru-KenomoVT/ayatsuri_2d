@@ -47,6 +47,9 @@
   sit on their keys for editing.
 - Parameter value boxes line up in one column.
 - README: system requirements measured on 2 cores and integrated graphics.
+- README: new Mesh Edit and rigging screenshots, with art by マパ\*MAPA
+  ([pixiv](https://www.pixiv.net/users/99163365)), used with permission.
+  Thank you!
 
 ## 0.5.4 beta (2026-10-13)
 

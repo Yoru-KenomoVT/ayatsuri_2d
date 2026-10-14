@@ -103,6 +103,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 <p align="center">
   <img src="docs/media/mesh-edit.png" alt="Mesh Edit on a cheek blush: an automatic mesh over the art, with the Edit Mesh tools beside it" width="860">
 </p>
+<p align="center"><sub>Art by <a href="https://www.pixiv.net/users/99163365">マパ*MAPA</a> (pixiv 99163365), used with permission</sub></p>
 
 - **PSD and Krita import**: folders become parts, layers become meshes packed
   into texture atlases, clipping layers become masks. Import into a new model,
@@ -120,6 +121,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 <p align="center">
   <img src="docs/media/rigging.png" alt="A warp deformer on the head with its Bezier handles, keyed to the Head X parameter" width="860">
 </p>
+<p align="center"><sub>Art by <a href="https://www.pixiv.net/users/99163365">マパ*MAPA</a> (pixiv 99163365), used with permission</sub></p>
 
 - **Parameters and keyforms**, with Cubism's palette tools: four-corner forms,
   motion mirroring, Reflect, Adjust, Change, parameter folders and linked pads.
@@ -312,6 +314,14 @@ the format work flows back to the community it came from, and the C ABI is
 **Apache-2.0**. The runtime's licence is still an open question, because a
 copyleft runtime cannot be embedded in a proprietary game. See
 [`LICENSING.md`](LICENSING.md).
+
+## Artwork
+
+The model in the Mesh Edit and rigging screenshots is drawn by
+**マパ\*MAPA** ([pixiv profile](https://www.pixiv.net/users/99163365), ID
+99163365), who kindly let us use their PSD to show the editor. Thank you!
+The artwork remains theirs: it is not covered by this repository's licences,
+so please don't reuse it without their permission.
 
 ## Provenance
 
