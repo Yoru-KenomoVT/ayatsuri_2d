@@ -283,6 +283,45 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
     }
 }
 
+/// Drop texture pages no mesh draws from (and that aren't the ArtPath
+/// colour page while paths exist), renumbering the meshes' pages. Returns
+/// the pages kept and how many went.
+pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, usize) {
+    let mut used = vec![false; pngs.len()];
+    for m in &model.art_meshes {
+        if let Some(u) = used.get_mut(m.texture as usize) {
+            *u = true;
+        }
+    }
+    if !model.art_paths.is_empty()
+        && let Some(u) = model.art_path_page.and_then(|p| used.get_mut(p as usize))
+    {
+        *u = true;
+    }
+    let dropped = used.iter().filter(|u| !**u).count();
+    if dropped == 0 || used.iter().all(|u| !*u) {
+        // nothing to do, or no art at all (keep the file as it is)
+        return (pngs, 0);
+    }
+    let mut new_index = vec![0u32; used.len()];
+    let mut next = 0u32;
+    for (i, u) in used.iter().enumerate() {
+        if *u && let Some(slot) = new_index.get_mut(i) {
+            *slot = next;
+            next += 1;
+        }
+    }
+    for m in &mut model.art_meshes {
+        m.texture = new_index.get(m.texture as usize).copied().unwrap_or(0);
+    }
+    model.art_path_page = model
+        .art_path_page
+        .filter(|p| used.get(*p as usize).copied().unwrap_or(false))
+        .and_then(|p| new_index.get(p as usize).copied());
+    let kept = pngs.into_iter().zip(used).filter(|(_, u)| *u).map(|(p, _)| p).collect();
+    (kept, dropped)
+}
+
 /// What a re-import did: meshes given new art, layers with no mesh to go
 /// to, and meshes whose layer is gone from the file.
 #[derive(Debug, Default)]
@@ -458,6 +497,11 @@ fn reimport_into(
     }
     let mut pngs = s.texture_pngs.clone();
     pngs.extend(built.textures);
+    // the pages the old art was on are empty now if every mesh moved off
+    let (pngs, dropped) = prune_pages(&mut next, pngs);
+    if dropped > 0 {
+        info!("re-import: {dropped} page(s) of old art no longer used, removed");
+    }
     s.swap_in(ctx, next, pngs)?;
     s.original_meshes = originals;
     Ok(report)
@@ -723,8 +767,15 @@ impl Session {
             payload.meta.name.clone()
         };
         let pngs: Vec<Vec<u8>> = payload.textures.into_iter().map(|b| b.into_vec()).collect();
+        // pages no mesh draws from cost video memory for nothing
+        let mut model = payload.model;
+        let (pngs, dropped) = prune_pages(&mut model, pngs);
         let tex_names = (0..pngs.len()).map(|i| format!("texture_{i:02}")).collect();
-        let mut s = Self::from_parts(ctx, name, payload.model, pngs, tex_names, None, path)?;
+        let mut s = Self::from_parts(ctx, name, model, pngs, tex_names, None, path)?;
+        if dropped > 0 {
+            info!("left out {dropped} texture page(s) no mesh uses; saving makes it stick");
+            s.modified = true;
+        }
         s.aom_path = Some(path.to_path_buf());
         s.author = payload.meta.author;
         s.animations = payload.animations;
@@ -1803,6 +1854,36 @@ mod import_paint_tests {
         s.undo();
         assert_eq!(s.puppet.model().art_meshes.len(), 1);
         assert_eq!(s.mesh_name(0), "Body");
+    }
+
+    #[test]
+    fn pages_no_mesh_uses_are_dropped_and_the_rest_renumbered() {
+        use ayatsuri_format::model::{ArtMesh, Binding};
+        let mesh = |id: &str, texture: u32| ArtMesh {
+            id: id.into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture,
+            flags: 0,
+            vertex_count: 0,
+            uvs: vec![],
+            indices: vec![],
+            masks: vec![],
+            binding: Binding::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![],
+        };
+        let mut m = Model::new();
+        m.art_meshes = vec![mesh("A", 0), mesh("B", 2), mesh("C", 2)];
+        let pngs = vec![vec![0u8], vec![1u8], vec![2u8], vec![3u8]];
+        let (kept, dropped) = prune_pages(&mut m, pngs);
+        assert_eq!(dropped, 2);
+        assert_eq!(kept, vec![vec![0u8], vec![2u8]]);
+        let pages: Vec<u32> = m.art_meshes.iter().map(|a| a.texture).collect();
+        assert_eq!(pages, vec![0, 1, 1]);
     }
 
     #[test]
