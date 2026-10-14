@@ -222,12 +222,30 @@ pub struct DisplayInfo {
     /// ids, kept so an export writes back what the model came with. None
     /// in older files and models that never had any.
     pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
-    /// Canvas guide lines: (vertical, position in canvas pixels). Empty in
-    /// older files.
-    pub guides: Vec<(bool, f32)>,
-    /// Warp Bezier handles as the rigger left them (the model keeps only
-    /// the grid): (deformer id, keyform, patches across, patches down, net
-    /// points as x, y pairs). Used again only while they still make the
-    /// warp's grid. Empty in older files.
+    pub guides: Vec<GuideLine>,
     pub bezier_nets: Vec<(String, u32, u32, u32, Vec<f32>)>,
+}
+
+/// A guide line on the canvas, as Cubism's Guide Line Settings has them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GuideLine {
+    pub vertical: bool,
+    pub at: f32,
+    pub color: [u8; 4],
+    pub memo: String,
+}
+
+impl Default for GuideLine {
+    fn default() -> Self {
+        Self { vertical: false, at: 0.0, color: GuideLine::DEFAULT_COLOR, memo: String::new() }
+    }
+}
+
+impl GuideLine {
+    pub const DEFAULT_COLOR: [u8; 4] = [0, 190, 255, 255];
+
+    pub fn new(vertical: bool, at: f32) -> Self {
+        Self { vertical, at, ..Self::default() }
+    }
 }
