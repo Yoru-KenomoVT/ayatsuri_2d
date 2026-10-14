@@ -23,8 +23,8 @@ runs in VTube Studio. On Windows, macOS and Linux.
 </div>
 
 <p align="center">
-  <img src="docs/media/hero.png" alt="The Ayatsuri2D editor with a model being rigged: the face mesh under a head warp deformer, with the deformer tree and parts" width="900">
-  <br>A model in the editor: mesh wireframe, the deformer tree and parts.
+  <img src="docs/media/hero.png" alt="The Ayatsuri2D editor with a rigged model: the face mesh, parameter folders with 2D pads, the deformer tree and parts" width="900">
+  <br>A rigged model in the editor: mesh wireframe, keyed parameters in folders, the deformer tree and parts.
   <br>Model art by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!
 </p>
 
@@ -120,7 +120,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 ### Rigging
 
 <p align="center">
-  <img src="docs/media/rigging.png" alt="A warp deformer on the head with its Bezier handles, keyed to the Head X parameter" width="860">
+  <img src="docs/media/rigging.png" alt="The Head Main warp deformer with its Bezier handles, keyed to the head parameters, over the whole model" width="860">
 </p>
 <p align="center">Model art by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!</p>
 
