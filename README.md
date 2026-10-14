@@ -118,7 +118,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 ### Rigging
 
 <p align="center">
-  <img src="docs/media/rigging.png" alt="A warp deformer bending the head as the Angle X and Angle Y parameters move" width="860">
+  <img src="docs/media/rigging.png" alt="A warp deformer on the head with its Bezier handles, keyed to the Head X parameter" width="860">
 </p>
 
 - **Parameters and keyforms**, with Cubism's palette tools: four-corner forms,
