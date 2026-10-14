@@ -616,7 +616,6 @@ impl EditorUi {
             crate::i18n::tr("ArtPath"),
             "Click to place a corner, press and drag for a smooth point (Alt+drag breaks its handles). Click the first point to close the path; Enter finishes an open one, Esc drops it, Backspace takes back the last point.\n\nThe path becomes an ordinary ArtMesh: clip by it, put it under deformers, give it keys. Select an ArtPath mesh with this tool to drag its points and handles; Alt+click deletes a point.",
         );
-        // the selected path's settings, else the ones the next path gets
         let selected = match self.selected {
             Some(Sel::Mesh(mi)) if self.art_draft.is_none() => {
                 self.session.as_ref().and_then(|s| {
@@ -635,7 +634,6 @@ impl EditorUi {
             None => self.art_draft.clone().unwrap_or_else(|| self.art_style.clone()),
         };
         let before = p.clone();
-        // a slider applies when let go, everything else at once
         let mut settled = false;
         grid(ui, "td-artpath", |ui| {
             row(ui, crate::i18n::tr("Stroke"), |ui| {
@@ -736,7 +734,6 @@ impl EditorUi {
                 "This path has keys: changing it redraws every keyform in its rest shape.",
             ));
         }
-        // a colour applies once its picker closes; until then it waits
         let picker_open =
             egui::Popup::is_any_open(ui.ctx()) || ui.ctx().input(|i| i.pointer.any_down());
         let colors_moved =

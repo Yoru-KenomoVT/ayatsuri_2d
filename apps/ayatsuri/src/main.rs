@@ -111,8 +111,6 @@ fn main() -> eframe::Result {
                 ayatsuri_editor::theme::install(&cc.egui_ctx);
                 let mut editor = editor.take().unwrap_or_default();
                 if let Some(rs) = &cc.wgpu_render_state {
-                    // wgpu's default handler panics on any error, out of
-                    // video memory included; log it and carry on instead
                     rs.device.on_uncaptured_error(std::sync::Arc::new(|e: eframe::wgpu::Error| {
                         let oom = matches!(e, eframe::wgpu::Error::OutOfMemory { .. });
                         ayatsuri_editor::gpu_error(oom, &e.to_string());

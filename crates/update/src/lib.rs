@@ -31,8 +31,6 @@ pub struct Latest {
     pub url: String,
     /// When this was learned, in seconds since 1970.
     pub checked_at: u64,
-    /// The release notes (that version's CHANGELOG section, Markdown);
-    /// empty in answers saved by older versions.
     #[serde(default)]
     pub notes: String,
 }

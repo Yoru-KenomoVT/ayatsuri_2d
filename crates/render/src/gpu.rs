@@ -62,8 +62,6 @@ pub struct Packet {
     // and the model would never show. The flag says they arrived.
     pub textures: Option<std::sync::Arc<Vec<TexData>>>,
     pub uploaded: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    /// Single pages to replace (or add, at the end) without re-sending the
-    /// whole set, with the same arrived flag.
     pub pages: Option<std::sync::Arc<Vec<(usize, TexData)>>>,
     pub pages_uploaded: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -688,7 +686,6 @@ impl GpuRenderer {
                 } else if *i == len {
                     self.textures.push(bind);
                 }
-                // past the end: the full set has not arrived yet
             }
             if let Some(flag) = &packet.pages_uploaded {
                 flag.store(true, std::sync::atomic::Ordering::Release);

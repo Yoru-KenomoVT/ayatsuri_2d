@@ -278,7 +278,7 @@ enum Block {
 /// tables left out (the release page has them).
 fn blocks(md: &str) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
-    let mut open = false; // the last block takes continuation lines
+    let mut open = false;
     for line in md.lines() {
         let t = line.trim();
         if t.is_empty() || t.starts_with('|') {
@@ -304,7 +304,6 @@ fn blocks(md: &str) -> Vec<Block> {
 
 fn plain(s: &str) -> String {
     let s = s.replace("**", "").replace('`', "");
-    // [text](url) -> text
     let mut out = String::with_capacity(s.len());
     let mut rest = s.as_str();
     while let Some(open) = rest.find('[') {

@@ -27,8 +27,6 @@ pub use panels::EditorUi;
 
 /// The MSAA sample count saved in preferences, for the app shell to hand
 /// the renderer at startup. 0 in the file means the default.
-/// Set when the GPU ran out of memory: the canvas says so instead of the
-/// app going down (wgpu's default treats it as fatal).
 static GPU_OUT_OF_MEMORY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static GPU_ERRORS_LOGGED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 

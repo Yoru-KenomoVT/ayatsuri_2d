@@ -147,7 +147,6 @@ pub struct Session {
     /// the upload, then dropped to free the memory.
     pub gpu_pending: Option<std::sync::Arc<Vec<ayatsuri_render::TexData>>>,
     pub gpu_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Single pages changed since (the ArtPath swatch), waiting for the GPU.
     pub gpu_pages: Option<std::sync::Arc<Vec<(usize, ayatsuri_render::TexData)>>>,
     pub gpu_pages_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub texture_names: Vec<String>,
@@ -193,9 +192,6 @@ pub struct Session {
     /// Guide lines on the canvas: (vertical, canvas pixels). Saved with the
     /// model, not part of undo.
     pub guides: Vec<(bool, f32)>,
-    /// Warp Bezier handles as last left, per (warp, keyform): the model
-    /// keeps only the grid, and a fit from it always puts handles at a
-    /// third of each span. Saved with the model.
     pub bezier_nets: HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     undo: Vec<Model>,
     redo: Vec<Model>,
@@ -287,8 +283,6 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
     }
 }
 
-/// Undo (and redo) memory: whole-model steps, so they are capped by size
-/// as well as count. 256 MB fits well inside the 1 GB minimum spec.
 const UNDO_BUDGET: usize = 256 * 1024 * 1024;
 const UNDO_STEPS: usize = 16;
 
@@ -348,7 +342,6 @@ pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>
     }
     let dropped = used.iter().filter(|u| !**u).count();
     if dropped == 0 || used.iter().all(|u| !*u) {
-        // nothing to do, or no art at all (keep the file as it is)
         return (pngs, 0);
     }
     let mut new_index = vec![0u32; used.len()];
@@ -545,7 +538,6 @@ fn reimport_into(
     }
     let mut pngs = s.texture_pngs.clone();
     pngs.extend(built.textures);
-    // the pages the old art was on are empty now if every mesh moved off
     let (pngs, dropped) = prune_pages(&mut next, pngs);
     if dropped > 0 {
         info!("re-import: {dropped} page(s) of old art no longer used, removed");
@@ -811,7 +803,6 @@ impl Session {
             payload.meta.name.clone()
         };
         let pngs: Vec<Vec<u8>> = payload.textures.into_iter().map(|b| b.into_vec()).collect();
-        // pages no mesh draws from cost video memory for nothing
         let mut model = payload.model;
         let (pngs, dropped) = prune_pages(&mut model, pngs);
         let tex_names = (0..pngs.len()).map(|i| format!("texture_{i:02}")).collect();
@@ -1214,9 +1205,6 @@ impl Session {
                 mipmap_mode: Some(egui::TextureFilter::Linear),
                 ..TextureOptions::LINEAR
             };
-            // one full-size page at a time: each is a second GPU copy of a
-            // page (64 MB at 4096), so keeping every page ever edited would
-            // fill a small GPU's memory
             for slot in &mut self.full_tex {
                 *slot = None;
             }
@@ -1998,16 +1986,13 @@ mod import_paint_tests {
             });
             m
         };
-        // count: 16 at most
         let mut h: Vec<Model> = (0..20).map(step).collect();
         trim_history_to(&mut h, 16, usize::MAX);
         assert_eq!(h.len(), 16);
         assert_eq!(h[0].art_meshes[0].id, "M4", "the oldest went first");
-        // size: each step is ~100 KB, a 350 KB budget keeps three
         trim_history_to(&mut h, 16, 350_000);
         assert_eq!(h.len(), 3);
         assert_eq!(h[2].art_meshes[0].id, "M19", "the newest stays");
-        // never fewer than two, however big
         trim_history_to(&mut h, 16, 1);
         assert_eq!(h.len(), 2);
     }

@@ -336,40 +336,21 @@ pub struct EditorUi {
     /// Deform paths per (mesh, edit level 2 or 3), as in Cubism.
     deform_paths: std::collections::HashMap<(usize, u8), Vec<PathPin>>,
     path_grab: Option<PathGrab>,
-    /// The ArtPath being drawn, before it becomes a mesh.
     art_draft: Option<ayatsuri_format::model::ArtPath>,
-    /// A point or handle of an ArtPath being dragged.
     art_grab: Option<ArtGrab>,
-    /// An existing ArtPath while one of its points is dragged: (mesh, path).
     art_edit: Option<(usize, ayatsuri_format::model::ArtPath)>,
-    /// What new ArtPaths start with (set in Tool Details).
     art_style: ayatsuri_format::model::ArtPath,
-    /// Tool Details' Finish button, picked up by the canvas.
     art_finish: bool,
-    /// The eyedropper is out for the stroke (0) or fill (1) colour.
     art_pick: Option<u8>,
-    /// Clicking meshes on the canvas makes this mesh (an ArtPath, say)
-    /// their clipping mask; clicking one again takes it off.
     clip_with: Option<usize>,
-    /// The search box in Clip by's + list.
     clip_search: String,
-    /// The Deform Brush stroke in progress.
     dbrush: Option<DeformStroke>,
-    /// How much of the brush pushes at full strength (the rest fades), and
-    /// how hard it pushes overall.
     dbrush_hardness: f32,
     dbrush_strength: f32,
-    /// Guides drawn (Show > Guides), and the one being dragged.
     show_guides: bool,
     guide_drag: Option<usize>,
-    /// "Clip meshes with this path" clips inverted (the mesh shows only
-    /// outside the mask); Alt+click flips it per click.
     clip_invert: bool,
-    /// A selected path's settings while a colour picker is still open:
-    /// applied once it closes, not on every frame of the drag.
     art_pending: Option<(usize, ayatsuri_format::model::ArtPath)>,
-    /// Texture pages decoded for the eyedropper: page -> (png length,
-    /// width, height, rgba). The length notices a page that was replaced.
     pick_pages: std::collections::HashMap<usize, (usize, u32, u32, Vec<u8>)>,
     /// Path width in canvas pixels (the red circle) and the share of it that
     /// keeps its shape fully (the blue circle).
@@ -535,10 +516,6 @@ enum LiveTarget {
     Warp(usize),
 }
 
-/// A Deform Brush stroke: per object it moves, the live preview, its
-/// points' screen positions when the stroke began, and how far the brush
-/// has pushed each one so far. Lands as one edit on release.
-/// Per object a stroke moved: what it is, the keyform, and its moves.
 type BrushPlan = Vec<(LiveTarget, usize, Vec<(usize, f32, f32)>)>;
 
 struct DeformStroke {
@@ -747,8 +724,6 @@ enum BgJob {
 /// vertex's screen offset, and the parent-space positions at the grab.
 type PathFinish = (usize, Pos2, Vec<(usize, Vec2)>, Vec<f32>);
 
-/// An ArtPath anchor (part 0) or its in (1) or out (2) handle being
-/// dragged: where the drag began and the anchor as it was, canvas pixels.
 #[derive(Clone, Copy)]
 struct ArtGrab {
     anchor: usize,
@@ -1811,7 +1786,6 @@ impl EditorUi {
             && let Some(Sel::Mesh(mi)) = self.selected
             && ui.ctx().input(|i| i.key_pressed(egui::Key::Delete))
         {
-            // Delete only: Backspace is too easy to hit while typing elsewhere
             let meshes = self.mesh_pick_with(mi);
             self.delete_meshes(meshes);
         }
@@ -2796,8 +2770,6 @@ impl EditorUi {
                     .unwrap_or(Vec2::ZERO);
                 let ease = 1.0 - (-dt * 8.0).exp();
                 let before = self.follow;
-                // once the head has caught up with the pointer, stop: no new
-                // values, no evaluation, no repaint until the pointer moves
                 following = (target - self.follow).length() > 1e-3;
                 self.follow =
                     if following { self.follow + (target - self.follow) * ease } else { target };
@@ -2822,8 +2794,6 @@ impl EditorUi {
             }
             let physics_moved =
                 self.physics_on && s.puppet.has_physics() && s.puppet.step_physics(dt);
-            // keep ticking only while something is in motion; a settled rig
-            // waits for the next input (which repaints by itself)
             let animating = following || physics_moved;
             if physics_moved {
                 s.dirty = true;
@@ -6026,7 +5996,6 @@ impl EditorUi {
 
     fn deformers_panel(&mut self, ui: &mut Ui) {
         let mut def_cmd: Option<DefCmd> = None;
-        // mesh rows in the order drawn, for Shift ranges, and the one clicked
         let mut def_mesh_rows: Vec<usize> = Vec::new();
         let mut def_mesh_click: Option<usize> = None;
         let Some(s) = &mut self.session else {
@@ -6477,7 +6446,6 @@ impl EditorUi {
         if let Some(cmd) = def_cmd {
             self.run_def_cmd(cmd);
         }
-        // Ctrl+click toggles, Shift+click picks a range, as in the Parts list
         if let Some(mi) = def_mesh_click {
             let (shift, ctrl) = ui.ctx().input(|i| (i.modifiers.shift, i.modifiers.command));
             self.pick_rows(mi, shift, ctrl, &def_mesh_rows, false);
@@ -6845,7 +6813,6 @@ impl EditorUi {
                         let needle = self.clip_search.to_lowercase();
                         let model = s.puppet.model();
                         let is_path = |mi: usize| ayatsuri_core::edit::art_path_of(model, mi).is_some();
-                        // ArtPaths first: they are usually drawn to be masks
                         let mut order: Vec<usize> = (0..model.art_meshes.len())
                             .filter(|&mi| mi != i && !masks.contains(&(mi as u32)))
                             .filter(|&mi| {
@@ -7129,9 +7096,6 @@ impl EditorUi {
             pos2(origin.x + px * scale, origin.y + py * scale)
         };
 
-        // an ArtPath's triangles come from its path: Mesh Edit would
-        // scramble them (and the next path edit undo it all), so its
-        // points are edited with the ArtPath tool instead, as in Cubism
         if let Some(mi) = self.mesh_edit
             && ayatsuri_core::edit::art_path_of(s.puppet.model(), mi).is_some()
         {
@@ -7145,7 +7109,6 @@ impl EditorUi {
                 s.mesh_name(mi)
             );
         }
-        // the full-size page Mesh Edit uses goes when it ends
         if self.mesh_edit.is_none() {
             s.drop_full_textures();
         }
@@ -7308,8 +7271,6 @@ impl EditorUi {
             }
             // a click on the selected warp's points or box handles belongs
             // to warp editing, not to picking the mesh underneath
-            // Ctrl+click always picks meshes, even over a mesh's edit box
-            // (the point tool has no use for Ctrl)
             let ctrl_now = ui.ctx().input(|i| i.modifiers.command);
             if resp.clicked()
                 && (!self.pts.hot || ctrl_now)
@@ -7322,7 +7283,6 @@ impl EditorUi {
                     self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
                 });
                 if let Some(mask) = self.clip_with {
-                    // the mask itself is under the click more often than not
                     let hit = hit_mesh(&s.puppet, ux, uy, &|m| {
                         m == mask
                             || self.mesh_locked.contains(&m)
@@ -7340,7 +7300,6 @@ impl EditorUi {
                             list.retain(|&x| x != mask as u32);
                         }
                         let invert = self.clip_invert != alt;
-                        // a path that becomes a mask stops drawing itself
                         let path = ayatsuri_core::edit::art_path_of(s.puppet.model(), mask)
                             .filter(|p| on && !p.mask_only)
                             .cloned()
@@ -7380,8 +7339,6 @@ impl EditorUi {
                         }
                     }
                 } else if let Some(target) = self.clip_pick {
-                    // an ArtPath is picked anywhere inside its outline, even
-                    // with no fill (a mask is often drawn just for this)
                     let c = s.puppet.model().canvas;
                     let hit = art_path_at(
                         s.puppet.model(),
@@ -7488,7 +7445,6 @@ impl EditorUi {
                         .expand2(vec2(10.0, 5.0));
                 vp.rect_filled(bg, 4.0, theme::pal().accent.gamma_multiply(0.9));
                 vp.galley(bg.min + vec2(10.0, 5.0), galley, Color32::WHITE);
-                // outline what it clips already
                 for (mi, m) in s.puppet.model().art_meshes.iter().enumerate() {
                     if !m.masks.contains(&(mask as u32)) {
                         continue;
@@ -7674,10 +7630,6 @@ impl EditorUi {
         // overlays for whatever is selected
         let mut warp_hot = false;
         match self.selected {
-            // several meshes picked: their points as one set, so the box
-            // moves, scales and rotates them together and points picked
-            // across meshes move as one, in one undo step. The wireframes
-            // follow the pointer; the art catches up on release.
             Some(Sel::Mesh(_)) if self.multi_sel.len() > 1 => {
                 let group: Vec<usize> = self
                     .multi_sel
@@ -7707,7 +7659,6 @@ impl EditorUi {
                     && !space
                     && self.mesh_edit.is_none()
                     && !pts.is_empty();
-                // the point tool's memory belongs to this exact group
                 let key =
                     group.iter().fold(0x9e37_usize, |h, m| h.wrapping_mul(31).wrapping_add(*m));
                 let mut grab_hot = None;
@@ -8137,7 +8088,6 @@ impl EditorUi {
                             ayatsuri_core::edit::Target::Deformer(di),
                             &values,
                         );
-                        // the handles as last left, while the grid is still theirs
                         let kept = keyform
                             .and_then(|k| s.bezier_nets.get(&(di, k)))
                             .filter(|l| l.bw == bw && l.bh == bh)
@@ -8243,7 +8193,6 @@ impl EditorUi {
                                 self.bez_drag = None;
                                 bez_busy = false;
                                 warp_commit = Some(moves);
-                                // keep the handles as dropped for next time
                                 if let Some(k) = keyform {
                                     if s.bezier_nets.len() > 256 {
                                         s.bezier_nets.clear();
@@ -8664,8 +8613,6 @@ impl EditorUi {
 
         self.pts.hot = warp_hot;
 
-        // a Deform Brush stroke left behind by a tool change puts its
-        // preview back
         if self.tool != Tool::DeformBrush
             && let Some(st) = self.dbrush.take()
         {
@@ -8674,11 +8621,6 @@ impl EditorUi {
             }
             s.dirty = true;
         }
-        // the Deform Brush pushes points along the stroke, like Liquify:
-        // the selected meshes' points, or a selected warp's grid. Full
-        // strength inside the hard core, fading to the edge; the art
-        // follows live and the stroke lands in the current keyform as one
-        // undo step. B + drag or [ and ] size it.
         if self.tool == Tool::DeformBrush && !space && self.mesh_edit.is_none() {
             let sizing = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 4.0);
             let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
@@ -8920,7 +8862,6 @@ impl EditorUi {
                 }
             }
             if b_down {
-                // sizing (size_brush, below), not painting
             } else if let Some(p) = ptr
                 && (resp.drag_started() || resp.clicked() || resp.dragged())
             {
@@ -9093,12 +9034,6 @@ impl EditorUi {
             }
         }
 
-        // the ArtPath tool draws Bezier paths that become ordinary meshes:
-        // click places a corner, press-and-drag a smooth point (Alt breaks
-        // its handles), clicking the first point closes the path, Enter
-        // finishes an open one, Esc drops it, Backspace takes a point back.
-        // With an ArtPath mesh selected its points and handles drag instead
-        // (Alt+click deletes a point) and the mesh is redrawn on release.
         if self.tool == Tool::ArtPath && !space && self.mesh_edit.is_none() {
             use ayatsuri_format::model::ArtPath;
             let guides = if self.show_guides { s.guides.clone() } else { Vec::new() };
@@ -9128,7 +9063,6 @@ impl EditorUi {
                     ..self.art_style.clone()
                 }),
             };
-            // under the pointer: (anchor, 0 the point / 1 in handle / 2 out handle)
             let probe = if inp.drag_started { inp.origin.or(inp.ptr) } else { inp.ptr };
             let hit = probe.and_then(|p| {
                 let mut best: Option<((usize, u8), f32)> = None;
@@ -9146,7 +9080,6 @@ impl EditorUi {
                 }
                 best.map(|(h, _)| h)
             });
-            // the eyedropper: the next click takes the colour under it
             let mut picking = self.art_pick;
             let mut pick_commit = false;
             if let Some(slot) = picking {
@@ -9224,7 +9157,6 @@ impl EditorUi {
                 let now = to_px(p);
                 let (dx, dy) = (now[0] - g.start[0], now[1] - g.start[1]);
                 let [x, y, ix, iy, ox, oy] = g.orig;
-                // a handle drags its partner the opposite way unless Alt
                 let moved = match g.part {
                     0 => {
                         let q = snap([x + dx, y + dy]);
@@ -9324,8 +9256,6 @@ impl EditorUi {
                 None => self.art_draft = Some(path.clone()),
             }
 
-            // the path as it will draw (a drawn mesh shows itself, except
-            // while its points move), the outline, then points and handles
             let samples = ayatsuri_core::artpath::sample(&path.anchors, path.closed, path.step);
             let scr: Vec<Pos2> = samples.iter().map(|q| on_screen(*q)).collect();
             let rgba = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
@@ -10313,7 +10243,6 @@ impl EditorUi {
                     s.modified = true;
                 }
                 if !down {
-                    // dropped on a ruler or off the canvas: gone
                     if ptr.is_none_or(|p| !view.contains(p) || top.contains(p) || left.contains(p))
                         && i < s.guides.len()
                     {
@@ -11206,7 +11135,6 @@ fn art_path_at(model: &Model, px: f32, py: f32, slack: f32) -> Option<usize> {
         let pts = ayatsuri_core::artpath::sample(&path.anchors, path.closed, path.step);
         let n = pts.len();
         if path.closed && n >= 3 {
-            // even-odd crossings
             let mut inside = false;
             for i in 0..n {
                 let (Some(a), Some(b)) = (pts.get(i), pts.get((i + 1) % n)) else { continue };
@@ -11272,8 +11200,6 @@ fn color_at(
         let png = pngs.get(page)?;
         let fresh = cache.get(&page).is_some_and(|(len, ..)| *len == png.len());
         if !fresh {
-            // a 4096 page is 64 MB decoded: hold two at most (a mesh and
-            // its mask), never a growing pile
             if cache.len() >= 2 {
                 cache.clear();
             }
@@ -12340,7 +12266,6 @@ mod eyedropper_tests {
 
     #[test]
     fn the_eyedropper_reads_the_texel_under_the_point() {
-        // a unit quad textured with a 2x2 page: red, green / blue, white
         let mut m = Model::new();
         m.canvas = Canvas { pixels_per_unit: 1.0, ..Canvas::default() };
         m.art_meshes.push(ArtMesh {
