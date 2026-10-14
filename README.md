@@ -89,7 +89,7 @@ These badges always show the newest version, betas included.
 | **CPU** | 2 cores, 64-bit | 4 cores or more |
 | **Memory** | 1 GB free | 2 GB or more for very large models |
 | **Graphics** | integrated graphics with OpenGL 3.3, Vulkan, DirectX 12 or Metal | any dedicated GPU |
-| **Disk** | about 15 MB for the app, plus your models | |
+| **Disk** | about 20 MB for the app, plus your models | |
 | **Screen** | 1280×720 | 1920×1080 |
 
 Measured, not guessed: a full VTuber model (356 meshes, 19,405 points,
