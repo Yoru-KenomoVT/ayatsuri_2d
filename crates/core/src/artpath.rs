@@ -19,28 +19,20 @@
 
 use ayatsuri_format::model::ArtPath;
 
-/// The swatch page's size in pixels, and a colour cell's.
 pub const SWATCH_SIZE: u32 = 256;
 pub const SWATCH_CELL: u32 = 32;
-/// Cells on the page: 8 x 8.
 pub const SWATCH_CELLS: usize =
     ((SWATCH_SIZE / SWATCH_CELL) * (SWATCH_SIZE / SWATCH_CELL)) as usize;
-/// Where the fade starts (opaque, the cell's middle) and how far out it
-/// runs to clear, in pixels.
 const FADE_FROM: f32 = 16.0;
 const FADE_LEN: f32 = 12.0;
-/// Meshes index with u16; stop well short of it.
 const MAX_POINTS: usize = 12_000;
 
-/// What part of the path a vertex belongs to, and how far out in the fade.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Role {
     pub fill: bool,
-    /// 0 on the shape, 1 at the outer edge of the soft ring.
     pub fade: f32,
 }
 
-/// A path's triangles in canvas pixels, before uvs.
 #[derive(Debug, Clone, Default)]
 pub struct Built {
     pub points: Vec<[f32; 2]>,
@@ -60,7 +52,6 @@ impl Built {
     }
 
     fn quad(&mut self, a: u16, b: u16, c: u16, d: u16) {
-        // a-b on one side, d-c on the other
         self.tri(a, b, c);
         self.tri(a, c, d);
     }
@@ -94,7 +85,6 @@ pub fn sample(anchors: &[[f32; 6]], closed: bool, step: f32) -> Vec<[f32; 2]> {
         };
         let (p0, _, p1) = anchor(a);
         let (p3, p2, _) = anchor(b);
-        // the control polygon's length bounds the curve's
         let reach = dist(p0, p1) + dist(p1, p2) + dist(p2, p3);
         let count = ((reach / step).ceil() as usize).clamp(1, 256);
         for k in 0..count {
@@ -106,7 +96,6 @@ pub fn sample(anchors: &[[f32; 6]], closed: bool, step: f32) -> Vec<[f32; 2]> {
     {
         out.push([last[0], last[1]]);
     }
-    // drop repeats, which have no direction
     out.dedup_by(|a, b| dist(*a, *b) < 1e-3);
     out.truncate(MAX_POINTS);
     out
@@ -209,7 +198,7 @@ pub fn triangulate(pts: &[[f32; 2]]) -> Vec<[usize; 3]> {
             };
             let (a, b, c) = (at(ia), at(ib), at(ic));
             if cross(a, b, c) <= 0.0 {
-                continue; // reflex corner
+                continue;
             }
             let blocked =
                 ring.iter().any(|&j| j != ia && j != ib && j != ic && inside_tri(at(j), a, b, c));
@@ -226,7 +215,6 @@ pub fn triangulate(pts: &[[f32; 2]]) -> Vec<[usize; 3]> {
             None => break,
         }
     }
-    // whatever is left (a triangle, or a tangle): fan it
     if let Some(&first) = ring.first() {
         for w in ring.windows(2).skip(1) {
             if let [b, c] = *w {
@@ -257,7 +245,6 @@ pub fn build(path: &ArtPath) -> Built {
         for [a, b, c] in tris {
             out.tri(base + a as u16, base + b as u16, base + c as u16);
         }
-        // the soft ring, outward (the side away from the inside)
         let covered = path.stroke && path.width >= 1.0;
         if feather > 0.0 && !covered {
             let offs = offsets(&pts, true);
@@ -280,7 +267,6 @@ pub fn build(path: &ArtPath) -> Built {
     if path.stroke && path.width > 0.0 {
         let offs = offsets(&pts, closed);
         let half = path.width * 0.5;
-        // per point: outer-left, inner-left, inner-right, outer-right
         let mut cols: Vec<[u16; 4]> = Vec::with_capacity(pts.len());
         for (p, (d, k)) in pts.iter().zip(&offs) {
             let ol = out.push(along(*p, *d, (half + feather) * k), false, 1.0);
@@ -299,7 +285,6 @@ pub fn build(path: &ArtPath) -> Built {
             out.quad(a[1], b[1], b[2], a[2]);
             out.quad(a[2], b[2], b[3], a[3]);
         }
-        // soft ends on an open stroke
         if !closed && feather > 0.0 {
             for (end, toward) in [(0usize, 1usize), (n - 1, n - 2)] {
                 let (Some(p), Some(q), Some(c)) =
@@ -307,7 +292,6 @@ pub fn build(path: &ArtPath) -> Built {
                 else {
                     continue;
                 };
-                // away from the line, past its end
                 let len = dist(p, q).max(1e-6);
                 let back = [(p[0] - q[0]) / len, (p[1] - q[1]) / len];
                 let cap: Vec<u16> = c
@@ -348,9 +332,6 @@ pub fn swatch_rgba(colors: &[[u8; 4]]) -> Vec<u8> {
         let (ox, oy) = ((i % per_row) * cell, (i / per_row) * cell);
         for y in oy..oy + cell {
             for x in 0..cell {
-                // alpha follows the fade out from the middle; the colour
-                // fills the whole cell so a blend toward clear keeps it
-                // fully opaque for the two texels the middle sits between
                 let d = (x as f32 + 0.5 - FADE_FROM).abs();
                 let t = ((d - 0.5) / (FADE_LEN - 0.5)).clamp(0.0, 1.0);
                 let a = (c[3] as f32 * (1.0 - t)).round() as u8;
@@ -387,11 +368,9 @@ mod tests {
     #[test]
     fn a_filled_square_is_two_triangles_and_a_ring() {
         let b = build(&square(true, false));
-        // 4 shape points, 4 ring points; 2 fill triangles, 8 ring triangles
         assert_eq!(b.points.len(), 8);
         assert_eq!(b.indices.len(), (2 + 8) * 3);
         assert!(b.roles.iter().take(4).all(|r| r.fill && r.fade == 0.0));
-        // the ring sits outside the square
         assert!(
             b.points
                 .iter()
@@ -402,7 +381,6 @@ mod tests {
 
     #[test]
     fn a_concave_outline_triangulates_without_spilling() {
-        // an L shape: the fill must not cover the notch
         let pts = [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0], [1.0, 2.0], [0.0, 2.0]];
         let tris = triangulate(&pts);
         assert_eq!(tris.len(), 4);
@@ -419,7 +397,6 @@ mod tests {
             ..ArtPath::default()
         };
         let b = build(&p);
-        // 2 columns of 4, plus 4 cap points at each end
         assert_eq!(b.points.len(), 16);
         assert!(b.points.iter().any(|q| q[0] < 0.0) && b.points.iter().any(|q| q[0] > 50.0));
         assert!(b.indices.iter().all(|&i| (i as usize) < b.points.len()));
@@ -430,7 +407,6 @@ mod tests {
         let px = swatch_rgba(&[[10, 20, 30, 255], [200, 0, 0, 255]]);
         let alpha = |x: usize| px[(16 * SWATCH_SIZE as usize + x) * 4 + 3];
         assert_eq!(alpha(16), 255);
-        // both edges of a cell are clear, so neighbours never bleed
         for x in [0, 1, 2, 3, 29, 30, 31, 32, 33] {
             assert_eq!(alpha(x), 0, "x={x}");
         }

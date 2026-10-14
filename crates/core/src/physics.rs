@@ -415,8 +415,6 @@ impl Physics {
                 if half > 1e-6 {
                     o.peak = o.peak.max(o.last.abs() / half * 100.0);
                 }
-                // a settled rig reports no motion, so the editor can stop
-                // drawing until the next input
                 any |= (*slot - was).abs() > 1e-4;
             }
         }

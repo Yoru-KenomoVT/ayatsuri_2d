@@ -1045,7 +1045,6 @@ pub fn delete_art_meshes(model: &mut Model, meshes: &[usize]) -> bool {
             *x = new_index(*x);
         }
     }
-    // an ArtPath goes with its mesh
     let ids: std::collections::HashSet<&str> =
         model.art_meshes.iter().map(|m| m.id.as_str()).collect();
     let paths = std::mem::take(&mut model.art_paths);
@@ -1138,7 +1137,6 @@ pub fn create_art_path(
         positions,
     });
     let index = model.art_meshes.len() - 1;
-    // a model read from moc3 draws through its groups; join the root one
     if let Some(root) = model.draw_groups.first_mut() {
         root.items.push(ayatsuri_format::model::DrawItem {
             part: false,
@@ -1176,8 +1174,6 @@ pub fn update_art_path(
     m.positions = rest.repeat(keyforms);
     m.uvs = uvs;
     m.indices = indices;
-    // a mask-only path draws at 0 (masks clip by shape, not opacity);
-    // turning it back on shows it fully again
     if path.mask_only != was_mask_only {
         let to = if path.mask_only { 0.0 } else { 1.0 };
         m.opacities.fill(to);
@@ -2571,7 +2567,6 @@ mod tests {
         assert_eq!(mesh.texture, 3);
         assert_eq!(mesh.positions.len(), mesh.uvs.len());
         assert!(mesh.uvs.iter().all(|u| (0.0..=1.0).contains(u)));
-        // stroke and fill colours took two swatch cells
         assert_eq!(m.art_path_colors.len(), 2);
         assert_eq!(art_path_of(&m, mi).map(|p| p.mesh.as_str()), Some(mesh.id.as_str()));
         assert!(delete_art_meshes(&mut m, &[mi]));
@@ -2585,7 +2580,6 @@ mod tests {
         let hidden = ayatsuri_format::model::ArtPath { mask_only: true, ..square_path() };
         assert!(update_art_path(&mut m, mi, hidden));
         assert!(m.art_meshes[mi].opacities.iter().all(|o| *o == 0.0));
-        // still a full shape, so it still clips
         assert!(!m.art_meshes[mi].indices.is_empty());
         assert!(update_art_path(&mut m, mi, square_path()));
         assert!(m.art_meshes[mi].opacities.iter().all(|o| *o == 1.0));
