@@ -823,5 +823,6 @@
   "Copy Path": "パスをコピー",
   "Remove from Recent": "最近使ったファイルから削除",
   "Remove Missing Files": "見つからないファイルを削除",
-  "Clear Recent": "最近使ったファイルをクリア"
+  "Clear Recent": "最近使ったファイルをクリア",
+  "What's new in {version}": "{version} の新機能"
 }

@@ -823,5 +823,6 @@
   "Copy Path": "Pad kopiëren",
   "Remove from Recent": "Verwijderen uit recent",
   "Remove Missing Files": "Ontbrekende bestanden verwijderen",
-  "Clear Recent": "Recent wissen"
+  "Clear Recent": "Recent wissen",
+  "What's new in {version}": "Nieuw in {version}"
 }

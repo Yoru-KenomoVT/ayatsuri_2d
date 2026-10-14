@@ -31,6 +31,10 @@ pub struct Latest {
     pub url: String,
     /// When this was learned, in seconds since 1970.
     pub checked_at: u64,
+    /// The release notes (that version's CHANGELOG section, Markdown);
+    /// empty in answers saved by older versions.
+    #[serde(default)]
+    pub notes: String,
 }
 
 impl Latest {
@@ -71,6 +75,8 @@ struct Release {
     draft: bool,
     #[serde(default)]
     assets: Vec<install::Asset>,
+    #[serde(default)]
+    body: Option<String>,
 }
 
 /// The newest published release in a releases-list response, with the
@@ -88,6 +94,7 @@ pub fn newest_with_assets(releases_json: &str) -> Option<(Latest, Vec<install::A
             version: r.tag_name.trim_start_matches('v').to_string(),
             url: r.html_url,
             checked_at: now(),
+            notes: r.body.unwrap_or_default(),
         };
         (latest, r.assets)
     })

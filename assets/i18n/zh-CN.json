@@ -823,5 +823,6 @@
   "Copy Path": "复制路径",
   "Remove from Recent": "从最近列表移除",
   "Remove Missing Files": "移除不存在的文件",
-  "Clear Recent": "清除最近列表"
+  "Clear Recent": "清除最近列表",
+  "What's new in {version}": "{version} 的新功能"
 }

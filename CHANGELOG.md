@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The update banner and About show **What's new** for the release on
+  offer: its changelog, folded away until opened.
+
 ## 0.5.5 beta (2026-10-14)
 
 ### Added

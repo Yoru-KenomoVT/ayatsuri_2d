@@ -3265,6 +3265,7 @@ impl EditorUi {
                             crate::update::actions(ui, &mut self.update, &latest);
                         });
                     });
+                    crate::update::notes(ui, &latest);
                 });
             ui.add_space(14.0);
         }

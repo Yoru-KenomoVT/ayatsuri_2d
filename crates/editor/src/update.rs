@@ -232,3 +232,113 @@ pub(crate) fn finish(state: &UpdateState) {
         log::error!("update: {e}");
     }
 }
+
+/// "What's new in X": the release's notes, folded away until asked for.
+pub(crate) fn notes(ui: &mut egui::Ui, latest: &Latest) {
+    if latest.notes.trim().is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new(crate::i18n::trf(
+        "What's new in {version}",
+        &[("version", &latest.version)],
+    ))
+    .id_salt(("update-notes", latest.version.as_str()))
+    .show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(280.0).auto_shrink([false, true]).show(ui, |ui| {
+            for block in blocks(&latest.notes) {
+                match block {
+                    Block::Heading(text) => {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new(text).strong());
+                    }
+                    Block::Bullet(text) => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("•");
+                            ui.label(text);
+                        });
+                    }
+                    Block::Text(text) => {
+                        ui.label(text);
+                    }
+                }
+            }
+        });
+    });
+}
+
+#[derive(Debug, PartialEq)]
+enum Block {
+    Heading(String),
+    Bullet(String),
+    Text(String),
+}
+
+/// The changelog's Markdown as headings, bullets and paragraphs: wrapped
+/// lines joined, `**bold**`, `code` and [links](url) reduced to their text,
+/// tables left out (the release page has them).
+fn blocks(md: &str) -> Vec<Block> {
+    let mut out: Vec<Block> = Vec::new();
+    let mut open = false; // the last block takes continuation lines
+    for line in md.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('|') {
+            open = false;
+            continue;
+        }
+        if let Some(h) = t.strip_prefix("### ").or_else(|| t.strip_prefix("## ")) {
+            out.push(Block::Heading(plain(h)));
+            open = false;
+        } else if let Some(b) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
+            out.push(Block::Bullet(plain(b)));
+            open = true;
+        } else if open && let Some(Block::Bullet(s) | Block::Text(s)) = out.last_mut() {
+            s.push(' ');
+            s.push_str(&plain(t));
+        } else {
+            out.push(Block::Text(plain(t)));
+            open = true;
+        }
+    }
+    out
+}
+
+fn plain(s: &str) -> String {
+    let s = s.replace("**", "").replace('`', "");
+    // [text](url) -> text
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s.as_str();
+    while let Some(open) = rest.find('[') {
+        let (before, after) = rest.split_at(open);
+        out.push_str(before);
+        match after.find("](").and_then(|m| after.get(m..)?.find(')').map(|c| (m, m + c))) {
+            Some((mid, close)) => {
+                out.push_str(after.get(1..mid).unwrap_or(""));
+                rest = after.get(close + 1..).unwrap_or("");
+            }
+            None => {
+                out.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace("\\*", "*")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changelog_markdown_reads_as_blocks() {
+        let md = "### Added\n\n- **Search** in the [Parts](https://x) palette,\n  and more.\n\n| a | b |\n|---|---|\nText here\nwraps on.";
+        assert_eq!(
+            blocks(md),
+            vec![
+                Block::Heading("Added".into()),
+                Block::Bullet("Search in the Parts palette, and more.".into()),
+                Block::Text("Text here wraps on.".into()),
+            ]
+        );
+    }
+}

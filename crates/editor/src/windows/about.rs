@@ -371,6 +371,7 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
     });
     // updates: ask on request; only ever points at the release page
     ui.add_space(8.0);
+    let mut notes = None;
     ui.horizontal(|ui| {
         let label = format!(
             "{}  {}",
@@ -392,6 +393,7 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
                 .color(theme::pal().accent),
             );
             crate::update::actions(ui, update, &latest);
+            notes = Some(latest);
         } else {
             match &update.status {
                 Some(Ok(())) => faint(ui, crate::i18n::tr("You have the latest version.")),
@@ -402,6 +404,9 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
             }
         }
     });
+    if let Some(latest) = &notes {
+        crate::update::notes(ui, latest);
+    }
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
         faint(
             ui,

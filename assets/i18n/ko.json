@@ -823,5 +823,6 @@
   "Copy Path": "경로 복사",
   "Remove from Recent": "최근 목록에서 제거",
   "Remove Missing Files": "없는 파일 제거",
-  "Clear Recent": "최근 목록 지우기"
+  "Clear Recent": "최근 목록 지우기",
+  "What's new in {version}": "{version}의 새로운 기능"
 }
