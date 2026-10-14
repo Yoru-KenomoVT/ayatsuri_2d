@@ -283,6 +283,50 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
     }
 }
 
+/// Undo (and redo) memory: whole-model steps, so they are capped by size
+/// as well as count. 256 MB fits well inside the 1 GB minimum spec.
+const UNDO_BUDGET: usize = 256 * 1024 * 1024;
+const UNDO_STEPS: usize = 16;
+
+/// Roughly what a model clone costs: its bulk arrays.
+fn model_bytes(m: &Model) -> usize {
+    use ayatsuri_format::model::DeformerKind;
+    let f = std::mem::size_of::<f32>();
+    let meshes: usize = m
+        .art_meshes
+        .iter()
+        .map(|a| {
+            (a.positions.len() + a.uvs.len() + a.opacities.len() + a.draw_orders.len()) * f
+                + a.indices.len() * 2
+        })
+        .sum();
+    let deformers: usize = m
+        .deformers
+        .iter()
+        .map(|d| match &d.kind {
+            DeformerKind::Warp(w) => (w.positions.len() + w.opacities.len()) * f,
+            DeformerKind::Rotation(r) => (r.angles.len() * 6) * f,
+        })
+        .sum();
+    let glues: usize = m.glues.iter().map(|g| g.weights.len() * f + g.indices.len() * 2).sum();
+    meshes + deformers + glues + 4096
+}
+
+/// Drop the oldest steps past the count or the byte budget (keeping two).
+fn trim_history(steps: &mut Vec<Model>) {
+    trim_history_to(steps, UNDO_STEPS, UNDO_BUDGET);
+}
+
+fn trim_history_to(steps: &mut Vec<Model>, max_steps: usize, budget: usize) {
+    while steps.len() > max_steps {
+        steps.remove(0);
+    }
+    let mut total: usize = steps.iter().map(model_bytes).sum();
+    while steps.len() > 2 && total > budget {
+        total = total.saturating_sub(model_bytes(&steps.remove(0)));
+    }
+}
+
 /// Drop texture pages no mesh draws from (and that aren't the ArtPath
 /// colour page while paths exist), renumbering the meshes' pages. Returns
 /// the pages kept and how many went.
@@ -657,10 +701,7 @@ impl Session {
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
         self.undo = old.undo;
-        self.undo.push(before);
-        if self.undo.len() > 16 {
-            self.undo.remove(0);
-        }
+        self.push_undo(before);
         self.redo.clear();
         self.modified = true;
         for i in 0..old.puppet.model().parameters.len() {
@@ -734,10 +775,7 @@ impl Session {
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
         self.undo = old.undo;
-        self.undo.push(before);
-        if self.undo.len() > 16 {
-            self.undo.remove(0);
-        }
+        self.push_undo(before);
         self.redo.clear();
         self.modified = true;
         for (i, v) in (0..old.puppet.model().parameters.len()).map(|i| (i, old.puppet.value(i))) {
@@ -1250,16 +1288,21 @@ impl Session {
         true
     }
 
+    /// Keep `before` as an undo step. Undo holds at most 16 steps and,
+    /// since a step is a whole model (tens of MB on a big rig), at most
+    /// UNDO_BUDGET bytes, always keeping the last two.
+    fn push_undo(&mut self, before: Model) {
+        self.undo.push(before);
+        trim_history(&mut self.undo);
+    }
+
     pub fn edit(&mut self, f: impl FnOnce(&mut Model) -> bool) -> bool {
         let before = self.puppet.model().clone();
         let mut after = before.clone();
         if !f(&mut after) {
             return false;
         }
-        self.undo.push(before);
-        if self.undo.len() > 16 {
-            self.undo.remove(0);
-        }
+        self.push_undo(before);
         self.redo.clear();
         self.rebuild_from(after);
         self.modified = true;
@@ -1298,6 +1341,7 @@ impl Session {
     pub fn undo(&mut self) {
         if let Some(previous) = self.undo.pop() {
             self.redo.push(self.puppet.model().clone());
+            trim_history(&mut self.redo);
             self.rebuild_from(previous);
             self.modified = true;
             log::info!("undo ({} left)", self.undo.len());
@@ -1307,6 +1351,7 @@ impl Session {
     pub fn redo(&mut self) {
         if let Some(next) = self.redo.pop() {
             self.undo.push(self.puppet.model().clone());
+            trim_history(&mut self.undo);
             self.rebuild_from(next);
             self.modified = true;
             log::info!("redo");
@@ -1854,6 +1899,43 @@ mod import_paint_tests {
         s.undo();
         assert_eq!(s.puppet.model().art_meshes.len(), 1);
         assert_eq!(s.mesh_name(0), "Body");
+    }
+
+    #[test]
+    fn undo_history_is_capped_by_steps_and_by_size() {
+        let step = |n: usize| {
+            let mut m = Model::new();
+            m.art_meshes.push(ayatsuri_format::model::ArtMesh {
+                id: format!("M{n}"),
+                parent_part: None,
+                parent_deformer: None,
+                visible: true,
+                enabled: true,
+                texture: 0,
+                flags: 0,
+                vertex_count: 0,
+                uvs: vec![],
+                indices: vec![],
+                masks: vec![],
+                binding: ayatsuri_format::model::Binding::default(),
+                opacities: vec![1.0],
+                draw_orders: vec![500.0],
+                positions: vec![0.0; 25_000],
+            });
+            m
+        };
+        // count: 16 at most
+        let mut h: Vec<Model> = (0..20).map(step).collect();
+        trim_history_to(&mut h, 16, usize::MAX);
+        assert_eq!(h.len(), 16);
+        assert_eq!(h[0].art_meshes[0].id, "M4", "the oldest went first");
+        // size: each step is ~100 KB, a 350 KB budget keeps three
+        trim_history_to(&mut h, 16, 350_000);
+        assert_eq!(h.len(), 3);
+        assert_eq!(h[2].art_meshes[0].id, "M19", "the newest stays");
+        // never fewer than two, however big
+        trim_history_to(&mut h, 16, 1);
+        assert_eq!(h.len(), 2);
     }
 
     #[test]
