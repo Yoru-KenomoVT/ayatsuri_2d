@@ -336,6 +336,23 @@ pub struct EditorUi {
     /// Deform paths per (mesh, edit level 2 or 3), as in Cubism.
     deform_paths: std::collections::HashMap<(usize, u8), Vec<PathPin>>,
     path_grab: Option<PathGrab>,
+    /// The ArtPath being drawn, before it becomes a mesh.
+    art_draft: Option<ayatsuri_format::model::ArtPath>,
+    /// A point or handle of an ArtPath being dragged.
+    art_grab: Option<ArtGrab>,
+    /// An existing ArtPath while one of its points is dragged: (mesh, path).
+    art_edit: Option<(usize, ayatsuri_format::model::ArtPath)>,
+    /// What new ArtPaths start with (set in Tool Details).
+    art_style: ayatsuri_format::model::ArtPath,
+    /// Tool Details' Finish button, picked up by the canvas.
+    art_finish: bool,
+    /// The eyedropper is out for the stroke (0) or fill (1) colour.
+    art_pick: Option<u8>,
+    /// Clicking meshes on the canvas makes this mesh (an ArtPath, say)
+    /// their clipping mask; clicking one again takes it off.
+    clip_with: Option<usize>,
+    /// The search box in Clip by's + list.
+    clip_search: String,
     /// The Deform Brush stroke in progress.
     dbrush: Option<DeformStroke>,
     /// How much of the brush pushes at full strength (the rest fades), and
@@ -345,6 +362,15 @@ pub struct EditorUi {
     /// Guides drawn (Show > Guides), and the one being dragged.
     show_guides: bool,
     guide_drag: Option<usize>,
+    /// "Clip meshes with this path" clips inverted (the mesh shows only
+    /// outside the mask); Alt+click flips it per click.
+    clip_invert: bool,
+    /// A selected path's settings while a colour picker is still open:
+    /// applied once it closes, not on every frame of the drag.
+    art_pending: Option<(usize, ayatsuri_format::model::ArtPath)>,
+    /// Texture pages decoded for the eyedropper: page -> (png length,
+    /// width, height, rgba). The length notices a page that was replaced.
+    pick_pages: std::collections::HashMap<usize, (usize, u32, u32, Vec<u8>)>,
     /// Path width in canvas pixels (the red circle) and the share of it that
     /// keeps its shape fully (the blue circle).
     path_width: f32,
@@ -726,6 +752,16 @@ enum BgJob {
 /// vertex's screen offset, and the parent-space positions at the grab.
 type PathFinish = (usize, Pos2, Vec<(usize, Vec2)>, Vec<f32>);
 
+/// An ArtPath anchor (part 0) or its in (1) or out (2) handle being
+/// dragged: where the drag began and the anchor as it was, canvas pixels.
+#[derive(Clone, Copy)]
+struct ArtGrab {
+    anchor: usize,
+    part: u8,
+    start: [f32; 2],
+    orig: [f32; 6],
+}
+
 /// A deform path control point being dragged. With the Deform Path tool
 /// it only moves the point; with the arrow tool the mesh follows the path.
 struct PathGrab {
@@ -965,11 +1001,22 @@ impl Default for EditorUi {
             mesh_snapshot: None,
             deform_paths: std::collections::HashMap::new(),
             path_grab: None,
+            art_draft: None,
+            art_grab: None,
+            art_edit: None,
+            art_style: ayatsuri_format::model::ArtPath::default(),
+            art_finish: false,
+            art_pick: None,
+            clip_with: None,
+            clip_search: String::new(),
+            clip_invert: false,
             dbrush: None,
             dbrush_hardness: 0.3,
             dbrush_strength: 0.7,
             show_guides: true,
             guide_drag: None,
+            art_pending: None,
+            pick_pages: std::collections::HashMap::new(),
             path_width: 80.0,
             path_hardness: 0.5,
 
@@ -2230,10 +2277,17 @@ impl EditorUi {
                         );
                     });
                     ui.menu_button(crate::i18n::tr("ArtPath"), |ui| {
-                        let _ = ui.add_enabled(
-                            false,
-                            egui::Button::new(crate::i18n::tr("Create ArtPath")),
-                        );
+                        if ui
+                            .add_enabled(
+                                self.session.is_some(),
+                                egui::Button::new(crate::i18n::tr("Create ArtPath")),
+                            )
+                            .clicked()
+                        {
+                            self.tool = Tool::ArtPath;
+                            self.art_draft = None;
+                            ui.close();
+                        }
                     });
                     ui.menu_button(crate::i18n::tr("Glue"), |ui| {
                         if ui
@@ -6789,10 +6843,33 @@ impl EditorUi {
                         self.tool = Tool::Arrow;
                     }
                     ui.menu_button("+", |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.clip_search)
+                                .hint_text(crate::i18n::tr("Search meshes"))
+                                .desired_width(180.0),
+                        );
+                        let needle = self.clip_search.to_lowercase();
+                        let model = s.puppet.model();
+                        let is_path = |mi: usize| ayatsuri_core::edit::art_path_of(model, mi).is_some();
+                        // ArtPaths first: they are usually drawn to be masks
+                        let mut order: Vec<usize> = (0..model.art_meshes.len())
+                            .filter(|&mi| mi != i && !masks.contains(&(mi as u32)))
+                            .filter(|&mi| {
+                                needle.is_empty() || s.mesh_name(mi).to_lowercase().contains(&needle)
+                            })
+                            .collect();
+                        order.sort_by_key(|&mi| !is_path(mi));
                         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                            for mi in 0..s.puppet.model().art_meshes.len() {
-                                if mi == i || masks.contains(&(mi as u32)) {
-                                    continue;
+                            let mut heading = None;
+                            for mi in order {
+                                let path = is_path(mi);
+                                if heading != Some(path) {
+                                    heading = Some(path);
+                                    ui.weak(if path {
+                                        crate::i18n::tr("ArtPaths")
+                                    } else {
+                                        crate::i18n::tr("Meshes")
+                                    });
                                 }
                                 if ui.button(s.mesh_name(mi)).clicked() {
                                     masks.push(mi as u32);
@@ -7058,6 +7135,22 @@ impl EditorUi {
             pos2(origin.x + px * scale, origin.y + py * scale)
         };
 
+        // an ArtPath's triangles come from its path: Mesh Edit would
+        // scramble them (and the next path edit undo it all), so its
+        // points are edited with the ArtPath tool instead, as in Cubism
+        if let Some(mi) = self.mesh_edit
+            && ayatsuri_core::edit::art_path_of(s.puppet.model(), mi).is_some()
+        {
+            self.mesh_edit = None;
+            self.mesh_snapshot = None;
+            self.tool = Tool::ArtPath;
+            self.selected = Some(Sel::Mesh(mi));
+            self.art_draft = None;
+            log::info!(
+                "{} is an ArtPath: its points are edited with the ArtPath tool",
+                s.mesh_name(mi)
+            );
+        }
         // the full-size page Mesh Edit uses goes when it ends
         if self.mesh_edit.is_none() {
             s.drop_full_textures();
@@ -7084,11 +7177,18 @@ impl EditorUi {
                 vp.rect_filled(back, 6.0, theme::pal().rotation_red.gamma_multiply(0.9));
                 vp.galley(at + vec2(8.0, 5.0), galley, Color32::WHITE);
             }
+            if s.gpu_pages.is_some()
+                && s.gpu_pages_uploaded.load(std::sync::atomic::Ordering::Acquire)
+            {
+                s.gpu_pages = None;
+            }
             let cb = crate::gpu_view::callback(
                 view,
                 &s.puppet,
                 s.gpu_pending.clone(),
                 s.gpu_uploaded.clone(),
+                s.gpu_pages.clone(),
+                s.gpu_pages_uploaded.clone(),
                 pos2(origin.x, origin.y),
                 scale,
                 ui.ctx().pixels_per_point(),
@@ -7227,7 +7327,76 @@ impl EditorUi {
                 let hit = hit_mesh(&s.puppet, ux, uy, &|m| {
                     self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
                 });
-                if let Some(target) = self.clip_pick {
+                if let Some(mask) = self.clip_with {
+                    // the mask itself is under the click more often than not
+                    let hit = hit_mesh(&s.puppet, ux, uy, &|m| {
+                        m == mask
+                            || self.mesh_locked.contains(&m)
+                            || !s.mesh_shown.get(m).copied().unwrap_or(true)
+                    });
+                    if let Some(mi) = hit
+                        && let Some(mut list) =
+                            s.puppet.model().art_meshes.get(mi).map(|m| m.masks.clone())
+                    {
+                        use ayatsuri_format::model::flags::INVERTED_MASK;
+                        let on = !list.contains(&(mask as u32));
+                        if on {
+                            list.push(mask as u32);
+                        } else {
+                            list.retain(|&x| x != mask as u32);
+                        }
+                        let invert = self.clip_invert != alt;
+                        // a path that becomes a mask stops drawing itself
+                        let path = ayatsuri_core::edit::art_path_of(s.puppet.model(), mask)
+                            .filter(|p| on && !p.mask_only)
+                            .cloned()
+                            .map(|p| ayatsuri_format::model::ArtPath { mask_only: true, ..p });
+                        let ctx = ui.ctx().clone();
+                        let done = s.art_path_edit(&ctx, |m, _| {
+                            let mut changed = ayatsuri_core::edit::set_masks(m, mi, &list);
+                            if let Some(t) = m.art_meshes.get_mut(mi) {
+                                let flags = match (on, invert, list.is_empty()) {
+                                    (true, true, _) => t.flags | INVERTED_MASK,
+                                    (true, false, _) | (false, _, true) => t.flags & !INVERTED_MASK,
+                                    (false, _, false) => t.flags,
+                                };
+                                changed |= flags != t.flags;
+                                t.flags = flags;
+                            }
+                            if let Some(p) = path {
+                                changed |= ayatsuri_core::edit::update_art_path(m, mask, p);
+                            }
+                            changed
+                        });
+                        if done {
+                            if on {
+                                log::info!(
+                                    "{} now clips by {}{}",
+                                    s.mesh_name(mi),
+                                    s.mesh_name(mask),
+                                    if invert { " (inverted)" } else { "" }
+                                );
+                            } else {
+                                log::info!(
+                                    "{} no longer clips by {}",
+                                    s.mesh_name(mi),
+                                    s.mesh_name(mask)
+                                );
+                            }
+                        }
+                    }
+                } else if let Some(target) = self.clip_pick {
+                    // an ArtPath is picked anywhere inside its outline, even
+                    // with no fill (a mask is often drawn just for this)
+                    let c = s.puppet.model().canvas;
+                    let hit = art_path_at(
+                        s.puppet.model(),
+                        ux * c.pixels_per_unit + c.origin_x,
+                        uy * c.pixels_per_unit + c.origin_y,
+                        6.0 / scale,
+                    )
+                    .filter(|&a| a != target)
+                    .or(hit);
                     if let Some(mi) = hit
                         && mi != target
                     {
@@ -7305,6 +7474,51 @@ impl EditorUi {
         }
 
         // picking clipping masks: say so on the canvas, Esc or another tool ends it
+        if let Some(mask) = self.clip_with {
+            let gone = s.puppet.model().art_meshes.get(mask).is_none();
+            if gone
+                || self.tool != Tool::Arrow
+                || self.mesh_edit.is_some()
+                || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape))
+            {
+                self.clip_with = None;
+            } else {
+                let text = crate::i18n::trf(
+                    "Click the meshes {mask} should clip  ·  Alt+click clips inverted  ·  click again to take it off  ·  Esc to finish",
+                    &[("mask", &s.mesh_name(mask))],
+                );
+                let at = content.center_top() + vec2(0.0, 14.0);
+                let galley = vp.layout_no_wrap(text, FontId::proportional(12.0), Color32::WHITE);
+                let bg =
+                    Rect::from_center_size(at + vec2(0.0, galley.size().y / 2.0), galley.size())
+                        .expand2(vec2(10.0, 5.0));
+                vp.rect_filled(bg, 4.0, theme::pal().accent.gamma_multiply(0.9));
+                vp.galley(bg.min + vec2(10.0, 5.0), galley, Color32::WHITE);
+                // outline what it clips already
+                for (mi, m) in s.puppet.model().art_meshes.iter().enumerate() {
+                    if !m.masks.contains(&(mask as u32)) {
+                        continue;
+                    }
+                    let Some(g) = s.puppet.mesh_geometry(mi) else { continue };
+                    let (pos, _) = g.positions.as_chunks::<2>();
+                    let stroke = Stroke::new(1.0, theme::pal().accent);
+                    for t in g.indices.as_chunks::<3>().0 {
+                        let (Some(a), Some(b), Some(c2)) = (
+                            pos.get(t[0] as usize),
+                            pos.get(t[1] as usize),
+                            pos.get(t[2] as usize),
+                        ) else {
+                            continue;
+                        };
+                        let (a, b, c2) =
+                            (to_screen(a[0], a[1]), to_screen(b[0], b[1]), to_screen(c2[0], c2[1]));
+                        vp.line_segment([a, b], stroke);
+                        vp.line_segment([b, c2], stroke);
+                        vp.line_segment([c2, a], stroke);
+                    }
+                }
+            }
+        }
         if let Some(target) = self.clip_pick {
             let gone = s.puppet.model().art_meshes.get(target).is_none();
             if gone
@@ -8881,6 +9095,301 @@ impl EditorUi {
                         }
                     }
                 }
+            }
+        }
+
+        // the ArtPath tool draws Bezier paths that become ordinary meshes:
+        // click places a corner, press-and-drag a smooth point (Alt breaks
+        // its handles), clicking the first point closes the path, Enter
+        // finishes an open one, Esc drops it, Backspace takes a point back.
+        // With an ArtPath mesh selected its points and handles drag instead
+        // (Alt+click deletes a point) and the mesh is redrawn on release.
+        if self.tool == Tool::ArtPath && !space && self.mesh_edit.is_none() {
+            use ayatsuri_format::model::ArtPath;
+            let guides = if self.show_guides { s.guides.clone() } else { Vec::new() };
+            let snap = |q: [f32; 2]| snap_to_guides(&guides, q, 6.0 / scale);
+            let inp = point_edit::PtInput::read(ui, &resp);
+            let to_px = |p: Pos2| [(p.x - origin.x) / scale, (p.y - origin.y) / scale];
+            let on_screen = |q: [f32; 2]| pos2(origin.x + q[0] * scale, origin.y + q[1] * scale);
+            let editing = match self.selected {
+                Some(Sel::Mesh(mi))
+                    if self.art_draft.is_none()
+                        && ayatsuri_core::edit::art_path_of(s.puppet.model(), mi).is_some() =>
+                {
+                    Some(mi)
+                }
+                _ => None,
+            };
+            let mut path: ArtPath = match editing {
+                Some(mi) => match &self.art_edit {
+                    Some((m, p)) if *m == mi => p.clone(),
+                    _ => ayatsuri_core::edit::art_path_of(s.puppet.model(), mi)
+                        .cloned()
+                        .unwrap_or_default(),
+                },
+                None => self.art_draft.clone().unwrap_or_else(|| ArtPath {
+                    anchors: Vec::new(),
+                    mesh: String::new(),
+                    ..self.art_style.clone()
+                }),
+            };
+            // under the pointer: (anchor, 0 the point / 1 in handle / 2 out handle)
+            let probe = if inp.drag_started { inp.origin.or(inp.ptr) } else { inp.ptr };
+            let hit = probe.and_then(|p| {
+                let mut best: Option<((usize, u8), f32)> = None;
+                for (i, a) in path.anchors.iter().enumerate() {
+                    let [x, y, ix, iy, ox, oy] = *a;
+                    for (k, hx, hy) in [(0u8, 0.0, 0.0), (1, ix, iy), (2, ox, oy)] {
+                        if k > 0 && hx == 0.0 && hy == 0.0 {
+                            continue;
+                        }
+                        let d = on_screen([x + hx, y + hy]).distance(p);
+                        if d <= 8.0 && best.is_none_or(|(_, bd)| d < bd) {
+                            best = Some(((i, k), d));
+                        }
+                    }
+                }
+                best.map(|(h, _)| h)
+            });
+            // the eyedropper: the next click takes the colour under it
+            let mut picking = self.art_pick;
+            let mut pick_commit = false;
+            if let Some(slot) = picking {
+                let sample = inp.ptr.and_then(|p| {
+                    let [px, py] = to_px(p);
+                    let ux = (px - c.origin_x) / c.pixels_per_unit;
+                    let uy = (py - c.origin_y) / c.pixels_per_unit;
+                    color_at(&s.puppet, &s.texture_pngs, &mut self.pick_pages, ux, uy)
+                });
+                if let (Some(p), Some(col)) = (inp.ptr, sample) {
+                    let [r, g, b, _] = col;
+                    vp.circle(
+                        p + vec2(18.0, -18.0),
+                        9.0,
+                        Color32::from_rgb(r, g, b),
+                        Stroke::new(1.5, Color32::WHITE),
+                    );
+                }
+                let cancel = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+                if inp.clicked || cancel {
+                    if let (false, Some(col)) = (cancel, sample) {
+                        match slot {
+                            0 => path.stroke_color = col,
+                            _ => path.fill_color = col,
+                        }
+                        self.art_style.stroke_color = path.stroke_color;
+                        self.art_style.fill_color = path.fill_color;
+                        pick_commit = editing.is_some();
+                    }
+                    self.art_pick = None;
+                    self.pick_pages.clear();
+                }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+            let typing = ui.ctx().egui_wants_keyboard_input() || picking.is_some();
+            let (enter, esc, back) = ui.ctx().input(|i| {
+                (
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::Escape),
+                    i.key_pressed(egui::Key::Backspace),
+                )
+            });
+            let mut finish = std::mem::take(&mut self.art_finish) && path.anchors.len() >= 2;
+            let mut commit = pick_commit;
+            if inp.drag_started
+                && picking.is_none()
+                && let Some(at) = probe
+            {
+                match hit {
+                    Some((i, k)) => {
+                        self.art_grab = path.anchors.get(i).map(|a| ArtGrab {
+                            anchor: i,
+                            part: k,
+                            start: to_px(at),
+                            orig: *a,
+                        });
+                    }
+                    None if editing.is_none() => {
+                        let q = snap(to_px(at));
+                        let a = [q[0], q[1], 0.0, 0.0, 0.0, 0.0];
+                        path.anchors.push(a);
+                        self.art_grab = Some(ArtGrab {
+                            anchor: path.anchors.len() - 1,
+                            part: 2,
+                            start: q,
+                            orig: a,
+                        });
+                    }
+                    None => {}
+                }
+            }
+            if let Some(g) = self.art_grab
+                && let Some(p) = inp.ptr
+            {
+                let now = to_px(p);
+                let (dx, dy) = (now[0] - g.start[0], now[1] - g.start[1]);
+                let [x, y, ix, iy, ox, oy] = g.orig;
+                // a handle drags its partner the opposite way unless Alt
+                let moved = match g.part {
+                    0 => {
+                        let q = snap([x + dx, y + dy]);
+                        [q[0], q[1], ix, iy, ox, oy]
+                    }
+                    1 if inp.alt => [x, y, ix + dx, iy + dy, ox, oy],
+                    1 => [x, y, ix + dx, iy + dy, -(ix + dx), -(iy + dy)],
+                    _ if inp.alt => [x, y, ix, iy, ox + dx, oy + dy],
+                    _ => [x, y, -(ox + dx), -(oy + dy), ox + dx, oy + dy],
+                };
+                if let Some(slot) = path.anchors.get_mut(g.anchor) {
+                    *slot = moved;
+                }
+            }
+            if self.art_grab.is_some() && (inp.drag_stopped || !inp.any_down) {
+                self.art_grab = None;
+                commit = editing.is_some();
+            }
+            if inp.clicked
+                && picking.is_none()
+                && let Some(at) = inp.press.or(inp.ptr)
+            {
+                match hit {
+                    Some((i, 0)) if inp.alt => {
+                        if i < path.anchors.len() && (editing.is_none() || path.anchors.len() > 2) {
+                            path.anchors.remove(i);
+                            commit = editing.is_some();
+                        }
+                    }
+                    Some((0, 0)) if editing.is_none() && path.anchors.len() >= 3 => {
+                        path.closed = true;
+                        finish = true;
+                    }
+                    Some(_) => {}
+                    None if editing.is_none() => {
+                        let q = snap(to_px(at));
+                        path.anchors.push([q[0], q[1], 0.0, 0.0, 0.0, 0.0]);
+                    }
+                    None => {}
+                }
+            }
+            if !typing {
+                match editing {
+                    None => {
+                        if enter && path.anchors.len() >= 2 {
+                            finish = true;
+                        }
+                        if esc {
+                            path.anchors.clear();
+                        }
+                        if back {
+                            path.anchors.pop();
+                        }
+                    }
+                    Some(_) if esc => self.selected = None,
+                    Some(_) => {}
+                }
+            }
+            if finish {
+                let part = match self.selected {
+                    Some(Sel::Part(p)) => Some(p as u32),
+                    Some(Sel::Mesh(mi)) => {
+                        s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_part)
+                    }
+                    _ => None,
+                };
+                let draft = path.clone();
+                let mut made = None;
+                if s.art_path_edit(ui.ctx(), |m, page| {
+                    made = ayatsuri_core::edit::create_art_path(m, draft, part, page);
+                    made.is_some()
+                }) {
+                    if let Some(mi) = made {
+                        log::info!("ArtPath drawn as mesh {mi}");
+                        self.selected = Some(Sel::Mesh(mi));
+                    }
+                } else {
+                    log::warn!(
+                        "ArtPath: nothing to draw (it needs a stroke, or fill on a closed path)"
+                    );
+                }
+                path.anchors.clear();
+                path.closed = false;
+            }
+            if commit && let Some(mi) = editing {
+                let next = path.clone();
+                if s.art_path_edit(ui.ctx(), |m, _| {
+                    ayatsuri_core::edit::update_art_path(m, mi, next)
+                }) {
+                    log::info!("ArtPath {mi} redrawn");
+                }
+            }
+            match editing {
+                Some(mi) if self.art_grab.is_some() => self.art_edit = Some((mi, path.clone())),
+                Some(_) => self.art_edit = None,
+                None if path.anchors.is_empty() => self.art_draft = None,
+                None => self.art_draft = Some(path.clone()),
+            }
+
+            // the path as it will draw (a drawn mesh shows itself, except
+            // while its points move), the outline, then points and handles
+            let samples = ayatsuri_core::artpath::sample(&path.anchors, path.closed, path.step);
+            let scr: Vec<Pos2> = samples.iter().map(|q| on_screen(*q)).collect();
+            let rgba = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+            let live = editing.is_none() || self.art_grab.is_some();
+            if live && path.fill && path.closed && scr.len() >= 3 {
+                let mut mesh = egui::Mesh::default();
+                for p in &scr {
+                    mesh.colored_vertex(*p, rgba(path.fill_color));
+                }
+                for [a, b, c2] in ayatsuri_core::artpath::triangulate(&samples) {
+                    mesh.add_triangle(a as u32, b as u32, c2 as u32);
+                }
+                vp.add(egui::Shape::mesh(mesh));
+            }
+            let mut outline = scr.clone();
+            if path.closed
+                && let Some(first) = scr.first()
+            {
+                outline.push(*first);
+            }
+            if live && path.stroke && outline.len() >= 2 {
+                vp.add(egui::Shape::line(
+                    outline.clone(),
+                    Stroke::new((path.width * scale).max(1.0), rgba(path.stroke_color)),
+                ));
+            }
+            let green = theme::pal().warp_green;
+            if outline.len() >= 2 {
+                vp.add(egui::Shape::line(outline, Stroke::new(1.0, green)));
+            }
+            if editing.is_none()
+                && self.art_grab.is_none()
+                && let (Some(last), Some(p)) = (scr.last(), inp.ptr)
+            {
+                vp.line_segment([*last, p], Stroke::new(1.0, green.gamma_multiply(0.5)));
+            }
+            for (i, a) in path.anchors.iter().enumerate() {
+                let [x, y, ix, iy, ox, oy] = *a;
+                let at = on_screen([x, y]);
+                for (hx, hy) in [(ix, iy), (ox, oy)] {
+                    if hx != 0.0 || hy != 0.0 {
+                        let h = on_screen([x + hx, y + hy]);
+                        vp.line_segment([at, h], Stroke::new(1.0, Color32::from_gray(190)));
+                        vp.circle(h, 3.5, Color32::WHITE, Stroke::new(1.0, green));
+                    }
+                }
+                let hot = hit.map(|(j, _)| j) == Some(i);
+                let r = if hot { 5.5 } else { 4.0 };
+                let fill = if i == 0 && editing.is_none() { theme::pal().accent } else { green };
+                let sq = Rect::from_center_size(at, vec2(r * 2.0, r * 2.0));
+                vp.rect_filled(sq, 1.0, fill);
+                vp.rect_stroke(sq, 1.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Middle);
+            }
+            if picking.take().is_none() {
+                ui.ctx().set_cursor_icon(if hit.is_some() {
+                    egui::CursorIcon::PointingHand
+                } else {
+                    egui::CursorIcon::Crosshair
+                });
             }
         }
 
@@ -10694,6 +11203,119 @@ fn size_brush(ui: &Ui, resp: &egui::Response, size: &mut f32, min: f32) -> bool 
     b
 }
 
+/// The ArtPath under a canvas point (pixels): inside a closed outline, or
+/// within `slack` of an open one's stroke. Its mesh index.
+fn art_path_at(model: &Model, px: f32, py: f32, slack: f32) -> Option<usize> {
+    for path in model.art_paths.iter().rev() {
+        let Some(mi) = model.art_meshes.iter().position(|m| m.id == path.mesh) else { continue };
+        let pts = ayatsuri_core::artpath::sample(&path.anchors, path.closed, path.step);
+        let n = pts.len();
+        if path.closed && n >= 3 {
+            // even-odd crossings
+            let mut inside = false;
+            for i in 0..n {
+                let (Some(a), Some(b)) = (pts.get(i), pts.get((i + 1) % n)) else { continue };
+                if (a[1] > py) != (b[1] > py)
+                    && px < a[0] + (py - a[1]) / (b[1] - a[1]) * (b[0] - a[0])
+                {
+                    inside = !inside;
+                }
+            }
+            if inside {
+                return Some(mi);
+            }
+        }
+        let reach = path.width * 0.5 + slack;
+        let near = pts.windows(2).any(|w| {
+            let [a, b] = w else { return false };
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = (dx * dx + dy * dy).max(1e-9);
+            let t = (((px - a[0]) * dx + (py - a[1]) * dy) / len2).clamp(0.0, 1.0);
+            let (qx, qy) = (a[0] + t * dx, a[1] + t * dy);
+            (px - qx).powi(2) + (py - qy).powi(2) <= reach * reach
+        });
+        if near {
+            return Some(mi);
+        }
+    }
+    None
+}
+
+/// The colour the model shows at a point (model units): the top mesh there
+/// whose art is solid enough, read from its full-size texture page. A mesh
+/// clipped away at that point (outside its mask) doesn't count.
+fn color_at(
+    puppet: &ayatsuri_core::Puppet,
+    pngs: &[Vec<u8>],
+    cache: &mut std::collections::HashMap<usize, (usize, u32, u32, Vec<u8>)>,
+    ux: f32,
+    uy: f32,
+) -> Option<[u8; 4]> {
+    let mut texel = |mi: usize| -> Option<([u8; 4], f32)> {
+        let g = puppet.mesh_geometry(mi)?;
+        let (pos, _) = g.positions.as_chunks::<2>();
+        let (uv, _) = g.uvs.as_chunks::<2>();
+        let (tris, _) = g.indices.as_chunks::<3>();
+        let [a, b, c] = *tris.iter().find(|&&[a, b, c]| {
+            match (pos.get(a as usize), pos.get(b as usize), pos.get(c as usize)) {
+                (Some(p0), Some(p1), Some(p2)) => point_in_triangle(ux, uy, p0, p1, p2),
+                _ => false,
+            }
+        })?;
+        let (p0, p1, p2) = (pos.get(a as usize)?, pos.get(b as usize)?, pos.get(c as usize)?);
+        let det = (p1[1] - p2[1]) * (p0[0] - p2[0]) + (p2[0] - p1[0]) * (p0[1] - p2[1]);
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let w0 = ((p1[1] - p2[1]) * (ux - p2[0]) + (p2[0] - p1[0]) * (uy - p2[1])) / det;
+        let w1 = ((p2[1] - p0[1]) * (ux - p2[0]) + (p0[0] - p2[0]) * (uy - p2[1])) / det;
+        let w2 = 1.0 - w0 - w1;
+        let (t0, t1, t2) = (uv.get(a as usize)?, uv.get(b as usize)?, uv.get(c as usize)?);
+        let u = w0 * t0[0] + w1 * t1[0] + w2 * t2[0];
+        let v = w0 * t0[1] + w1 * t1[1] + w2 * t2[1];
+        let page = g.texture as usize;
+        let png = pngs.get(page)?;
+        let fresh = cache.get(&page).is_some_and(|(len, ..)| *len == png.len());
+        if !fresh {
+            // a 4096 page is 64 MB decoded: hold two at most (a mesh and
+            // its mask), never a growing pile
+            if cache.len() >= 2 {
+                cache.clear();
+            }
+            let img = image::load_from_memory(png).ok()?.into_rgba8();
+            cache.insert(page, (png.len(), img.width(), img.height(), img.into_raw()));
+        }
+        let (_, w, h, px) = cache.get(&page)?;
+        let x = ((u.clamp(0.0, 1.0) * *w as f32) as u32).min(w.saturating_sub(1));
+        let y = ((v.clamp(0.0, 1.0) * *h as f32) as u32).min(h.saturating_sub(1));
+        let at = ((y * w + x) * 4) as usize;
+        let &[r, g, b, a] = px.get(at..at + 4)? else { return None };
+        Some(([r, g, b, 255], a as f32 / 255.0))
+    };
+    let order: Vec<(usize, f32, Vec<u32>, bool)> = puppet
+        .drawables()
+        .filter(|d| d.opacity > 0.05)
+        .map(|d| {
+            let inverted = d.flags & ayatsuri_format::model::flags::INVERTED_MASK != 0;
+            (d.mesh, d.opacity, d.masks.to_vec(), inverted)
+        })
+        .collect();
+    for (mi, opacity, masks, inverted) in order.into_iter().rev() {
+        let Some((rgb, alpha)) = texel(mi) else { continue };
+        if alpha * opacity < 0.5 {
+            continue;
+        }
+        if !masks.is_empty() {
+            let in_mask = masks.iter().any(|&k| texel(k as usize).is_some_and(|(_, a)| a > 0.5));
+            if in_mask == inverted {
+                continue;
+            }
+        }
+        return Some(rgb);
+    }
+    None
+}
+
 fn hit_mesh(
     puppet: &ayatsuri_core::Puppet,
     ux: f32,
@@ -11713,5 +12335,50 @@ mod palette_search_tests {
         assert_eq!(leaves, vec![true, true, false]);
         assert!(matches_search("ey", &["Eye L", "ArtMesh3"]));
         assert!(!matches_search("ey", &["Mouth"]));
+    }
+}
+
+#[cfg(test)]
+mod eyedropper_tests {
+    use super::*;
+    use ayatsuri_format::model::{ArtMesh, Binding, Canvas};
+
+    #[test]
+    fn the_eyedropper_reads_the_texel_under_the_point() {
+        // a unit quad textured with a 2x2 page: red, green / blue, white
+        let mut m = Model::new();
+        m.canvas = Canvas { pixels_per_unit: 1.0, ..Canvas::default() };
+        m.art_meshes.push(ArtMesh {
+            id: "Q".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            vertex_count: 4,
+            uvs: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            masks: vec![],
+            binding: Binding::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+        });
+        let mut puppet = ayatsuri_core::Puppet::new(m);
+        puppet.update();
+        let px = vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+        let mut png = Vec::new();
+        image::RgbaImage::from_raw(2, 2, px)
+            .unwrap()
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let pages = vec![png];
+        let mut cache = std::collections::HashMap::new();
+        let at = |x, y, cache: &mut _| color_at(&puppet, &pages, cache, x, y);
+        assert_eq!(at(0.25, 0.25, &mut cache), Some([255, 0, 0, 255]));
+        assert_eq!(at(0.75, 0.25, &mut cache), Some([0, 255, 0, 255]));
+        assert_eq!(at(0.25, 0.75, &mut cache), Some([0, 0, 255, 255]));
+        assert_eq!(at(2.0, 2.0, &mut cache), None);
     }
 }

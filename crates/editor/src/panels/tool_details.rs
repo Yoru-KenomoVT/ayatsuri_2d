@@ -150,7 +150,7 @@ impl EditorUi {
                 Tool::DeformPath => self.td_path(ui),
                 Tool::WarpCreate | Tool::RotationCreate => self.td_create(ui),
                 Tool::BrushSelect | Tool::DeformBrush => self.td_brush(ui),
-                Tool::ArtPath => td_artpath(ui),
+                Tool::ArtPath => self.td_artpath(ui),
                 Tool::TextureAtlas => {
                     section(
                         ui,
@@ -610,6 +610,189 @@ impl EditorUi {
         }
     }
 
+    fn td_artpath(&mut self, ui: &mut Ui) {
+        section(
+            ui,
+            crate::i18n::tr("ArtPath"),
+            "Click to place a corner, press and drag for a smooth point (Alt+drag breaks its handles). Click the first point to close the path; Enter finishes an open one, Esc drops it, Backspace takes back the last point.\n\nThe path becomes an ordinary ArtMesh: clip by it, put it under deformers, give it keys. Select an ArtPath mesh with this tool to drag its points and handles; Alt+click deletes a point.",
+        );
+        // the selected path's settings, else the ones the next path gets
+        let selected = match self.selected {
+            Some(Sel::Mesh(mi)) if self.art_draft.is_none() => {
+                self.session.as_ref().and_then(|s| {
+                    let m = s.puppet.model();
+                    let keyed = m.art_meshes.get(mi).is_some_and(|a| a.binding.keyform_count() > 1);
+                    ayatsuri_core::edit::art_path_of(m, mi).cloned().map(|p| (mi, p, keyed))
+                })
+            }
+            _ => None,
+        };
+        let mut p = match &selected {
+            Some((mi, p, _)) => match &self.art_pending {
+                Some((m, q)) if m == mi => q.clone(),
+                _ => p.clone(),
+            },
+            None => self.art_draft.clone().unwrap_or_else(|| self.art_style.clone()),
+        };
+        let before = p.clone();
+        // a slider applies when let go, everything else at once
+        let mut settled = false;
+        grid(ui, "td-artpath", |ui| {
+            row(ui, crate::i18n::tr("Stroke"), |ui| {
+                settled |= ui.checkbox(&mut p.stroke, "").changed();
+                let _ = ui.color_edit_button_srgba_unmultiplied(&mut p.stroke_color);
+                if icon(
+                    ui,
+                    self.art_pick == Some(0),
+                    true,
+                    ph::EYEDROPPER,
+                    "Pick the stroke colour from the canvas (Esc cancels)",
+                )
+                .clicked()
+                {
+                    self.art_pick = if self.art_pick == Some(0) { None } else { Some(0) };
+                }
+            });
+            row(ui, crate::i18n::tr("Width"), |ui| {
+                let r = ui.add(
+                    egui::Slider::new(&mut p.width, 0.5..=200.0).logarithmic(true).suffix(" px"),
+                );
+                settled |= r.drag_stopped() || (r.changed() && !r.dragged());
+            });
+            row(ui, crate::i18n::tr("Fill"), |ui| {
+                settled |= ui.checkbox(&mut p.fill, "").changed();
+                let _ = ui.color_edit_button_srgba_unmultiplied(&mut p.fill_color);
+                if icon(
+                    ui,
+                    self.art_pick == Some(1),
+                    true,
+                    ph::EYEDROPPER,
+                    "Pick the fill colour from the canvas (Esc cancels)",
+                )
+                .clicked()
+                {
+                    self.art_pick = if self.art_pick == Some(1) { None } else { Some(1) };
+                }
+            });
+            row(ui, crate::i18n::tr("Closed"), |ui| {
+                settled |= ui.checkbox(&mut p.closed, "").changed();
+            });
+            row(ui, crate::i18n::tr("Soft edge"), |ui| {
+                let r = ui.add(egui::Slider::new(&mut p.feather, 0.0..=8.0).suffix(" px"));
+                settled |= r.drag_stopped() || (r.changed() && !r.dragged());
+            });
+            row(ui, crate::i18n::tr("Mask only"), |ui| {
+                settled |= ui
+                    .checkbox(&mut p.mask_only, "")
+                    .on_hover_text(crate::i18n::tr(
+                        "Don't draw the path (fill or stroke), only clip with it. Turns on when the path becomes a clipping mask.",
+                    ))
+                    .changed();
+            });
+            row(ui, crate::i18n::tr("Segment length"), |ui| {
+                let r = ui.add(egui::Slider::new(&mut p.step, 1.0..=30.0).suffix(" px"));
+                settled |= r.drag_stopped() || (r.changed() && !r.dragged());
+            });
+        });
+        if p.fill && !p.closed {
+            ui.weak(crate::i18n::tr("Fill shows once the path is closed."));
+        }
+        if let Some((mi, path, _)) = &selected
+            && ui
+                .button(crate::i18n::tr("Redraw from path"))
+                .on_hover_text(crate::i18n::tr(
+                    "Rebuild this mesh from its path points (fixes a path whose mesh was edited by hand)",
+                ))
+                .clicked()
+        {
+            let (mi, path) = (*mi, path.clone());
+            let ctx = ui.ctx().clone();
+            if let Some(s) = &mut self.session
+                && s.art_path_edit(&ctx, |m, _| ayatsuri_core::edit::update_art_path(m, mi, path))
+            {
+                log::info!("ArtPath {mi} redrawn from its path");
+            }
+        }
+        if let Some((mi, _, _)) = &selected {
+            let on = self.clip_with == Some(*mi);
+            if ui
+                .selectable_label(on, crate::i18n::tr("Clip meshes with this path"))
+                .on_hover_text(crate::i18n::tr(
+                    "Then click meshes on the canvas: each one shows only inside this path. Click one again to take it off; Esc ends.",
+                ))
+                .clicked()
+            {
+                self.clip_with = if on { None } else { Some(*mi) };
+                self.clip_pick = None;
+                self.tool = Tool::Arrow;
+            }
+            ui.checkbox(&mut self.clip_invert, crate::i18n::tr("Inverted"))
+                .on_hover_text(crate::i18n::tr(
+                    "Clipped meshes show only outside the path (Alt+click flips it per mesh). Inverting applies to all of a mesh's masks, as in Cubism.",
+                ));
+        }
+        if selected.as_ref().is_some_and(|(_, _, keyed)| *keyed) {
+            ui.weak(crate::i18n::tr(
+                "This path has keys: changing it redraws every keyform in its rest shape.",
+            ));
+        }
+        // a colour applies once its picker closes; until then it waits
+        let picker_open =
+            egui::Popup::is_any_open(ui.ctx()) || ui.ctx().input(|i| i.pointer.any_down());
+        let colors_moved =
+            p.stroke_color != before.stroke_color || p.fill_color != before.fill_color;
+        let pending = self.art_pending.is_some();
+        if !picker_open && (colors_moved || pending) {
+            settled = true;
+        }
+        match &selected {
+            Some((mi, committed, _)) => {
+                let mi = *mi;
+                if *committed != p && !settled {
+                    self.art_pending = Some((mi, p.clone()));
+                } else if *committed != p && settled {
+                    self.art_pending = None;
+                    let ctx = ui.ctx().clone();
+                    if let Some(s) = &mut self.session
+                        && s.art_path_edit(&ctx, |m, _| {
+                            ayatsuri_core::edit::update_art_path(m, mi, p)
+                        })
+                    {
+                        log::info!("ArtPath {mi} restyled");
+                    }
+                } else {
+                    self.art_pending = None;
+                }
+            }
+            None => {
+                if p != before {
+                    if self.art_draft.is_some() {
+                        self.art_draft = Some(p.clone());
+                    }
+                    self.art_style = ayatsuri_format::model::ArtPath {
+                        anchors: Vec::new(),
+                        mesh: String::new(),
+                        ..p
+                    };
+                }
+                if let Some(d) = &self.art_draft {
+                    let n = d.anchors.len();
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(n >= 2, egui::Button::new(crate::i18n::tr("Finish path")))
+                            .clicked()
+                        {
+                            self.art_finish = true;
+                        }
+                        if ui.button(crate::i18n::tr("Cancel")).clicked() {
+                            self.art_draft = None;
+                        }
+                    });
+                }
+            }
+        }
+    }
+
     fn td_brush(&mut self, ui: &mut Ui) {
         if self.tool == Tool::DeformBrush {
             section(
@@ -664,22 +847,4 @@ impl EditorUi {
             self.brush_w.clear();
         }
     }
-}
-
-fn td_artpath(ui: &mut Ui) {
-    section(ui, crate::i18n::tr("ArtPath tools"), "ArtPaths are not built yet.");
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        for (glyph, tip) in [
-            (ph::PLUS_CIRCLE, "Add control point"),
-            (ph::MINUS_CIRCLE, "Delete control point"),
-            (ph::LINE_SEGMENTS, "Fold line"),
-            (ph::DROP_HALF, "Control point opacity"),
-            (ph::LINE_VERTICAL, "Control point thickness"),
-            (ph::PEN_NIB, "Stroke ArtPath"),
-            (ph::PENCIL_LINE, "Re-stroke ArtPath"),
-        ] {
-            let _ = icon(ui, false, false, glyph, tip);
-        }
-    });
 }

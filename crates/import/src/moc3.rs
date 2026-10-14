@@ -604,5 +604,8 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         glues,
         draw_groups,
         physics: None,
+        art_paths: Vec::new(),
+        art_path_colors: Vec::new(),
+        art_path_page: None,
     })
 }

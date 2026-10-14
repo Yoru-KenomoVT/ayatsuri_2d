@@ -147,6 +147,9 @@ pub struct Session {
     /// the upload, then dropped to free the memory.
     pub gpu_pending: Option<std::sync::Arc<Vec<ayatsuri_render::TexData>>>,
     pub gpu_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Single pages changed since (the ArtPath swatch), waiting for the GPU.
+    pub gpu_pages: Option<std::sync::Arc<Vec<(usize, ayatsuri_render::TexData)>>>,
+    pub gpu_pages_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub texture_names: Vec<String>,
     /// The encoded images as imported, kept so saving .aom is lossless.
     pub texture_pngs: Vec<Vec<u8>>,
@@ -1035,6 +1038,8 @@ impl Session {
             textures,
             gpu_pending: Some(std::sync::Arc::new(full)),
             gpu_uploaded: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            gpu_pages: None,
+            gpu_pages_uploaded: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             texture_names,
             texture_pngs: pngs,
             aom_path: None,
@@ -1108,6 +1113,90 @@ impl Session {
             }
         }
         self.full_tex.get(i).and_then(|t| t.as_ref())
+    }
+
+    /// Put one texture page in place, or add it at the end, from raw RGBA:
+    /// saved as PNG with the model, shown in the Texture palette, and sent
+    /// to the GPU on its own.
+    pub fn set_page(
+        &mut self,
+        ctx: &Context,
+        index: usize,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<(), String> {
+        if index > self.texture_pngs.len() {
+            return Err(format!("texture page {index} is past the end"));
+        }
+        let img = image::RgbaImage::from_raw(width, height, rgba)
+            .ok_or_else(|| "page pixels don't match its size".to_string())?;
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+        let name = format!("texture_{index:02}");
+        let (thumb, data) = decode_texture(ctx, &name, &png)?;
+        fn place<T>(list: &mut Vec<T>, index: usize, item: T) {
+            match list.get_mut(index) {
+                Some(slot) => *slot = item,
+                None => list.push(item),
+            }
+        }
+        place(&mut self.texture_pngs, index, png);
+        place(&mut self.textures, index, Some(thumb));
+        place(&mut self.texture_names, index, name);
+        place(&mut self.preview_tex, index, data.clone());
+        place(&mut self.full_tex, index, None);
+        let mut pages = self.gpu_pages.take().map(|p| (*p).clone()).unwrap_or_default();
+        pages.retain(|(i, _)| *i != index);
+        pages.push((index, data));
+        self.gpu_pages = Some(std::sync::Arc::new(pages));
+        self.gpu_pages_uploaded.store(false, std::sync::atomic::Ordering::Release);
+        self.modified = true;
+        Ok(())
+    }
+
+    /// The page ArtPaths take their colours from: the one existing paths
+    /// use, else a new page at the end.
+    pub fn art_path_page(&self) -> usize {
+        let m = self.puppet.model();
+        let pages = self.texture_pngs.len();
+        m.art_path_page
+            .map(|p| p as usize)
+            .filter(|&p| p < pages)
+            .or_else(|| {
+                m.art_paths.iter().find_map(|p| {
+                    m.art_meshes.iter().find(|a| a.id == p.mesh).map(|a| a.texture as usize)
+                })
+            })
+            .unwrap_or(pages)
+    }
+
+    /// An ArtPath edit as one undo step (`f` gets the swatch page), then the
+    /// swatch page repainted if the colours on it changed.
+    pub fn art_path_edit(
+        &mut self,
+        ctx: &Context,
+        f: impl FnOnce(&mut Model, u32) -> bool,
+    ) -> bool {
+        let page = self.art_path_page();
+        let missing = page >= self.texture_pngs.len();
+        let colors_before = self.puppet.model().art_path_colors.clone();
+        if !self.edit(|m| {
+            m.art_path_page = Some(page as u32);
+            f(m, page as u32)
+        }) {
+            return false;
+        }
+        let colors = self.puppet.model().art_path_colors.clone();
+        if missing || colors != colors_before {
+            let size = ayatsuri_core::artpath::SWATCH_SIZE;
+            let rgba = ayatsuri_core::artpath::swatch_rgba(&colors);
+            if let Err(e) = self.set_page(ctx, page, size, size, rgba) {
+                warn!("ArtPath colours: {e}");
+            }
+        }
+        true
     }
 
     pub fn edit(&mut self, f: impl FnOnce(&mut Model) -> bool) -> bool {
