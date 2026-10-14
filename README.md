@@ -101,7 +101,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 ### From artwork to mesh
 
 <p align="center">
-  <img src="docs/media/mesh-edit.png" alt="Mesh Edit on a hair strand: its points and triangles over the art, with the Edit Mesh tools beside it" width="860">
+  <img src="docs/media/mesh-edit.png" alt="Mesh Edit on a cheek blush: an automatic mesh over the art, with the Edit Mesh tools beside it" width="860">
 </p>
 
 - **PSD and Krita import**: folders become parts, layers become meshes packed
