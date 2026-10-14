@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anim;
+pub mod artpath;
 pub mod automesh;
 pub mod bezier;
 pub mod blend;
@@ -1015,6 +1016,9 @@ mod tests {
             glues: vec![],
             draw_groups: vec![],
             physics: None,
+            art_paths: Vec::new(),
+            art_path_colors: Vec::new(),
+            art_path_page: None,
         }
     }
 

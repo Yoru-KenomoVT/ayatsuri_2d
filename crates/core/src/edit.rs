@@ -1045,6 +1045,155 @@ pub fn delete_art_meshes(model: &mut Model, meshes: &[usize]) -> bool {
             *x = new_index(*x);
         }
     }
+    // an ArtPath goes with its mesh
+    let ids: std::collections::HashSet<&str> =
+        model.art_meshes.iter().map(|m| m.id.as_str()).collect();
+    let paths = std::mem::take(&mut model.art_paths);
+    model.art_paths = paths.into_iter().filter(|p| ids.contains(p.mesh.as_str())).collect();
+    true
+}
+
+/// The ArtPath behind a mesh, if it was drawn as one.
+pub fn art_path_of(model: &Model, mesh: usize) -> Option<&ayatsuri_format::model::ArtPath> {
+    let id = &model.art_meshes.get(mesh)?.id;
+    model.art_paths.iter().find(|p| &p.mesh == id)
+}
+
+/// A colour's cell on the swatch page, adding it when new. A full page
+/// reuses the nearest colour already on it.
+fn swatch_cell(model: &mut Model, c: [u8; 4]) -> usize {
+    if let Some(i) = model.art_path_colors.iter().position(|x| *x == c) {
+        return i;
+    }
+    if model.art_path_colors.len() < crate::artpath::SWATCH_CELLS {
+        model.art_path_colors.push(c);
+        return model.art_path_colors.len() - 1;
+    }
+    let far =
+        |x: &[u8; 4]| -> i32 { x.iter().zip(c).map(|(a, b)| (*a as i32 - b as i32).pow(2)).sum() };
+    model.art_path_colors.iter().enumerate().min_by_key(|(_, x)| far(x)).map_or(0, |(i, _)| i)
+}
+
+/// A path's triangles placed for `parent` (canvas pixels at rest -> model
+/// units -> the deformer's space), with uvs on the swatch page.
+fn art_path_geometry(
+    model: &mut Model,
+    path: &ayatsuri_format::model::ArtPath,
+    parent: Option<usize>,
+) -> Option<(Vec<f32>, Vec<f32>, Vec<u16>)> {
+    let built = crate::artpath::build(path);
+    if built.indices.is_empty() {
+        return None;
+    }
+    let stroke = swatch_cell(model, path.stroke_color);
+    let fill = swatch_cell(model, path.fill_color);
+    let c = model.canvas;
+    let ppu = c.pixels_per_unit.max(1e-6);
+    let rest = parent.map(|_| rest_puppet(model));
+    let mut positions = Vec::with_capacity(built.points.len() * 2);
+    for p in &built.points {
+        let world = ((p[0] - c.origin_x) / ppu, (p[1] - c.origin_y) / ppu);
+        let (x, y) = match &rest {
+            Some(r) => to_local(r, parent, world),
+            None => world,
+        };
+        positions.extend([x, y]);
+    }
+    let uvs = built
+        .roles
+        .iter()
+        .flat_map(|r| crate::artpath::swatch_uv(if r.fill { fill } else { stroke }, r.fade))
+        .collect();
+    Some((positions, uvs, built.indices))
+}
+
+/// Add a mesh drawn from `path`, in `part`, textured from swatch page
+/// `page`, on top of the draw order. Returns its index.
+pub fn create_art_path(
+    model: &mut Model,
+    mut path: ayatsuri_format::model::ArtPath,
+    part: Option<u32>,
+    page: u32,
+) -> Option<usize> {
+    let (positions, uvs, indices) = art_path_geometry(model, &path, None)?;
+    let taken: std::collections::HashSet<&str> =
+        model.art_meshes.iter().map(|m| m.id.as_str()).collect();
+    let id = (0..).map(|n| format!("ArtPath{n}")).find(|id| !taken.contains(id.as_str()))?;
+    let order = 500.0;
+    model.art_meshes.push(ayatsuri_format::model::ArtMesh {
+        id: id.clone(),
+        parent_part: part,
+        parent_deformer: None,
+        visible: true,
+        enabled: true,
+        texture: page,
+        flags: 0,
+        vertex_count: (positions.len() / 2) as u32,
+        uvs,
+        indices,
+        masks: Vec::new(),
+        binding: Binding::default(),
+        opacities: vec![1.0],
+        draw_orders: vec![order],
+        positions,
+    });
+    let index = model.art_meshes.len() - 1;
+    // a model read from moc3 draws through its groups; join the root one
+    if let Some(root) = model.draw_groups.first_mut() {
+        root.items.push(ayatsuri_format::model::DrawItem {
+            part: false,
+            object: index as u32,
+            child_group: None,
+        });
+        root.total += 1;
+        root.min_order = root.min_order.min(order as i32);
+        root.max_order = root.max_order.max(order as i32);
+    }
+    path.mesh = id;
+    model.art_paths.push(path);
+    Some(index)
+}
+
+/// Redraw an ArtPath mesh from new path settings. The mesh keeps its place,
+/// parent, masks, opacity and draw order; every keyform takes the new rest
+/// shape (a different point count can't carry the old shapes over), and
+/// glues on it go, since their points are gone.
+pub fn update_art_path(
+    model: &mut Model,
+    mesh: usize,
+    mut path: ayatsuri_format::model::ArtPath,
+) -> bool {
+    let Some(m) = model.art_meshes.get(mesh) else { return false };
+    let id = m.id.clone();
+    let parent = m.parent_deformer.map(|p| p as usize);
+    let keyforms = m.binding.keyform_count().max(1);
+    let Some((rest, uvs, indices)) = art_path_geometry(model, &path, parent) else {
+        return false;
+    };
+    let was_mask_only = model.art_paths.iter().find(|p| p.mesh == id).is_some_and(|p| p.mask_only);
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    m.vertex_count = (rest.len() / 2) as u32;
+    m.positions = rest.repeat(keyforms);
+    m.uvs = uvs;
+    m.indices = indices;
+    // a mask-only path draws at 0 (masks clip by shape, not opacity);
+    // turning it back on shows it fully again
+    if path.mask_only != was_mask_only {
+        let to = if path.mask_only { 0.0 } else { 1.0 };
+        m.opacities.fill(to);
+    }
+    while let Some(g) = model
+        .glues
+        .iter()
+        .position(|g| g.art_mesh_a as usize == mesh || g.art_mesh_b as usize == mesh)
+    {
+        model.glues.remove(g);
+    }
+    path.mesh = id.clone();
+    match model.art_paths.iter_mut().find(|p| p.mesh == id) {
+        Some(slot) => *slot = path,
+        None => model.art_paths.push(path),
+    }
     true
 }
 
@@ -2397,6 +2546,69 @@ mod tests {
     use crate::Puppet;
     use ayatsuri_format::model::{ArtMesh, Canvas, Parameter};
 
+    fn square_path() -> ayatsuri_format::model::ArtPath {
+        ayatsuri_format::model::ArtPath {
+            anchors: vec![
+                [10.0, 10.0, 0.0, 0.0, 0.0, 0.0],
+                [30.0, 10.0, 0.0, 0.0, 0.0, 0.0],
+                [30.0, 30.0, 0.0, 0.0, 0.0, 0.0],
+                [10.0, 30.0, 0.0, 0.0, 0.0, 0.0],
+            ],
+            closed: true,
+            fill: true,
+            step: 1000.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_art_path_becomes_a_mesh_and_goes_with_it() {
+        let mut m = test_model();
+        let before = m.art_meshes.len();
+        let mi = create_art_path(&mut m, square_path(), None, 3).expect("drawn");
+        assert_eq!(mi, before);
+        let mesh = &m.art_meshes[mi];
+        assert_eq!(mesh.texture, 3);
+        assert_eq!(mesh.positions.len(), mesh.uvs.len());
+        assert!(mesh.uvs.iter().all(|u| (0.0..=1.0).contains(u)));
+        // stroke and fill colours took two swatch cells
+        assert_eq!(m.art_path_colors.len(), 2);
+        assert_eq!(art_path_of(&m, mi).map(|p| p.mesh.as_str()), Some(mesh.id.as_str()));
+        assert!(delete_art_meshes(&mut m, &[mi]));
+        assert!(m.art_paths.is_empty());
+    }
+
+    #[test]
+    fn a_mask_only_path_draws_at_zero_and_comes_back() {
+        let mut m = test_model();
+        let mi = create_art_path(&mut m, square_path(), None, 0).expect("drawn");
+        let hidden = ayatsuri_format::model::ArtPath { mask_only: true, ..square_path() };
+        assert!(update_art_path(&mut m, mi, hidden));
+        assert!(m.art_meshes[mi].opacities.iter().all(|o| *o == 0.0));
+        // still a full shape, so it still clips
+        assert!(!m.art_meshes[mi].indices.is_empty());
+        assert!(update_art_path(&mut m, mi, square_path()));
+        assert!(m.art_meshes[mi].opacities.iter().all(|o| *o == 1.0));
+    }
+
+    #[test]
+    fn redrawing_an_art_path_keeps_its_keyform_count() {
+        let mut m = test_model();
+        let mi = create_art_path(&mut m, square_path(), None, 0).expect("drawn");
+        assert!(add_keys(&mut m, Target::ArtMesh(mi), 0, &[0.0, 1.0]));
+        let mut wider = square_path();
+        if let Some(a) = wider.anchors.get_mut(1) {
+            a[0] = 60.0;
+        }
+        wider.stroke = false;
+        assert!(update_art_path(&mut m, mi, wider));
+        let mesh = &m.art_meshes[mi];
+        assert_eq!(mesh.binding.keyform_count(), 2);
+        assert_eq!(mesh.positions.len(), 2 * mesh.vertex_count as usize * 2);
+        let max_x = mesh.positions.iter().step_by(2).fold(f32::MIN, |a, &b| a.max(b));
+        assert!(max_x > 59.0, "the moved corner shows: {max_x}");
+    }
+
     fn test_model() -> Model {
         Model {
             canvas: Canvas { pixels_per_unit: 1.0, ..Canvas::default() },
@@ -2441,6 +2653,9 @@ mod tests {
             glues: vec![],
             draw_groups: vec![],
             physics: None,
+            art_paths: Vec::new(),
+            art_path_colors: Vec::new(),
+            art_path_page: None,
         }
     }
 
