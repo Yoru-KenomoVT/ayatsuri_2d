@@ -23,8 +23,9 @@ runs in VTube Studio. On Windows, macOS and Linux.
 </div>
 
 <p align="center">
-  <img src="docs/media/hero.png" alt="The Ayatsuri2D editor with a rigged model: mesh wireframe, parameters, deformers and parts" width="900">
-  <br><sub>A rigged model in the editor: mesh wireframe, keyed parameters, the deformer tree and parts.</sub>
+  <img src="docs/media/hero.png" alt="The Ayatsuri2D editor with a model being rigged: the face mesh under a head warp deformer, with the deformer tree and parts" width="900">
+  <br>A model in the editor: mesh wireframe, the deformer tree and parts.
+  <br>Model art by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!
 </p>
 
 ---
@@ -317,7 +318,7 @@ copyleft runtime cannot be embedded in a proprietary game. See
 
 ## Artwork
 
-The model in the Mesh Edit and rigging screenshots is drawn by
+The model in the top, Mesh Edit and rigging screenshots is drawn by
 **マパ\*MAPA** ([pixiv profile](https://www.pixiv.net/users/99163365), ID
 99163365), who kindly let us use their PSD to show the editor. Thank you!
 The artwork remains theirs: it is not covered by this repository's licences,
