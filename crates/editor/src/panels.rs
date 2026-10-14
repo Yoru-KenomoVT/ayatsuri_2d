@@ -8358,14 +8358,9 @@ impl EditorUi {
         // sizes the brush; Esc clears. The arrow tool then moves every
         // painted point by its weight.
         if self.tool == Tool::BrushSelect && !space && self.mesh_edit.is_none() {
-            let (ptr, alt, b_down, esc, delta) = ui.ctx().input(|i| {
-                (
-                    i.pointer.latest_pos(),
-                    i.modifiers.alt,
-                    i.key_down(egui::Key::B),
-                    i.key_pressed(egui::Key::Escape),
-                    i.pointer.delta(),
-                )
+            let b_down = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 2.0);
+            let (ptr, alt, esc) = ui.ctx().input(|i| {
+                (i.pointer.latest_pos(), i.modifiers.alt, i.key_pressed(egui::Key::Escape))
             });
             let mut targets: Vec<((u8, usize), Vec<Pos2>)> = Vec::new();
             if let Some(Sel::Deformer(di)) = self.selected
@@ -8431,8 +8426,8 @@ impl EditorUi {
                     self.selected = self.multi_sel.last().copied().map(Sel::Mesh);
                 }
             }
-            if b_down && resp.dragged() {
-                self.tool_opts.brush_size = (self.tool_opts.brush_size + delta.x).clamp(2.0, 400.0);
+            if b_down {
+                // sizing (size_brush, below), not painting
             } else if let Some(p) = ptr
                 && (resp.drag_started() || resp.clicked() || resp.dragged())
             {
@@ -8790,8 +8785,10 @@ impl EditorUi {
                 // the erase brush: everything the circle sweeps is marked,
                 // and the whole stroke goes in one undo step on release
                 if self.mesh_mode == 5 && !space {
+                    let sizing = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 4.0);
                     let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
-                    let painting = resp.dragged() || resp.drag_started() || resp.clicked();
+                    let painting =
+                        !sizing && (resp.dragged() || resp.drag_started() || resp.clicked());
                     if painting && let Some(ptr) = resp.interact_pointer_pos() {
                         for (vi, sp) in screen_pts.iter().enumerate() {
                             if sp.distance(ptr) <= r {
@@ -8803,19 +8800,6 @@ impl EditorUi {
                         let marked: Vec<usize> = self.erase_marked.iter().copied().collect();
                         mesh_op = Some(MeshOp::EraseMany(mi, marked));
                         self.erase_marked.clear();
-                    }
-                    // [ and ] size the brush, like every paint program
-                    let (shrink, grow) = ui.ctx().input(|i| {
-                        (
-                            i.key_pressed(egui::Key::OpenBracket),
-                            i.key_pressed(egui::Key::CloseBracket),
-                        )
-                    });
-                    if shrink {
-                        self.tool_opts.brush_size = (self.tool_opts.brush_size / 1.25).max(4.0);
-                    }
-                    if grow {
-                        self.tool_opts.brush_size = (self.tool_opts.brush_size * 1.25).min(400.0);
                     }
                     if let Some(ptr) = ptr {
                         vp.circle_stroke(ptr, r, Stroke::new(1.2, theme::pal().rotation_red));
@@ -9365,6 +9349,7 @@ impl EditorUi {
                 // the weight brush: strength builds while dragging, lands on
                 // release as one undo step
                 if editing && self.tool == Tool::Glue && !space {
+                    let sizing = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 4.0);
                     let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
                     if let Some(p) = ptr {
                         vp.circle_stroke(
@@ -9373,7 +9358,8 @@ impl EditorUi {
                             Stroke::new(1.2, Color32::from_rgb(0xE8, 0xC6, 0x3B)),
                         );
                     }
-                    if (resp.dragged() || resp.drag_started())
+                    if !sizing
+                        && (resp.dragged() || resp.drag_started())
                         && let Some(p) = resp.interact_pointer_pos()
                     {
                         let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.001, 0.1);
@@ -10257,6 +10243,33 @@ fn paint_glue_bottle(ui: &Ui, rect: Rect, color: Color32) {
 /// The front-most mesh under a model-space point. Locked meshes, hidden
 /// ones and fully transparent ones can't be picked: you can't select what
 /// you can't see.
+/// Every brush sizes the same way: hold B and drag (right or up grows it),
+/// or press [ and ]. True while B is held, so that drag sizes the brush
+/// instead of painting with it.
+fn size_brush(ui: &Ui, resp: &egui::Response, size: &mut f32, min: f32) -> bool {
+    if ui.ctx().egui_wants_keyboard_input() {
+        return false;
+    }
+    let (b, delta, shrink, grow) = ui.ctx().input(|i| {
+        (
+            i.key_down(egui::Key::B),
+            i.pointer.delta(),
+            i.key_pressed(egui::Key::OpenBracket),
+            i.key_pressed(egui::Key::CloseBracket),
+        )
+    });
+    if b && (resp.dragged() || resp.drag_started()) {
+        *size = (*size + delta.x - delta.y).clamp(min, 400.0);
+    }
+    if shrink {
+        *size = (*size / 1.25).max(min);
+    }
+    if grow {
+        *size = (*size * 1.25).min(400.0);
+    }
+    b
+}
+
 fn hit_mesh(
     puppet: &ayatsuri_core::Puppet,
     ux: f32,
