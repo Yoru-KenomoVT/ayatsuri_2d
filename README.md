@@ -166,6 +166,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 <p align="center">
   <img src="docs/media/dashboard.png" alt="The Ayatsuri2D home screen with recent models" width="900">
 </p>
+<p align="center">Model art (left) by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!</p>
 
 - Dockable, rearrangeable panels and saved workspaces.
 - Light and dark themes, your own primary colour, interface scale, density and
@@ -318,7 +319,7 @@ copyleft runtime cannot be embedded in a proprietary game. See
 
 ## Artwork
 
-The model in the top, Mesh Edit and rigging screenshots is drawn by
+The model in the top, Mesh Edit, rigging and home screen screenshots is drawn by
 **マパ\*MAPA** ([pixiv profile](https://www.pixiv.net/users/99163365), ID
 99163365), who kindly let us use their PSD to show the editor. Thank you!
 The artwork remains theirs: it is not covered by this repository's licences,
