@@ -36,7 +36,9 @@
   canvas (#7).
 - Every brush sizes the same way: B + drag, or [ and ] (#9).
 - Warp Bezier handles stay as you leave them instead of springing back
-  to a third of the span (#10).
+  to a third of the span, and are saved with the model (#10).
+- Undo history is capped by memory (256 MB) as well as by steps, so big
+  rigs can't fill RAM with undo.
 
 ## 0.5.5 beta (2026-10-14)
 
