@@ -268,6 +268,60 @@ pub struct Model {
     /// have none.
     #[serde(default)]
     pub physics: Option<PhysicsRig>,
+    /// The editable paths behind ArtPath meshes (each mesh is an ordinary
+    /// ArtMesh; this is how it was drawn). Empty in older files.
+    #[serde(default)]
+    pub art_paths: Vec<ArtPath>,
+    /// The colours on the ArtPath swatch page, in cell order. Append-only,
+    /// so a colour's cell (and every uv pointing at it) never moves.
+    #[serde(default)]
+    pub art_path_colors: Vec<[u8; 4]>,
+    /// The texture page those colours are painted on, once there is one.
+    #[serde(default)]
+    pub art_path_page: Option<u32>,
+}
+
+/// How an ArtPath mesh was drawn: Bezier anchors in canvas pixels, at the
+/// rest pose. The mesh itself carries the geometry; this rebuilds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtPath {
+    /// The ArtMesh this path draws, by id (ids survive deletes and undo).
+    pub mesh: String,
+    /// Per anchor: x, y, then the in and out handles as offsets from it.
+    pub anchors: Vec<[f32; 6]>,
+    pub closed: bool,
+    /// Stroke width and the soft edge outside it, in canvas pixels.
+    pub width: f32,
+    pub feather: f32,
+    pub stroke: bool,
+    /// Fill the inside (closed paths only).
+    pub fill: bool,
+    pub stroke_color: [u8; 4],
+    pub fill_color: [u8; 4],
+    /// Curve sampling: canvas pixels per segment, smaller is smoother.
+    pub step: f32,
+    /// Only a clipping shape: the mesh keeps its triangles (so it still
+    /// clips) but draws at opacity 0. Set when it becomes a mask.
+    pub mask_only: bool,
+}
+
+impl Default for ArtPath {
+    fn default() -> Self {
+        Self {
+            mesh: String::new(),
+            anchors: Vec::new(),
+            closed: false,
+            width: 6.0,
+            feather: 1.5,
+            stroke: true,
+            fill: false,
+            stroke_color: [40, 30, 40, 255],
+            fill_color: [255, 255, 255, 255],
+            step: 6.0,
+            mask_only: false,
+        }
+    }
 }
 
 impl Model {
