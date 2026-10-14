@@ -392,11 +392,6 @@ pub struct EditorUi {
 
     /// Bezier divisions per warp, columns by rows.
     bezier_div: std::collections::HashMap<usize, (usize, usize)>,
-    /// Bezier handles as last left, per (warp, keyform). The model only
-    /// keeps the grid, and a fit from it always puts handles at a third of
-    /// each span, so a shortened handle would spring back; these are used
-    /// again while the grid still is what they made.
-    bezier_nets: std::collections::HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     bez_drag: Option<BezierDrag>,
 
     rot_drag: Option<RotDrag>,
@@ -1028,7 +1023,6 @@ impl Default for EditorUi {
             brush_last: None,
 
             bezier_div: std::collections::HashMap::new(),
-            bezier_nets: std::collections::HashMap::new(),
             bez_drag: None,
 
             rot_drag: None,
@@ -8145,7 +8139,7 @@ impl EditorUi {
                         );
                         // the handles as last left, while the grid is still theirs
                         let kept = keyform
-                            .and_then(|k| self.bezier_nets.get(&(di, k)))
+                            .and_then(|k| s.bezier_nets.get(&(di, k)))
                             .filter(|l| l.bw == bw && l.bh == bh)
                             .filter(|l| {
                                 let made = l.to_grid(cols as usize, rows as usize);
@@ -8251,10 +8245,11 @@ impl EditorUi {
                                 warp_commit = Some(moves);
                                 // keep the handles as dropped for next time
                                 if let Some(k) = keyform {
-                                    if self.bezier_nets.len() > 256 {
-                                        self.bezier_nets.clear();
+                                    if s.bezier_nets.len() > 256 {
+                                        s.bezier_nets.clear();
                                     }
-                                    self.bezier_nets.insert((di, k), lat.clone());
+                                    s.bezier_nets.insert((di, k), lat.clone());
+                                    s.modified = true;
                                 }
                             }
                         }

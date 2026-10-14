@@ -225,4 +225,9 @@ pub struct DisplayInfo {
     /// Canvas guide lines: (vertical, position in canvas pixels). Empty in
     /// older files.
     pub guides: Vec<(bool, f32)>,
+    /// Warp Bezier handles as the rigger left them (the model keeps only
+    /// the grid): (deformer id, keyform, patches across, patches down, net
+    /// points as x, y pairs). Used again only while they still make the
+    /// warp's grid. Empty in older files.
+    pub bezier_nets: Vec<(String, u32, u32, u32, Vec<f32>)>,
 }

@@ -193,6 +193,10 @@ pub struct Session {
     /// Guide lines on the canvas: (vertical, canvas pixels). Saved with the
     /// model, not part of undo.
     pub guides: Vec<(bool, f32)>,
+    /// Warp Bezier handles as last left, per (warp, keyform): the model
+    /// keeps only the grid, and a fit from it always puts handles at a
+    /// third of each span. Saved with the model.
+    pub bezier_nets: HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     undo: Vec<Model>,
     redo: Vec<Model>,
 }
@@ -698,6 +702,7 @@ impl Session {
         self.combined = old.combined;
         self.model_groups = old.model_groups;
         self.guides = old.guides;
+        self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
         self.undo = old.undo;
@@ -772,6 +777,7 @@ impl Session {
         self.combined = old.combined;
         self.model_groups = old.model_groups;
         self.guides = old.guides;
+        self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
         self.undo = old.undo;
@@ -821,6 +827,24 @@ impl Session {
         if let Some(d) = payload.display {
             s.model_groups = d.model_groups.clone();
             s.guides = d.guides.clone();
+            let index_of: HashMap<&str, usize> = s
+                .puppet
+                .model()
+                .deformers
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (d.id.as_str(), i))
+                .collect();
+            for (id, k, bw, bh, flat) in &d.bezier_nets {
+                let Some(&di) = index_of.get(id.as_str()) else { continue };
+                let net: Vec<(f32, f32)> =
+                    flat.as_chunks::<2>().0.iter().map(|&[x, y]| (x, y)).collect();
+                let (bw, bh) = (*bw as usize, *bh as usize);
+                if net.len() == (3 * bw + 1) * (3 * bh + 1) {
+                    s.bezier_nets
+                        .insert((di, *k as usize), ayatsuri_core::bezier::Lattice { bw, bh, net });
+                }
+            }
             let n = s.puppet.model().parameters.len();
             if !d.part_names.is_empty() && d.part_names.len() == s.part_names.len() {
                 s.part_names = d.part_names.clone();
@@ -1161,6 +1185,7 @@ impl Session {
             combined,
             model_groups: None,
             guides: Vec::new(),
+            bezier_nets: HashMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -1468,6 +1493,20 @@ impl Session {
                 combined: Some(self.combined.iter().map(|&(a, b)| (a as u32, b as u32)).collect()),
                 model_groups: self.model_groups.clone(),
                 guides: self.guides.clone(),
+                bezier_nets: {
+                    let defs = &self.puppet.model().deformers;
+                    let mut nets: Vec<(String, u32, u32, u32, Vec<f32>)> = self
+                        .bezier_nets
+                        .iter()
+                        .filter_map(|(&(d, k), l)| {
+                            let id = defs.get(d)?.id.clone();
+                            let flat = l.net.iter().flat_map(|&(x, y)| [x, y]).collect();
+                            Some((id, k as u32, l.bw as u32, l.bh as u32, flat))
+                        })
+                        .collect();
+                    nets.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
+                    nets
+                },
             }),
         }
     }
@@ -1845,6 +1884,41 @@ mod import_paint_tests {
         let xs = m.art_meshes[mesh].positions.chunks(2).map(|p| p[0]).fold(f32::MAX, f32::min);
         let ys = m.art_meshes[mesh].positions.chunks(2).map(|p| p[1]).fold(f32::MAX, f32::min);
         (xs * c.pixels_per_unit + c.origin_x, ys * c.pixels_per_unit + c.origin_y)
+    }
+
+    #[test]
+    fn bezier_handles_are_saved_with_the_model() {
+        use ayatsuri_format::model::{Binding, Deformer, DeformerKind, WarpData};
+        let mut m = Model::new();
+        let grid: Vec<f32> =
+            (0..9).flat_map(|i| [(i % 3) as f32 * 50.0, (i / 3) as f32 * 50.0]).collect();
+        m.deformers.push(Deformer {
+            id: "Warp7".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            kind: DeformerKind::Warp(WarpData {
+                rows: 2,
+                cols: 2,
+                quad: false,
+                opacities: vec![1.0],
+                positions: grid,
+            }),
+        });
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), m).unwrap();
+        let net: Vec<(f32, f32)> = (0..16).map(|i| (i as f32, -(i as f32))).collect();
+        s.bezier_nets
+            .insert((0, 0), ayatsuri_core::bezier::Lattice { bw: 1, bh: 1, net: net.clone() });
+        let path = std::env::temp_dir().join(format!("ay-bez-{}.aom", std::process::id()));
+        s.save_aom(&path).unwrap();
+        let back = Session::load(&ctx, &path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let got = back.bezier_nets.get(&(0, 0)).expect("handles came back");
+        assert_eq!((got.bw, got.bh), (1, 1));
+        assert_eq!(got.net, net);
     }
 
     #[test]
