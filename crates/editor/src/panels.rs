@@ -6960,6 +6960,21 @@ impl EditorUi {
                 s.gpu_pending = None;
                 log::debug!("textures are on the GPU");
             }
+            if crate::gpu_out_of_memory() {
+                let note = crate::i18n::tr(
+                    "Video memory is full: some textures could not be loaded. Close other models or editor windows, then reopen this one.",
+                );
+                let at = view.left_top() + vec2(12.0, 12.0);
+                let galley = vp.layout(
+                    note.to_string(),
+                    FontId::proportional(13.0),
+                    Color32::WHITE,
+                    view.width() - 48.0,
+                );
+                let back = Rect::from_min_size(at, galley.size() + vec2(16.0, 10.0));
+                vp.rect_filled(back, 6.0, theme::pal().rotation_red.gamma_multiply(0.9));
+                vp.galley(at + vec2(8.0, 5.0), galley, Color32::WHITE);
+            }
             let cb = crate::gpu_view::callback(
                 view,
                 &s.puppet,

@@ -27,6 +27,33 @@ pub use panels::EditorUi;
 
 /// The MSAA sample count saved in preferences, for the app shell to hand
 /// the renderer at startup. 0 in the file means the default.
+/// Set when the GPU ran out of memory: the canvas says so instead of the
+/// app going down (wgpu's default treats it as fatal).
+static GPU_OUT_OF_MEMORY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static GPU_ERRORS_LOGGED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The GPU's error handler: log (the first few), never panic, remember an
+/// out-of-memory so the editor can show it. `out_of_memory` says which kind.
+pub fn gpu_error(out_of_memory: bool, message: &str) {
+    use std::sync::atomic::Ordering;
+    if out_of_memory {
+        GPU_OUT_OF_MEMORY.store(true, Ordering::Release);
+    }
+    if GPU_ERRORS_LOGGED.fetch_add(1, Ordering::AcqRel) < 20 {
+        log::error!("GPU error (the editor keeps going): {message}");
+    }
+}
+
+/// Whether the GPU has run out of memory since the last `gpu_memory_ok`.
+pub fn gpu_out_of_memory() -> bool {
+    GPU_OUT_OF_MEMORY.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// A new model is on the GPU: forget the last out-of-memory.
+pub fn gpu_memory_ok() {
+    GPU_OUT_OF_MEMORY.store(false, std::sync::atomic::Ordering::Release);
+}
+
 pub fn startup_msaa() -> u32 {
     let p = prefs::Prefs::load();
     match p.msaa {

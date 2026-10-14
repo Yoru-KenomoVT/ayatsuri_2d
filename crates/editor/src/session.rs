@@ -486,6 +486,7 @@ impl Session {
     /// Open a model: `.aom`, a bare `.moc3`, or a `.model3.json` bundle.
     pub fn load(ctx: &Context, path: &Path) -> Result<Self, String> {
         let started = std::time::Instant::now();
+        crate::gpu_memory_ok();
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let session = match ext.as_str() {
             "aom" => Self::load_aom(ctx, path)?,
