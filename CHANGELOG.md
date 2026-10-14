@@ -4,8 +4,39 @@
 
 ### Added
 
+- **ArtPath**: draw Bezier paths on the canvas (click for a corner, drag
+  for a smooth point) with a stroke and an optional fill. Each becomes an
+  ordinary ArtMesh, so it clips, sits under deformers, takes keys and
+  exports to moc3. Select one with the ArtPath tool to edit its points.
+- **Clip with a path**: Clip meshes with this path, then click meshes on
+  the canvas (Alt+click or Inverted for an inverted mask). A path used as a
+  mask turns **Mask only**: it still clips but doesn't draw.
+- **Eyedropper** for ArtPath colours, picked from the art itself.
+- **Deform Brush**: push the selected meshes' points, or a warp's grid,
+  along the stroke, with size, strength and hardness. Live, one undo step.
+- **Guides**: drag out of the rulers on the canvas edges; ArtPath points
+  snap to them. Saved with the model (Show > Guides).
+- **Several selected meshes edit as one**: one box moves, scales and
+  rotates them all (#8).
 - The update banner and About show **What's new** for the release on
   offer: its changelog, folded away until opened.
+- The Clip by list has a search box and lists ArtPaths first.
+
+### Fixed
+
+- Running out of video memory no longer crashes the editor (and no longer
+  crashes it again every frame); the canvas says so instead (#3).
+- Re-import PSD no longer piles up texture pages: pages no mesh uses are
+  dropped after a re-import and when a model opens (#4).
+- Mesh Edit holds one full-size texture page at a time instead of keeping
+  every page it showed (#5).
+- No CPU use while nothing moves with Follow or Physics on (#6).
+- Ctrl+click toggles a mesh in and out of the selection in the Parts
+  palette, the Deformer palette (which gets multi-select) and on the
+  canvas (#7).
+- Every brush sizes the same way: B + drag, or [ and ] (#9).
+- Warp Bezier handles stay as you leave them instead of springing back
+  to a third of the span (#10).
 
 ## 0.5.5 beta (2026-10-14)
 
