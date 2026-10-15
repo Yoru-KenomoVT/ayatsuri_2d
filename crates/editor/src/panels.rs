@@ -1275,10 +1275,16 @@ impl EditorUi {
             let picked = rfd::FileDialog::new()
                 .add_filter(
                     crate::i18n::tr("All supported"),
-                    &["aom", "moc3", "json", "psd", "kra", "clip"],
+                    &["aom", "moc3", "cmo3", "json", "psd", "kra", "clip"],
                 )
-                .add_filter(crate::i18n::tr("Ayatsuri / Live2D model"), &["aom", "moc3", "json"])
-                .add_filter(crate::i18n::tr("Artwork (Photoshop, Krita, Clip Studio)"), &["psd", "kra", "clip"])
+                .add_filter(
+                    crate::i18n::tr("Ayatsuri / Live2D model"),
+                    &["aom", "moc3", "cmo3", "json"],
+                )
+                .add_filter(
+                    crate::i18n::tr("Artwork (Photoshop, Krita, Clip Studio)"),
+                    &["psd", "kra", "clip"],
+                )
                 .set_title(crate::i18n::tr("Open model or artwork"))
                 .pick_file();
             let _ = tx.send(BgJob::Picked(picked));

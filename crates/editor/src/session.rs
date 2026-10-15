@@ -582,6 +582,7 @@ impl Session {
         let session = match ext.as_str() {
             "aom" => Self::load_aom(ctx, path)?,
             "psd" | "kra" | "clip" => Self::load_paint(ctx, path, &ext)?,
+            "cmo3" => Self::load_cmo3(ctx, path)?,
             _ => Self::load_moc3(ctx, path)?,
         };
         info!("opened {} in {:.0} ms", path.display(), started.elapsed().as_secs_f32() * 1000.0);
@@ -621,6 +622,78 @@ impl Session {
         let mesh_names = imported.mesh_names.clone();
         let mut s =
             Self::from_parts(ctx, name, imported.model, imported.textures, tex_names, None, path)?;
+        if part_names.len() == s.part_names.len() {
+            s.part_names = part_names;
+        }
+        if mesh_names.len() == s.mesh_names.len() {
+            s.mesh_names = mesh_names;
+        }
+        s.modified = true;
+        Ok(s)
+    }
+
+    /// A Cubism Editor project becomes a model with everything the project
+    /// had: art, meshes, parts, deformers, parameters in their folders,
+    /// keyforms, physics and clipping. It starts unsaved, as a paint
+    /// document does.
+    fn load_cmo3(ctx: &Context, path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "model".into());
+        let out = ayatsuri_import::from_cmo3(&bytes, &name)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let (within, checked) = out.within;
+        info!(
+            "cmo3: {} meshes, {} deformers, {} parameters in {} folders, {} physics groups; {within}/{checked} meshes on their edit points at rest",
+            out.imported.model.art_meshes.len(),
+            out.imported.model.deformers.len(),
+            out.imported.model.parameters.len(),
+            out.param_groups.len(),
+            out.imported.model.physics.as_ref().map_or(0, |p| p.groups.len())
+        );
+        // the project's parameter names and folders ride in as a cdi would
+        let mut cdi = Cdi3::default();
+        for (gi, (gname, members)) in out.param_groups.iter().enumerate() {
+            let gid = format!("ParamGroup{gi}");
+            cdi.parameter_groups.push(Cdi3Entry {
+                id: gid.clone(),
+                group_id: String::new(),
+                name: gname.clone(),
+            });
+            for &pi in members {
+                if let Some(p) = out.imported.model.parameters.get(pi as usize) {
+                    cdi.parameters.push(Cdi3Entry {
+                        id: p.id.clone(),
+                        group_id: gid.clone(),
+                        name: out.param_names.get(pi as usize).cloned().unwrap_or_default(),
+                    });
+                }
+            }
+        }
+        for (pi, p) in out.imported.model.parameters.iter().enumerate() {
+            if !cdi.parameters.iter().any(|e| e.id == p.id) {
+                cdi.parameters.push(Cdi3Entry {
+                    id: p.id.clone(),
+                    group_id: String::new(),
+                    name: out.param_names.get(pi).cloned().unwrap_or_default(),
+                });
+            }
+        }
+        let imported = out.imported;
+        let tex_names = (0..imported.textures.len()).map(|i| format!("texture_{i:02}")).collect();
+        let part_names = imported.part_names.clone();
+        let mesh_names = imported.mesh_names.clone();
+        let mut s = Self::from_parts(
+            ctx,
+            name,
+            imported.model,
+            imported.textures,
+            tex_names,
+            Some(cdi),
+            path,
+        )?;
         if part_names.len() == s.part_names.len() {
             s.part_names = part_names;
         }
