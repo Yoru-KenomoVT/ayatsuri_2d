@@ -189,9 +189,7 @@ pub struct Session {
     /// The model3.json Groups the model came with (target, name, ids);
     /// None when it had none, and export then writes the standard ones.
     pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
-    /// Guide lines on the canvas: (vertical, canvas pixels). Saved with the
-    /// model, not part of undo.
-    pub guides: Vec<(bool, f32)>,
+    pub guides: Vec<ayatsuri_format::GuideLine>,
     pub bezier_nets: HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     undo: Vec<Model>,
     redo: Vec<Model>,

@@ -192,7 +192,15 @@ pub struct PointState {
     /// While present, every weighted point moves by its weight and the box
     /// wraps them.
     pub weights: Vec<f32>,
+    /// Guide lines in screen space, (vertical, x or y): moving points snap
+    /// to them. Empty when snapping is off.
+    pub snap: Vec<(bool, f32)>,
+    /// The guides a moving point sits on right now (indices into `snap`).
+    pub snapped: Vec<usize>,
 }
+
+/// How close, in screen points, a moving point comes to a guide to land on it.
+const SNAP: f32 = 7.0;
 
 pub struct PtOpts {
     /// Show the box around every point when nothing is picked (form
@@ -376,10 +384,39 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
             });
         }
     }
+    st.snapped.clear();
     if let Some(d) = &mut st.drag
         && let Some(p) = ptr
     {
         d.ptr = p;
+        if matches!(d.grab, Grab::Point | Grab::Move) && !st.snap.is_empty() {
+            let raw = p - d.start;
+            let mut fix_x: Option<(f32, usize)> = None;
+            let mut fix_y: Option<(f32, usize)> = None;
+            for (k, &(_, p0)) in d.from.iter().enumerate().take(4000) {
+                if d.weight.get(k).is_some_and(|w| *w < 0.999) {
+                    continue;
+                }
+                let q = p0 + raw;
+                for (gi, &(vertical, at)) in st.snap.iter().enumerate() {
+                    let off = if vertical { at - q.x } else { at - q.y };
+                    let best = if vertical { &mut fix_x } else { &mut fix_y };
+                    if off.abs() <= SNAP && best.is_none_or(|(b, _)| off.abs() < b.abs()) {
+                        *best = Some((off, gi));
+                    }
+                }
+            }
+            let mut t = raw;
+            if let Some((off, gi)) = fix_x {
+                t.x += off;
+                st.snapped.push(gi);
+            }
+            if let Some((off, gi)) = fix_y {
+                t.y += off;
+                st.snapped.push(gi);
+            }
+            d.ptr = d.start + t;
+        }
         if let Some(path) = &mut d.lasso
             && path.last().is_none_or(|l| l.distance(p) > 2.0)
         {
@@ -657,6 +694,34 @@ mod tests {
         assert!((by(0) - 10.0).abs() < 1e-4);
         assert!((by(1) - 5.0).abs() < 1e-4);
         assert_eq!(by(2), 0.0);
+    }
+
+    #[test]
+    fn a_dragged_point_lands_on_a_nearby_guide() {
+        // a vertical guide at x = 50
+        let mut st = PointState { snap: vec![(true, 50.0)], ..PointState::default() };
+        let mut pts = [pos2(0.0, 0.0), pos2(100.0, 100.0)];
+        let opts = PtOpts { whole_box: false, marquee: true, lasso: false, reach: 8.0, pad: 0.0 };
+        let start = PtInput {
+            ptr: Some(pos2(0.0, 0.0)),
+            origin: Some(pos2(0.0, 0.0)),
+            any_down: true,
+            drag_started: true,
+            ..PtInput::default()
+        };
+        point_tool(&mut st, &start, &mut pts, &opts);
+        // let go 4 px short of the guide
+        let end = PtInput {
+            ptr: Some(pos2(46.0, 20.0)),
+            any_down: false,
+            drag_stopped: true,
+            ..PtInput::default()
+        };
+        let out = point_tool(&mut st, &end, &mut pts, &opts);
+        let moved = out.commit.unwrap();
+        let d = moved.iter().find(|m| m.0 == 0).map(|m| m.1).unwrap();
+        assert!((d.x - 50.0).abs() < 1e-4, "snapped onto the guide: {d:?}");
+        assert!((d.y - 20.0).abs() < 1e-4, "no horizontal guide, y as dragged");
     }
 
     #[test]

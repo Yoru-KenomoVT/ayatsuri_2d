@@ -293,6 +293,17 @@ pub struct EditorUi {
     clip_pick: Option<usize>,
     /// A deformer creation requested from inside a borrow (canvas, tool pane).
     pending_create: Option<(bool, Option<(f32, f32)>)>,
+    /// A guide line asked for from a menu, placed once the canvas is known.
+    pending_guide: Option<GuideCmd>,
+    /// Where the canvas was last right-clicked, for "add a guide here".
+    ctx_click: Option<Pos2>,
+    show_guide_settings: bool,
+    /// F: frame the selection once the canvas size is known.
+    focus_request: bool,
+    /// Ctrl+F: put the cursor in the Parts search box.
+    focus_search: bool,
+    /// Copy Form: (1 mesh / 2 warp, local positions).
+    form_clip: Option<(u8, Vec<f32>)>,
     /// Mesh edit mode: the mesh whose vertices are being edited, if any.
     mesh_edit: Option<usize>,
     mesh_drag: Option<MeshDrag>,
@@ -537,14 +548,24 @@ fn brush_falloff(t: f32, hardness: f32) -> f32 {
 }
 
 /// A point dropped near a guide lands on it (canvas pixels).
-fn snap_to_guides(guides: &[(bool, f32)], q: [f32; 2], tolerance: f32) -> [f32; 2] {
+#[derive(Clone, Copy)]
+enum GuideCmd {
+    /// At a screen point: vertical, horizontal, or both (None).
+    At(Option<bool>, Pos2),
+    /// The same from a key, only when the mouse is over the canvas.
+    Mouse(Option<bool>, Pos2),
+    Center,
+    AtVertex,
+}
+
+fn snap_to_guides(guides: &[ayatsuri_format::GuideLine], q: [f32; 2], tolerance: f32) -> [f32; 2] {
     let mut out = q;
-    for &(vertical, at) in guides {
-        if vertical && (q[0] - at).abs() < tolerance {
-            out[0] = at;
+    for g in guides {
+        if g.vertical && (q[0] - g.at).abs() < tolerance {
+            out[0] = g.at;
         }
-        if !vertical && (q[1] - at).abs() < tolerance {
-            out[1] = at;
+        if !g.vertical && (q[1] - g.at).abs() < tolerance {
+            out[1] = g.at;
         }
     }
     out
@@ -947,6 +968,12 @@ impl Default for EditorUi {
             mesh_anchor: None,
             clip_pick: None,
             pending_create: None,
+            pending_guide: None,
+            ctx_click: None,
+            show_guide_settings: false,
+            focus_request: false,
+            focus_search: false,
+            form_clip: None,
             mesh_edit: None,
             mesh_drag: None,
             mesh_mode: 0,
@@ -2062,7 +2089,7 @@ impl EditorUi {
                         ui.close();
                     }
                 });
-                ui.menu_button(crate::i18n::tr("Show"), |ui| {
+                ui.menu_button(crate::i18n::tr("View"), |ui| {
                     let has = self.session.is_some();
                     if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Zoom In"))).clicked()
                     {
@@ -2080,18 +2107,63 @@ impl EditorUi {
                         ui.close();
                     }
                     ui.separator();
-                    ui.checkbox(&mut self.show_guides, crate::i18n::tr("Guides"))
-                        .on_hover_text(crate::i18n::tr(
-                            "Rulers on the canvas edges: drag out of the top one for a horizontal guide, the left one for a vertical guide",
-                        ));
-                    let any = self.session.as_ref().is_some_and(|s| !s.guides.is_empty());
-                    if ui.add_enabled(any, egui::Button::new(crate::i18n::tr("Clear guides"))).clicked() {
-                        if let Some(s) = &mut self.session {
-                            s.guides.clear();
-                            s.modified = true;
+                    ui.menu_button(crate::i18n::tr("Guide Line"), |ui| {
+                        ui.checkbox(&mut self.show_guides, crate::i18n::tr("Show Guide Lines"));
+                        if ui
+                            .add_enabled(has, egui::Button::new(crate::i18n::tr("Add guide lines in the center")))
+                            .clicked()
+                        {
+                            self.pending_guide = Some(GuideCmd::Center);
+                            ui.close();
                         }
-                        ui.close();
-                    }
+                        if ui
+                            .add_enabled(
+                                has,
+                                egui::Button::new(crate::i18n::tr(
+                                    "Add a guide line to the coordinates of the selected vertex",
+                                )),
+                            )
+                            .clicked()
+                        {
+                            self.pending_guide = Some(GuideCmd::AtVertex);
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(has, egui::Button::new(crate::i18n::tr("Guide Line settings…")))
+                            .clicked()
+                        {
+                            self.show_guide_settings = true;
+                            ui.close();
+                        }
+                        ui.separator();
+                        let mut snap = !self.prefs.guide_snap_off;
+                        if ui
+                            .checkbox(&mut snap, crate::i18n::tr("Snap moving vertices to guide lines"))
+                            .changed()
+                        {
+                            self.prefs.guide_snap_off = !snap;
+                            self.prefs.save();
+                        }
+                        let mut rulers = !self.prefs.rulers_off;
+                        if ui
+                            .checkbox(&mut rulers, crate::i18n::tr("Rulers"))
+                            .on_hover_text(crate::i18n::tr(
+                                "The rulers along the canvas edges; drag out of them for a guide line",
+                            ))
+                            .changed()
+                        {
+                            self.prefs.rulers_off = !rulers;
+                            self.prefs.save();
+                        }
+                        let any = self.session.as_ref().is_some_and(|s| !s.guides.is_empty());
+                        if ui.add_enabled(any, egui::Button::new(crate::i18n::tr("Clear guide lines"))).clicked() {
+                            if let Some(s) = &mut self.session {
+                                s.guides.clear();
+                                s.modified = true;
+                            }
+                            ui.close();
+                        }
+                    });
                 });
                 ui.menu_button(crate::i18n::tr("Modeling"), |ui| {
                     if ui.button(crate::i18n::tr("Modeling Workspace")).clicked() {
@@ -4892,6 +4964,25 @@ impl EditorUi {
                 self.view_zoom = 1.0;
                 self.view_pan = Vec2::ZERO;
             }
+            "guides-clear" => {
+                if let Some(s) = &mut self.session
+                    && !s.guides.is_empty()
+                {
+                    s.guides.clear();
+                    s.modified = true;
+                    log::info!("guide lines cleared");
+                }
+            }
+            "guide-h-mouse" | "guide-v-mouse" | "guide-both-mouse" if have => {
+                let which = match id {
+                    "guide-h-mouse" => Some(false),
+                    "guide-v-mouse" => Some(true),
+                    _ => None,
+                };
+                if let Some(p) = ctx.pointer_latest_pos() {
+                    self.pending_guide = Some(GuideCmd::Mouse(which, p));
+                }
+            }
             _ => {}
         }
     }
@@ -7058,6 +7149,40 @@ impl EditorUi {
             self.view_pan += resp.drag_delta();
         }
         resp.context_menu(|ui| {
+            ui.menu_button(crate::i18n::tr("Guide Line"), |ui| {
+                let at = self.ctx_click;
+                for (label, which) in [
+                    (crate::i18n::tr("Add Horizontal Line"), Some(false)),
+                    (crate::i18n::tr("Add Vertical Line"), Some(true)),
+                    (crate::i18n::tr("Add Vertical and Horizontal Lines"), None),
+                ] {
+                    if ui.add_enabled(at.is_some(), egui::Button::new(label)).clicked()
+                        && let Some(p) = at
+                    {
+                        self.pending_guide = Some(GuideCmd::At(which, p));
+                        ui.close();
+                    }
+                }
+                if ui.button(crate::i18n::tr("Add guide lines in the center")).clicked() {
+                    self.pending_guide = Some(GuideCmd::Center);
+                    ui.close();
+                }
+                if ui
+                    .button(crate::i18n::tr(
+                        "Add a guide line to the coordinates of the selected vertex",
+                    ))
+                    .clicked()
+                {
+                    self.pending_guide = Some(GuideCmd::AtVertex);
+                    ui.close();
+                }
+                ui.checkbox(&mut self.show_guides, crate::i18n::tr("Show Guide Lines"));
+                if ui.button(crate::i18n::tr("Open guide line settings")).clicked() {
+                    self.show_guide_settings = true;
+                    ui.close();
+                }
+            });
+            ui.separator();
             if ui.button(crate::i18n::tr("Fit")).clicked() {
                 self.view_zoom = 1.0;
                 self.view_pan = Vec2::ZERO;
@@ -7087,6 +7212,19 @@ impl EditorUi {
         // the canvas page
         let page = Rect::from_min_size(pos2(origin.x, origin.y), vec2(cw * scale, ch * scale));
         let vp = ui.painter_at(view);
+        self.pts.snap = if self.show_guides && !self.prefs.guide_snap_off {
+            s.guides
+                .iter()
+                .map(|g| {
+                    (
+                        g.vertical,
+                        if g.vertical { origin.x + g.at * scale } else { origin.y + g.at * scale },
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         vp.rect_filled(page, 0.0, theme::pal().canvas);
         vp.rect_stroke(page, 0.0, Stroke::new(1.0, Color32::from_gray(0x8c)), StrokeKind::Outside);
 
@@ -10114,132 +10252,195 @@ impl EditorUi {
             }
         }
 
-        // guides: rulers along the top and left of the canvas. Drag out of
-        // the top ruler for a horizontal guide, the left one for a vertical
-        // guide; drag a guide's marker to move it, back onto a ruler or off
-        // the canvas (or right-click it) to delete it. Saved with the model.
+        if let Some(cmd) = self.pending_guide.take() {
+            let px = |p: Pos2| ((p.x - origin.x) / scale, (p.y - origin.y) / scale);
+            let mut lines: Vec<(bool, f32)> = Vec::new();
+            match cmd {
+                GuideCmd::Mouse(_, p) if !view.contains(p) => {}
+                GuideCmd::At(which, p) | GuideCmd::Mouse(which, p) => {
+                    let (x, y) = px(p);
+                    if which != Some(false) {
+                        lines.push((true, x));
+                    }
+                    if which != Some(true) {
+                        lines.push((false, y));
+                    }
+                }
+                GuideCmd::Center => {
+                    lines.push((true, cw / 2.0));
+                    lines.push((false, ch / 2.0));
+                }
+                GuideCmd::AtVertex => {
+                    let at = |pos: &[f32], v: usize| {
+                        let x = pos.get(v * 2).copied()?;
+                        let y = pos.get(v * 2 + 1).copied()?;
+                        Some((
+                            x * c.pixels_per_unit + c.origin_x,
+                            y * c.pixels_per_unit + c.origin_y,
+                        ))
+                    };
+                    let first = self.pts.picked.iter().next().copied();
+                    let found = match (self.pts.owner, first) {
+                        (Some((1, mi)), Some(v)) => {
+                            s.puppet.mesh_geometry(mi).and_then(|g| at(g.positions, v))
+                        }
+                        (Some((2, di)), Some(v)) => {
+                            s.puppet.warp_grid(di).and_then(|(g, _, _)| at(g, v))
+                        }
+                        _ => None,
+                    };
+                    match found {
+                        Some((x, y)) => {
+                            lines.push((true, x));
+                            lines.push((false, y));
+                        }
+                        None => log::info!("pick a vertex first (click a point of a mesh or warp)"),
+                    }
+                }
+            }
+            for (vertical, at) in lines {
+                s.guides.push(ayatsuri_format::GuideLine::new(vertical, at.round()));
+                s.modified = true;
+            }
+            self.show_guides = true;
+        }
         if self.show_guides {
             const RULER: f32 = 14.0;
+            let rulers = !self.prefs.rulers_off;
             let top = Rect::from_min_max(view.min, pos2(view.max.x, view.min.y + RULER));
             let left = Rect::from_min_max(
                 pos2(view.min.x, view.min.y + RULER),
                 pos2(view.min.x + RULER, view.max.y),
             );
-            let green = theme::pal().warp_green;
             let canvas_x = |x: f32| (x - origin.x) / scale;
             let canvas_y = |y: f32| (y - origin.y) / scale;
             let screen_x = |x: f32| origin.x + x * scale;
             let screen_y = |y: f32| origin.y + y * scale;
-            for &(vertical, at) in &s.guides {
-                let line = if vertical {
-                    [pos2(screen_x(at), view.min.y), pos2(screen_x(at), view.max.y)]
+            let snapping = self.pts.drag.is_some();
+            for (gi, g) in s.guides.iter().enumerate() {
+                let line = if g.vertical {
+                    [pos2(screen_x(g.at), view.min.y), pos2(screen_x(g.at), view.max.y)]
                 } else {
-                    [pos2(view.min.x, screen_y(at)), pos2(view.max.x, screen_y(at))]
+                    [pos2(view.min.x, screen_y(g.at)), pos2(view.max.x, screen_y(g.at))]
                 };
-                vp.line_segment(line, Stroke::new(1.0, green.gamma_multiply(0.85)));
-            }
-            let chrome = theme::pal().chrome;
-            vp.rect_filled(top, 0.0, chrome);
-            vp.rect_filled(left, 0.0, chrome);
-            // ticks: a step that keeps labels about 60 px apart
-            let step = [10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0]
-                .into_iter()
-                .find(|s| s * scale >= 60.0)
-                .unwrap_or(10000.0);
-            let faint = theme::pal().text_faint;
-            let mut x = (canvas_x(top.min.x) / step).floor() * step;
-            while screen_x(x) <= top.max.x {
-                let sx = screen_x(x);
-                if sx >= left.max.x {
-                    vp.line_segment(
-                        [pos2(sx, top.max.y - 5.0), pos2(sx, top.max.y)],
-                        Stroke::new(1.0, faint),
-                    );
-                    vp.text(
-                        pos2(sx + 2.0, top.min.y + 1.0),
-                        Align2::LEFT_TOP,
-                        format!("{x:.0}"),
-                        FontId::proportional(8.5),
-                        faint,
-                    );
-                }
-                x += step;
-            }
-            let mut y = (canvas_y(left.min.y) / step).floor() * step;
-            while screen_y(y) <= left.max.y {
-                let sy = screen_y(y);
-                if sy >= left.min.y {
-                    vp.line_segment(
-                        [pos2(left.max.x - 5.0, sy), pos2(left.max.x, sy)],
-                        Stroke::new(1.0, faint),
-                    );
-                }
-                y += step;
-            }
-            // markers: vertical guides on the top ruler, horizontal on the left
-            for &(vertical, at) in &s.guides {
-                let tip = if vertical {
-                    pos2(screen_x(at), top.max.y)
+                let stroke = if snapping && self.pts.snapped.contains(&gi) {
+                    Stroke::new(2.0, Color32::from_rgb(40, 220, 90))
                 } else {
-                    pos2(left.max.x, screen_y(at))
+                    let [r, gg, b, a] = g.color;
+                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(r, gg, b, a))
                 };
-                let pts = if vertical {
-                    vec![tip, tip + vec2(-5.0, -8.0), tip + vec2(5.0, -8.0)]
-                } else {
-                    vec![tip, tip + vec2(-8.0, -5.0), tip + vec2(-8.0, 5.0)]
-                };
-                vp.add(egui::Shape::convex_polygon(pts, green, Stroke::NONE));
+                vp.line_segment(line, stroke);
             }
-            let top_r = ui.interact(top, egui::Id::new("guide-ruler-top"), Sense::click_and_drag());
-            let left_r =
-                ui.interact(left, egui::Id::new("guide-ruler-left"), Sense::click_and_drag());
-            // which guide's marker is at a pointer on a ruler
-            let marker_at = |guides: &[(bool, f32)], p: Pos2, on_top: bool| -> Option<usize> {
-                guides.iter().position(|&(vertical, at)| {
-                    if on_top {
-                        vertical && (screen_x(at) - p.x).abs() <= 5.0
-                    } else {
-                        !vertical && (screen_y(at) - p.y).abs() <= 5.0
+            if rulers {
+                let chrome = theme::pal().chrome;
+                vp.rect_filled(top, 0.0, chrome);
+                vp.rect_filled(left, 0.0, chrome);
+                let step = [10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0]
+                    .into_iter()
+                    .find(|st| st * scale >= 60.0)
+                    .unwrap_or(10000.0);
+                let faint = theme::pal().text_faint;
+                let mut x = (canvas_x(top.min.x) / step).floor() * step;
+                while screen_x(x) <= top.max.x {
+                    let sx = screen_x(x);
+                    if sx >= left.max.x {
+                        vp.line_segment(
+                            [pos2(sx, top.max.y - 5.0), pos2(sx, top.max.y)],
+                            Stroke::new(1.0, faint),
+                        );
+                        vp.text(
+                            pos2(sx + 2.0, top.min.y + 1.0),
+                            Align2::LEFT_TOP,
+                            format!("{x:.0}"),
+                            FontId::proportional(8.5),
+                            faint,
+                        );
                     }
-                })
-            };
-            for (r, on_top) in [(&top_r, true), (&left_r, false)] {
-                let at = r.interact_pointer_pos().or(r.hover_pos());
-                if r.drag_started()
-                    && let Some(p) = at
-                {
-                    self.guide_drag = match marker_at(&s.guides, p, on_top) {
-                        Some(i) => Some(i),
-                        None => {
-                            // out of the top ruler: a horizontal guide
-                            s.guides.push((
-                                !on_top,
-                                if on_top { canvas_y(p.y) } else { canvas_x(p.x) },
-                            ));
-                            Some(s.guides.len() - 1)
-                        }
-                    };
+                    x += step;
                 }
-                if r.secondary_clicked()
-                    && let Some(p) = at
-                    && let Some(i) = marker_at(&s.guides, p, on_top)
-                {
-                    s.guides.remove(i);
-                    s.modified = true;
+                let mut y = (canvas_y(left.min.y) / step).floor() * step;
+                while screen_y(y) <= left.max.y {
+                    let sy = screen_y(y);
+                    if sy >= left.min.y {
+                        vp.line_segment(
+                            [pos2(left.max.x - 5.0, sy), pos2(left.max.x, sy)],
+                            Stroke::new(1.0, faint),
+                        );
+                    }
+                    y += step;
                 }
-                if r.hovered() && at.is_some_and(|p| marker_at(&s.guides, p, on_top).is_some()) {
-                    ui.ctx().set_cursor_icon(if on_top {
-                        egui::CursorIcon::ResizeHorizontal
+                for g in &s.guides {
+                    let tip = if g.vertical {
+                        pos2(screen_x(g.at), top.max.y)
                     } else {
-                        egui::CursorIcon::ResizeVertical
-                    });
+                        pos2(left.max.x, screen_y(g.at))
+                    };
+                    let pts = if g.vertical {
+                        vec![tip, tip + vec2(-5.0, -8.0), tip + vec2(5.0, -8.0)]
+                    } else {
+                        vec![tip, tip + vec2(-8.0, -5.0), tip + vec2(-8.0, 5.0)]
+                    };
+                    let [r, gg, b, a] = g.color;
+                    vp.add(egui::Shape::convex_polygon(
+                        pts,
+                        Color32::from_rgba_unmultiplied(r, gg, b, a),
+                        Stroke::NONE,
+                    ));
+                }
+                let top_r =
+                    ui.interact(top, egui::Id::new("guide-ruler-top"), Sense::click_and_drag());
+                let left_r =
+                    ui.interact(left, egui::Id::new("guide-ruler-left"), Sense::click_and_drag());
+                let marker_at = |guides: &[ayatsuri_format::GuideLine],
+                                 p: Pos2,
+                                 on_top: bool|
+                 -> Option<usize> {
+                    guides.iter().position(|g| {
+                        if on_top {
+                            g.vertical && (screen_x(g.at) - p.x).abs() <= 5.0
+                        } else {
+                            !g.vertical && (screen_y(g.at) - p.y).abs() <= 5.0
+                        }
+                    })
+                };
+                for (r, on_top) in [(&top_r, true), (&left_r, false)] {
+                    let at = r.interact_pointer_pos().or(r.hover_pos());
+                    if r.drag_started()
+                        && let Some(p) = at
+                    {
+                        self.guide_drag = match marker_at(&s.guides, p, on_top) {
+                            Some(i) => Some(i),
+                            None => {
+                                s.guides.push(ayatsuri_format::GuideLine::new(
+                                    !on_top,
+                                    if on_top { canvas_y(p.y) } else { canvas_x(p.x) },
+                                ));
+                                Some(s.guides.len() - 1)
+                            }
+                        };
+                    }
+                    if r.secondary_clicked()
+                        && let Some(p) = at
+                        && let Some(i) = marker_at(&s.guides, p, on_top)
+                    {
+                        s.guides.remove(i);
+                        s.modified = true;
+                    }
+                    if r.hovered() && at.is_some_and(|p| marker_at(&s.guides, p, on_top).is_some())
+                    {
+                        ui.ctx().set_cursor_icon(if on_top {
+                            egui::CursorIcon::ResizeHorizontal
+                        } else {
+                            egui::CursorIcon::ResizeVertical
+                        });
+                    }
                 }
             }
             if let Some(i) = self.guide_drag {
                 let (ptr, down) =
                     ui.ctx().input(|i| (i.pointer.latest_pos(), i.pointer.any_down()));
                 if let (Some(p), Some(g)) = (ptr, s.guides.get_mut(i)) {
-                    g.1 = if g.0 { canvas_x(p.x) } else { canvas_y(p.y) }.round();
+                    g.at = if g.vertical { canvas_x(p.x) } else { canvas_y(p.y) }.round();
                     s.modified = true;
                 }
                 if !down {
@@ -10251,6 +10452,96 @@ impl EditorUi {
                     self.guide_drag = None;
                 }
             }
+        }
+        if self.show_guide_settings {
+            let mut open = true;
+            egui::Window::new(crate::i18n::tr("Guide Line Settings"))
+                .open(&mut open)
+                .default_width(460.0)
+                .show(ui.ctx(), |ui| {
+                    let mut changed = false;
+                    let mut remove = None;
+                    ui.horizontal(|ui| {
+                        if ui.button(crate::i18n::tr("New Guide Line")).clicked() {
+                            s.guides
+                                .push(ayatsuri_format::GuideLine::new(false, (ch / 2.0).round()));
+                            changed = true;
+                        }
+                        ui.separator();
+                        ui.label(crate::i18n::tr("Change color of all guide lines"));
+                        let mut all = s
+                            .guides
+                            .first()
+                            .map_or(ayatsuri_format::GuideLine::DEFAULT_COLOR, |g| g.color);
+                        if ui.color_edit_button_srgba_unmultiplied(&mut all).changed() {
+                            for g in &mut s.guides {
+                                g.color = all;
+                            }
+                            changed = true;
+                        }
+                    });
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        egui::Grid::new("guide-lines").striped(true).show(ui, |ui| {
+                            for h in ["No.", "Type", "Position", "Color", "Memo", ""] {
+                                ui.weak(crate::i18n::tr(h));
+                            }
+                            ui.end_row();
+                            for (i, g) in s.guides.iter_mut().enumerate() {
+                                ui.label((i + 1).to_string());
+                                egui::ComboBox::from_id_salt(("guide-type", i))
+                                    .selected_text(if g.vertical {
+                                        crate::i18n::tr("Vertical")
+                                    } else {
+                                        crate::i18n::tr("Horizontal")
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        changed |= ui
+                                            .selectable_value(
+                                                &mut g.vertical,
+                                                false,
+                                                crate::i18n::tr("Horizontal"),
+                                            )
+                                            .changed();
+                                        changed |= ui
+                                            .selectable_value(
+                                                &mut g.vertical,
+                                                true,
+                                                crate::i18n::tr("Vertical"),
+                                            )
+                                            .changed();
+                                    });
+                                changed |= ui
+                                    .add(egui::DragValue::new(&mut g.at).speed(1.0).suffix(" px"))
+                                    .changed();
+                                changed |=
+                                    ui.color_edit_button_srgba_unmultiplied(&mut g.color).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut g.memo)
+                                            .desired_width(140.0),
+                                    )
+                                    .changed();
+                                if ui
+                                    .small_button("×")
+                                    .on_hover_text(crate::i18n::tr("Delete"))
+                                    .clicked()
+                                {
+                                    remove = Some(i);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    });
+                    if let Some(i) = remove {
+                        s.guides.remove(i);
+                        changed = true;
+                    }
+                    if changed {
+                        s.modified = true;
+                    }
+                });
+            self.show_guide_settings = open;
         }
 
         // zoom strip
@@ -10497,6 +10788,10 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Tools", "level-2", "Edit level 2", N, K::Num2),
         ("Tools", "level-3", "Edit level 3", N, K::Num3),
         ("View", "display-all", "Display all (fit)", C, K::Num0),
+        ("View", "guide-h-mouse", "Horizontal guide line at the mouse", N, K::H),
+        ("View", "guide-v-mouse", "Vertical guide line at the mouse", N, K::V),
+        ("View", "guide-both-mouse", "Vertical and horizontal guide lines at the mouse", N, K::G),
+        ("View", "guides-clear", "Clear guide lines", M::SHIFT, K::G),
     ]
 };
 
