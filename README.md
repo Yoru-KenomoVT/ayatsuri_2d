@@ -17,8 +17,9 @@ runs in VTube Studio. On Windows, macOS and Linux.
 ![Platforms](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-555)
 ![moc3](https://img.shields.io/badge/moc3-3.0%20to%205.3-brightgreen)
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Website](https://img.shields.io/badge/ayatsuri--2d.org-website-f08e1e)](https://ayatsuri-2d.org)
 
-[**Download**](#download) · [Features](#features) · [Status](#status) · [Build from source](#build-from-source) · [Docs](#documentation) · [Support the project](#support-the-project)
+[**Website**](https://ayatsuri-2d.org) · [**Download**](#download) · [Features](#features) · [Status](#status) · [Build from source](#build-from-source) · [Docs](#documentation) · [Support the project](#support-the-project)
 
 </div>
 
@@ -63,7 +64,9 @@ Live2D Inc. See [Provenance](#provenance).
 [![Release date](https://img.shields.io/github/release-date-pre/Yoru-KenomoVT/ayatsuri_2d?label=released&style=for-the-badge)](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases)
 
 Grab the latest build from the
-[**releases page**](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases).
+[**releases page**](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases),
+or pick your system on [**ayatsuri-2d.org/download**](https://ayatsuri-2d.org/download/),
+which has first-launch notes for each one.
 These badges always show the newest version, betas included.
 
 | System | File | Notes |
@@ -287,6 +290,11 @@ hostile-input surface and stays isolated, and `openmoc3` is useful on its own.
 
 ## Documentation
 
+The user guide and tutorials are on the website:
+[**ayatsuri-2d.org/docs**](https://ayatsuri-2d.org/docs/) and
+[**ayatsuri-2d.org/tutorials**](https://ayatsuri-2d.org/tutorials/).
+The technical documents live in this repo:
+
 | | |
 |---|---|
 | [`docs/goals.md`](docs/goals.md) | what the project guarantees, and how it is tested |
@@ -303,8 +311,8 @@ Ayatsuri2D is free and always will be. If it saves you time or money, you can
 help keep it going:
 
 <p>
-  <a href="https://ko-fi.com/chaceberry"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
   <a href="https://buymeacoffee.com/ChaceBerry"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
+  <a href="https://ko-fi.com/chaceberry"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
 </p>
 
 Reporting bugs, sharing what you rig with it, and starring the repo help too.
