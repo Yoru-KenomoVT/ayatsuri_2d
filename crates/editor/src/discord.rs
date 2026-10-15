@@ -6,11 +6,14 @@
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use discord_rich_presence::activity::{Activity, Assets, Button, Timestamps};
+use discord_rich_presence::activity::{
+    Activity, ActivityType, Assets, Button, StatusDisplayType, Timestamps,
+};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 
-/// Where the presence's button sends people.
+/// Where the presence's buttons send people.
 pub(crate) const GITHUB: &str = "https://github.com/Yoru-KenomoVT/ayatsuri_2d";
+pub(crate) const SITE: &str = "https://ayatsuri-2d.org";
 
 /// Ayatsuri2D's own Discord application, so presence works with no setup.
 pub const APP_ID: &str = "1559152287459446904";
@@ -66,24 +69,32 @@ impl Presence {
                         && dirty
                         && let Some((details, state)) = &latest
                     {
+                        // what today's client reads: an explicit Playing type,
+                        // the application's name in the member list, the image
+                        // by URL (Discord proxies it, so it shows under any
+                        // Application ID the user sets) and two buttons
                         let activity = Activity::new()
+                            .activity_type(ActivityType::Playing)
+                            .status_display_type(StatusDisplayType::Name)
                             .details(details.as_str())
                             .state(state.as_str())
                             .timestamps(Timestamps::new().start(started))
                             .assets(
                                 Assets::new()
-                                    // a URL, not an asset key, so it shows
-                                    // under any Application ID the user sets
                                     .large_image(ICON_URL)
-                                    .large_text(concat!("Ayatsuri2D ", env!("CARGO_PKG_VERSION"))),
+                                    .large_text(concat!("Ayatsuri2D ", env!("CARGO_PKG_VERSION")))
+                                    .large_url(SITE),
                             )
-                            .buttons(vec![Button::new("Ayatsuri2D on GitHub", GITHUB)]);
-                        if client.set_activity(activity).is_ok() {
-                            dirty = false;
-                        } else {
-                            // Discord went away; try again on the next tick
-                            log::debug!("discord: lost the connection");
-                            connected = false;
+                            .buttons(vec![
+                                Button::new("Download Ayatsuri2D", SITE),
+                                Button::new("Source on GitHub", GITHUB),
+                            ]);
+                        match client.set_activity(activity) {
+                            Ok(()) => dirty = false,
+                            Err(e) => {
+                                log::debug!("discord: set_activity failed: {e}");
+                                connected = false;
+                            }
                         }
                     }
                 }
