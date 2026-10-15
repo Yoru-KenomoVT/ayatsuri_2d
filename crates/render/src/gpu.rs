@@ -64,6 +64,24 @@ pub struct Packet {
     pub uploaded: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub pages: Option<std::sync::Arc<Vec<(usize, TexData)>>>,
     pub pages_uploaded: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Pages whose full-size texture can go; their proxy stays and draws.
+    pub drop_pages: Option<Vec<usize>>,
+}
+
+/// One texture page on the GPU: a small proxy that is always there once
+/// the model is loaded, and the full page while it is wanted. Drawing
+/// takes the full page when it is resident, the proxy otherwise, so a
+/// page can be dropped and brought back without a frame going blank.
+#[derive(Default)]
+struct Slot {
+    full: Option<wgpu::BindGroup>,
+    proxy: Option<wgpu::BindGroup>,
+}
+
+impl Slot {
+    fn bind(&self) -> Option<&wgpu::BindGroup> {
+        self.full.as_ref().or(self.proxy.as_ref())
+    }
 }
 
 const SHADER: &str = r#"
@@ -173,7 +191,7 @@ pub struct GpuRenderer {
     // bound as group 2 during mask passes, where the real mask buffer is the
     // render target and must not also be sampled
     dummy_mode_bind: Option<wgpu::BindGroup>,
-    textures: Vec<wgpu::BindGroup>,
+    textures: Vec<Slot>,
     white: Option<wgpu::BindGroup>,
     offscreen: Option<Offscreen>,
     vbuf: Option<wgpu::Buffer>,
@@ -594,11 +612,21 @@ impl GpuRenderer {
         })
     }
 
+    /// The proxies for every page of a freshly loaded model; full pages
+    /// arrive one at a time through `Packet::pages` as they are wanted.
     pub fn set_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &[TexData]) {
         self.textures = images
             .iter()
-            .map(|t| self.upload_texture_bind(device, queue, t.width, t.height, &t.rgba))
+            .map(|t| Slot {
+                full: None,
+                proxy: Some(self.upload_texture_bind(device, queue, t.width, t.height, &t.rgba)),
+            })
             .collect();
+    }
+
+    /// Bytes of texture memory the full pages hold right now, mips included.
+    pub fn resident_full(&self) -> usize {
+        self.textures.iter().filter(|s| s.full.is_some()).count()
     }
 
     fn ensure_offscreen(&mut self, device: &wgpu::Device, w: u32, h: u32) {
@@ -677,14 +705,21 @@ impl GpuRenderer {
                 flag.store(true, std::sync::atomic::Ordering::Release);
             }
         }
+        if let Some(drop) = &packet.drop_pages {
+            for &i in drop {
+                if let Some(slot) = self.textures.get_mut(i) {
+                    slot.full = None;
+                }
+            }
+        }
         if let Some(pages) = &packet.pages {
             for (i, t) in pages.iter() {
                 let bind = self.upload_texture_bind(device, queue, t.width, t.height, &t.rgba);
                 let len = self.textures.len();
                 if let Some(slot) = self.textures.get_mut(*i) {
-                    *slot = bind;
+                    slot.full = Some(bind);
                 } else if *i == len {
-                    self.textures.push(bind);
+                    self.textures.push(Slot { full: Some(bind), proxy: None });
                 }
             }
             if let Some(flag) = &packet.pages_uploaded {
@@ -762,7 +797,11 @@ impl GpuRenderer {
                 pass.set_vertex_buffer(0, vbuf.slice(..));
                 pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
                 for (range, texture) in shapes {
-                    let Some(bind) = self.textures.get(*texture as usize).or(self.white.as_ref())
+                    let Some(bind) = self
+                        .textures
+                        .get(*texture as usize)
+                        .and_then(Slot::bind)
+                        .or(self.white.as_ref())
                     else {
                         continue;
                     };
@@ -805,7 +844,11 @@ impl GpuRenderer {
             pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
             for cmd in packet.cmds.get(run_start..i).unwrap_or(&[]) {
                 let Cmd::Draw { indices, texture, blend, mask } = cmd else { continue };
-                let Some(bind) = self.textures.get(*texture as usize).or(self.white.as_ref())
+                let Some(bind) = self
+                    .textures
+                    .get(*texture as usize)
+                    .and_then(Slot::bind)
+                    .or(self.white.as_ref())
                 else {
                     continue;
                 };
