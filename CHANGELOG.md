@@ -14,8 +14,13 @@
 - **Eyedropper** for ArtPath colours, picked from the art itself.
 - **Deform Brush**: push the selected meshes' points, or a warp's grid,
   along the stroke, with size, strength and hardness. Live, one undo step.
-- **Guides**: drag out of the rulers on the canvas edges; ArtPath points
-  snap to them. Saved with the model (Show > Guides).
+- **Guide lines**, as in Cubism: right-click the canvas > Guide Line to
+  add horizontal or vertical lines at the click, in the center or at the
+  selected vertex, or drag them out of the rulers. View > Guide Line has
+  the settings window (type, position, colour, memo per line), a rulers
+  toggle and snapping: moving vertices land on guide lines, which turn
+  green. Saved with the model.
+- The Show menu is now called **View**.
 - **Several selected meshes edit as one**: one box moves, scales and
   rotates them all (#8).
 - The update banner and About show **What's new** for the release on
