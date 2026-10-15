@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Clip Studio Paint files** (`.clip`) open, import and re-import the way
+  PSD and Krita files do: folders become parts, every drawn layer becomes
+  a mesh with its mask applied, paper and adjustment layers are left out.
+  Vector, fill, gradient and text layers come in as Clip Studio draws
+  them. The reader was built from the files themselves and treats them as
+  hostile input, like every other format.
 - **Timelapse**: every step of building a model (each edit, undo and redo)
   is kept in a small `.timelapse` file beside it, as compressed changes.
   Window > Timelapse plays it back with a scrubber and exports PNG frames
