@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Cubism Editor projects** (`.cmo3`) open as whole models: art, meshes,
+  parts, the deformer tree, parameters in their folders, every keyform,
+  clipping and physics, with the names the rigger gave things. Built from
+  the project files themselves; checked against a project rigged in
+  Cubism, deformer for deformer.
 - **Clip Studio Paint files** (`.clip`) open, import and re-import the way
   PSD and Krita files do: folders become parts, every drawn layer becomes
   a mesh with its mask applied, paper and adjustment layers are left out.
