@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Timelapse**: every step of building a model (each edit, undo and redo)
+  is kept in a small `.timelapse` file beside it, as compressed changes.
+  Window > Timelapse plays it back with a scrubber and exports PNG frames
+  and a GIF, plus an MP4 when ffmpeg is installed. Turn it off in
+  Settings > General.
 - **ArtPath**: draw Bezier paths on the canvas (click for a corner, drag
   for a smooth point) with a stroke and an optional fill. Each becomes an
   ordinary ArtMesh, so it clips, sits under deformers, takes keys and
