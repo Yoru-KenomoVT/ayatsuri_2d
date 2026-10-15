@@ -581,7 +581,7 @@ impl Session {
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let session = match ext.as_str() {
             "aom" => Self::load_aom(ctx, path)?,
-            "psd" | "kra" => Self::load_paint(ctx, path, &ext)?,
+            "psd" | "kra" | "clip" => Self::load_paint(ctx, path, &ext)?,
             _ => Self::load_moc3(ctx, path)?,
         };
         info!("opened {} in {:.0} ms", path.display(), started.elapsed().as_secs_f32() * 1000.0);
@@ -590,15 +590,11 @@ impl Session {
 
     /// A paint document becomes a brand new model: groups as parts, layers
     /// as quad meshes, pixels packed into atlases. It starts unsaved, since
-    /// the .psd or .kra is the source and not a model file.
+    /// the .psd, .kra or .clip is the source and not a model file.
     fn load_paint(ctx: &Context, path: &Path, ext: &str) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let imported = if ext == "kra" {
-            ayatsuri_import::from_kra(&bytes)
-        } else {
-            ayatsuri_import::from_psd(&bytes)
-        }
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let imported = ayatsuri_import::from_paint(&bytes, ext)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         info!(
             "{} layers became {} meshes in {} parts on {} texture page(s){}{}",
             ext.to_uppercase(),
@@ -642,12 +638,8 @@ impl Session {
     pub fn import_paint(&mut self, ctx: &Context, path: &Path) -> Result<String, String> {
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let imported = if ext == "kra" {
-            ayatsuri_import::from_kra(&bytes)
-        } else {
-            ayatsuri_import::from_psd(&bytes)
-        }
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let imported = ayatsuri_import::from_paint(&bytes, &ext)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.add_imported(ctx, imported, path)?;
         Ok(file)
@@ -662,7 +654,7 @@ impl Session {
     pub fn reimport_paint(&mut self, ctx: &Context, path: &Path) -> Result<Reimported, String> {
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let (doc, _) = ayatsuri_import::read_document(&bytes, ext == "kra")
+        let (doc, _) = ayatsuri_import::read_document(&bytes, &ext)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let mut report = reimport_into(self, ctx, doc)?;
         report.file =

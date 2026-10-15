@@ -1275,10 +1275,10 @@ impl EditorUi {
             let picked = rfd::FileDialog::new()
                 .add_filter(
                     crate::i18n::tr("All supported"),
-                    &["aom", "moc3", "json", "psd", "kra"],
+                    &["aom", "moc3", "json", "psd", "kra", "clip"],
                 )
                 .add_filter(crate::i18n::tr("Ayatsuri / Live2D model"), &["aom", "moc3", "json"])
-                .add_filter(crate::i18n::tr("Artwork (Photoshop, Krita)"), &["psd", "kra"])
+                .add_filter(crate::i18n::tr("Artwork (Photoshop, Krita, Clip Studio)"), &["psd", "kra", "clip"])
                 .set_title(crate::i18n::tr("Open model or artwork"))
                 .pick_file();
             let _ = tx.send(BgJob::Picked(picked));
@@ -2006,29 +2006,29 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new(crate::i18n::tr("Import PSD…")),
+                            egui::Button::new(crate::i18n::tr("Import Artwork…")),
                         )
                         .on_hover_text(crate::i18n::tr(
-                            "Add a Photoshop or Krita file's layers to this model as new parts \
-                             and meshes",
+                            "Add a Photoshop, Krita or Clip Studio file's layers to this model \
+                             as new parts and meshes",
                         ))
                         .clicked()
                     {
                         ui.close();
                         self.pick_async(PickFor::ImportPaint, || {
                             rfd::FileDialog::new()
-                                .add_filter(crate::i18n::tr("Artwork"), &["psd", "kra"])
-                                .set_title(crate::i18n::tr("Import PSD into this model"))
+                                .add_filter(crate::i18n::tr("Artwork"), &["psd", "kra", "clip"])
+                                .set_title(crate::i18n::tr("Import artwork into this model"))
                                 .pick_file()
                         });
                     }
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new(crate::i18n::tr("Re-import PSD…")),
+                            egui::Button::new(crate::i18n::tr("Re-import Artwork…")),
                         )
                         .on_hover_text(crate::i18n::tr(
-                            "Swap in updated art from the PSD this model was made from: layers \
+                            "Swap in updated art from the file this model was made from: layers \
                              match meshes by folder and name, and the rigging stays as it is",
                         ))
                         .clicked()
@@ -2036,8 +2036,8 @@ impl EditorUi {
                         ui.close();
                         self.pick_async(PickFor::ReimportPaint, || {
                             rfd::FileDialog::new()
-                                .add_filter(crate::i18n::tr("Artwork"), &["psd", "kra"])
-                                .set_title(crate::i18n::tr("Re-import PSD"))
+                                .add_filter(crate::i18n::tr("Artwork"), &["psd", "kra", "clip"])
+                                .set_title(crate::i18n::tr("Re-import artwork"))
                                 .pick_file()
                         });
                     }
