@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod clip;
 mod exp3;
 mod kra;
 mod layers;
@@ -15,13 +16,32 @@ mod moc3_export;
 mod motion3;
 mod physics3;
 mod psd_doc;
+mod sqlite;
 
 pub use layers::{Document, Imported, Layer};
 
-/// A Photoshop (`kra` false) or Krita document's layers, before they are
-/// turned into a model, with how many layers were skipped while reading.
-pub fn read_document(bytes: &[u8], kra: bool) -> Result<(Document, usize), ImportError> {
-    if kra { kra::read_kra(bytes) } else { psd_doc::read_psd(bytes).map(|d| (d, 0)) }
+/// A paint document's layers by file extension (`psd`, `kra` or `clip`),
+/// before they are turned into a model, with how many layers were skipped
+/// while reading. Anything else is read as a PSD.
+pub fn read_document(bytes: &[u8], ext: &str) -> Result<(Document, usize), ImportError> {
+    match ext {
+        "kra" => kra::read_kra(bytes),
+        "clip" => clip::read_clip(bytes),
+        _ => psd_doc::read_psd(bytes).map(|d| (d, 0)),
+    }
+}
+
+/// Whether a file extension names a paint document this crate opens.
+pub fn is_paint_ext(ext: &str) -> bool {
+    matches!(ext, "psd" | "kra" | "clip")
+}
+
+/// A paint document, by extension, as a fresh rig-ready model.
+pub fn from_paint(bytes: &[u8], ext: &str) -> Result<Imported, ImportError> {
+    let (doc, skipped) = read_document(bytes, ext)?;
+    let mut out = layers::build(&doc)?;
+    out.skipped += skipped;
+    Ok(out)
 }
 
 /// Any layered document (already read from its file) as a fresh model.

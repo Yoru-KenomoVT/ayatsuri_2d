@@ -22,3 +22,5 @@ thiserror = { workspace = true }
 psd = "0.3"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Clip Studio tiles are zlib streams
+miniz_oxide = { workspace = true }
