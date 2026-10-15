@@ -46,7 +46,8 @@ drawing turns its head, blinks, and its hair swings.
 It reads and writes the formats the rest of the ecosystem already uses:
 
 - **Opens** Cubism models (`.model3.json` and `.moc3`, versions 3.0 to 5.3),
-  Photoshop `.psd` and Krita `.kra` files.
+  Cubism Editor projects (`.cmo3`, rig and all), and Photoshop `.psd`,
+  Krita `.kra` and Clip Studio Paint `.clip` files.
 - **Exports** a complete moc3 bundle (model, physics, motions, expressions,
   textures) that loads in VTube Studio, OpenVT and anything built on the
   Cubism SDK.
@@ -109,9 +110,11 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 </p>
 <p align="center">Model art by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!</p>
 
-- **PSD and Krita import**: folders become parts, layers become meshes packed
-  into texture atlases, clipping layers become masks. Import into a new model,
-  or add more art to a model you already have.
+- **PSD, Krita and Clip Studio import**: folders become parts, layers become
+  meshes packed into texture atlases, clipping layers become masks. Import
+  into a new model, or add more art to a model you already have.
+- **Cubism project import**: a `.cmo3` opens with its meshes, deformer tree,
+  parameters and folders, keyforms, clipping, physics and names.
 - **Mesh editing**: auto mesh that follows the outline of the art (Standard,
   Deform and Light presets), add and erase points, connect and cut edges, an
   erase brush, 4-division. Points slide over the art instead of stretching it.
@@ -272,7 +275,7 @@ crates/format       ayatsuri-format   the model types and the .aom format
 crates/core         ayatsuri-core     deformation, physics, masking, animation,
                                       draw order, editing; no I/O, no renderer
 crates/import       ayatsuri-import   moc3, model3/physics3/motion3/exp3 JSON,
-                                      PSD and Krita in; moc3 out
+                                      PSD, Krita, Clip Studio and cmo3 in; moc3 out
 crates/openmoc3     openmoc3          standalone safe reader for .moc3 files
 crates/render       ayatsuri-render   the GPU renderer
 crates/editor       ayatsuri-editor   the editor: panels, canvas, windows, API
