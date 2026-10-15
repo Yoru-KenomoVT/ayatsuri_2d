@@ -176,9 +176,109 @@ impl Lattice {
     }
 }
 
+/// The affine map (x' = a x + b y + c, y' = d x + e y + f) that takes the
+/// points `from` to `to` (x, y pairs), when one does within `tolerance`;
+/// None for an edit that bent the grid. Least squares over every point.
+pub fn affine_between(from: &[f32], to: &[f32], tolerance: f32) -> Option<[f32; 6]> {
+    if from.len() != to.len() || from.len() < 6 {
+        return None;
+    }
+    let (fp, _) = from.as_chunks::<2>();
+    let (tp, _) = to.as_chunks::<2>();
+    let (mut sxx, mut sxy, mut syy, mut sx, mut sy, mut n) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+    let (mut xu, mut yu, mut u, mut xv, mut yv, mut v) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+    for (f, t) in fp.iter().zip(tp) {
+        let (x, y, tx, ty) = (f[0] as f64, f[1] as f64, t[0] as f64, t[1] as f64);
+        sxx += x * x;
+        sxy += x * y;
+        syy += y * y;
+        sx += x;
+        sy += y;
+        n += 1.0;
+        xu += x * tx;
+        yu += y * tx;
+        u += tx;
+        xv += x * ty;
+        yv += y * ty;
+        v += ty;
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn det3(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f64) -> f64 {
+        a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    }
+    let det = det3(sxx, sxy, sx, sxy, syy, sy, sx, sy, n);
+    if det.abs() < 1e-18 {
+        return None;
+    }
+    let solve = |r0: f64, r1: f64, r2: f64| {
+        (
+            det3(r0, sxy, sx, r1, syy, sy, r2, sy, n) / det,
+            det3(sxx, r0, sx, sxy, r1, sy, sx, r2, n) / det,
+            det3(sxx, sxy, r0, sxy, syy, r1, sx, sy, r2) / det,
+        )
+    };
+    let (a, b, c) = solve(xu, yu, u);
+    let (d, e, f) = solve(xv, yv, v);
+    let map = [a as f32, b as f32, c as f32, d as f32, e as f32, f as f32];
+    let fits = fp.iter().zip(tp).all(|(p, t)| {
+        let x = map[0] * p[0] + map[1] * p[1] + map[2];
+        let y = map[3] * p[0] + map[4] * p[1] + map[5];
+        (x - t[0]).abs() <= tolerance && (y - t[1]).abs() <= tolerance
+    });
+    fits.then_some(map)
+}
+
+impl Lattice {
+    /// The lattice moved by an affine map: a Bezier surface follows an
+    /// affine map exactly, so its handles keep their shape.
+    pub fn mapped(&self, a: [f32; 6]) -> Self {
+        let net = self
+            .net
+            .iter()
+            .map(|&(x, y)| (a[0] * x + a[1] * y + a[2], a[3] * x + a[4] * y + a[5]))
+            .collect();
+        Self { bw: self.bw, bh: self.bh, net }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_and_turned_grid_carries_its_handles_along() {
+        let grid = identity(5, 5);
+        let mut lat = Lattice::fit(&grid, 5, 5, 2, 2);
+        if let Some(h) = lat.net.get_mut(1) {
+            h.0 *= 0.3;
+        }
+        lat.derive_inner();
+        let before = lat.to_grid(5, 5);
+        let (s, c) = 30f32.to_radians().sin_cos();
+        let turn = [c, -s, 3.0, s, c, -1.0];
+        let after: Vec<f32> = before
+            .chunks(2)
+            .flat_map(|p| {
+                [
+                    turn[0] * p[0] + turn[1] * p[1] + turn[2],
+                    turn[3] * p[0] + turn[4] * p[1] + turn[5],
+                ]
+            })
+            .collect();
+        let found = affine_between(&before, &after, 1e-4).expect("affine");
+        let moved = lat.mapped(found);
+        for (a, b) in moved.to_grid(5, 5).iter().zip(&after) {
+            assert!((a - b).abs() < 1e-4);
+        }
+        let len = |l: &Lattice| {
+            let (a, h) = (l.net[0], l.net[1]);
+            ((h.0 - a.0).powi(2) + (h.1 - a.1).powi(2)).sqrt()
+        };
+        assert!((len(&moved) - len(&lat)).abs() < 1e-4);
+        let mut bent = after.clone();
+        bent[14] += 0.5;
+        assert!(affine_between(&before, &bent, 1e-4).is_none());
+    }
 
     fn identity(cols: usize, rows: usize) -> Vec<f32> {
         let mut g = Vec::new();

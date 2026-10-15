@@ -8471,6 +8471,7 @@ impl EditorUi {
                             .map(|i| s.puppet.value(i))
                             .collect();
                         let target = ayatsuri_core::edit::Target::Deformer(di);
+                        let old_local = s.puppet.warp_local_grid(di).unwrap_or_default();
                         match ayatsuri_core::keyform::keyform_at(s.puppet.model(), target, &values)
                         {
                             Some(k) => {
@@ -8488,6 +8489,32 @@ impl EditorUi {
                                         "warp {di}: {} grid point(s) moved in keyform {k}",
                                         moves.len()
                                     );
+                                    if warp_commit_screen
+                                        && let Some(l) = s.bezier_nets.get(&(di, k)).cloned()
+                                        && let Some(new_local) = s.puppet.warp_local_grid(di)
+                                    {
+                                        let extent = old_local
+                                            .iter()
+                                            .fold(0.0f32, |a, v| a.max(v.abs()))
+                                            .max(1e-6);
+                                        let tol = extent * 1e-4;
+                                        let made = l.to_grid(cols as usize, rows as usize);
+                                        let was_theirs = made.len() == old_local.len()
+                                            && made
+                                                .iter()
+                                                .zip(&old_local)
+                                                .all(|(a, b)| (a - b).abs() <= tol);
+                                        match ayatsuri_core::bezier::affine_between(
+                                            &old_local, &new_local, tol,
+                                        ) {
+                                            Some(a) if was_theirs => {
+                                                s.bezier_nets.insert((di, k), l.mapped(a));
+                                            }
+                                            _ => {
+                                                s.bezier_nets.remove(&(di, k));
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             None => log::warn!(
