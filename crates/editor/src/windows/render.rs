@@ -75,6 +75,9 @@ impl Preset {
     }
 }
 
+/// Preview frames are drawn this wide; the panel scales them to fit.
+const PREVIEW_W: usize = 560;
+
 enum Progress {
     Frames(usize, usize),
     Done(Result<String, String>),
@@ -199,7 +202,7 @@ impl RenderWin {
                     );
                 }
                 puppet.update();
-                crate::thumb::render(puppet, &s.preview_tex, 320)
+                crate::thumb::render(puppet, &s.preview_tex, PREVIEW_W)
             }
             Source::Timelapse => {
                 if self.player.is_none()
@@ -213,7 +216,7 @@ impl RenderWin {
                 let Some(model) = player.model(self.step) else { return };
                 let mut puppet = ayatsuri_core::Puppet::new(model);
                 puppet.update();
-                crate::thumb::render(&puppet, &s.preview_tex, 320)
+                crate::thumb::render(&puppet, &s.preview_tex, PREVIEW_W)
             }
         };
         let (w, h, px) = frame;
@@ -652,7 +655,7 @@ impl EditorUi {
         let mut pick_folder = false;
         let has_timelapse =
             s.aom_path.as_ref().is_some_and(|p| crate::timelapse::Recorder::sidecar(p).exists());
-        egui::Window::new(tr("Render")).open(&mut open).default_size([840.0, 470.0]).show(ui.ctx(), |ui| {
+        egui::Window::new(tr("Render")).open(&mut open).default_size([1040.0, 600.0]).show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut win.source, Source::Animation, tr("Animation"));
                 ui.add_enabled_ui(has_timelapse, |ui| {
@@ -754,35 +757,53 @@ impl EditorUi {
                 ui.separator();
                 // preview and queue
                 ui.vertical(|ui| {
-                    ui.set_min_width(250.0);
+                    ui.set_min_width(420.0);
                     ui.strong(tr("Preview"));
+                    // the frame keeps the canvas's shape; the image sits
+                    // centred on dark or white, as the export will
+                    let c = s.puppet.model().canvas;
+                    let aspect = (c.height / c.width.max(1.0)).max(0.1);
+                    let fw = 420.0_f32;
+                    let fh = (fw * aspect).clamp(160.0, 380.0);
+                    let fill = if win.transparent && win.preset.alpha() {
+                        egui::Color32::from_gray(44)
+                    } else {
+                        egui::Color32::WHITE
+                    };
+                    let (frame_rect, _) = ui.allocate_exact_size(egui::vec2(fw, fh), egui::Sense::hover());
+                    let painter = ui.painter_at(frame_rect);
+                    painter.rect_filled(frame_rect, 6.0, fill);
                     if let Some(t) = &win.preview {
                         let size = t.size_vec2();
-                        let k = (250.0_f32 / size.x).min(200.0 / size.y).min(1.0);
-                        egui::Frame::new().fill(if win.transparent { egui::Color32::from_gray(40) } else { egui::Color32::WHITE }).show(ui, |ui| {
-                            ui.image((t.id(), size * k));
-                        });
+                        let k = ((fw - 16.0) / size.x).min((fh - 16.0) / size.y).min(1.0);
+                        let shown = size * k;
+                        let at = egui::Rect::from_center_size(frame_rect.center(), shown);
+                        painter.image(t.id(), at, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
                     }
+                    painter.rect_stroke(frame_rect, 6.0, egui::Stroke::new(1.0, crate::theme::pal().text_faint.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         let icon = if win.playing { egui_phosphor::regular::PAUSE } else { egui_phosphor::regular::PLAY };
-                        if ui.button(icon).clicked() {
+                        if ui.add_sized([30.0, 24.0], egui::Button::new(egui::RichText::new(icon).size(15.0))).clicked() {
                             win.playing = !win.playing;
                             win.last_tick = None;
                         }
+                        let slider_w = (fw - 30.0 - 72.0).max(80.0);
+                        ui.spacing_mut().slider_width = slider_w;
                         match win.source {
                             Source::Animation => {
                                 let end = s.animations.get(win.scene).map_or(0.0, |a| a.duration).max(0.0);
                                 if ui.add(egui::Slider::new(&mut win.time, 0.0..=end).show_value(false)).changed() {
                                     win.playing = false;
                                 }
-                                ui.weak(format!("{:.2}s", win.time));
+                                ui.weak(egui::RichText::new(format!("{:6.2}s", win.time)).monospace());
                             }
                             Source::Timelapse => {
                                 let n = win.player.as_ref().map_or(0, |p| p.steps.len()).saturating_sub(1);
                                 if ui.add(egui::Slider::new(&mut win.step, 0..=n).show_value(false)).changed() {
                                     win.playing = false;
                                 }
-                                ui.weak(format!("{}/{}", win.step, n));
+                                ui.weak(egui::RichText::new(format!("{}/{}", win.step, n)).monospace());
                             }
                         }
                     });
