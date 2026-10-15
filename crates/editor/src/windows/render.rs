@@ -132,6 +132,15 @@ pub struct RenderWin {
     ffmpeg_get: Option<crate::ffmpeg::Download>,
     ffmpeg_failed: Option<String>,
     preview: Option<egui::TextureHandle>,
+    /// The preview player: a puppet posed per frame for a scene, the
+    /// timelapse steps for a timelapse.
+    playing: bool,
+    time: f32,
+    step: usize,
+    last_tick: Option<std::time::Instant>,
+    shown: Option<(Source, usize, u32)>,
+    puppet: Option<ayatsuri_core::Puppet>,
+    player: Option<crate::timelapse::Player>,
     queue: Vec<Job>,
     rx: Option<Receiver<Progress>>,
 }
@@ -162,8 +171,59 @@ impl RenderWin {
             ffmpeg_get: None,
             ffmpeg_failed: None,
             preview: None,
+            playing: false,
+            time: 0.0,
+            step: 0,
+            last_tick: None,
+            shown: None,
+            puppet: None,
+            player: None,
             queue: Vec::new(),
             rx: None,
+        }
+    }
+
+    /// Draw the preview frame for the current time or step.
+    fn refresh_preview(&mut self, ctx: &egui::Context, s: &crate::session::Session) {
+        let frame = match self.source {
+            Source::Animation => {
+                let puppet = self
+                    .puppet
+                    .get_or_insert_with(|| ayatsuri_core::Puppet::new(s.puppet.model().clone()));
+                if let Some(anim) = s.animations.get(self.scene) {
+                    pose(
+                        puppet,
+                        anim,
+                        self.time,
+                        self.expression.and_then(|i| s.expressions.get(i)),
+                    );
+                }
+                puppet.update();
+                crate::thumb::render(puppet, &s.preview_tex, 320)
+            }
+            Source::Timelapse => {
+                if self.player.is_none()
+                    && let Some(p) = &s.aom_path
+                {
+                    self.player =
+                        crate::timelapse::Player::open(&crate::timelapse::Recorder::sidecar(p))
+                            .ok();
+                }
+                let Some(player) = &mut self.player else { return };
+                let Some(model) = player.model(self.step) else { return };
+                let mut puppet = ayatsuri_core::Puppet::new(model);
+                puppet.update();
+                crate::thumb::render(&puppet, &s.preview_tex, 320)
+            }
+        };
+        let (w, h, px) = frame;
+        let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
+        match &mut self.preview {
+            Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+            None => {
+                self.preview =
+                    Some(ctx.load_texture("render-preview", img, egui::TextureOptions::LINEAR))
+            }
         }
     }
 }
@@ -498,10 +558,11 @@ impl EditorUi {
         if let Some(i) = s.current_anim {
             win.scene = i;
         }
-        // the preview is the model as it stands, at a size the panel can show
-        let (w, h, px) = crate::thumb::render(&s.puppet, &s.preview_tex, 320);
-        let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
-        win.preview = Some(ctx.load_texture("render-preview", img, egui::TextureOptions::LINEAR));
+        let _ = ctx;
+        win.puppet = None;
+        win.player = None;
+        win.shown = None;
+        win.playing = false;
         self.render_win = Some(win);
     }
 
@@ -555,6 +616,37 @@ impl EditorUi {
         }
 
         let Some(s) = &self.session else { return };
+        // advance the preview while it plays, at the scene's own clock
+        let now = std::time::Instant::now();
+        let dt = win.last_tick.map_or(0.0, |t| now.duration_since(t).as_secs_f32()).min(0.1);
+        win.last_tick = Some(now);
+        if win.playing {
+            match win.source {
+                Source::Animation => {
+                    if let Some(a) = s.animations.get(win.scene) {
+                        win.time += dt;
+                        if win.time > a.duration {
+                            win.time = if a.duration > 0.0 { win.time % a.duration } else { 0.0 };
+                        }
+                    }
+                }
+                Source::Timelapse => {
+                    let n = win.player.as_ref().map_or(0, |p| p.steps.len());
+                    let per = (n as f32 / 600.0).max(1.0);
+                    win.step += (dt * win.fps as f32 * per).max(1.0) as usize;
+                    if n > 0 && win.step >= n {
+                        win.step = 0;
+                    }
+                }
+            }
+            win.shown = None;
+            ui.ctx().request_repaint();
+        }
+        let key = (win.source, win.scene, ((win.time * 1000.0) as u32) ^ ((win.step as u32) << 8));
+        if win.shown != Some(key) {
+            win.refresh_preview(ui.ctx(), s);
+            win.shown = Some(key);
+        }
         let mut open = true;
         let mut enqueue = false;
         let mut pick_folder = false;
@@ -671,6 +763,29 @@ impl EditorUi {
                             ui.image((t.id(), size * k));
                         });
                     }
+                    ui.horizontal(|ui| {
+                        let icon = if win.playing { egui_phosphor::regular::PAUSE } else { egui_phosphor::regular::PLAY };
+                        if ui.button(icon).clicked() {
+                            win.playing = !win.playing;
+                            win.last_tick = None;
+                        }
+                        match win.source {
+                            Source::Animation => {
+                                let end = s.animations.get(win.scene).map_or(0.0, |a| a.duration).max(0.0);
+                                if ui.add(egui::Slider::new(&mut win.time, 0.0..=end).show_value(false)).changed() {
+                                    win.playing = false;
+                                }
+                                ui.weak(format!("{:.2}s", win.time));
+                            }
+                            Source::Timelapse => {
+                                let n = win.player.as_ref().map_or(0, |p| p.steps.len()).saturating_sub(1);
+                                if ui.add(egui::Slider::new(&mut win.step, 0..=n).show_value(false)).changed() {
+                                    win.playing = false;
+                                }
+                                ui.weak(format!("{}/{}", win.step, n));
+                            }
+                        }
+                    });
                     ui.add_space(8.0);
                     ui.strong(tr("Queue"));
                     if win.queue.is_empty() {

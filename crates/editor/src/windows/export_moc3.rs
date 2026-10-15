@@ -16,6 +16,8 @@ impl EditorUi {
             .open(&mut open)
             .width(400.0)
             .show(ui.ctx(), |ui| {
+                // the same size on every tab, so switching doesn't jump
+                ui.set_min_size(egui::vec2(380.0, 300.0));
                 ui.horizontal(|ui| {
                     for (i, label) in ["moc3", "cmo3", "Image"].iter().enumerate() {
                         ui.selectable_value(&mut dlg.tab, i, crate::i18n::tr(label));
