@@ -27,6 +27,7 @@ fn main() -> Result<(), String> {
             name: "ariu".into(),
             author: String::new(),
             tool: "aomtest".into(),
+            timelapse: None,
         },
         model,
         textures: Vec::new(),

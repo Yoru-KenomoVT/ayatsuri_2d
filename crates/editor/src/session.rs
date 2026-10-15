@@ -193,6 +193,8 @@ pub struct Session {
     /// Records each step of the model into `<file>.timelapse`.
     pub timelapse: crate::timelapse::Recorder,
     pub timelapse_on: bool,
+    /// The project's own Record timelapse setting; None follows Settings.
+    pub timelapse_pref: Option<bool>,
     pub bezier_nets: HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     undo: Vec<Model>,
     redo: Vec<Model>,
@@ -762,6 +764,7 @@ impl Session {
         self.guides = old.guides;
         self.timelapse = old.timelapse;
         self.timelapse_on = old.timelapse_on;
+        self.timelapse_pref = old.timelapse_pref;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
@@ -840,6 +843,7 @@ impl Session {
         self.guides = old.guides;
         self.timelapse = old.timelapse;
         self.timelapse_on = old.timelapse_on;
+        self.timelapse_pref = old.timelapse_pref;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
@@ -887,6 +891,7 @@ impl Session {
         s.timelapse = crate::timelapse::Recorder::open(Some(path));
         s.timelapse.record(s.puppet.model());
         s.author = payload.meta.author;
+        s.timelapse_pref = payload.meta.timelapse;
         s.animations = payload.animations;
         s.expressions = payload.expressions;
         if let Some(d) = payload.display {
@@ -1252,6 +1257,7 @@ impl Session {
             guides: Vec::new(),
             timelapse: crate::timelapse::Recorder::default(),
             timelapse_on: true,
+            timelapse_pref: None,
             bezier_nets: HashMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1535,6 +1541,7 @@ impl Session {
                 name: self.name.clone(),
                 author: self.author.clone(),
                 tool: format!("Ayatsuri2D {}", env!("CARGO_PKG_VERSION")),
+                timelapse: self.timelapse_pref,
             },
             model: self.puppet.model().clone(),
             textures: self

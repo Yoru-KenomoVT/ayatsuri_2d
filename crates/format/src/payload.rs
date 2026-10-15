@@ -15,6 +15,9 @@ pub struct Meta {
     pub name: String,
     pub author: String,
     pub tool: String,
+    /// Record a timelapse beside this project: None follows the editor's
+    /// Settings default.
+    pub timelapse: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

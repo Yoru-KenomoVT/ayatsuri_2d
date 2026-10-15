@@ -748,7 +748,8 @@ pub(crate) enum PickFor {
     SaveAs {
         then_close: Option<u8>,
     },
-    ExportImage,
+    /// Width in pixels, JPEG rather than PNG, transparent background.
+    ExportImage(u32, bool, bool),
     ExportMoc3(Box<ExportDlg>),
     WorkspaceExport,
     WorkspaceImport,
@@ -823,6 +824,11 @@ pub(crate) struct ExportDlg {
     pub(crate) physics: bool,
     pub(crate) motions: bool,
     pub(crate) expressions: bool,
+    /// 0 moc3, 1 cmo3, 2 image.
+    pub(crate) tab: usize,
+    pub(crate) image_width: u32,
+    pub(crate) jpeg: bool,
+    pub(crate) transparent: bool,
 }
 
 /// The New Model dialog's working copy.
@@ -833,6 +839,8 @@ struct ModelNew {
     height: f32,
     ppu: f32,
     std_params: bool,
+    /// Record a timelapse beside the project, from the Settings default.
+    timelapse: bool,
 }
 
 impl Default for ModelNew {
@@ -843,6 +851,7 @@ impl Default for ModelNew {
             width: 2048.0,
             height: 2048.0,
             ppu: 1024.0,
+            timelapse: true,
             std_params: true,
         }
     }
@@ -1469,7 +1478,7 @@ impl EditorUi {
             (PickFor::SaveAs { then_close: Some(action) }, None) => {
                 self.confirm_close = Some(action);
             }
-            (PickFor::ExportImage, Some(path)) => self.export_image_to(path),
+            (PickFor::ExportImage(w, j, t), Some(path)) => self.export_image_to(path, w, j, t),
             (PickFor::ExportMoc3(dlg), Some(dir)) => self.export_moc3_to(&dlg, &dir),
             // a cancelled folder pick leaves the export dialog as it was
             (PickFor::ExportMoc3(dlg), None) => self.export_dlg = Some(*dlg),
@@ -1964,32 +1973,17 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new(crate::i18n::tr("Export Image…"))
-                                .shortcut_text(self.sc("export-image")),
-                        )
-                        .clicked()
-                    {
-                        ui.close();
-                        self.export_image();
-                    }
-                    if ui
-                        .add_enabled(
-                            self.session.is_some(),
-                            egui::Button::new(crate::i18n::tr("Export as moc3…"))
+                            egui::Button::new(crate::i18n::tr("Export Model…"))
                                 .shortcut_text(self.sc("export-moc3")),
                         )
+                        .on_hover_text(crate::i18n::tr(
+                            "moc3 for VTube Studio and other Cubism-compatible apps, a Cubism \
+                             project, or a still image",
+                        ))
                         .clicked()
                     {
                         ui.close();
-                        let name =
-                            self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
-                        self.export_dlg = Some(ExportDlg {
-                            name,
-                            version: ayatsuri_import::ExportVersion::default_index(),
-                            physics: true,
-                            motions: true,
-                            expressions: true,
-                        });
+                        self.open_export(0);
                     }
                     if ui
                         .add_enabled(
@@ -2051,7 +2045,7 @@ impl EditorUi {
                     if ui
                         .add_enabled(
                             self.session.is_some(),
-                            egui::Button::new(crate::i18n::tr("Model Info…")),
+                            egui::Button::new(crate::i18n::tr("Project…")),
                         )
                         .clicked()
                     {
@@ -3042,7 +3036,7 @@ impl EditorUi {
         self.settings_window(ui);
         self.stats_window(ui);
         if let Some(s) = &mut self.session {
-            s.timelapse_on = !self.prefs.timelapse_off;
+            s.timelapse_on = s.timelapse_pref.unwrap_or(!self.prefs.timelapse_off);
         }
         if let (Some(v), Some(s)) = (&mut self.timelapse_view, &self.session)
             && !v.show(ui.ctx(), s)
@@ -3543,7 +3537,7 @@ impl EditorUi {
                 self.import_dialog(&ui.ctx().clone());
             }
             if ui
-                .add_sized([150.0, 34.0], egui::Button::new(crate::i18n::tr("New model…")))
+                .add_sized([150.0, 34.0], egui::Button::new(crate::i18n::tr("New project…")))
                 .clicked()
             {
                 self.new_model = Some(ModelNew::default());
@@ -4625,7 +4619,7 @@ impl EditorUi {
         let Some(new) = &mut self.new_model else { return };
         let mut open = true;
         let mut create = false;
-        crate::windows::Dialog::new(crate::i18n::tr("New Model")).open(&mut open).show(
+        crate::windows::Dialog::new(crate::i18n::tr("New Project")).open(&mut open).show(
             ui.ctx(),
             |ui| {
                 ui.set_width(300.0);
@@ -4657,6 +4651,7 @@ impl EditorUi {
                 ui.weak(crate::i18n::tr(
                     "Angle, eyes, mouth, body and breath, the ids trackers expect.",
                 ));
+                ui.checkbox(&mut new.timelapse, crate::i18n::tr("Record timelapse"));
                 ui.add_space(6.0);
                 if ui.button(crate::i18n::tr("Create")).clicked() {
                     create = true;
@@ -4703,8 +4698,10 @@ impl EditorUi {
                 }
             }
             let name = if new.name.is_empty() { "untitled".into() } else { new.name };
+            let record = new.timelapse;
             match Session::create(&ui.ctx().clone(), name, new.author, model) {
-                Ok(s) => {
+                Ok(mut s) => {
+                    s.timelapse_pref = Some(record);
                     self.session = Some(s);
                     self.selected = None;
                     self.multi_sel.clear();
@@ -5004,17 +5001,8 @@ impl EditorUi {
                     self.close_session();
                 }
             }
-            "export-image" if have => self.export_image(),
-            "export-moc3" if have => {
-                let name = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
-                self.export_dlg = Some(ExportDlg {
-                    name,
-                    version: ayatsuri_import::ExportVersion::default_index(),
-                    physics: true,
-                    motions: true,
-                    expressions: true,
-                });
-            }
+            "export-image" if have => self.open_export(2),
+            "export-moc3" if have => self.open_export(0),
             "shortcuts" => {
                 self.show_settings = true;
                 self.settings_tab = 3;
@@ -5426,18 +5414,39 @@ impl EditorUi {
     }
 
     /// Render the current pose to a PNG at canvas resolution.
-    fn export_image(&mut self) {
+    /// File > Export Model: the window on the tab asked for, settings kept
+    /// from the last time it was open.
+    pub(crate) fn open_export(&mut self, tab: usize) {
         let Some(s) = &self.session else { return };
-        let file = format!("{}.png", s.name);
-        self.pick_async(PickFor::ExportImage, move || {
+        let mut dlg = self.export_dlg.take().unwrap_or_else(|| ExportDlg {
+            name: s.name.clone(),
+            version: ayatsuri_import::ExportVersion::default_index(),
+            physics: true,
+            motions: true,
+            expressions: true,
+            tab: 0,
+            image_width: s.puppet.model().canvas.width.max(1.0) as u32,
+            jpeg: false,
+            transparent: true,
+        });
+        dlg.tab = tab;
+        self.export_dlg = Some(dlg);
+    }
+
+    /// The Image tab's Export: pick the file, then render at the size asked for.
+    pub(crate) fn export_image(&mut self, width: u32, jpeg: bool, transparent: bool) {
+        let Some(s) = &self.session else { return };
+        let (ext, label) = if jpeg { ("jpg", "JPEG image") } else { ("png", "PNG image") };
+        let file = format!("{}.{ext}", s.name);
+        self.pick_async(PickFor::ExportImage(width, jpeg, transparent), move || {
             rfd::FileDialog::new()
-                .add_filter(crate::i18n::tr("PNG image"), &["png"])
+                .add_filter(crate::i18n::tr(label), &[ext])
                 .set_file_name(file)
                 .save_file()
         });
     }
 
-    fn export_image_to(&mut self, path: PathBuf) {
+    fn export_image_to(&mut self, path: PathBuf, width: u32, jpeg: bool, transparent: bool) {
         let Some(s) = &self.session else { return };
         let mut tex = Vec::new();
         for png in &s.texture_pngs {
@@ -5456,14 +5465,32 @@ impl EditorUi {
                 }
             }
         }
-        let width = s.puppet.model().canvas.width.max(1.0) as usize;
-        let (w, h, rgba) = crate::thumb::render(&s.puppet, &tex, width);
-        match image::RgbaImage::from_raw(w as u32, h as u32, rgba) {
-            Some(img) => match img.save(&path) {
-                Ok(()) => log::info!("image exported to {}", path.display()),
-                Err(e) => log::error!("image export: {e}"),
-            },
-            None => log::error!("image export: buffer size mismatch"),
+        let width = (width.clamp(16, 16384)) as usize;
+        let (w, h, mut rgba) = crate::thumb::render(&s.puppet, &tex, width);
+        // JPEG has no alpha, and an opaque PNG was asked for: over white
+        if jpeg || !transparent {
+            for px in rgba.as_chunks_mut::<4>().0 {
+                let a = px[3] as u32;
+                for c in px.iter_mut().take(3) {
+                    *c = ((*c as u32 * a + 255 * (255 - a)) / 255) as u8;
+                }
+                px[3] = 255;
+            }
+        }
+        let Some(img) = image::RgbaImage::from_raw(w as u32, h as u32, rgba) else {
+            log::error!("image export: buffer size mismatch");
+            return;
+        };
+        let result = if jpeg {
+            image::DynamicImage::ImageRgba8(img)
+                .to_rgb8()
+                .save_with_format(&path, image::ImageFormat::Jpeg)
+        } else {
+            img.save(&path)
+        };
+        match result {
+            Ok(()) => log::info!("image exported to {}", path.display()),
+            Err(e) => log::error!("image export: {e}"),
         }
     }
 

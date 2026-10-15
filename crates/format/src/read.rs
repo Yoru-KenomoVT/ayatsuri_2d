@@ -67,7 +67,12 @@ mod tests {
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
         });
         let payload = AomPayload {
-            meta: Meta { name: "t".into(), author: String::new(), tool: "test".into() },
+            meta: Meta {
+                name: "t".into(),
+                author: String::new(),
+                tool: "test".into(),
+                timelapse: None,
+            },
             model,
             textures: vec![serde_bytes::ByteBuf::from(vec![1u8, 2, 3])],
             display: None,

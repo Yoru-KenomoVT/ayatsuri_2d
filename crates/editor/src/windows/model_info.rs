@@ -1,4 +1,4 @@
-// File > Model Info: the name and author saved in the .aom meta.
+// File > Project: the name, author and timelapse switch saved in the .aom meta.
 
 use crate::panels::EditorUi;
 use egui::Ui;
@@ -9,7 +9,8 @@ impl EditorUi {
             return;
         }
         let mut open = self.show_model_info;
-        crate::windows::Dialog::new(crate::i18n::tr("Model Info")).open(&mut open).show(
+        let default_rec = !self.prefs.timelapse_off;
+        crate::windows::Dialog::new(crate::i18n::tr("Project")).open(&mut open).show(
             ui.ctx(),
             |ui| {
                 let Some(s) = &mut self.session else {
@@ -31,8 +32,17 @@ impl EditorUi {
                         &[("width", &c.width), ("height", &c.height), ("ppu", &c.pixels_per_unit)],
                     ));
                     ui.end_row();
+                    ui.label(crate::i18n::tr("Timelapse"));
+                    let mut rec = s.timelapse_pref.unwrap_or(default_rec);
+                    if ui.checkbox(&mut rec, crate::i18n::tr("Record timelapse")).changed() {
+                        s.timelapse_pref = Some(rec);
+                        s.modified = true;
+                    }
+                    ui.end_row();
                 });
-                ui.weak(crate::i18n::tr("Name and author save into the .aom meta block."));
+                ui.weak(crate::i18n::tr(
+                    "Saved with the project. Settings > General holds the default for new projects.",
+                ));
             },
         );
         self.show_model_info = open;
