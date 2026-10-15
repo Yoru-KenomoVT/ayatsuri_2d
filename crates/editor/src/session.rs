@@ -190,6 +190,9 @@ pub struct Session {
     /// None when it had none, and export then writes the standard ones.
     pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
     pub guides: Vec<ayatsuri_format::GuideLine>,
+    /// Records each step of the model into `<file>.timelapse`.
+    pub timelapse: crate::timelapse::Recorder,
+    pub timelapse_on: bool,
     pub bezier_nets: HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     undo: Vec<Model>,
     redo: Vec<Model>,
@@ -692,6 +695,8 @@ impl Session {
         self.combined = old.combined;
         self.model_groups = old.model_groups;
         self.guides = old.guides;
+        self.timelapse = old.timelapse;
+        self.timelapse_on = old.timelapse_on;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
@@ -709,6 +714,7 @@ impl Session {
             self.puppet.set_mesh_visible(i, *on);
         }
         self.dirty = true;
+        self.record_step();
         Ok(())
     }
 
@@ -767,6 +773,8 @@ impl Session {
         self.combined = old.combined;
         self.model_groups = old.model_groups;
         self.guides = old.guides;
+        self.timelapse = old.timelapse;
+        self.timelapse_on = old.timelapse_on;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
@@ -784,6 +792,7 @@ impl Session {
             self.puppet.set_mesh_visible(i, *on);
         }
         self.dirty = true;
+        self.record_step();
         info!("imported {added_meshes} layer(s) in {added_parts} folder(s)");
         Ok((added_meshes, added_parts))
     }
@@ -810,6 +819,8 @@ impl Session {
             s.modified = true;
         }
         s.aom_path = Some(path.to_path_buf());
+        s.timelapse = crate::timelapse::Recorder::open(Some(path));
+        s.timelapse.record(s.puppet.model());
         s.author = payload.meta.author;
         s.animations = payload.animations;
         s.expressions = payload.expressions;
@@ -1174,6 +1185,8 @@ impl Session {
             combined,
             model_groups: None,
             guides: Vec::new(),
+            timelapse: crate::timelapse::Recorder::default(),
+            timelapse_on: true,
             bezier_nets: HashMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1305,6 +1318,13 @@ impl Session {
     fn push_undo(&mut self, before: Model) {
         self.undo.push(before);
         trim_history(&mut self.undo);
+    }
+
+    /// One step of the timelapse, when recording is on.
+    fn record_step(&mut self) {
+        if self.timelapse_on {
+            self.timelapse.record(self.puppet.model());
+        }
     }
 
     pub fn edit(&mut self, f: impl FnOnce(&mut Model) -> bool) -> bool {
@@ -1439,6 +1459,7 @@ impl Session {
         puppet.update();
         self.puppet = puppet;
         self.dirty = false;
+        self.record_step();
     }
 
     /// Save this session as `.aom`, atomically, and remember the path.
@@ -1574,6 +1595,7 @@ impl Session {
             started.elapsed().as_secs_f32() * 1000.0
         );
         self.aom_path = Some(path.to_path_buf());
+        self.timelapse.saved_as(path);
         self.modified = false;
         Ok(())
     }

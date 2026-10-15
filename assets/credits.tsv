@@ -36,6 +36,7 @@ chacha20	0.10.2	MIT OR Apache-2.0	https://github.com/RustCrypto/stream-ciphers
 clipboard-win	5.4.1	BSL-1.0	https://github.com/DoumanAsh/clipboard-win
 codespan-reporting	0.13.1	Apache-2.0	https://github.com/brendanzab/codespan
 color	0.3.3	Apache-2.0 OR MIT	https://github.com/linebender/color
+color_quant	1.1.0	MIT	https://github.com/image-rs/color_quant.git
 combine	4.6.8	MIT	https://github.com/Marwes/combine
 concurrent-queue	2.5.0	Apache-2.0 OR MIT	https://github.com/smol-rs/concurrent-queue
 const-oid	0.10.2	Apache-2.0 OR MIT	https://github.com/RustCrypto/formats
@@ -95,6 +96,7 @@ gethostname	1.1.0	Apache-2.0	https://codeberg.org/swsnr/gethostname.rs.git
 getrandom	0.2.17	MIT OR Apache-2.0	https://github.com/rust-random/getrandom
 getrandom	0.3.4	MIT OR Apache-2.0	https://github.com/rust-random/getrandom
 getrandom	0.4.3	MIT OR Apache-2.0	https://github.com/rust-random/getrandom
+gif	0.14.2	MIT OR Apache-2.0	https://github.com/image-rs/image-gif
 glifo	0.2.0	Apache-2.0 OR MIT	https://github.com/linebender/vello
 glow	0.17.0	MIT OR Apache-2.0 OR Zlib	https://github.com/grovesNL/glow
 glutin	0.32.3	Apache-2.0	https://github.com/rust-windowing/glutin

@@ -20,6 +20,7 @@ mod recovery;
 mod session;
 pub mod theme;
 mod thumb;
+pub(crate) mod timelapse;
 mod update;
 mod windows;
 

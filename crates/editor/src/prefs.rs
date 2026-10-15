@@ -65,6 +65,8 @@ pub struct Prefs {
     /// Hide the canvas rulers (guides still show).
     pub rulers_off: bool,
     pub guide_snap_off: bool,
+    /// Don't record the timelapse beside each model.
+    pub timelapse_off: bool,
     /// The release the user said "Later" to; its banner stays hidden.
     pub update_dismissed: Option<String>,
     /// Physics page splitters as the user left them: settings column

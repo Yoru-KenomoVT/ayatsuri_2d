@@ -174,6 +174,8 @@ pub struct EditorUi {
     startup_done: bool,
 
     pub(crate) show_stats: bool,
+    /// Window > Timelapse, while open.
+    timelapse_view: Option<crate::timelapse::View>,
     show_physics: bool,
     phys_sel: usize,
     phys_tab: usize,
@@ -910,6 +912,7 @@ impl Default for EditorUi {
             startup_done: false,
 
             show_stats: false,
+            timelapse_view: None,
             show_physics: false,
             phys_sel: 0,
             phys_tab: 0,
@@ -2570,6 +2573,13 @@ impl EditorUi {
                         }
                     }
                     ui.separator();
+                    if ui
+                        .add_enabled(self.session.is_some(), egui::Button::new(crate::i18n::tr("Timelapse…")))
+                        .clicked()
+                    {
+                        self.open_timelapse();
+                        ui.close();
+                    }
                     if ui.button(crate::i18n::tr("Settings…")).clicked() {
                         self.show_settings = true;
                         ui.close();
@@ -3025,6 +3035,14 @@ impl EditorUi {
         self.about_window(ui);
         self.settings_window(ui);
         self.stats_window(ui);
+        if let Some(s) = &mut self.session {
+            s.timelapse_on = !self.prefs.timelapse_off;
+        }
+        if let (Some(v), Some(s)) = (&mut self.timelapse_view, &self.session)
+            && !v.show(ui.ctx(), s)
+        {
+            self.timelapse_view = None;
+        }
         self.mesh_edit_window(ui);
         self.param_new_window(ui);
         self.folder_new_window(ui);
@@ -5207,6 +5225,21 @@ impl EditorUi {
     }
 
     /// Ctrl+2: lock or unlock the selection.
+    /// Window > Timelapse: the open model's steps, once it has a file.
+    fn open_timelapse(&mut self) {
+        let Some(s) = &self.session else { return };
+        let Some(path) = s.aom_path.clone() else {
+            log::info!(
+                "save the model first: its timelapse is kept and written with the first save"
+            );
+            return;
+        };
+        match crate::timelapse::View::open(&path) {
+            Ok(v) => self.timelapse_view = Some(v),
+            Err(e) => log::warn!("timelapse: {e}"),
+        }
+    }
+
     /// The deformer's own meshes as the selection.
     fn select_children(&mut self, d: usize) {
         let Some(s) = &self.session else { return };

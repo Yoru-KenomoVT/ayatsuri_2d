@@ -284,6 +284,22 @@ impl EditorUi {
             },
         );
 
+        section(ui, crate::i18n::tr("TIMELAPSE"));
+        let mut rec = !self.prefs.timelapse_off;
+        row(
+            ui,
+            crate::i18n::tr("Record timelapse"),
+            crate::i18n::tr(
+                "Keeps every step of building a model in a .timelapse file beside it, for Window > Timelapse",
+            ),
+            |ui| {
+                if ui.checkbox(&mut rec, "").changed() {
+                    self.prefs.timelapse_off = !rec;
+                    save = true;
+                }
+            },
+        );
+
         section(ui, crate::i18n::tr("UPDATES"));
         let mut check = !self.prefs.update_check_off;
         row(

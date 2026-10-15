@@ -25,7 +25,9 @@ log = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+miniz_oxide = { workspace = true }
 rfd = "0.17"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 egui-phosphor = "0.14.0"
 discord-rich-presence = "1.1"
