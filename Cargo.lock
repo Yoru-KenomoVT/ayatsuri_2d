@@ -206,6 +206,7 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "openmoc3",
  "psd",
+ "quick-xml",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

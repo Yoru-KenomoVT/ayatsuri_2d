@@ -22,5 +22,7 @@ thiserror = { workspace = true }
 psd = "0.3"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
-# Clip Studio tiles are zlib streams
+# Clip Studio tiles and Cubism project zips are deflate streams
 miniz_oxide = { workspace = true }
+# Cubism Editor projects keep their object graph as XML
+quick-xml = "0.41"

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod clip;
+mod cmo3;
 mod exp3;
 mod kra;
 mod layers;
@@ -64,6 +65,7 @@ pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
     Ok(out)
 }
 
+pub use cmo3::{Cmo3, from_cmo3};
 pub use exp3::{from_exp3, to_exp3};
 pub use moc3::from_moc3;
 pub use moc3_export::{ExportVersion, VTS_NOTE, export_warnings, to_moc3};
