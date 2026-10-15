@@ -92,6 +92,23 @@ Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\ayatsuri-launcher.exe" "" "$INSTDIR\ayatsuri2d.ico"
 SectionEnd
 
+; ffmpeg for MP4, WebM and MOV export, fetched by the launcher from its
+; builders (checked against their published checksum) into $INSTDIR\ffmpeg,
+; where the editor looks. Nothing goes on PATH. Skipped when an ffmpeg is
+; already on PATH or in place, and in silent updates (the editor offers it
+; at start instead of the update stalling unseen on a large download).
+Section "ffmpeg for video export (download)" SecFfmpeg
+  IfSilent ffmpeg_done
+  IfFileExists "$INSTDIR\ffmpeg\ffmpeg.exe" ffmpeg_done
+  SearchPath $0 "ffmpeg.exe"
+  StrCmp $0 "" 0 ffmpeg_done
+  DetailPrint "$(MSG_Ffmpeg)"
+  ExecWait '"$INSTDIR\ayatsuri-launcher.exe" --get-ffmpeg "$INSTDIR\ffmpeg"' $0
+  StrCmp $0 "0" ffmpeg_done
+    DetailPrint "$(MSG_FfmpegFailed)"
+  ffmpeg_done:
+SectionEnd
+
 Section "Open .aom files with ${APP}" SecAssoc
   WriteRegStr HKLM "Software\Classes\.aom" "" "Ayatsuri2D.Model"
   WriteRegStr HKLM "Software\Classes\Ayatsuri2D.Model" "" "Ayatsuri2D model"
@@ -103,13 +120,20 @@ SectionEnd
 LangString DESC_App ${LANG_ENGLISH} "The editor and its launcher."
 LangString DESC_Desktop ${LANG_ENGLISH} "A shortcut on the desktop."
 LangString DESC_Assoc ${LANG_ENGLISH} "Double-click .aom models to open them."
+LangString DESC_Ffmpeg ${LANG_ENGLISH} "Downloads ffmpeg (about 190 MB) so MP4, WebM and MOV export work. No admin setup or PATH needed."
+LangString MSG_Ffmpeg ${LANG_ENGLISH} "Downloading ffmpeg for video export..."
+LangString MSG_FfmpegFailed ${LANG_ENGLISH} "ffmpeg could not be downloaded; Ayatsuri2D will offer it again when it starts."
 LangString DESC_App ${LANG_JAPANESE} "エディターとランチャー。"
 LangString DESC_Desktop ${LANG_JAPANESE} "デスクトップのショートカット。"
 LangString DESC_Assoc ${LANG_JAPANESE} ".aom モデルをダブルクリックで開く。"
+LangString DESC_Ffmpeg ${LANG_JAPANESE} "MP4、WebM、MOV の書き出し用に ffmpeg（約 190 MB）をダウンロードします。管理者設定も PATH も不要です。"
+LangString MSG_Ffmpeg ${LANG_JAPANESE} "動画書き出し用の ffmpeg をダウンロードしています..."
+LangString MSG_FfmpegFailed ${LANG_JAPANESE} "ffmpeg をダウンロードできませんでした。Ayatsuri2D の起動時にもう一度提案します。"
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} $(DESC_App)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} $(DESC_Desktop)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecAssoc} $(DESC_Assoc)
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecFfmpeg} $(DESC_Ffmpeg)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
@@ -122,6 +146,7 @@ Section "Uninstall"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\credits.tsv"
   Delete "$INSTDIR\uninstall.exe"
+  RMDir /r "$INSTDIR\ffmpeg"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\${APP}\${APP}.lnk"
   Delete "$SMPROGRAMS\${APP}\Uninstall ${APP}.lnk"

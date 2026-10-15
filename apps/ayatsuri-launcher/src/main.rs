@@ -410,7 +410,34 @@ fn window_icon() -> Option<std::sync::Arc<egui::IconData>> {
     Some(std::sync::Arc::new(egui::IconData { rgba: img.into_raw(), width, height }))
 }
 
+/// `--get-ffmpeg [dir]`, for the installers: fetch ffmpeg for video export
+/// into `dir` (the preferences folder when left out) with no window, and
+/// exit 0 when it is in place. A failure is logged and is not fatal to the
+/// install: the editor offers the download again from its Render window.
+fn get_ffmpeg(dir: Option<String>) -> ! {
+    let dir = dir.map(std::path::PathBuf::from).or_else(ayatsuri_update::ffmpeg::user_dir);
+    let Some(dir) = dir else {
+        log::error!("--get-ffmpeg: no folder to put ffmpeg in");
+        std::process::exit(2);
+    };
+    match ayatsuri_update::ffmpeg::fetch(&dir, &Default::default()) {
+        Ok(path) => {
+            println!("ffmpeg is ready: {}", path.display());
+            std::process::exit(0);
+        }
+        Err(e) => {
+            log::error!("--get-ffmpeg: {e}");
+            eprintln!("could not get ffmpeg: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() -> eframe::Result {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--get-ffmpeg") {
+        get_ffmpeg(args.next());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Ayatsuri2D")

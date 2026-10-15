@@ -180,6 +180,15 @@ pub fn verify(bytes: &[u8], want: &str) -> Result<(), String> {
 /// Fetch, check and put in place the update for this kind of install, from
 /// a release's assets. Blocking; run it off the UI thread.
 pub fn install(install: &Install, assets: &[Asset]) -> Result<Installed, String> {
+    install_counted(install, assets, &crate::Progress::default())
+}
+
+/// `install`, counting the release's download into `progress` for a bar.
+pub fn install_counted(
+    install: &Install,
+    assets: &[Asset],
+    progress: &crate::Progress,
+) -> Result<Installed, String> {
     let suffix = wanted_suffix(install).ok_or("this copy does not update itself")?;
     let sums = assets
         .iter()
@@ -193,7 +202,12 @@ pub fn install(install: &Install, assets: &[Asset]) -> Result<Installed, String>
         .map_err(|_| "SHA256SUMS.txt is not text")?;
     let want = digest_for(&sums, &artefact.name)
         .ok_or_else(|| format!("SHA256SUMS.txt has no line for {}", artefact.name))?;
-    let bytes = get(&artefact.browser_download_url, MAX_ARTEFACT)?;
+    let url = &artefact.browser_download_url;
+    let mut resp = ureq::get(url)
+        .header("User-Agent", &format!("Ayatsuri2D/{}", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|e| format!("could not download {url}: {e}"))?;
+    let bytes = crate::read_counted(&mut resp, MAX_ARTEFACT, progress)?;
     verify(&bytes, &want)?;
 
     match install {

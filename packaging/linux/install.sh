@@ -25,6 +25,35 @@ files() {
   cd "$HERE" && find bin share -type f | sort
 }
 
+# MP4, WebM and MOV export need ffmpeg. With none on PATH, offer to fetch
+# one for Ayatsuri2D only (into its settings folder, checked against the
+# builder's published checksum): no root, nothing added to PATH. A
+# system-wide install leaves it to each user; the editor offers it at start.
+get_ffmpeg() {
+  command -v ffmpeg >/dev/null 2>&1 && [ -z "${AYATSURI_PRETEND_NO_FFMPEG:-}" ] && return 0
+  conf="${XDG_CONFIG_HOME:-$HOME/.config}/ayatsuri2d/ffmpeg/ffmpeg"
+  [ -x "$conf" ] && return 0
+  if [ "$(id -u)" = 0 ]; then
+    echo "note: no ffmpeg found; each user can install it from Ayatsuri2D, or install your distro's ffmpeg package"
+    return 0
+  fi
+  answer=y
+  if [ -t 0 ]; then
+    printf "MP4, WebM and MOV export need ffmpeg, which is not installed.\nDownload it for Ayatsuri2D now (about 30 MB, no root, nothing added to PATH)? [Y/n] "
+    read -r answer || answer=n
+  fi
+  case "$answer" in
+    "" | y | Y | yes | Yes)
+      if "$PREFIX/bin/ayatsuri-launcher" --get-ffmpeg; then
+        :
+      else
+        echo "note: ffmpeg could not be downloaded; Ayatsuri2D will offer it again when it starts"
+      fi
+      ;;
+    *) echo "skipped; Ayatsuri2D will offer ffmpeg when it starts" ;;
+  esac
+}
+
 if [ "$UNINSTALL" = 1 ]; then
   for f in $(files); do rm -f "$PREFIX/$f"; done
   rmdir "$PREFIX/share/doc/ayatsuri2d" 2>/dev/null || true
@@ -37,6 +66,7 @@ else
   done
   echo "installed Ayatsuri2D into $PREFIX"
   case ":$PATH:" in *":$PREFIX/bin:"*) ;; *) echo "note: $PREFIX/bin is not on your PATH" ;; esac
+  get_ffmpeg
 fi
 
 # refresh the caches; each tool is optional

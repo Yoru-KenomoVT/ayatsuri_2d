@@ -16,6 +16,15 @@ which is MIT, and because it is useful to people who will never adopt the rest
 of this project. Keeping it permissive means the work flows back to the
 community it came from.
 
+## ffmpeg is not part of Ayatsuri2D
+
+No ffmpeg ships in any download. When video export needs one, the editor
+or an installer fetches a build straight from the people who make it
+([BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) on Windows,
+[martin-riedl.de](https://ffmpeg.martin-riedl.de) on Linux and macOS) at the
+user's request. It runs as a separate program under its own licence (GPL for
+these builds), and the codecs it carries are between the user and ffmpeg.
+
 ## The C ABI is Apache-2.0
 
 Settled. `ayatsumi_abi` is Apache-2.0, chosen over MIT for the explicit patent

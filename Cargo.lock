@@ -240,10 +240,12 @@ name = "ayatsuri-update"
 version = "0.5.5"
 dependencies = [
  "flate2",
+ "log",
  "serde",
  "serde_json",
  "sha2",
  "ureq",
+ "zip",
 ]
 
 [[package]]

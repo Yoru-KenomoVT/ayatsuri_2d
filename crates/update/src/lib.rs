@@ -14,7 +14,54 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+pub mod ffmpeg;
 pub mod install;
+
+/// How far a download has come, for a progress bar on another thread:
+/// bytes so far, and the size once the server has said it (0 until then).
+#[derive(Debug, Default)]
+pub struct Progress {
+    pub done: std::sync::atomic::AtomicU64,
+    pub total: std::sync::atomic::AtomicU64,
+}
+
+impl Progress {
+    /// Bytes so far and the size (0 while unknown).
+    pub fn get(&self) -> (u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (self.done.load(Relaxed), self.total.load(Relaxed))
+    }
+}
+
+/// Read a response body to the end, counting into `progress`, refusing
+/// more than `limit` bytes.
+pub(crate) fn read_counted(
+    resp: &mut ureq::http::Response<ureq::Body>,
+    limit: u64,
+    progress: &Progress,
+) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::sync::atomic::Ordering::Relaxed;
+    if let Some(len) = resp
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        progress.total.store(len, Relaxed);
+    }
+    let mut reader = resp.body_mut().with_config().limit(limit).reader();
+    let mut bytes = Vec::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| format!("the download did not finish: {e}"))?;
+        if n == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(buf.get(..n).unwrap_or_default());
+        progress.done.store(bytes.len() as u64, Relaxed);
+    }
+}
 
 /// The releases list: newest first, pre-releases included.
 pub const RELEASES_API: &str =

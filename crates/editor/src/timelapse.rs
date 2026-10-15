@@ -375,7 +375,8 @@ fn export(
     let mut made = format!("{} frames, {}", written, gif_path.display());
     // MP4 through ffmpeg when it is installed: nothing patent-encumbered ships
     let mp4 = folder.join(format!("{stem}-timelapse.mp4"));
-    let ffmpeg = std::process::Command::new("ffmpeg")
+    let program = ayatsuri_update::ffmpeg::program().unwrap_or_else(|| PathBuf::from("ffmpeg"));
+    let ffmpeg = std::process::Command::new(program)
         .arg("-y")
         .args(["-framerate", &fps.to_string()])
         .arg("-i")
@@ -387,7 +388,7 @@ fn export(
         .status();
     match ffmpeg {
         Ok(st) if st.success() => made.push_str(&format!(", {}", mp4.display())),
-        _ => made.push_str(" (install ffmpeg for an MP4 too)"),
+        _ => made.push_str(" (install ffmpeg from the Render window for an MP4 too)"),
     }
     Ok(made)
 }

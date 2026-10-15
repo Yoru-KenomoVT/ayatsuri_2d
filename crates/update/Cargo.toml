@@ -11,8 +11,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10"
 flate2 = "1"
+zip = { version = "9", default-features = false, features = ["deflate"] }

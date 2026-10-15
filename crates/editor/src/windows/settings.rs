@@ -315,6 +315,20 @@ impl EditorUi {
                 }
             },
         );
+        let mut ask = !self.prefs.ffmpeg_prompt_off;
+        row(
+            ui,
+            crate::i18n::tr("Offer ffmpeg"),
+            crate::i18n::tr(
+                "When ffmpeg is missing, offers at start to download it for MP4, WebM and MOV export",
+            ),
+            |ui| {
+                if ui.checkbox(&mut ask, "").changed() {
+                    self.prefs.ffmpeg_prompt_off = !ask;
+                    save = true;
+                }
+            },
+        );
 
         section(ui, crate::i18n::tr("DISCORD"));
         let mut on = !self.prefs.discord_off;

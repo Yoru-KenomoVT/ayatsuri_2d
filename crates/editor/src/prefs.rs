@@ -62,6 +62,8 @@ pub struct Prefs {
     pub language: Option<String>,
     /// Don't ask GitHub for a newer release at start (launcher and editor).
     pub update_check_off: bool,
+    /// Don't offer to download ffmpeg at start when there is none.
+    pub ffmpeg_prompt_off: bool,
     /// Hide the canvas rulers (guides still show).
     pub rulers_off: bool,
     pub guide_snap_off: bool,

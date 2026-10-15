@@ -149,6 +149,8 @@ pub struct EditorUi {
     pub(crate) prefs: Prefs,
     tool: Tool,
     pub(crate) show_about: bool,
+    /// The start-up offer to download ffmpeg when there is none.
+    ffmpeg_prompt: crate::ffmpeg::Prompt,
     pub(crate) about: crate::windows::about::AboutState,
     /// What's known about newer releases (launcher's check, About's check).
     pub(crate) update: crate::update::UpdateState,
@@ -176,6 +178,8 @@ pub struct EditorUi {
     pub(crate) show_stats: bool,
     /// Window > Timelapse, while open.
     timelapse_view: Option<crate::timelapse::View>,
+    /// File > Export Animation / Export Timelapse, while open.
+    pub(crate) render_win: Option<crate::windows::render::RenderWin>,
     show_physics: bool,
     phys_sel: usize,
     phys_tab: usize,
@@ -196,7 +200,7 @@ pub struct EditorUi {
     phys_prev_until: f64,
 
     /// The physics dialog's Valid checkbox: the rig only ticks while on.
-    physics_on: bool,
+    pub(crate) physics_on: bool,
     /// Drive the standard face/body/eye parameters from the cursor.
     follow_cursor: bool,
     follow: Vec2,
@@ -750,6 +754,7 @@ pub(crate) enum PickFor {
     },
     /// Width in pixels, JPEG rather than PNG, transparent background.
     ExportImage(u32, bool, bool),
+    RenderFolder,
     ExportMoc3(Box<ExportDlg>),
     WorkspaceExport,
     WorkspaceImport,
@@ -887,6 +892,7 @@ impl Default for EditorUi {
     fn default() -> Self {
         let prefs = Prefs::load();
         let check_updates = !prefs.update_check_off;
+        let ask_ffmpeg = !prefs.ffmpeg_prompt_off;
         crate::i18n::set_language(prefs.language.as_deref().unwrap_or("system"));
         let pending_import = if prefs.reopen_last { prefs.recents.first().cloned() } else { None };
         let layout = prefs.workspace_modeling.clone().unwrap_or_else(dock::default_workspace);
@@ -906,6 +912,7 @@ impl Default for EditorUi {
             about: crate::windows::about::AboutState::default(),
             // tests never reach the network
             update: crate::update::UpdateState::new(check_updates && !cfg!(test)),
+            ffmpeg_prompt: crate::ffmpeg::Prompt::new(ask_ffmpeg && !cfg!(test)),
             export_overwrite: None,
             show_settings: false,
             show_api_window: false,
@@ -922,6 +929,7 @@ impl Default for EditorUi {
 
             show_stats: false,
             timelapse_view: None,
+            render_win: None,
             show_physics: false,
             phys_sel: 0,
             phys_tab: 0,
@@ -1479,6 +1487,11 @@ impl EditorUi {
                 self.confirm_close = Some(action);
             }
             (PickFor::ExportImage(w, j, t), Some(path)) => self.export_image_to(path, w, j, t),
+            (PickFor::RenderFolder, Some(dir)) => {
+                if let Some(w) = &mut self.render_win {
+                    w.set_folder(dir);
+                }
+            }
             (PickFor::ExportMoc3(dlg), Some(dir)) => self.export_moc3_to(&dlg, &dir),
             // a cancelled folder pick leaves the export dialog as it was
             (PickFor::ExportMoc3(dlg), None) => self.export_dlg = Some(*dlg),
@@ -1984,6 +1997,34 @@ impl EditorUi {
                     {
                         ui.close();
                         self.open_export(0);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Export Animation…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            "Render a scene, with an expression on top if you like, to GIF, \
+                             a PNG sequence, MP4, WebM or MOV",
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.open_render(&ui.ctx().clone(), crate::windows::render::Source::Animation);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Export Timelapse…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            "Render the project's timelapse: every step of the rig, held on the \
+                             finished model at the end",
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.open_render(&ui.ctx().clone(), crate::windows::render::Source::Timelapse);
                     }
                     if ui
                         .add_enabled(
@@ -3033,6 +3074,12 @@ impl EditorUi {
         self.deformer_dialog_window(ui);
 
         self.about_window(ui);
+        let mut never = false;
+        self.ffmpeg_prompt.show(ui.ctx(), &mut never);
+        if never {
+            self.prefs.ffmpeg_prompt_off = true;
+            self.prefs.save();
+        }
         self.settings_window(ui);
         self.stats_window(ui);
         if let Some(s) = &mut self.session {
@@ -3050,6 +3097,7 @@ impl EditorUi {
         self.model_info_window(ui);
         self.new_anim_window(ui);
         self.export_window(ui);
+        self.render_window(ui);
         self.export_overwrite_window(ui);
         self.close_confirm_window(ui);
         self.workspace_windows(ui);

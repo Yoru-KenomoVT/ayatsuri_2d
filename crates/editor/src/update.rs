@@ -35,8 +35,10 @@ pub(crate) struct UpdateState {
     last_read: Option<Instant>,
     /// How this copy was installed, worked out once when first needed.
     how: Option<Install>,
-    /// A running "Update now".
+    /// A running "Update now", and how far its download has come.
     installing: Option<Receiver<Result<Installed, String>>>,
+    progress: std::sync::Arc<ayatsuri_update::Progress>,
+    bar: crate::windows::ByteBar,
     /// What the last "Update now" came to.
     pub(crate) installed: Option<Result<Installed, String>>,
     /// Restart was pressed: start the new version as the editor exits.
@@ -97,9 +99,12 @@ impl UpdateState {
         }
         let how = self.how().clone();
         let (tx, rx) = channel();
+        self.progress = Default::default();
+        self.bar = Default::default();
+        let counted = self.progress.clone();
         let spawned = std::thread::Builder::new().name("update-install".into()).spawn(move || {
             let answer = ayatsuri_update::fetch_with_assets(&current())
-                .and_then(|(_, assets)| install::install(&how, &assets));
+                .and_then(|(_, assets)| install::install_counted(&how, &assets, &counted));
             let _ = tx.send(answer);
         });
         match spawned {
@@ -165,9 +170,11 @@ impl UpdateState {
 pub(crate) fn actions(ui: &mut egui::Ui, state: &mut UpdateState, latest: &Latest) {
     use crate::i18n::tr;
     if state.installing() {
-        ui.spinner();
-        ui.label(tr("Downloading the update…"));
-        ui.ctx().request_repaint_after(Duration::from_millis(200));
+        ui.vertical(|ui| {
+            ui.set_max_width(320.0);
+            ui.label(tr("Downloading the update…"));
+            state.bar.show(ui, state.progress.get());
+        });
         return;
     }
     match &state.installed {
