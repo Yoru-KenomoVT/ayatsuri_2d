@@ -59,6 +59,8 @@
 
 ### Fixed
 
+- Discord Rich Presence shows the app's picture under any Application ID:
+  the image is fetched from ayatsuri-2d.org instead of an uploaded asset.
 - Running out of video memory no longer crashes the editor (and no longer
   crashes it again every frame); the canvas says so instead (#3).
 - Re-import PSD no longer piles up texture pages: pages no mesh uses are

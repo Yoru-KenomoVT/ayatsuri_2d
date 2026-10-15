@@ -14,6 +14,9 @@ pub(crate) const GITHUB: &str = "https://github.com/Yoru-KenomoVT/ayatsuri_2d";
 
 /// Ayatsuri2D's own Discord application, so presence works with no setup.
 pub const APP_ID: &str = "1559152287459446904";
+/// The presence image. Discord fetches external images itself, which
+/// spares uploading an art asset to every application id.
+const ICON_URL: &str = "https://ayatsuri-2d.org/img/icon-256.png";
 
 enum Msg {
     Show { details: String, state: String },
@@ -69,7 +72,9 @@ impl Presence {
                             .timestamps(Timestamps::new().start(started))
                             .assets(
                                 Assets::new()
-                                    .large_image("logo")
+                                    // a URL, not an asset key, so it shows
+                                    // under any Application ID the user sets
+                                    .large_image(ICON_URL)
                                     .large_text(concat!("Ayatsuri2D ", env!("CARGO_PKG_VERSION"))),
                             )
                             .buttons(vec![Button::new("Ayatsuri2D on GitHub", GITHUB)]);
