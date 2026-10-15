@@ -15,6 +15,14 @@
   Vector, fill, gradient and text layers come in as Clip Studio draws
   them. The reader was built from the files themselves and treats them as
   hostile input, like every other format.
+- **Export Animation** and **Export Timelapse** open the new **Render**
+  window: formats down the left (GIF, PNG sequence, MP4, WebM, MOV),
+  settings in the middle (scene, an expression on top, work area, frame
+  rate, width, transparent background, folder), a preview and a render
+  queue on the right. Frames render on a worker thread; GIF and PNG are
+  built in, the video formats stream to ffmpeg when it is on PATH and the
+  window says so when it isn't. Physics runs during an animation render
+  when it is on in the editor.
 - **Export Model** replaces Export Image and Export as moc3: one window
   with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
