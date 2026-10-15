@@ -1052,6 +1052,101 @@ pub fn delete_art_meshes(model: &mut Model, meshes: &[usize]) -> bool {
     true
 }
 
+/// Put an art mesh (a copy from the clipboard) into the model and return its
+/// index. It keeps its id when that is free (a cut and paste is a move),
+/// else takes `<id>_copy`, `<id>_copy2`...; it draws next to the mesh named
+/// `beside` when that is still there, else among its part's meshes, else
+/// at the end of the top group. Its ArtPath comes with it. Masks pointing
+/// past the end are dropped; glue is not copied.
+pub fn insert_art_mesh(
+    model: &mut Model,
+    mut mesh: ayatsuri_format::model::ArtMesh,
+    path: Option<ayatsuri_format::model::ArtPath>,
+    beside: Option<&str>,
+) -> usize {
+    let taken = |id: &str, m: &Model| m.art_meshes.iter().any(|x| x.id == id);
+    if taken(&mesh.id, model) {
+        let base = format!("{}_copy", mesh.id);
+        let mut id = base.clone();
+        let mut n = 2;
+        while taken(&id, model) {
+            id = format!("{base}{n}");
+            n += 1;
+        }
+        mesh.id = id;
+    }
+    let count = model.art_meshes.len() as u32;
+    mesh.masks.retain(|&x| x < count);
+    if mesh.parent_part.is_some_and(|p| p as usize >= model.parts.len()) {
+        mesh.parent_part = None;
+    }
+    if mesh.parent_deformer.is_some_and(|d| d as usize >= model.deformers.len()) {
+        mesh.parent_deformer = None;
+    }
+    let index = model.art_meshes.len();
+    let next_to = beside.and_then(|id| model.art_meshes.iter().position(|m| m.id == id));
+    let part = mesh.parent_part;
+
+    // the group and slot the copy draws in
+    let mut place: Option<(usize, usize)> = None;
+    for (gi, g) in model.draw_groups.iter().enumerate() {
+        for (ii, it) in g.items.iter().enumerate() {
+            if it.part {
+                continue;
+            }
+            let o = it.object as usize;
+            if Some(o) == next_to {
+                place = Some((gi, ii + 1));
+            } else if place.is_none()
+                && next_to.is_none()
+                && model.art_meshes.get(o).is_some_and(|m| m.parent_part == part)
+            {
+                place = Some((gi, g.items.len()));
+            }
+        }
+    }
+    let (group, slot) =
+        place.unwrap_or((0, model.draw_groups.first().map_or(0, |g| g.items.len())));
+    if let Some(path) = path {
+        model.art_paths.push(ayatsuri_format::model::ArtPath { mesh: mesh.id.clone(), ..path });
+    }
+    model.art_meshes.push(mesh);
+    if model.draw_groups.is_empty() {
+        return index;
+    }
+    let mut parent_group: Vec<Option<usize>> = vec![None; model.draw_groups.len()];
+    for (gi, g) in model.draw_groups.iter().enumerate() {
+        for it in &g.items {
+            if let Some(slot) = it.child_group.and_then(|c| parent_group.get_mut(c as usize)) {
+                *slot = Some(gi);
+            }
+        }
+    }
+    if let Some(g) = model.draw_groups.get_mut(group) {
+        let slot = slot.min(g.items.len());
+        g.items.insert(
+            slot,
+            ayatsuri_format::model::DrawItem {
+                part: false,
+                object: index as u32,
+                child_group: None,
+            },
+        );
+    }
+    let mut at = Some(group);
+    let mut hops = 0;
+    while let Some(g) = at
+        && hops <= parent_group.len()
+    {
+        if let Some(gr) = model.draw_groups.get_mut(g) {
+            gr.total += 1;
+        }
+        at = parent_group.get(g).copied().flatten();
+        hops += 1;
+    }
+    index
+}
+
 /// The ArtPath behind a mesh, if it was drawn as one.
 pub fn art_path_of(model: &Model, mesh: usize) -> Option<&ayatsuri_format::model::ArtPath> {
     let id = &model.art_meshes.get(mesh)?.id;
@@ -3364,6 +3459,43 @@ mod tests {
         p.update();
         assert_eq!(p.drawables().count(), 3);
         assert!(!delete_art_meshes(&mut m, &[7]));
+    }
+
+    #[test]
+    fn a_pasted_mesh_draws_beside_its_original_and_a_cut_keeps_its_id() {
+        use ayatsuri_format::model::{DrawGroup, DrawItem};
+        let mut m = test_model();
+        let base = m.art_meshes[0].clone();
+        m.art_meshes = (0..3).map(|i| ArtMesh { id: format!("M{i}"), ..base.clone() }).collect();
+        let mesh = |object| DrawItem { part: false, object, child_group: None };
+        // root: M0 and a part holding group 1 (M1, M2)
+        m.draw_groups = vec![
+            DrawGroup {
+                total: 3,
+                min_order: 500,
+                max_order: 500,
+                items: vec![mesh(0), DrawItem { part: true, object: 0, child_group: Some(1) }],
+            },
+            DrawGroup { total: 2, min_order: 500, max_order: 500, items: vec![mesh(1), mesh(2)] },
+        ];
+        // a copy of M1: a new id, right after M1 in M1's group, totals up the tree
+        let copy = m.art_meshes[1].clone();
+        let i = insert_art_mesh(&mut m, copy.clone(), None, Some("M1"));
+        assert_eq!(i, 3);
+        assert_eq!(m.art_meshes[3].id, "M1_copy");
+        let objects: Vec<u32> = m.draw_groups[1].items.iter().map(|it| it.object).collect();
+        assert_eq!(objects, vec![1, 3, 2]);
+        assert_eq!((m.draw_groups[1].total, m.draw_groups[0].total), (3, 4));
+        assert_eq!(insert_art_mesh(&mut m, copy, None, Some("M1")), 4);
+        assert_eq!(m.art_meshes[4].id, "M1_copy2");
+        // cut M2, paste it back: the id is free again, so it keeps it
+        let cut = m.art_meshes[2].clone();
+        assert!(delete_art_meshes(&mut m, &[2]));
+        let i = insert_art_mesh(&mut m, cut, None, Some("M2"));
+        assert_eq!(m.art_meshes[i].id, "M2");
+        let mut p = Puppet::new(m.clone());
+        p.update();
+        assert_eq!(p.drawables().count(), 5);
     }
 
     #[test]
