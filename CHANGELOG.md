@@ -15,6 +15,12 @@
   Vector, fill, gradient and text layers come in as Clip Studio draws
   them. The reader was built from the files themselves and treats them as
   hostile input, like every other format.
+- **Export Model** replaces Export Image and Export as moc3: one window
+  with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
+  any width, transparent or on white, of the model as it stands.
+- **Project** replaces Model Info, and New Model is New Project. Both
+  carry a **Record timelapse** switch saved with the project; Settings
+  keeps the default for new ones.
 - **Timelapse**: every step of building a model (each edit, undo and redo)
   is kept in a small `.timelapse` file beside it, as compressed changes.
   Window > Timelapse plays it back with a scrubber and exports PNG frames
