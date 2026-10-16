@@ -172,6 +172,18 @@ fn credits(check: bool) -> Result<()> {
     Ok(())
 }
 
+/// `cargo xtask soak <model.aom> [seconds]`: run the headless soak example
+/// in release, which fails when memory grows over the run.
+fn soak(args: &[String]) -> Result<()> {
+    let model = args.first().ok_or("usage: cargo xtask soak <model.aom> [seconds]")?;
+    let mut argv =
+        vec!["run", "--release", "-p", "ayatsuri", "--example", "soak", "--", model.as_str()];
+    if let Some(secs) = args.get(1) {
+        argv.push(secs.as_str());
+    }
+    run("cargo", &argv)
+}
+
 fn ci() -> Result<()> {
     run("cargo", &["fmt", "--check"])?;
     run("cargo", &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?;
@@ -182,12 +194,15 @@ fn ci() -> Result<()> {
 
 fn main() {
     let task = std::env::args().nth(1).unwrap_or_default();
-    let result = match task.as_str() {
-        "layers" => layers(),
-        "credits" => credits(std::env::args().nth(2).is_some_and(|a| a == "--check")),
-        "ci" => ci(),
-        _ => Err("usage: cargo xtask <layers|credits [--check]|ci>".into()),
-    };
+    let result =
+        match task.as_str() {
+            "layers" => layers(),
+            "credits" => credits(std::env::args().nth(2).is_some_and(|a| a == "--check")),
+            "ci" => ci(),
+            "soak" => soak(&std::env::args().skip(2).collect::<Vec<_>>()),
+            _ => Err("usage: cargo xtask <layers|credits [--check]|ci|soak <model.aom> [seconds]>"
+                .into()),
+        };
     if let Err(e) = result {
         eprintln!("xtask: {e}");
         std::process::exit(1);
