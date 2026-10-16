@@ -7844,9 +7844,60 @@ impl EditorUi {
                 s.gpu_pending = None;
                 log::debug!("textures are on the GPU");
             }
+            // which pages this frame draws, and whether the small proxy is too
+            // coarse for them at this zoom; residency decides what to load or drop
+            let ppp = ui.ctx().pixels_per_point();
+            let mut used: Vec<(usize, bool)> = Vec::new();
+            for d in s.puppet.drawables() {
+                if d.opacity <= 0.0 || d.indices.is_empty() {
+                    continue;
+                }
+                let page = d.texture as usize;
+                if used.iter().any(|(p, _)| *p == page) {
+                    continue;
+                }
+                let proxy_w = s.preview_tex.get(page).map_or(1, |t| t.width.max(1)) as f32;
+                let full_w = s.residency_page_width(page) as f32;
+                let need = scale * ppp * (full_w / proxy_w) > 1.0;
+                used.push((page, need));
+            }
+            let idle = ui.ctx().input(|i| {
+                let v = i.viewport();
+                v.minimized == Some(true) || v.focused == Some(false)
+            });
+            let budget_mb = match self.prefs.texture_budget_mb {
+                0 => 512,
+                mb => mb,
+            };
+            // the Settings budget rules, except after an out-of-memory, when the
+            // halved budget stands until the model is reopened
+            let pref_budget = budget_mb as usize * (1 << 20);
+            s.residency.budget = if s.residency.oom_count == 0 {
+                pref_budget
+            } else {
+                s.residency.budget.min(pref_budget)
+            };
             if crate::gpu_out_of_memory() {
+                let gone = s.residency.on_out_of_memory();
+                s.gpu_drop.extend(gone);
+                crate::gpu_memory_ok();
+                log::warn!(
+                    "video memory ran out; full texture pages dropped and the budget is now {} MB",
+                    s.residency.budget >> 20
+                );
+            }
+            let plan = s.residency.tick(&used, idle, &s.texture_pngs);
+            if let Some((i, data)) = plan.upload {
+                let mut pages = s.gpu_pages.take().map(|p| (*p).clone()).unwrap_or_default();
+                pages.retain(|(k, _)| *k != i);
+                pages.push((i, data));
+                s.gpu_pages = Some(std::sync::Arc::new(pages));
+                s.gpu_pages_uploaded.store(false, std::sync::atomic::Ordering::Release);
+            }
+            s.gpu_drop.extend(plan.drop);
+            if s.residency.oom_count > 0 {
                 let note = crate::i18n::tr(
-                    "Video memory is full: some textures could not be loaded. Close other models or editor windows, then reopen this one.",
+                    "Video memory ran out: textures beyond the budget draw at lower detail. Close other models or windows to give it back.",
                 );
                 let at = view.left_top() + vec2(12.0, 12.0);
                 let galley = vp.layout(
@@ -7871,6 +7922,7 @@ impl EditorUi {
                 s.gpu_uploaded.clone(),
                 s.gpu_pages.clone(),
                 s.gpu_pages_uploaded.clone(),
+                if s.gpu_drop.is_empty() { None } else { Some(std::mem::take(&mut s.gpu_drop)) },
                 pos2(origin.x, origin.y),
                 scale,
                 ui.ctx().pixels_per_point(),

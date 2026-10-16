@@ -149,6 +149,10 @@ pub struct Session {
     pub gpu_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub gpu_pages: Option<std::sync::Arc<Vec<(usize, ayatsuri_render::TexData)>>>,
     pub gpu_pages_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Full pages the renderer should let go of this frame.
+    pub gpu_drop: Vec<usize>,
+    /// Which pages are on the GPU at full size, and the loading of them.
+    pub residency: crate::residency::Residency,
     pub texture_names: Vec<String>,
     /// The encoded images as imported, kept so saving .aom is lossless.
     pub texture_pngs: Vec<Vec<u8>>,
@@ -1070,8 +1074,12 @@ impl Session {
         cdi: Option<Cdi3>,
         source: &Path,
     ) -> Result<Self, String> {
+        // pages are decoded one at a time and only their proxies are kept:
+        // the full pixels stream to the GPU later, page by page, as the
+        // view needs them (see residency.rs)
         let mut textures = Vec::with_capacity(pngs.len());
-        let mut full = Vec::with_capacity(pngs.len());
+        let mut preview_tex = Vec::with_capacity(pngs.len());
+        let mut sizes = Vec::with_capacity(pngs.len());
         for (i, png) in pngs.iter().enumerate() {
             match decode_texture(
                 ctx,
@@ -1081,44 +1089,24 @@ impl Session {
                 Ok((thumb, data)) => {
                     debug!("texture {i}: {}x{} decoded", data.width, data.height);
                     textures.push(Some(thumb));
-                    full.push(data);
+                    sizes.push((data.width, data.height));
+                    preview_tex.push(shrink_for_preview(data));
                 }
                 Err(e) => {
                     warn!("texture {i}: {e}");
                     textures.push(None);
-                    full.push(ayatsuri_render::TexData { width: 1, height: 1, rgba: vec![255; 4] });
+                    sizes.push((1, 1));
+                    preview_tex.push(ayatsuri_render::TexData {
+                        width: 1,
+                        height: 1,
+                        rgba: vec![255; 4],
+                    });
                 }
             }
         }
         if textures.is_empty() {
             warn!("no textures found; meshes draw untextured");
         }
-
-        // small copies for the CPU previews; the full set goes to the GPU
-        let preview_tex: Vec<ayatsuri_render::TexData> = full
-            .iter()
-            .map(|t| {
-                let long = t.width.max(t.height).max(1);
-                if long <= 512 {
-                    return t.clone();
-                }
-                let k = 512.0 / long as f32;
-                let (w, h) =
-                    (((t.width as f32 * k) as u32).max(1), ((t.height as f32 * k) as u32).max(1));
-                match image::RgbaImage::from_raw(t.width, t.height, t.rgba.clone()) {
-                    Some(img) => {
-                        let small = image::imageops::resize(
-                            &img,
-                            w,
-                            h,
-                            image::imageops::FilterType::Triangle,
-                        );
-                        ayatsuri_render::TexData { width: w, height: h, rgba: small.into_raw() }
-                    }
-                    None => t.clone(),
-                }
-            })
-            .collect();
 
         let cdi = cdi.unwrap_or_default();
         let param_name_of: HashMap<&str, &Cdi3Entry> =
@@ -1214,15 +1202,17 @@ impl Session {
         let n_tex = texture_names.len();
         let mut puppet = Puppet::new(model);
         puppet.update();
-        crate::thumb::ensure(&puppet, &full, source);
+        crate::thumb::ensure(&puppet, &preview_tex, source);
         Ok(Self {
             name,
             puppet,
             textures,
-            gpu_pending: Some(std::sync::Arc::new(full)),
+            gpu_pending: Some(std::sync::Arc::new(preview_tex.clone())),
+            residency: crate::residency::Residency::new(&sizes, 512),
             gpu_uploaded: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gpu_pages: None,
             gpu_pages_uploaded: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            gpu_drop: Vec::new(),
             texture_names,
             texture_pngs: pngs,
             aom_path: None,
@@ -1265,6 +1255,11 @@ impl Session {
     }
 
     /// Let go of the full-size Mesh Edit page, if one is held.
+    /// A page's full width in pixels, as recorded at load.
+    pub fn residency_page_width(&self, index: usize) -> u32 {
+        self.residency.page_size(index).map_or(1, |(w, _)| w)
+    }
+
     pub fn drop_full_textures(&mut self) {
         for slot in &mut self.full_tex {
             if slot.take().is_some() {
@@ -1329,8 +1324,10 @@ impl Session {
         place(&mut self.texture_pngs, index, png);
         place(&mut self.textures, index, Some(thumb));
         place(&mut self.texture_names, index, name);
-        place(&mut self.preview_tex, index, data.clone());
         place(&mut self.full_tex, index, None);
+        let (w, h) = (data.width, data.height);
+        place(&mut self.preview_tex, index, shrink_for_preview(data.clone()));
+        self.residency.set_page(index, w, h);
         let mut pages = self.gpu_pages.take().map(|p| (*p).clone()).unwrap_or_default();
         pages.retain(|(i, _)| *i != index);
         pages.push((index, data));
@@ -1814,6 +1811,25 @@ fn find_beside(
     listed.extend(found);
     listed.truncate(256);
     listed
+}
+
+/// A copy no longer than 512 px on its long side: the CPU previews and
+/// the GPU proxy draw from it, and it is all that stays in memory of a
+/// page between uses.
+fn shrink_for_preview(t: ayatsuri_render::TexData) -> ayatsuri_render::TexData {
+    let long = t.width.max(t.height).max(1);
+    if long <= 512 {
+        return t;
+    }
+    let k = 512.0 / long as f32;
+    let (w, h) = (((t.width as f32 * k) as u32).max(1), ((t.height as f32 * k) as u32).max(1));
+    match image::RgbaImage::from_raw(t.width, t.height, t.rgba) {
+        Some(img) => {
+            let small = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
+            ayatsuri_render::TexData { width: w, height: h, rgba: small.into_raw() }
+        }
+        None => ayatsuri_render::TexData { width: 1, height: 1, rgba: vec![255; 4] },
+    }
 }
 
 fn decode_texture(

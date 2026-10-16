@@ -30,6 +30,8 @@ pub struct Prefs {
     pub keybinds: Vec<(String, String)>,
     /// Repaint cap for animation (physics, follow); 0 leaves it uncapped.
     pub fps_cap: u32,
+    /// Video memory for full-size texture pages, in MB; 0 is the default (512).
+    pub texture_budget_mb: u32,
     /// Model MSAA samples (1 disables); needs a restart. 0 means default.
     pub msaa: u32,
     /// Canvas overlay colours; None follows the theme (mesh lines follow

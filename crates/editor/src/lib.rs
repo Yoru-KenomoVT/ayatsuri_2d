@@ -18,6 +18,7 @@ mod panels;
 mod point_edit;
 mod prefs;
 mod recovery;
+mod residency;
 mod session;
 pub mod theme;
 mod thumb;

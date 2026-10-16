@@ -702,6 +702,27 @@ impl EditorUi {
                 }
             },
         );
+        let mut budget = match self.prefs.texture_budget_mb {
+            256 | 512 | 1024 | 2048 => self.prefs.texture_budget_mb,
+            _ => 512,
+        };
+        row(
+            ui,
+            crate::i18n::tr("Texture memory"),
+            crate::i18n::tr(
+                "Video memory for full-size texture pages; pages beyond it draw from small proxies",
+            ),
+            |ui| {
+                if segmented(
+                    ui,
+                    &mut budget,
+                    &[("256 MB", 256u32), ("512 MB", 512), ("1 GB", 1024), ("2 GB", 2048)],
+                ) {
+                    self.prefs.texture_budget_mb = budget;
+                    save = true;
+                }
+            },
+        );
         row(ui, crate::i18n::tr("Renderer"), "", |ui| {
             let r = if self.gpu {
                 crate::i18n::tr("wgpu (GPU), shared with the UI")

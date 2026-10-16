@@ -89,6 +89,7 @@ pub fn callback(
     uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pages: Option<std::sync::Arc<Vec<(usize, TexData)>>>,
     pages_uploaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    drop_pages: Option<Vec<usize>>,
     // canvas px -> screen points: screen = screen_origin + px * scale
     screen_origin: egui::Pos2,
     scale: f32,
@@ -162,6 +163,7 @@ pub fn callback(
         uploaded: Some(uploaded),
         pages,
         pages_uploaded: Some(pages_uploaded),
+        drop_pages,
     };
     egui_wgpu::Callback::new_paint_callback(rect, ModelPaint { packet: Mutex::new(Some(packet)) })
 }

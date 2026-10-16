@@ -48,6 +48,17 @@ impl EditorUi {
                         ("Triangles", tris.to_string()),
                         ("Keyforms", keyforms.to_string()),
                         ("Textures", s.texture_names.len().to_string()),
+                        (
+                            "  On the GPU at full size",
+                            crate::i18n::trf(
+                                "{n} of {total}, {mb} MB",
+                                &[
+                                    ("n", &s.residency.resident_count()),
+                                    ("total", &s.texture_names.len()),
+                                    ("mb", &(s.residency.resident_bytes() >> 20)),
+                                ],
+                            ),
+                        ),
                     ] {
                         ui.weak(crate::i18n::tr(label));
                         ui.label(value);
