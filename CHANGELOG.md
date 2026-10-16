@@ -15,6 +15,17 @@
   Vector, fill, gradient and text layers come in as Clip Studio draws
   them. The reader was built from the files themselves and treats them as
   hostile input, like every other format.
+- **Texture memory stays bounded.** A model's texture pages no longer go
+  to the GPU whole at load: each page keeps a small proxy there, and the
+  full page streams in from its PNG on a worker thread when a visible
+  mesh draws it at a zoom the proxy can't carry, then leaves again after
+  five seconds unused, after ten seconds idle or minimised, or when the
+  budget (Settings > Performance > Texture memory, 512 MB by default) is
+  full. A model with more texture than fits still opens; the pages past
+  the budget draw from their proxies. Load keeps one decoded page in RAM
+  at a time instead of all of them. Model Statistics shows what is
+  resident. `cargo xtask soak <model.aom> [seconds]` runs the evaluation,
+  undo, decode and physics paths headless and fails if memory grows.
 - **Export Animation** and **Export Timelapse** open the new **Render**
   window: formats down the left (GIF, PNG sequence, MP4, WebM, MOV),
   settings in the middle (scene, an expression on top, work area, frame
