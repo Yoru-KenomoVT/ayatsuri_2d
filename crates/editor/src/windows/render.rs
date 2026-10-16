@@ -76,8 +76,8 @@ impl Preset {
     }
 }
 
-/// Preview frames are drawn this wide; the panel scales them to fit.
-const PREVIEW_W: usize = 560;
+/// Preview frames are drawn at the player's size on screen, up to this.
+const PREVIEW_W: f32 = 1400.0;
 
 enum Progress {
     Frames(usize, usize),
@@ -142,11 +142,23 @@ pub struct RenderWin {
     time: f32,
     step: usize,
     last_tick: Option<std::time::Instant>,
-    shown: Option<(Source, usize, u32)>,
-    puppet: Option<ayatsuri_core::Puppet>,
-    /// Which source the puppet was built for; switching rebuilds it.
-    puppet_src: Option<Source>,
-    player: Option<crate::timelapse::Player>,
+    /// The thread that poses, diffs and rasters frames; the editor never
+    /// waits on it, it just shows the newest frame that came back.
+    worker: Option<Worker>,
+    /// The frame last asked of the worker, so the same one isn't sent twice.
+    asked: Option<Key>,
+    /// When each timelapse step was recorded (unix ms).
+    stamps: Vec<u64>,
+    /// The shown frame's canvas, parameter values and part opacities.
+    canvas: Canvas,
+    values: Vec<f32>,
+    part_opacity: Vec<f32>,
+    /// The shown step's changed objects, in canvas pixels, by change index.
+    marks: Vec<(usize, Mark)>,
+    /// The player's size at the last layout, which sets the raster width.
+    player_size: (f32, f32),
+    /// The player and its panel over the whole screen.
+    fullscreen: bool,
     loop_on: bool,
     /// Timelapse speed: 1 plays the whole thing in twenty seconds.
     speed: f32,
@@ -154,8 +166,6 @@ pub struct RenderWin {
     carry: f32,
     /// Draw what changed at this step over the frame.
     show_changes: bool,
-    /// The step shown last and its model, the base of the next diff.
-    prev_step: Option<(usize, Model)>,
     changes: Vec<Change>,
     counts: Counts,
     /// One change picked in the list, highlighted alone.
@@ -194,15 +204,19 @@ impl RenderWin {
             time: 0.0,
             step: 0,
             last_tick: None,
-            shown: None,
-            puppet: None,
-            puppet_src: None,
-            player: None,
+            worker: None,
+            asked: None,
+            stamps: Vec::new(),
+            canvas: Canvas::default(),
+            values: Vec::new(),
+            part_opacity: Vec::new(),
+            marks: Vec::new(),
+            player_size: (540.0, 400.0),
+            fullscreen: false,
             loop_on: true,
             speed: 1.0,
             carry: 0.0,
             show_changes: true,
-            prev_step: None,
             changes: Vec::new(),
             counts: Counts::default(),
             picked: None,
@@ -211,69 +225,269 @@ impl RenderWin {
         }
     }
 
-    /// Draw the preview frame for the current time or step; for a timelapse
-    /// also work out what changed since the step shown before.
+    /// Show the newest frame the worker sent, then ask it for the one the
+    /// clock is on now. A worker is started for the source when missing.
     fn refresh_preview(&mut self, ctx: &egui::Context, s: &crate::session::Session) {
-        if self.puppet_src != Some(self.source) {
-            self.puppet = None;
-            self.puppet_src = Some(self.source);
+        if self.worker.as_ref().is_none_or(|w| w.source != self.source) {
+            let (worker, stamps) = Worker::start(ctx.clone(), s, self.source);
+            self.worker = worker;
+            self.stamps = stamps;
+            self.asked = None;
+            self.changes.clear();
+            self.marks.clear();
+            self.picked = None;
         }
-        let frame = match self.source {
-            Source::Animation => {
-                let puppet = self
-                    .puppet
-                    .get_or_insert_with(|| ayatsuri_core::Puppet::new(s.puppet.model().clone()));
-                if let Some(anim) = s.animations.get(self.scene) {
-                    pose(
-                        puppet,
-                        anim,
-                        self.time,
-                        self.expression.and_then(|i| s.expressions.get(i)),
-                    );
+        let Some(w) = &self.worker else { return };
+        let mut newest = None;
+        while let Ok(f) = w.rx.try_recv() {
+            newest = Some(f);
+        }
+        if let Some(f) = newest {
+            let img = egui::ColorImage::from_rgba_unmultiplied([f.w, f.h], &f.px);
+            match &mut self.preview {
+                Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+                None => {
+                    self.preview =
+                        Some(ctx.load_texture("render-preview", img, egui::TextureOptions::LINEAR))
                 }
-                puppet.update();
-                crate::thumb::render(puppet, &s.preview_tex, PREVIEW_W)
             }
-            Source::Timelapse => {
-                if self.player.is_none()
-                    && let Some(p) = &s.aom_path
-                {
-                    self.player =
-                        crate::timelapse::Player::open(&crate::timelapse::Recorder::sidecar(p))
-                            .ok();
-                }
-                let Some(player) = &mut self.player else { return };
-                // the step before: the one shown last when playing forward,
-                // else rebuilt; step 0 is measured against nothing
-                let before = match self.prev_step.take() {
-                    Some((i, m)) if i < self.step => Some(m),
-                    _ if self.step == 0 => Some(Model::new()),
-                    _ => player.model(self.step - 1),
-                };
-                let Some(model) = player.model(self.step) else { return };
-                if let Some(b) = &before {
-                    self.changes = crate::model_diff::diff(b, &model);
-                    self.picked = None;
-                }
-                self.counts = crate::model_diff::counts(&model);
-                self.prev_step = Some((self.step, model.clone()));
-                let mut puppet = ayatsuri_core::Puppet::new(model);
-                puppet.update();
-                let frame = crate::thumb::render(&puppet, &s.preview_tex, PREVIEW_W);
-                self.puppet = Some(puppet);
-                frame
+            self.canvas = f.canvas;
+            self.values = f.values;
+            self.part_opacity = f.part_opacity;
+            if let Some(info) = f.step {
+                self.changes = info.changes;
+                self.counts = info.counts;
+                self.marks = info.marks;
+                self.picked = None;
             }
+        }
+        // a smaller raster while playing keeps the cadence; the full one
+        // comes once it pauses
+        let want = (self.player_size.0 * ctx.pixels_per_point()).round();
+        let width = if self.playing { want.min(PLAYING_W) } else { want.min(PREVIEW_W) } as u16;
+        let key = match self.source {
+            Source::Animation => Key::Time {
+                scene: self.scene,
+                expression: self.expression,
+                ms: (self.time * 1000.0) as u32,
+                width,
+            },
+            Source::Timelapse => Key::Step { step: self.step, width },
         };
-        let (w, h, px) = frame;
-        let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
-        match &mut self.preview {
-            Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-            None => {
-                self.preview =
-                    Some(ctx.load_texture("render-preview", img, egui::TextureOptions::LINEAR))
-            }
+        if self.asked != Some(key) {
+            let _ = w.tx.send(key);
+            self.asked = Some(key);
         }
     }
+}
+
+/// A frame the worker is asked for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Time { scene: usize, expression: Option<usize>, ms: u32, width: u16 },
+    Step { step: usize, width: u16 },
+}
+
+/// A changed object drawn over the frame, in canvas pixels: line segments
+/// (a wireframe or a grid), dots (grid points) or a pivot with its angle.
+struct Mark {
+    kind: Kind,
+    segs: Vec<[f32; 4]>,
+    dots: Vec<[f32; 2]>,
+    pivot: Option<[f32; 3]>,
+}
+
+/// What a timelapse step changed, how big the model is, and the marks.
+struct StepInfo {
+    changes: Vec<Change>,
+    counts: Counts,
+    marks: Vec<(usize, Mark)>,
+}
+
+struct Frame {
+    w: usize,
+    h: usize,
+    px: Vec<u8>,
+    canvas: Canvas,
+    values: Vec<f32>,
+    part_opacity: Vec<f32>,
+    step: Option<StepInfo>,
+}
+
+struct Worker {
+    source: Source,
+    tx: Sender<Key>,
+    rx: Receiver<Frame>,
+}
+
+/// The raster width while playing is capped lower, for the cadence.
+const PLAYING_W: f32 = 640.0;
+
+impl Worker {
+    /// Start a preview thread for the source. For a timelapse the step
+    /// timestamps come back with it, for the working-time readout.
+    fn start(
+        ctx: egui::Context,
+        s: &crate::session::Session,
+        source: Source,
+    ) -> (Option<Self>, Vec<u64>) {
+        let (tx, req) = channel::<Key>();
+        let (out, rx) = channel::<Frame>();
+        let textures = s.preview_tex.clone();
+        let model = s.puppet.model().clone();
+        let anims = s.animations.clone();
+        let exprs = s.expressions.clone();
+        let sidecar = match source {
+            Source::Timelapse => {
+                s.aom_path.as_ref().map(|p| crate::timelapse::Recorder::sidecar(p))
+            }
+            Source::Animation => None,
+        };
+        let stamps: Vec<u64> = sidecar
+            .as_deref()
+            .and_then(|p| crate::timelapse::index(p).ok())
+            .map(|ix| ix.iter().map(|x| x.0).collect())
+            .unwrap_or_default();
+        let spawned = std::thread::Builder::new().name("render-preview".into()).spawn(move || {
+            let mut player =
+                sidecar.as_deref().and_then(|p| crate::timelapse::Player::open(p).ok());
+            let mut puppet = ayatsuri_core::Puppet::new(model);
+            // the step shown last, the base of the next diff
+            let mut prev: Option<(usize, ayatsuri_core::Puppet)> = None;
+            while let Ok(mut key) = req.recv() {
+                // only the newest request matters: the clock has moved on
+                while let Ok(k) = req.try_recv() {
+                    key = k;
+                }
+                let frame = match key {
+                    Key::Time { scene, expression, ms, width } => {
+                        if let Some(anim) = anims.get(scene) {
+                            pose(
+                                &mut puppet,
+                                anim,
+                                ms as f32 / 1000.0,
+                                expression.and_then(|i| exprs.get(i)),
+                            );
+                        }
+                        puppet.update();
+                        let (w, h, px) = crate::thumb::render(&puppet, &textures, width as usize);
+                        let n = puppet.model().parameters.len();
+                        let parts = puppet.model().parts.len();
+                        Some(Frame {
+                            w,
+                            h,
+                            px,
+                            canvas: puppet.model().canvas,
+                            values: (0..n).map(|i| puppet.value(i)).collect(),
+                            part_opacity: (0..parts).map(|i| puppet.part_user_opacity(i)).collect(),
+                            step: None,
+                        })
+                    }
+                    Key::Step { step, width } => {
+                        let Some(pl) = &mut player else { continue };
+                        // the step before: the one shown last when going
+                        // forward, else rebuilt; step 0 measures nothing
+                        let before = match prev.take() {
+                            Some((i, pp)) if i < step => Some(pp),
+                            _ if step == 0 => None,
+                            _ => pl.model(step - 1).map(ayatsuri_core::Puppet::new),
+                        };
+                        let Some(model) = pl.model(step) else { continue };
+                        let changes = before
+                            .as_ref()
+                            .map(|b| crate::model_diff::diff(b.model(), &model))
+                            .unwrap_or_default();
+                        let counts = crate::model_diff::counts(&model);
+                        let mut pp = ayatsuri_core::Puppet::new(model);
+                        pp.update();
+                        let (w, h, px) = crate::thumb::render(&pp, &textures, width as usize);
+                        let marks = marks(&pp, &changes);
+                        let canvas = pp.model().canvas;
+                        prev = Some((step, pp));
+                        Some(Frame {
+                            w,
+                            h,
+                            px,
+                            canvas,
+                            values: Vec::new(),
+                            part_opacity: Vec::new(),
+                            step: Some(StepInfo { changes, counts, marks }),
+                        })
+                    }
+                };
+                if let Some(f) = frame {
+                    if out.send(f).is_err() {
+                        break;
+                    }
+                    ctx.request_repaint();
+                }
+            }
+        });
+        (spawned.ok().map(|_| Worker { source, tx, rx }), stamps)
+    }
+}
+
+/// The changed objects' geometry at this step, in canvas pixels.
+fn marks(pp: &ayatsuri_core::Puppet, changes: &[Change]) -> Vec<(usize, Mark)> {
+    let c = pp.model().canvas;
+    let px =
+        |x: f32, y: f32| [c.origin_x + x * c.pixels_per_unit, c.origin_y + y * c.pixels_per_unit];
+    let mut out = Vec::new();
+    for (ci, ch) in changes.iter().enumerate() {
+        let Some(i) = ch.index else { continue };
+        let mut m = Mark { kind: ch.kind, segs: Vec::new(), dots: Vec::new(), pivot: None };
+        match ch.what {
+            What::Mesh => {
+                let Some(g) = pp.mesh_geometry(i) else { continue };
+                let (pts, _) = g.positions.as_chunks::<2>();
+                let (tris, _) = g.indices.as_chunks::<3>();
+                // each edge once, however many triangles share it
+                let mut seen = std::collections::HashSet::new();
+                for &[a, b, d] in tris {
+                    for (u, v) in [(a, b), (b, d), (d, a)] {
+                        let e = (u.min(v), u.max(v));
+                        if !seen.insert(e) {
+                            continue;
+                        }
+                        if let (Some(p0), Some(p1)) = (pts.get(e.0 as usize), pts.get(e.1 as usize))
+                        {
+                            let (q0, q1) = (px(p0[0], p0[1]), px(p1[0], p1[1]));
+                            m.segs.push([q0[0], q0[1], q1[0], q1[1]]);
+                        }
+                    }
+                }
+            }
+            What::Warp => {
+                let Some((grid, rows, cols)) = pp.warp_grid(i) else { continue };
+                let (pts, _) = grid.as_chunks::<2>();
+                let stride = cols as usize + 1;
+                let at = |r: usize, cc: usize| pts.get(r * stride + cc).map(|q| px(q[0], q[1]));
+                for r in 0..=rows as usize {
+                    for cc in 0..cols as usize {
+                        if let (Some(a), Some(b)) = (at(r, cc), at(r, cc + 1)) {
+                            m.segs.push([a[0], a[1], b[0], b[1]]);
+                        }
+                    }
+                }
+                for cc in 0..stride {
+                    for r in 0..rows as usize {
+                        if let (Some(a), Some(b)) = (at(r, cc), at(r + 1, cc)) {
+                            m.segs.push([a[0], a[1], b[0], b[1]]);
+                        }
+                    }
+                }
+                m.dots = pts.iter().map(|q| px(q[0], q[1])).collect();
+            }
+            What::Rotation => {
+                let Some(rot) = pp.rotation_state(i) else { continue };
+                let o = px(rot.origin.x, rot.origin.y);
+                m.pivot = Some([o[0], o[1], rot.angle]);
+            }
+            _ => continue,
+        }
+        out.push((ci, m));
+    }
+    out
 }
 
 /// Decode the texture pages at the detail the export width needs.
@@ -607,13 +821,11 @@ impl EditorUi {
             win.scene = i;
         }
         let _ = ctx;
-        win.puppet = None;
-        win.puppet_src = None;
-        win.player = None;
-        win.prev_step = None;
+        win.worker = None;
+        win.asked = None;
         win.changes.clear();
+        win.marks.clear();
         win.picked = None;
-        win.shown = None;
         win.playing = false;
         self.render_win = Some(win);
     }
@@ -688,7 +900,7 @@ impl EditorUi {
                     }
                 }
                 Source::Timelapse => {
-                    let n = win.player.as_ref().map_or(0, |p| p.steps.len());
+                    let n = win.stamps.len();
                     win.carry += dt * win.speed * (n as f32 / 20.0).max(1.0);
                     let whole = win.carry.floor();
                     win.carry -= whole;
@@ -703,20 +915,40 @@ impl EditorUi {
                     }
                 }
             }
-            win.shown = None;
             ui.ctx().request_repaint();
         }
-        let key = (win.source, win.scene, ((win.time * 1000.0) as u32) ^ ((win.step as u32) << 8));
-        if win.shown != Some(key) {
-            win.refresh_preview(ui.ctx(), s);
-            win.shown = Some(key);
+        win.refresh_preview(ui.ctx(), s);
+        if win.fullscreen {
+            let screen = ui.ctx().content_rect();
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                win.fullscreen = false;
+            }
+            egui::Area::new(egui::Id::new("render-fullscreen"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(screen.min)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::new().fill(egui::Color32::from_gray(12)).inner_margin(16.0).show(
+                        ui,
+                        |ui| {
+                            ui.set_min_size(screen.size() - egui::vec2(32.0, 32.0));
+                            let (pw, fh) =
+                                win.fit(screen.width() - 32.0, screen.height() - 32.0, s);
+                            ui.horizontal_top(|ui| {
+                                win.player_ui(ui, s, pw, fh);
+                                ui.add_space(6.0);
+                                win.side_panel(ui, s, STRIP_H + fh + BAR_H);
+                            });
+                        },
+                    );
+                });
+            return;
         }
         let mut open = true;
         let mut enqueue = false;
         let mut pick_folder = false;
         let has_timelapse =
             s.aom_path.as_ref().is_some_and(|p| crate::timelapse::Recorder::sidecar(p).exists());
-        egui::Window::new(tr("Render")).open(&mut open).default_size([1290.0, 660.0]).show(ui.ctx(), |ui| {
+        egui::Window::new(tr("Render")).open(&mut open).default_size([1180.0, 640.0]).min_width(860.0).show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut win.source, Source::Animation, tr("Animation"));
                 ui.add_enabled_ui(has_timelapse, |ui| {
@@ -728,7 +960,7 @@ impl EditorUi {
             ui.horizontal_top(|ui| {
                 // presets
                 ui.vertical(|ui| {
-                    ui.set_width(190.0);
+                    ui.set_width(170.0);
                     ui.strong(tr("Format"));
                     for p in Preset::ALL {
                         let usable = !p.ffmpeg() || win.ffmpeg.is_some();
@@ -751,7 +983,7 @@ impl EditorUi {
                 ui.separator();
                 // settings
                 ui.vertical(|ui| {
-                    ui.set_width(330.0);
+                    ui.set_width(300.0);
                     ui.strong(tr(win.preset.label()));
                     ui.weak(tr(win.preset.blurb()));
                     ui.add_space(4.0);
@@ -760,7 +992,7 @@ impl EditorUi {
                             Source::Animation => {
                                 ui.label(tr("Scene"));
                                 let name = s.animations.get(win.scene).map(|a| a.name.clone()).unwrap_or_default();
-                                egui::ComboBox::from_id_salt("render-scene").selected_text(name).show_ui(ui, |ui| {
+                                egui::ComboBox::from_id_salt("render-scene").selected_text(name).icon(no_icon).show_ui(ui, |ui| {
                                     for (i, a) in s.animations.iter().enumerate() {
                                         ui.selectable_value(&mut win.scene, i, &a.name);
                                     }
@@ -768,7 +1000,7 @@ impl EditorUi {
                                 ui.end_row();
                                 ui.label(tr("Expression"));
                                 let ename = win.expression.and_then(|i| s.expressions.get(i)).map_or_else(|| tr("None").to_string(), |e| e.name.clone());
-                                egui::ComboBox::from_id_salt("render-expr").selected_text(ename).show_ui(ui, |ui| {
+                                egui::ComboBox::from_id_salt("render-expr").selected_text(ename).icon(no_icon).show_ui(ui, |ui| {
                                     ui.selectable_value(&mut win.expression, None, tr("None"));
                                     for (i, e) in s.expressions.iter().enumerate() {
                                         ui.selectable_value(&mut win.expression, Some(i), &e.name);
@@ -819,10 +1051,11 @@ impl EditorUi {
                 // the player with what drives the frame beside it, the
                 // queue underneath
                 ui.vertical(|ui| {
+                    let (pw, fh) = win.fit(ui.available_width(), ui.available_height() - 70.0, s);
                     ui.horizontal_top(|ui| {
-                        win.player_ui(ui, s);
+                        win.player_ui(ui, s, pw, fh);
                         ui.add_space(6.0);
-                        win.side_panel(ui, s);
+                        win.side_panel(ui, s, STRIP_H + fh + BAR_H);
                     });
                     ui.add_space(8.0);
                     win.queue_ui(ui);
@@ -870,21 +1103,23 @@ impl EditorUi {
     }
 }
 
-/// The player's width; the side panel takes the rest of the column.
-const PLAYER_W: f32 = 540.0;
-const SIDE_W: f32 = 240.0;
+/// The side panel's width; the player takes the rest of the column.
+const SIDE_W: f32 = 236.0;
+/// The player never shrinks below this.
+const MIN_PLAYER_W: f32 = 320.0;
+
+/// A drop-down with no arrow: the text is the control.
+fn no_icon(_: &Ui, _: egui::Rect, _: &egui::style::WidgetVisuals, _: bool) {}
 const STRIP_H: f32 = 22.0;
 const BAR_H: f32 = 34.0;
 /// Changes listed for one step before the list says "and more".
 const MAX_CHANGES: usize = 80;
 
-/// MM:SS:FF at the scene's frame rate.
-fn timecode(t: f32, fps: f32) -> String {
-    let fps = fps.max(1.0);
-    let per = fps.round().max(1.0) as u64;
-    let frames = (t.max(0.0) * fps).round() as u64;
-    let secs = frames / per;
-    format!("{:02}:{:02}:{:02}", secs / 60, secs % 60, frames % per)
+/// MM:SS.ss.
+fn clock(t: f32) -> String {
+    let t = t.max(0.0);
+    let secs = t.floor() as u64;
+    format!("{:02}:{:02}.{:02}", secs / 60, secs % 60, ((t - t.floor()) * 100.0) as u32)
 }
 
 /// A wall-clock span in the largest two units that matter.
@@ -962,24 +1197,34 @@ fn scrubber(ui: &mut Ui, frac: f32, width: f32) -> Option<f32> {
 }
 
 impl RenderWin {
-    /// The frame's height for a canvas shape at the player's width.
-    fn frame_h(c: Canvas) -> f32 {
+    /// The player's width and frame height for the room on offer: the
+    /// frame keeps the canvas shape and the player shrinks to fit the
+    /// height when the window is short.
+    fn fit(&mut self, avail_w: f32, avail_h: f32, s: &crate::session::Session) -> (f32, f32) {
+        let c = s.puppet.model().canvas;
         let aspect = (c.height / c.width.max(1.0)).max(0.1);
-        (PLAYER_W * aspect).clamp(220.0, 400.0)
+        let mut pw = (avail_w - SIDE_W - 14.0).max(MIN_PLAYER_W);
+        let max_fh = (avail_h - STRIP_H - BAR_H).max(160.0);
+        let mut fh = pw * aspect;
+        if fh > max_fh {
+            fh = max_fh;
+            pw = (fh / aspect).clamp(MIN_PLAYER_W, pw);
+        }
+        self.player_size = (pw, fh);
+        (pw, fh)
     }
 
     /// The player: a title strip, the frame on dark with the output's
     /// background under the model, and a transport bar.
-    fn player_ui(&mut self, ui: &mut Ui, s: &crate::session::Session) {
+    fn player_ui(&mut self, ui: &mut Ui, s: &crate::session::Session, pw: f32, fh: f32) {
         use egui::{Align2, Color32, FontId, Rect, Sense, pos2, vec2};
-        let canvas = self.puppet.as_ref().map_or(s.puppet.model().canvas, |p| p.model().canvas);
-        let fh = Self::frame_h(s.puppet.model().canvas);
+        let canvas = if self.canvas.width > 0.0 { self.canvas } else { s.puppet.model().canvas };
         let (panel, panel_resp) =
-            ui.allocate_exact_size(vec2(PLAYER_W, STRIP_H + fh + BAR_H), Sense::hover());
+            ui.allocate_exact_size(vec2(pw, STRIP_H + fh + BAR_H), Sense::hover());
         let p = ui.painter_at(panel);
         p.rect_filled(panel, 8.0, Color32::from_gray(20));
         // title strip: what plays, at what size and rate
-        let strip = Rect::from_min_size(panel.min, vec2(PLAYER_W, STRIP_H));
+        let strip = Rect::from_min_size(panel.min, vec2(pw, STRIP_H));
         let name = match self.source {
             Source::Animation => {
                 s.animations.get(self.scene).map(|a| a.name.clone()).unwrap_or_default()
@@ -1004,8 +1249,7 @@ impl RenderWin {
         );
         // the frame: the canvas letterboxed, on white or a checker as the
         // export will be, the model over it
-        let frame =
-            Rect::from_min_size(pos2(panel.min.x, panel.min.y + STRIP_H), vec2(PLAYER_W, fh));
+        let frame = Rect::from_min_size(pos2(panel.min.x, panel.min.y + STRIP_H), vec2(pw, fh));
         let transparent = self.transparent && self.preset.alpha();
         let at = match &self.preview {
             Some(t) => {
@@ -1051,7 +1295,7 @@ impl RenderWin {
         // the transport bar
         let bar = Rect::from_min_size(
             pos2(panel.min.x + 6.0, frame.max.y + 5.0),
-            vec2(PLAYER_W - 12.0, BAR_H - 10.0),
+            vec2(pw - 12.0, BAR_H - 10.0),
         );
         let mut b = ui.new_child(
             egui::UiBuilder::new()
@@ -1059,14 +1303,13 @@ impl RenderWin {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         b.spacing_mut().item_spacing.x = 2.0;
-        let n = self.player.as_ref().map_or(0, |pl| pl.steps.len());
+        let n = self.stamps.len();
         let last = n.saturating_sub(1);
         let anim = s.animations.get(self.scene);
         let (dur, fps) = anim.map_or((0.0, 30.0), |a| (a.duration.max(0.0), a.fps));
         if icon_button(&mut b, egui_phosphor::regular::SKIP_BACK, false, tr("Start")).clicked() {
             self.time = 0.0;
             self.step = 0;
-            self.prev_step = None;
         }
         let play =
             if self.playing { egui_phosphor::regular::PAUSE } else { egui_phosphor::regular::PLAY };
@@ -1081,8 +1324,8 @@ impl RenderWin {
         }
         b.add_space(4.0);
         let right_w = match self.source {
-            Source::Animation => 148.0,
-            Source::Timelapse => 232.0,
+            Source::Animation => 172.0,
+            Source::Timelapse => 256.0,
         };
         let sw = (bar.width() - 84.0 - right_w).max(60.0);
         match self.source {
@@ -1094,33 +1337,36 @@ impl RenderWin {
                 }
                 b.add_space(6.0);
                 b.label(
-                    egui::RichText::new(format!(
-                        "{} / {}",
-                        timecode(self.time, fps),
-                        timecode(dur, fps)
-                    ))
-                    .monospace()
-                    .size(11.5)
-                    .color(Color32::from_gray(200)),
-                );
+                    egui::RichText::new(format!("{} / {}", clock(self.time), clock(dur)))
+                        .monospace()
+                        .size(11.5)
+                        .color(Color32::from_gray(200)),
+                )
+                .on_hover_text(trf(
+                    "Frame {frame} at {fps} fps",
+                    &[("frame", &((self.time * fps).round() as u32)), ("fps", &fps)],
+                ));
             }
             Source::Timelapse => {
                 let frac = if last > 0 { self.step as f32 / last as f32 } else { 0.0 };
                 if let Some(f) = scrubber(&mut b, frac, sw) {
-                    let to = (f * last as f32).round() as usize;
-                    if to < self.step {
-                        self.prev_step = None;
-                    }
-                    self.step = to;
+                    self.step = (f * last as f32).round() as usize;
                     self.playing = false;
                 }
                 b.add_space(6.0);
+                // the clock runs at the playback speed: twenty seconds at 1×
+                let total = 20.0 / self.speed.max(0.01);
+                let at = if last > 0 { self.step as f32 / last as f32 * total } else { 0.0 };
                 b.label(
-                    egui::RichText::new(format!("{} / {}", self.step + usize::from(n > 0), n))
+                    egui::RichText::new(format!("{} / {}", clock(at), clock(total)))
                         .monospace()
                         .size(11.5)
                         .color(Color32::from_gray(200)),
-                );
+                )
+                .on_hover_text(trf(
+                    "Step {step} of {steps}",
+                    &[("step", &(self.step + usize::from(n > 0))), ("steps", &n)],
+                ));
                 b.add_space(2.0);
                 let speed_txt = if self.speed >= 1.0 {
                     format!("{}×", self.speed as u32)
@@ -1151,6 +1397,16 @@ impl RenderWin {
         if icon_button(&mut b, egui_phosphor::regular::REPEAT, self.loop_on, tr("Loop")).clicked() {
             self.loop_on = !self.loop_on;
         }
+        let full_icon = if self.fullscreen {
+            egui_phosphor::regular::CORNERS_IN
+        } else {
+            egui_phosphor::regular::CORNERS_OUT
+        };
+        if icon_button(&mut b, full_icon, self.fullscreen, tr("Full screen (Esc to leave)"))
+            .clicked()
+        {
+            self.fullscreen = !self.fullscreen;
+        }
         // keys while the pointer is over the player
         if panel_resp.hovered() || frame_resp.hovered() {
             let (space, left, right, shift) = ui.input(|i| {
@@ -1174,11 +1430,7 @@ impl RenderWin {
                         self.time = (self.time + dir * by / fps.max(1.0)).clamp(0.0, dur);
                     }
                     Source::Timelapse => {
-                        let to = (self.step as f32 + dir * by).clamp(0.0, last as f32) as usize;
-                        if to < self.step {
-                            self.prev_step = None;
-                        }
-                        self.step = to;
+                        self.step = (self.step as f32 + dir * by).clamp(0.0, last as f32) as usize;
                     }
                 }
             }
@@ -1189,85 +1441,41 @@ impl RenderWin {
     /// wireframes, warp grids as grids, rotation deformers as their pivot.
     fn overlay(&self, p: &egui::Painter, at: egui::Rect, c: Canvas) {
         use egui::{Stroke, pos2};
-        let Some(puppet) = &self.puppet else { return };
         let pal = crate::theme::pal();
         let k = at.width() / c.width.max(1.0);
-        let to = |x: f32, y: f32| {
-            pos2(
-                at.min.x + (c.origin_x + x * c.pixels_per_unit) * k,
-                at.min.y + (c.origin_y + y * c.pixels_per_unit) * k,
-            )
-        };
-        for (ci, ch) in self.changes.iter().enumerate() {
-            if self.picked.is_some_and(|pk| pk != ci) {
+        let to = |x: f32, y: f32| pos2(at.min.x + x * k, at.min.y + y * k);
+        for (ci, m) in &self.marks {
+            if self.picked.is_some_and(|pk| pk != *ci) {
                 continue;
             }
-            let Some(i) = ch.index else { continue };
-            let col = match ch.kind {
+            let col = match m.kind {
                 Kind::Added => pal.warp_green,
                 Kind::Edited => pal.accent,
                 Kind::Removed => pal.rotation_red,
             };
-            match ch.what {
-                What::Mesh => {
-                    let Some(g) = puppet.mesh_geometry(i) else { continue };
-                    let (pts, _) = g.positions.as_chunks::<2>();
-                    let (tris, _) = g.indices.as_chunks::<3>();
-                    let stroke = Stroke::new(1.0, col.gamma_multiply(0.75));
-                    for &[a, b, d] in tris {
-                        let (Some(pa), Some(pb), Some(pd)) =
-                            (pts.get(a as usize), pts.get(b as usize), pts.get(d as usize))
-                        else {
-                            continue;
-                        };
-                        let (qa, qb, qd) = (to(pa[0], pa[1]), to(pb[0], pb[1]), to(pd[0], pd[1]));
-                        p.line_segment([qa, qb], stroke);
-                        p.line_segment([qb, qd], stroke);
-                        p.line_segment([qd, qa], stroke);
-                    }
-                }
-                What::Warp => {
-                    let Some((grid, rows, cols)) = puppet.warp_grid(i) else { continue };
-                    let (pts, _) = grid.as_chunks::<2>();
-                    let stride = cols as usize + 1;
-                    let stroke = Stroke::new(1.3, col);
-                    for r in 0..=rows as usize {
-                        let line: Vec<egui::Pos2> = (0..stride)
-                            .filter_map(|cc| pts.get(r * stride + cc))
-                            .map(|q| to(q[0], q[1]))
-                            .collect();
-                        p.add(egui::Shape::line(line, stroke));
-                    }
-                    for cc in 0..stride {
-                        let line: Vec<egui::Pos2> = (0..=rows as usize)
-                            .filter_map(|r| pts.get(r * stride + cc))
-                            .map(|q| to(q[0], q[1]))
-                            .collect();
-                        p.add(egui::Shape::line(line, stroke));
-                    }
-                    for q in pts {
-                        p.circle_filled(to(q[0], q[1]), 2.0, col);
-                    }
-                }
-                What::Rotation => {
-                    let Some(rot) = puppet.rotation_state(i) else { continue };
-                    let o = to(rot.origin.x, rot.origin.y);
-                    let a = rot.angle.to_radians();
-                    let tip = o + egui::vec2(a.sin(), -a.cos()) * 26.0;
-                    p.circle_stroke(o, 7.0, Stroke::new(2.0, col));
-                    p.circle_filled(o, 2.5, col);
-                    p.line_segment([o, tip], Stroke::new(2.0, col));
-                    p.circle_filled(tip, 3.0, col);
-                }
-                _ => {}
+            let stroke =
+                Stroke::new(if m.dots.is_empty() { 1.0 } else { 1.3 }, col.gamma_multiply(0.8));
+            for sg in &m.segs {
+                p.line_segment([to(sg[0], sg[1]), to(sg[2], sg[3])], stroke);
+            }
+            for d in &m.dots {
+                p.circle_filled(to(d[0], d[1]), 2.0, col);
+            }
+            if let Some([x, y, angle]) = m.pivot {
+                let o = to(x, y);
+                let a = angle.to_radians();
+                let tip = o + egui::vec2(a.sin(), -a.cos()) * 26.0;
+                p.circle_stroke(o, 7.0, Stroke::new(2.0, col));
+                p.circle_filled(o, 2.5, col);
+                p.line_segment([o, tip], Stroke::new(2.0, col));
+                p.circle_filled(tip, 3.0, col);
             }
         }
     }
 
     /// Beside the player: the parameters a scene drives, or what a timelapse
     /// step changed.
-    fn side_panel(&mut self, ui: &mut Ui, s: &crate::session::Session) {
-        let h = STRIP_H + Self::frame_h(s.puppet.model().canvas) + BAR_H;
+    fn side_panel(&mut self, ui: &mut Ui, s: &crate::session::Session, h: f32) {
         ui.allocate_ui_with_layout(
             egui::vec2(SIDE_W, h),
             egui::Layout::top_down(egui::Align::Min),
@@ -1283,7 +1491,7 @@ impl RenderWin {
 
     fn params_panel(&self, ui: &mut Ui, s: &crate::session::Session, h: f32) {
         let anim = s.animations.get(self.scene);
-        let model = self.puppet.as_ref().map_or(s.puppet.model(), |p| p.model());
+        let model = s.puppet.model();
         let live: Vec<&str> = anim
             .map(|a| {
                 a.curves
@@ -1323,7 +1531,7 @@ impl RenderWin {
             ui.set_min_width(SIDE_W - 14.0);
             for i in order {
                 let Some(p) = model.parameters.get(i) else { continue };
-                let v = self.puppet.as_ref().map_or(p.default, |pp| pp.value(i));
+                let v = self.values.get(i).copied().unwrap_or(p.default);
                 value_row(
                     ui,
                     &p.id,
@@ -1340,7 +1548,7 @@ impl RenderWin {
                 ui.strong(tr("Part opacity"));
                 for id in part_curves {
                     let Some(i) = model.parts.iter().position(|p| p.id == id) else { continue };
-                    let v = self.puppet.as_ref().map_or(1.0, |pp| pp.part_user_opacity(i));
+                    let v = self.part_opacity.get(i).copied().unwrap_or(1.0);
                     value_row(ui, id, v, 0.0, 1.0, 1.0, 2, true);
                 }
             }
@@ -1349,15 +1557,10 @@ impl RenderWin {
 
     fn changes_panel(&mut self, ui: &mut Ui, h: f32) {
         let pal = crate::theme::pal();
-        let (elapsed, total) = match &self.player {
-            Some(pl) => {
-                let t0 = pl.steps.first().map_or(0, |x| x.0);
-                let now = pl.steps.get(self.step).map_or(t0, |x| x.0);
-                let end = pl.steps.last().map_or(t0, |x| x.0);
-                (now.saturating_sub(t0), end.saturating_sub(t0))
-            }
-            None => (0, 0),
-        };
+        let t0 = self.stamps.first().copied().unwrap_or(0);
+        let now = self.stamps.get(self.step).copied().unwrap_or(t0);
+        let end = self.stamps.last().copied().unwrap_or(t0);
+        let (elapsed, total) = (now.saturating_sub(t0), end.saturating_sub(t0));
         ui.horizontal(|ui| {
             ui.strong(tr("This step"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
