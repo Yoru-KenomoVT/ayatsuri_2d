@@ -1010,5 +1010,8 @@
   "origin or scale": "原点或缩放",
   "changed": "更改",
   "stroke changed": "描边更改",
-  "groups": "组"
+  "groups": "组",
+  "Frame {frame} at {fps} fps": "第 {frame} 帧 ({fps} fps)",
+  "Step {step} of {steps}": "第 {step} 步，共 {steps} 步",
+  "Full screen (Esc to leave)": "全屏 (按 Esc 退出)"
 }

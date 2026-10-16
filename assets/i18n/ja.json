@@ -1010,5 +1010,8 @@
   "origin or scale": "原点または倍率",
   "changed": "変更",
   "stroke changed": "線を変更",
-  "groups": "グループ"
+  "groups": "グループ",
+  "Frame {frame} at {fps} fps": "フレーム {frame} ({fps} fps)",
+  "Step {step} of {steps}": "ステップ {step} / {steps}",
+  "Full screen (Esc to leave)": "全画面 (Esc で戻る)"
 }

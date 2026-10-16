@@ -1010,5 +1010,8 @@
   "origin or scale": "원점 또는 배율",
   "changed": "변경됨",
   "stroke changed": "선 변경",
-  "groups": "그룹"
+  "groups": "그룹",
+  "Frame {frame} at {fps} fps": "프레임 {frame} ({fps} fps)",
+  "Step {step} of {steps}": "단계 {step} / {steps}",
+  "Full screen (Esc to leave)": "전체 화면 (Esc로 나가기)"
 }

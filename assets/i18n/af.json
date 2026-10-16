@@ -1010,5 +1010,8 @@
   "origin or scale": "oorsprong of skaal",
   "changed": "verander",
   "stroke changed": "lyn verander",
-  "groups": "groepe"
+  "groups": "groepe",
+  "Frame {frame} at {fps} fps": "Raam {frame} teen {fps} fps",
+  "Step {step} of {steps}": "Stap {step} van {steps}",
+  "Full screen (Esc to leave)": "Volskerm (Esc om te verlaat)"
 }
