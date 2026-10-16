@@ -15,6 +15,13 @@
   Vector, fill, gradient and text layers come in as Clip Studio draws
   them. The reader was built from the files themselves and treats them as
   hostile input, like every other format.
+- **Texture Atlas** (Modeling > Texture Atlas…, or Edit atlas… in the
+  Texture palette): the pages laid out with every mesh's piece drawn from
+  its own pixels. Drag pieces around a page or onto another page's tab,
+  add and delete pages, pick a page size from 1024 to 8192, and **Auto
+  layout** packs everything onto as few pages as fit (pieces larger than
+  a page scale down when asked). Apply rewrites the pixels and every uv
+  in one undo step; the model draws exactly as before.
 - **Texture memory stays bounded.** A model's texture pages no longer go
   to the GPU whole at load: each page keeps a small proxy there, and the
   full page streams in from its PNG on a worker thread when a visible
