@@ -222,6 +222,32 @@ pub struct PtOut {
     pub hover_grab: Option<Grab>,
 }
 
+/// Mirror edit: for every moved point, the point that sits where it would
+/// reflect across the vertical axis `axis_x` (within `tol` screen points)
+/// moves the mirrored way, unless it is moving already. Points on the
+/// axis have no partner and are left as they are.
+pub fn mirror_moves(moves: &mut Vec<(usize, Vec2)>, pts: &[Pos2], axis_x: f32, tol: f32) {
+    let given: Vec<(usize, Vec2)> = moves.clone();
+    for (i, d) in given {
+        let Some(p) = pts.get(i) else { continue };
+        if (p.x - axis_x).abs() <= tol {
+            continue;
+        }
+        let want = pos2(2.0 * axis_x - p.x, p.y);
+        let partner = pts
+            .iter()
+            .enumerate()
+            .filter(|(j, q)| *j != i && q.distance(want) <= tol)
+            .min_by(|a, b| a.1.distance(want).total_cmp(&b.1.distance(want)))
+            .map(|(j, _)| j);
+        if let Some(j) = partner
+            && !moves.iter().any(|(k, _)| *k == j)
+        {
+            moves.push((j, Vec2::new(-d.x, d.y)));
+        }
+    }
+}
+
 impl PointState {
     /// Point selection belongs to one object; switching objects drops it.
     pub fn bind(&mut self, owner: (u8, usize)) {
@@ -694,6 +720,21 @@ mod tests {
         assert!((by(0) - 10.0).abs() < 1e-4);
         assert!((by(1) - 5.0).abs() < 1e-4);
         assert_eq!(by(2), 0.0);
+    }
+
+    #[test]
+    fn mirror_moves_find_the_partner_across_the_axis() {
+        // four points: a pair mirrored about x = 100, one on the axis, one alone
+        let pts = [pos2(60.0, 50.0), pos2(140.0, 50.0), pos2(100.0, 80.0), pos2(30.0, 90.0)];
+        let mut moves =
+            vec![(0, Vec2::new(5.0, -2.0)), (2, Vec2::new(1.0, 1.0)), (3, Vec2::new(2.0, 0.0))];
+        mirror_moves(&mut moves, &pts, 100.0, 3.0);
+        assert_eq!(moves.len(), 4);
+        assert_eq!(moves[3], (1, Vec2::new(-5.0, -2.0)));
+        // a partner already moving is not pushed twice
+        let mut both = vec![(0, Vec2::new(5.0, 0.0)), (1, Vec2::new(1.0, 0.0))];
+        mirror_moves(&mut both, &pts, 100.0, 3.0);
+        assert_eq!(both.len(), 2);
     }
 
     #[test]

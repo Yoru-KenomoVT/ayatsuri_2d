@@ -433,8 +433,14 @@ impl EditorUi {
             });
         }
 
+        // the same switch as View > Mirror Edit (Ctrl+Shift+M)
         section(ui, crate::i18n::tr("Mirror edit"), "");
-        greyed(ui, "Mirror edit");
+        ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit")).on_hover_text(
+            crate::i18n::tr(
+                "Moving a point also moves its mirror across the vertical axis: \
+             the vertical guide line nearest the centre, or the canvas centre",
+            ),
+        );
 
         section(
             ui,
@@ -442,15 +448,39 @@ impl EditorUi {
             "Traces the outline of the layer's pixels and fills it with points. Outline spacing sets the gap between outline points, inner spacing the gap inside, margin how far the outline stands off the art.",
         );
         let o = &mut self.tool_opts;
-        ui.horizontal_wrapped(|ui| {
-            for (i, (name, outline, inner, margin)) in Self::AUTO_PRESETS.iter().enumerate() {
-                if ui.selectable_label(o.auto_preset == i, crate::i18n::tr(name)).clicked() {
-                    o.auto_preset = i;
-                    o.auto_spacing = *outline;
-                    o.auto_inner = *inner;
-                    o.auto_margin = *margin;
-                }
-            }
+        // the preset the numbers below (and the layout) match, or Custom
+        // once one is edited
+        let now = Self::AUTO_PRESETS.iter().position(|&(_, a, b, c, st)| {
+            (a, b, c, st) == (o.auto_spacing, o.auto_inner, o.auto_margin, o.auto_style)
+        });
+        let shown = now.map_or_else(
+            || crate::i18n::tr("Custom").to_string(),
+            |i| {
+                Self::AUTO_PRESETS
+                    .get(i)
+                    .map_or_else(String::new, |p| crate::i18n::tr(p.0).to_string())
+            },
+        );
+        grid(ui, "td-auto-preset", |ui| {
+            row(ui, crate::i18n::tr("Preset"), |ui| {
+                egui::ComboBox::from_id_salt("td-auto-preset").selected_text(shown).show_ui(
+                    ui,
+                    |ui| {
+                        for (i, &(name, outline, inner, margin, style)) in
+                            Self::AUTO_PRESETS.iter().enumerate()
+                        {
+                            if ui.selectable_label(now == Some(i), crate::i18n::tr(name)).clicked()
+                            {
+                                o.auto_preset = i;
+                                o.auto_spacing = outline;
+                                o.auto_inner = inner;
+                                o.auto_margin = margin;
+                                o.auto_style = style;
+                            }
+                        }
+                    },
+                );
+            });
         });
         grid(ui, "td-auto", |ui| {
             row(ui, crate::i18n::tr("Outline spacing"), |ui| {

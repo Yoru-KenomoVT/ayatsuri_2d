@@ -17,11 +17,33 @@ pub struct Params {
     pub margin: f32,
     /// Alpha above this counts as artwork.
     pub threshold: u8,
+    /// How the inside is filled.
+    pub style: Style,
+}
+
+/// How a mesh is laid out inside its outline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Style {
+    /// One ring on the outline and an even lattice inside (Cubism's
+    /// Standard, Deform and Light).
+    #[default]
+    Lattice,
+    /// A face as riggers build it: two rings along the edge, one outside
+    /// the art at the margin and one as far inside, so the drawn edge stays
+    /// in a narrow strip when warps bend it, and two hubs on the centre
+    /// line (at 32% and 76% of the height) the inner ring fans into.
+    Face,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Self { outline_spacing: 24.0, inner_spacing: 48.0, margin: 8.0, threshold: 8 }
+        Self {
+            outline_spacing: 24.0,
+            inner_spacing: 48.0,
+            margin: 8.0,
+            threshold: 8,
+            style: Style::Lattice,
+        }
     }
 }
 
@@ -359,12 +381,27 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
     let grid = build_grid(alpha, w, h, &p);
 
     let mut points: Vec<(f32, f32)> = Vec::new();
-    for l in contours(&grid) {
-        points.extend(resample(&smooth(&l, 3), p.outline_spacing));
+    let rings: Vec<Vec<(f32, f32)>> =
+        contours(&grid).iter().map(|l| resample(&smooth(l, 3), p.outline_spacing)).collect();
+    for r in &rings {
+        points.extend(r.iter().copied());
     }
     if points.len() < 3 {
         return Mesh::default();
     }
+    if p.style == Style::Face {
+        face_inside(&mut points, &rings, &grid, &p);
+    } else {
+        lattice_inside(&mut points, &grid, w, h, &p);
+    }
+    if points.len() >= u16::MAX as usize {
+        points.truncate(u16::MAX as usize - 1);
+    }
+    triangulate(points, &grid)
+}
+
+/// Cubism's inside: points on a staggered grid, kept clear of the outline.
+fn lattice_inside(points: &mut Vec<(f32, f32)>, grid: &Grid, w: usize, h: usize, p: &Params) {
     // inner points on a staggered grid, kept clear of the outline
     let clear = p.outline_spacing * 0.6;
     let rows = (h as f32 / (p.inner_spacing * 0.866)).ceil() as usize + 1;
@@ -385,10 +422,56 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
             }
         }
     }
-    if points.len() >= u16::MAX as usize {
-        points.truncate(u16::MAX as usize - 1);
-    }
+}
 
+/// A face's inside: a second ring as far inside the art's edge as the
+/// first sits outside it, then two hubs on the centre line of the largest
+/// outline for the inner ring to fan into.
+fn face_inside(points: &mut Vec<(f32, f32)>, rings: &[Vec<(f32, f32)>], grid: &Grid, p: &Params) {
+    // the outer ring sits `margin` outside the art: the inner one as far in
+    let band = (p.margin * 2.0).max(p.outline_spacing * 0.25);
+    for ring in rings {
+        let n = ring.len();
+        for (i, &(x, y)) in ring.iter().enumerate() {
+            let (Some(&(ax, ay)), Some(&(bx, by))) =
+                (ring.get((i + n - 1) % n), ring.get((i + 1) % n))
+            else {
+                continue;
+            };
+            let (tx, ty) = (bx - ax, by - ay);
+            let len = (tx * tx + ty * ty).sqrt();
+            if len < 1e-3 {
+                continue;
+            }
+            // the normal that points into the shape
+            let (nx, ny) = (-ty / len, tx / len);
+            let inside = [(nx, ny), (-nx, -ny)]
+                .into_iter()
+                .map(|(dx, dy)| (x + dx * band, y + dy * band))
+                .find(|&(qx, qy)| grid.contains(qx, qy));
+            if let Some(q) = inside {
+                points.push(q);
+            }
+        }
+    }
+    // the hubs, on the centre line of the largest outline
+    let Some(big) = rings.iter().max_by_key(|r| r.len()) else { return };
+    let (x0, y0, x1, y1) =
+        big.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, &(x, y)| {
+            (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y))
+        });
+    let cx = (x0 + x1) / 2.0;
+    for f in [0.32f32, 0.76] {
+        let hub = (cx, y0 + (y1 - y0) * f);
+        if grid.contains(hub.0, hub.1) {
+            points.push(hub);
+        }
+    }
+}
+
+/// Delaunay over the points, then everything outside the shape carved away
+/// and points no triangle uses dropped.
+fn triangulate(points: Vec<(f32, f32)>, grid: &Grid) -> Mesh {
     // triangulate, then carve away whatever falls outside the shape
     let mut triangles: Vec<[u16; 3]> = Vec::new();
     for t in delaunay(&points) {
@@ -480,6 +563,60 @@ pub fn for_patch(
 mod tests {
     use super::*;
 
+    /// An opaque ellipse, `w` by `h`, in a transparent field.
+    fn ellipse(w: usize, h: usize) -> Vec<u8> {
+        let (cx, cy, rx, ry) = (w as f32 / 2.0, h as f32 / 2.0, w as f32 * 0.4, h as f32 * 0.42);
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32, (i / w) as f32);
+                if ((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2) <= 1.0 { 255 } else { 0 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_face_is_two_edge_rings_fanned_into_two_hubs() {
+        let (w, h) = (300, 380);
+        let alpha = ellipse(w, h);
+        let face = Params {
+            outline_spacing: 18.0,
+            inner_spacing: 24.0,
+            margin: 4.0,
+            style: Style::Face,
+            ..Params::default()
+        };
+        let m = generate(&alpha, w, h, &face);
+        assert!(!m.triangles.is_empty());
+        // the hubs: the two points most triangles meet at, on the centre line
+        let mut used = vec![0usize; m.points.len()];
+        for t in &m.triangles {
+            for &v in t {
+                used[v as usize] += 1;
+            }
+        }
+        let mut by_use: Vec<usize> = (0..m.points.len()).collect();
+        by_use.sort_by_key(|&i| std::cmp::Reverse(used[i]));
+        let hubs = [by_use[0], by_use[1]];
+        for hub in hubs {
+            let (x, _) = m.points[hub];
+            assert!((x - w as f32 / 2.0).abs() < 4.0, "a hub sits on the centre line");
+            assert!(used[hub] >= 8, "a hub fans out to many triangles");
+        }
+        // everything else lies near the edge: two rings, no lattice inside
+        let (cx, cy, rx, ry) = (w as f32 / 2.0, h as f32 / 2.0, w as f32 * 0.4, h as f32 * 0.42);
+        let inside = m
+            .points
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !hubs.contains(i))
+            .filter(|&(_, &(x, y))| ((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2) < 0.7)
+            .count();
+        assert_eq!(inside, 0, "no points deep inside but the hubs");
+        // Cubism's lattice fills the inside instead
+        let lattice = generate(&alpha, w, h, &Params { style: Style::Lattice, ..face });
+        assert!(lattice.points.len() > m.points.len());
+    }
+
     fn disc(size: usize, r: f32) -> Vec<u8> {
         let c = size as f32 / 2.0;
         (0..size * size)
@@ -493,7 +630,8 @@ mod tests {
     #[test]
     fn disc_gets_an_outline_and_an_interior() {
         let a = disc(200, 80.0);
-        let p = Params { outline_spacing: 16.0, inner_spacing: 32.0, margin: 4.0, threshold: 8 };
+        let p =
+            Params { outline_spacing: 16.0, inner_spacing: 32.0, margin: 4.0, ..Params::default() };
         let m = generate(&a, 200, 200, &p);
         assert!(m.triangles.len() > 20, "{} triangles", m.triangles.len());
         // perimeter of r=84 at 16px spacing is about 33 points, interior a
@@ -522,7 +660,8 @@ mod tests {
                 if (40.0..=85.0).contains(&r) { 255 } else { 0 }
             })
             .collect();
-        let p = Params { outline_spacing: 12.0, inner_spacing: 24.0, margin: 2.0, threshold: 8 };
+        let p =
+            Params { outline_spacing: 12.0, inner_spacing: 24.0, margin: 2.0, ..Params::default() };
         let m = generate(&a, size, size, &p);
         // no triangle may cover the centre of the hole
         for t in &m.triangles {

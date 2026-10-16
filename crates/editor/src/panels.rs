@@ -95,6 +95,8 @@ struct ToolOptions {
     auto_spacing: f32,
     auto_inner: f32,
     auto_margin: f32,
+    /// The layout inside: Cubism's lattice, or a face's rings and hubs.
+    auto_style: ayatsuri_core::automesh::Style,
     warp_cols: u32,
     warp_rows: u32,
 }
@@ -107,6 +109,7 @@ impl Default for ToolOptions {
             auto_spacing: 24.0,
             auto_inner: 48.0,
             auto_margin: 8.0,
+            auto_style: ayatsuri_core::automesh::Style::Lattice,
             warp_cols: 5,
             warp_rows: 5,
         }
@@ -372,6 +375,10 @@ pub struct EditorUi {
     dbrush_hardness: f32,
     dbrush_strength: f32,
     show_guides: bool,
+    /// Mirror edit: point moves repeat, flipped, on the point across the
+    /// vertical axis (a vertical guide line nearest the centre, else the
+    /// canvas centre).
+    mirror_edit: bool,
     guide_drag: Option<usize>,
     clip_invert: bool,
     art_pending: Option<(usize, ayatsuri_format::model::ArtPath)>,
@@ -1049,6 +1056,7 @@ impl Default for EditorUi {
             dbrush_hardness: 0.3,
             dbrush_strength: 0.7,
             show_guides: true,
+            mirror_edit: false,
             guide_drag: None,
             art_pending: None,
             pick_pages: std::collections::HashMap::new(),
@@ -2231,6 +2239,11 @@ impl EditorUi {
                         ui.close();
                     }
                     ui.separator();
+                    ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit"))
+                        .on_hover_text(crate::i18n::tr(
+                            "Moving a point also moves its mirror across the vertical axis: \
+                             the vertical guide line nearest the centre, or the canvas centre",
+                        ));
                     ui.menu_button(crate::i18n::tr("Guide Line"), |ui| {
                         ui.checkbox(&mut self.show_guides, crate::i18n::tr("Show Guide Lines"));
                         if ui
@@ -4547,9 +4560,18 @@ impl EditorUi {
         }
     }
 
-    /// Cubism's auto mesh presets: outline spacing, inner spacing, margin.
-    const AUTO_PRESETS: [(&'static str, f32, f32, f32); 3] =
-        [("Standard", 24.0, 48.0, 8.0), ("Deform", 14.0, 28.0, 6.0), ("Light", 40.0, 80.0, 10.0)];
+    /// Auto mesh presets: outline spacing, inner spacing, margin. The first
+    /// three are Cubism's. Face standard follows a face mesh a rigger built
+    /// by hand: the inside only a little sparser than the outline (about
+    /// 1.3 times, where Standard doubles it), so a warp turning the head
+    /// bends the cheeks smoothly instead of folding them between sparse
+    /// inner points.
+    const AUTO_PRESETS: [(&'static str, f32, f32, f32, ayatsuri_core::automesh::Style); 4] = [
+        ("Standard", 24.0, 48.0, 8.0, ayatsuri_core::automesh::Style::Lattice),
+        ("Deform", 14.0, 28.0, 6.0, ayatsuri_core::automesh::Style::Lattice),
+        ("Light", 40.0, 80.0, 10.0, ayatsuri_core::automesh::Style::Lattice),
+        ("Face standard", 36.0, 46.0, 6.0, ayatsuri_core::automesh::Style::Face),
+    ];
 
     /// One mesh's new triangulation from its texture's alpha, or why not.
     fn auto_mesh_data(&self, mi: usize) -> Result<(Vec<f32>, Vec<u16>), String> {
@@ -4559,6 +4581,7 @@ impl EditorUi {
             inner_spacing: o.auto_inner.clamp(4.0, 512.0),
             margin: o.auto_margin.clamp(0.0, 128.0),
             threshold: 8,
+            style: o.auto_style,
         };
         let s = self.session.as_ref().ok_or("no model open")?;
         let am = s.puppet.model().art_meshes.get(mi).ok_or("mesh is gone")?;
@@ -5125,6 +5148,7 @@ impl EditorUi {
                 self.view_pan = Vec2::ZERO;
             }
             "focus" => self.focus_request = true,
+            "mirror-edit" => self.mirror_edit = !self.mirror_edit,
             "guides-clear" => {
                 if let Some(s) = &mut self.session
                     && !s.guides.is_empty()
@@ -6496,6 +6520,9 @@ impl EditorUi {
     }
 
     fn tool_strip(&mut self, ui: &mut Ui) {
+        // Mesh Edit brings its own tools in its popup: the strip greys out
+        // and points there, so nobody reaches for a tool that does nothing
+        let locked = self.mesh_edit.is_some();
         // fixed-width name slot first, so switching tools never resizes the bar
         if !self.prefs.toolbar_docked {
             let (nr, _) = ui.allocate_exact_size(vec2(96.0, 26.0), Sense::hover());
@@ -6526,10 +6553,14 @@ impl EditorUi {
                         Stroke::new(1.0, theme::pal().accent),
                         StrokeKind::Inside,
                     );
-                } else if resp.hovered() {
+                } else if resp.hovered() && !locked {
                     ui.painter().rect_filled(rect, 5.0, theme::pal().header);
                 }
-                let icon_color = if active { theme::pal().accent } else { theme::pal().text };
+                let icon_color = match (locked, active) {
+                    (true, _) => theme::pal().text_faint.gamma_multiply(0.6),
+                    (false, true) => theme::pal().accent,
+                    (false, false) => theme::pal().text,
+                };
                 if t == Tool::Glue {
                     paint_glue_bottle(ui, rect, icon_color);
                 } else {
@@ -6542,8 +6573,14 @@ impl EditorUi {
                     );
                 }
                 resp.context_menu(|ui| self.toolbar_menu(ui));
-                let resp = resp.on_hover_text(crate::i18n::tr(t.label()));
-                if resp.clicked() {
+                let resp = if locked {
+                    resp.on_hover_text(crate::i18n::tr(
+                        "Mesh Edit has its own tools, in its popup; Done or Esc leaves Mesh Edit",
+                    ))
+                } else {
+                    resp.on_hover_text(crate::i18n::tr(t.label()))
+                };
+                if resp.clicked() && !locked {
                     self.tool = t;
                 }
             }
@@ -7709,6 +7746,7 @@ impl EditorUi {
                     ui.close();
                 }
                 ui.checkbox(&mut self.show_guides, crate::i18n::tr("Show Guide Lines"));
+                ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit"));
                 if ui.button(crate::i18n::tr("Open guide line settings")).clicked() {
                     self.show_guide_settings = true;
                     ui.close();
@@ -7788,6 +7826,18 @@ impl EditorUi {
         }
         let scale = fit * self.view_zoom;
         let origin = view.center() + self.view_pan - vec2(cw, ch) * scale * 0.5;
+        // the mirror axis on screen, when Mirror Edit is on
+        let mirror_x = self.mirror_edit.then(|| {
+            let at = s
+                .guides
+                .iter()
+                .filter(|g| g.vertical)
+                .map(|g| g.at)
+                .min_by(|a, b| (a - cw * 0.5).abs().total_cmp(&(b - cw * 0.5).abs()))
+                .unwrap_or(cw * 0.5);
+            origin.x + at * scale
+        });
+        let mirror_tol = (3.0 * scale).max(2.0);
 
         // the canvas page
         let page = Rect::from_min_size(pos2(origin.x, origin.y), vec2(cw * scale, ch * scale));
@@ -8455,7 +8505,10 @@ impl EditorUi {
                         reach: 7.0,
                         pad: 0.0,
                     };
-                    let out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                    let mut out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                    if let (Some(ax), Some(m)) = (mirror_x, &mut out.commit) {
+                        point_edit::mirror_moves(m, &pts, ax, mirror_tol);
+                    }
                     warp_hot |= self.pts.hot;
                     grab_hot = out.hover_grab;
                     if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -8701,7 +8754,10 @@ impl EditorUi {
                             reach: 7.0,
                             pad: 0.0,
                         };
-                        let out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                        let mut out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                        if let (Some(ax), Some(m)) = (mirror_x, &mut out.commit) {
+                            point_edit::mirror_moves(m, &pts, ax, mirror_tol);
+                        }
                         warp_hot |= self.pts.hot;
                         grab_hot = out.hover_grab;
                         hover_pt = out.hover;
@@ -9010,8 +9066,11 @@ impl EditorUi {
                             reach,
                             pad: if self.warp_bezier { 16.0 } else { 0.0 },
                         };
-                        let out =
+                        let mut out =
                             point_edit::point_tool(&mut self.pts, &inp, &mut screen_pts, &opts);
+                        if let (Some(ax), Some(m)) = (mirror_x, &mut out.commit) {
+                            point_edit::mirror_moves(m, &screen_pts, ax, mirror_tol);
+                        }
                         warp_hot = self.pts.hot;
                         if let Some(m) = out.commit {
                             warp_commit =
@@ -11039,6 +11098,28 @@ impl EditorUi {
         }
         if self.show_guides {
             const RULER: f32 = 14.0;
+            if let Some(ax) = mirror_x
+                && view.min.x <= ax
+                && ax <= view.max.x
+            {
+                // the mirror axis: dashed, in the accent, with its name at the top
+                let col = theme::pal().accent;
+                let mut y = view.min.y;
+                while y < view.max.y {
+                    vp.line_segment(
+                        [pos2(ax, y), pos2(ax, (y + 6.0).min(view.max.y))],
+                        Stroke::new(1.0, col),
+                    );
+                    y += 10.0;
+                }
+                vp.text(
+                    pos2(ax + 6.0, view.min.y + 6.0),
+                    Align2::LEFT_TOP,
+                    crate::i18n::tr("Mirror"),
+                    FontId::proportional(11.0),
+                    col,
+                );
+            }
             let rulers = !self.prefs.rulers_off;
             let top = Rect::from_min_max(view.min, pos2(view.max.x, view.min.y + RULER));
             let left = Rect::from_min_max(
@@ -11527,6 +11608,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Tools", "level-3", "Edit level 3", N, K::Num3),
         ("View", "display-all", "Display all (fit)", C, K::Num0),
         ("View", "focus", "Focus on the selected object", N, K::F),
+        ("View", "mirror-edit", "Mirror edit", CS, K::M),
         ("View", "zoom-in", "Zoom in", C, K::Equals),
         ("View", "zoom-out", "Zoom out", C, K::Minus),
         ("View", "guide-h-mouse", "Horizontal guide line at the mouse", N, K::H),

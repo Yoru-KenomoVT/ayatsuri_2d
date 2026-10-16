@@ -15,6 +15,11 @@
   Vector, fill, gradient and text layers come in as Clip Studio draws
   them. The reader was built from the files themselves and treats them as
   hostile input, like every other format.
+- **Mirror Edit** (View > Mirror Edit, Ctrl+Shift+M): moving points in
+  Mesh Edit, on a warp grid or on selected meshes also moves their
+  mirror across the vertical axis, flipped. The axis is the vertical
+  guide line nearest the centre, else the canvas centre, and shows as a
+  dashed line while the mode is on.
 - **Texture Atlas** (Modeling > Texture Atlas…, or Edit atlas… in the
   Texture palette): the pages laid out with every mesh's piece drawn from
   its own pixels. Drag pieces around a page or onto another page's tab,
