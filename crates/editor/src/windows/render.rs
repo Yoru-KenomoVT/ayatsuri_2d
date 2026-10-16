@@ -76,8 +76,9 @@ impl Preset {
     }
 }
 
-/// Preview frames are drawn at the player's size on screen, up to this.
-const PREVIEW_W: f32 = 1400.0;
+/// Preview frames are drawn at the player's size on screen, within this
+/// many pixels.
+const PREVIEW_PX: f32 = 1400.0 * 1000.0;
 
 enum Progress {
     Frames(usize, usize),
@@ -263,8 +264,13 @@ impl RenderWin {
         }
         // a smaller raster while playing keeps the cadence; the full one
         // comes once it pauses
+        // the raster follows the player's size on screen, within a pixel
+        // budget: a tall canvas gets a narrower frame, so the per-frame
+        // convert-and-upload stays cheap while it plays
+        let aspect = (self.canvas.height / self.canvas.width.max(1.0)).clamp(0.1, 10.0);
+        let budget = if self.playing { PLAYING_PX } else { PREVIEW_PX };
         let want = (self.player_size.0 * ctx.pixels_per_point()).round();
-        let width = if self.playing { want.min(PLAYING_W) } else { want.min(PREVIEW_W) } as u16;
+        let width = want.min((budget / aspect).sqrt()).max(64.0) as u16;
         let key = match self.source {
             Source::Animation => Key::Time {
                 scene: self.scene,
@@ -320,8 +326,8 @@ struct Worker {
     rx: Receiver<Frame>,
 }
 
-/// The raster width while playing is capped lower, for the cadence.
-const PLAYING_W: f32 = 640.0;
+/// While playing the budget is smaller, for the cadence.
+const PLAYING_PX: f32 = 560.0 * 560.0;
 
 impl Worker {
     /// Start a preview thread for the source. For a timelapse the step
