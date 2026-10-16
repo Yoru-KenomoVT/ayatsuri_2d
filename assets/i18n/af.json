@@ -1013,5 +1013,9 @@
   "groups": "groepe",
   "Frame {frame} at {fps} fps": "Raam {frame} teen {fps} fps",
   "Step {step} of {steps}": "Stap {step} van {steps}",
-  "Full screen (Esc to leave)": "Volskerm (Esc om te verlaat)"
+  "Full screen (Esc to leave)": "Volskerm (Esc om te verlaat)",
+  "Steps per second": "Stappe per sekonde",
+  "≈ {length}": "≈ {length}",
+  "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "Elke stap vloei in oor sy deel van die sekonde, soos dit gesleep is; hoër gee 'n korter video",
+  "Speed, on top of the steps per second": "Spoed, bo-op die stappe per sekonde"
 }

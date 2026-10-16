@@ -1013,5 +1013,9 @@
   "groups": "그룹",
   "Frame {frame} at {fps} fps": "프레임 {frame} ({fps} fps)",
   "Step {step} of {steps}": "단계 {step} / {steps}",
-  "Full screen (Esc to leave)": "전체 화면 (Esc로 나가기)"
+  "Full screen (Esc to leave)": "전체 화면 (Esc로 나가기)",
+  "Steps per second": "초당 단계 수",
+  "≈ {length}": "≈ {length}",
+  "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "각 단계는 자기 몫의 시간 동안 드래그했던 것처럼 부드럽게 변합니다. 값을 올리면 영상이 짧아집니다",
+  "Speed, on top of the steps per second": "속도 (초당 단계 수에 곱함)"
 }

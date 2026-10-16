@@ -1013,5 +1013,9 @@
   "groups": "グループ",
   "Frame {frame} at {fps} fps": "フレーム {frame} ({fps} fps)",
   "Step {step} of {steps}": "ステップ {step} / {steps}",
-  "Full screen (Esc to leave)": "全画面 (Esc で戻る)"
+  "Full screen (Esc to leave)": "全画面 (Esc で戻る)",
+  "Steps per second": "1 秒あたりのステップ数",
+  "≈ {length}": "≈ {length}",
+  "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "各ステップは割り当てられた時間の中でドラッグしたときのように滑らかに変化します。値を上げると動画が短くなります",
+  "Speed, on top of the steps per second": "速度 (1 秒あたりのステップ数に掛ける)"
 }

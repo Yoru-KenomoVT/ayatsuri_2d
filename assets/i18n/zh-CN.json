@@ -1013,5 +1013,9 @@
   "groups": "组",
   "Frame {frame} at {fps} fps": "第 {frame} 帧 ({fps} fps)",
   "Step {step} of {steps}": "第 {step} 步，共 {steps} 步",
-  "Full screen (Esc to leave)": "全屏 (按 Esc 退出)"
+  "Full screen (Esc to leave)": "全屏 (按 Esc 退出)",
+  "Steps per second": "每秒步数",
+  "≈ {length}": "≈ {length}",
+  "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "每一步在其时间份额内像拖动时那样平滑过渡；调高可缩短视频",
+  "Speed, on top of the steps per second": "速度（在每秒步数之上）"
 }
