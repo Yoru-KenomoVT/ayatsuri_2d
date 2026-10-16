@@ -351,7 +351,7 @@ struct Worker {
 }
 
 /// While playing the budget is smaller, for the cadence.
-const PLAYING_PX: f32 = 560.0 * 560.0;
+const PLAYING_PX: f32 = 800.0 * 800.0;
 
 impl Worker {
     /// Start a preview thread for the source. For a timelapse the step
@@ -359,7 +359,8 @@ impl Worker {
     fn start(ctx: egui::Context, s: &crate::session::Session, source: Source) -> Option<Self> {
         let (tx, req) = channel::<Key>();
         let (out, rx) = channel::<Frame>();
-        let textures = s.preview_tex.clone();
+        let mut art = s.preview_tex.clone();
+        let pngs = s.texture_pngs.clone();
         let model = s.puppet.model().clone();
         let anims = s.animations.clone();
         let exprs = s.expressions.clone();
@@ -383,12 +384,27 @@ impl Worker {
                 .as_mut()
                 .and_then(|pl| list.last().and_then(|&i| pl.model(i)))
                 .map(|m| m.canvas);
+            // the first frame comes with the thumbnail art, so there is
+            // something to see at once; the pages are then decoded at the
+            // size the largest paused frame draws at, and it is drawn again
+            let canvas = final_canvas.unwrap_or(model.canvas);
+            let aspect = (canvas.height / canvas.width.max(1.0)).clamp(0.1, 10.0);
+            let sharp_w = ((PREVIEW_PX / aspect).sqrt() * 2.0) as u32;
+            let mut sharp = false;
+            let mut again = None;
             let mut puppet = ayatsuri_core::Puppet::new(model);
             // the step on show and the one after it, blended between
             let mut cur: Option<(usize, Model)> = None;
             let mut nxt: Option<(usize, Model)> = None;
             let mut info: (Vec<Change>, Counts) = (Vec::new(), Counts::default());
-            while let Ok(mut key) = req.recv() {
+            loop {
+                let mut key = match again.take() {
+                    Some(k) => k,
+                    None => match req.recv() {
+                        Ok(k) => k,
+                        Err(_) => break,
+                    },
+                };
                 // only the newest request matters: the clock has moved on
                 while let Ok(k) = req.try_recv() {
                     key = k;
@@ -406,7 +422,7 @@ impl Worker {
                         puppet.update();
                         let (w, h, px) = crate::thumb::render_aa(
                             &puppet,
-                            &textures,
+                            &art,
                             width as usize,
                             if aa { 2 } else { 1 },
                         );
@@ -472,7 +488,7 @@ impl Worker {
                         pp.update();
                         let (w, h, px) = crate::thumb::render_aa(
                             &pp,
-                            &textures,
+                            &art,
                             width as usize,
                             if aa { 2 } else { 1 },
                         );
@@ -499,6 +515,12 @@ impl Worker {
                         break;
                     }
                     ctx.request_repaint();
+                }
+                if !sharp {
+                    sharp = true;
+                    art = textures(&pngs, canvas.width.max(1.0), sharp_w);
+                    // the frame on show was drawn with the thumbnails
+                    again = Some(key);
                 }
             }
         });
@@ -626,7 +648,20 @@ fn flatten(px: &mut [u8]) {
 enum Sink {
     Png(PathBuf, usize),
     Gif(image::codecs::gif::GifEncoder<std::io::BufWriter<std::fs::File>>, image::Delay),
-    Pipe(std::process::Child, std::io::BufWriter<std::process::ChildStdin>),
+    Pipe(
+        std::process::Child,
+        std::io::BufWriter<std::process::ChildStdin>,
+        std::thread::JoinHandle<String>,
+    ),
+}
+
+/// What ffmpeg said before it stopped, for the error.
+fn ffmpeg_said(child: &mut std::process::Child, said: std::thread::JoinHandle<String>) -> String {
+    let _ = child.wait();
+    let said = said.join().unwrap_or_default();
+    let tail: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
+    let n = tail.len();
+    tail.into_iter().skip(n.saturating_sub(3)).collect::<Vec<_>>().join(" / ")
 }
 
 /// Under the formats when there is no ffmpeg: a button that fetches one
@@ -687,7 +722,8 @@ impl Sink {
             }
             Preset::Mp4 | Preset::Webm | Preset::Mov => {
                 let mut cmd = std::process::Command::new(&spec.ffmpeg);
-                cmd.args(["-y", "-f", "rawvideo", "-pix_fmt", "rgba"])
+                cmd.args(["-hide_banner", "-loglevel", "error", "-nostats"])
+                    .args(["-y", "-f", "rawvideo", "-pix_fmt", "rgba"])
                     .arg("-s")
                     .arg(format!("{w}x{h}"))
                     .arg("-r")
@@ -726,10 +762,24 @@ impl Sink {
                 cmd.arg(&out)
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
+                    .stderr(std::process::Stdio::piped());
                 let mut child = cmd.spawn().map_err(|e| format!("ffmpeg: {e}"))?;
                 let stdin = child.stdin.take().ok_or("ffmpeg: no stdin")?;
-                Ok((Sink::Pipe(child, std::io::BufWriter::with_capacity(1 << 20, stdin)), out))
+                let stderr = child.stderr.take().ok_or("ffmpeg: no stderr")?;
+                // read as it comes, so a chatty ffmpeg never blocks on a full pipe
+                let said = std::thread::Builder::new()
+                    .name("ffmpeg-stderr".into())
+                    .spawn(move || {
+                        use std::io::Read;
+                        let mut s = String::new();
+                        let _ = std::io::BufReader::new(stderr).read_to_string(&mut s);
+                        s
+                    })
+                    .map_err(|e| format!("ffmpeg: {e}"))?;
+                Ok((
+                    Sink::Pipe(child, std::io::BufWriter::with_capacity(1 << 20, stdin), said),
+                    out,
+                ))
             }
         }
     }
@@ -746,7 +796,7 @@ impl Sink {
                 gif.encode_frame(image::Frame::from_parts(img, 0, 0, *delay))
                     .map_err(|e| e.to_string())
             }
-            Sink::Pipe(_, stdin) => {
+            Sink::Pipe(_, stdin, _) => {
                 use std::io::Write;
                 stdin.write_all(&px).map_err(|e| format!("ffmpeg: {e}"))
             }
@@ -760,10 +810,19 @@ impl Sink {
                 drop(gif);
                 Ok(())
             }
-            Sink::Pipe(mut child, stdin) => {
+            Sink::Pipe(mut child, stdin, said) => {
                 drop(stdin);
                 let st = child.wait().map_err(|e| format!("ffmpeg: {e}"))?;
-                if st.success() { Ok(()) } else { Err("ffmpeg could not encode the video".into()) }
+                if st.success() {
+                    Ok(())
+                } else {
+                    let why = ffmpeg_said(&mut child, said);
+                    Err(if why.is_empty() {
+                        "ffmpeg could not encode the video".into()
+                    } else {
+                        format!("ffmpeg could not encode the video: {why}")
+                    })
+                }
             }
         }
     }
@@ -827,8 +886,14 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
             sink = Some(s);
             out = o;
         }
-        if let Some(s) = &mut sink {
-            s.frame(w as u32, h as u32, px)?;
+        if let Some(s) = &mut sink
+            && let Err(e) = s.frame(w as u32, h as u32, px)
+        {
+            // ffmpeg's own words, when it was ffmpeg that stopped
+            return Err(match sink.take().map(Sink::finish) {
+                Some(Err(why)) => why,
+                _ => e,
+            });
         }
         written += 1;
         let _ = tx.send(Progress::Frames(written, total));
@@ -867,6 +932,7 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
         }
         Source::Timelapse => {
             let path = spec.timelapse.as_ref().ok_or("this project has no timelapse yet")?;
+            log::debug!("render: timelapse {}", path.display());
             let mut player = crate::timelapse::Player::open(path)?;
             let list = player.surviving();
             let n = list.len();
@@ -891,7 +957,12 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
                         Some((i, m)) if i == step => Some(m),
                         _ => list.get(step).and_then(|&i| player.model(i)),
                     };
-                    let a = a.ok_or("a step could not be read")?;
+                    let a = a.ok_or_else(|| {
+                        format!(
+                            "step {} could not be read",
+                            list.get(step).copied().unwrap_or(step)
+                        )
+                    })?;
                     nxt = list.get(step + 1).and_then(|&i| player.model(i)).map(|b| (step + 1, b));
                     pose = nxt
                         .as_ref()
@@ -974,8 +1045,14 @@ impl EditorUi {
                             win.queue.iter_mut().find(|j| matches!(j.state, State::Running))
                         {
                             j.state = match r {
-                                Ok(m) => State::Done(m),
-                                Err(e) => State::Failed(e),
+                                Ok(m) => {
+                                    log::info!("render: {}: {m}", j.label);
+                                    State::Done(m)
+                                }
+                                Err(e) => {
+                                    log::error!("render: {}: {e}", j.label);
+                                    State::Failed(e)
+                                }
                             };
                         }
                         finished = true;
@@ -993,11 +1070,13 @@ impl EditorUi {
         {
             let (tx, rx) = channel();
             win.rx = Some(rx);
+            log::info!("render: {} started", j.label);
             let spawned = std::thread::Builder::new().name("render".into()).spawn(move || {
                 let r = run(*spec, &tx);
                 let _ = tx.send(Progress::Done(r));
             });
             if spawned.is_err() {
+                log::error!("render: could not start the render thread");
                 j.state = State::Failed("could not start the render thread".into());
                 win.rx = None;
             }
@@ -1052,12 +1131,17 @@ impl EditorUi {
                         ui,
                         |ui| {
                             ui.set_min_size(screen.size() - egui::vec2(32.0, 32.0));
-                            let (pw, fh) =
-                                win.fit(screen.width() - 32.0, screen.height() - 32.0, s);
+                            let avail = screen.width() - 32.0;
+                            let (pw, fh) = win.fit(avail, screen.height() - 32.0, s);
+                            // the room left of a tall frame goes to the panel, then
+                            // to margins either side, so the pair sits in the middle
+                            let sw = (avail - pw - 14.0).clamp(SIDE_W, SIDE_W * 1.8);
+                            let lead = ((avail - pw - 14.0 - sw) / 2.0).max(0.0);
                             ui.horizontal_top(|ui| {
+                                ui.add_space(lead);
                                 win.player_ui(ui, s, pw, fh);
                                 ui.add_space(6.0);
-                                win.side_panel(ui, s, STRIP_H + fh + RenderWin::bar_h(pw));
+                                win.side_panel(ui, s, STRIP_H + fh + RenderWin::bar_h(pw), sw);
                             });
                         },
                     );
@@ -1183,7 +1267,7 @@ impl EditorUi {
                     ui.horizontal_top(|ui| {
                         win.player_ui(ui, s, pw, fh);
                         ui.add_space(6.0);
-                        win.side_panel(ui, s, STRIP_H + fh + RenderWin::bar_h(pw));
+                        win.side_panel(ui, s, STRIP_H + fh + RenderWin::bar_h(pw), SIDE_W);
                     });
                     ui.add_space(8.0);
                     win.queue_ui(ui);
@@ -1638,21 +1722,22 @@ impl RenderWin {
 
     /// Beside the player: the parameters a scene drives, or what a timelapse
     /// step changed.
-    fn side_panel(&mut self, ui: &mut Ui, s: &crate::session::Session, h: f32) {
+    fn side_panel(&mut self, ui: &mut Ui, s: &crate::session::Session, h: f32, w: f32) {
         ui.allocate_ui_with_layout(
-            egui::vec2(SIDE_W, h),
+            egui::vec2(w, h),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 ui.set_min_height(h);
+                ui.set_max_width(w);
                 match self.source {
-                    Source::Animation => self.params_panel(ui, s, h),
-                    Source::Timelapse => self.changes_panel(ui, h),
+                    Source::Animation => self.params_panel(ui, s, h, w),
+                    Source::Timelapse => self.changes_panel(ui, h, w),
                 }
             },
         );
     }
 
-    fn params_panel(&self, ui: &mut Ui, s: &crate::session::Session, h: f32) {
+    fn params_panel(&self, ui: &mut Ui, s: &crate::session::Session, h: f32, w: f32) {
         let anim = s.animations.get(self.scene);
         let model = s.puppet.model();
         let live: Vec<&str> = anim
@@ -1691,7 +1776,7 @@ impl RenderWin {
             }
         }
         egui::ScrollArea::vertical().id_salt("render-params").max_height(h - 24.0).show(ui, |ui| {
-            ui.set_min_width(SIDE_W - 14.0);
+            ui.set_min_width(w - 14.0);
             for i in order {
                 let Some(p) = model.parameters.get(i) else { continue };
                 let v = self.values.get(i).copied().unwrap_or(p.default);
@@ -1718,7 +1803,7 @@ impl RenderWin {
         });
     }
 
-    fn changes_panel(&mut self, ui: &mut Ui, h: f32) {
+    fn changes_panel(&mut self, ui: &mut Ui, h: f32, w: f32) {
         let pal = crate::theme::pal();
         let t0 = self.stamps.first().copied().unwrap_or(0);
         let now = self.stamps.get(self.pos.floor() as usize).copied().unwrap_or(t0);
@@ -1771,7 +1856,7 @@ impl RenderWin {
         egui::ScrollArea::vertical().id_salt("render-changes").max_height(h - 112.0).show(
             ui,
             |ui| {
-                ui.set_min_width(SIDE_W - 14.0);
+                ui.set_min_width(w - 14.0);
                 if self.changes.is_empty() {
                     ui.weak(
                         egui::RichText::new(tr("Nothing changed between these steps.")).small(),
@@ -1963,4 +2048,58 @@ fn value_row(
     p.circle_filled(pos2(fx(value), ty), 4.0, if live { pal.accent } else { pal.text_faint });
     p.circle_stroke(pos2(fx(value), ty), 4.0, egui::Stroke::new(1.0, pal.panel_bg));
     resp.on_hover_text(format!("{name}: {min} to {max}, {default} at rest"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Render a project's timelapse the way the Render window would, into
+    /// the folder named by AYATSURI_EXPORT_OUT. Needs a real .aom with a
+    /// timelapse beside it, so it only runs when asked for.
+    #[test]
+    #[ignore]
+    fn exports_a_real_timelapse() {
+        let aom = PathBuf::from(std::env::var("AYATSURI_EXPORT_AOM").unwrap());
+        let out = PathBuf::from(std::env::var("AYATSURI_EXPORT_OUT").unwrap());
+        let preset = match std::env::var("AYATSURI_EXPORT_PRESET").as_deref() {
+            Ok("mp4") => Preset::Mp4,
+            Ok("gif") => Preset::Gif,
+            Ok("png") => Preset::PngSeq,
+            Ok("mov") => Preset::Mov,
+            _ => Preset::Webm,
+        };
+        let bytes = std::fs::read(&aom).unwrap();
+        let payload = ayatsuri_format::read::read(&bytes).unwrap();
+        let spec = Spec {
+            source: Source::Timelapse,
+            preset,
+            fps: 30,
+            width: 1920,
+            transparent: true,
+            work_area: false,
+            hold: 1.0,
+            sps: 6.0,
+            physics: false,
+            folder: out,
+            name: "timelapse-test".into(),
+            model: payload.model,
+            pngs: payload.textures.into_iter().map(|b| b.into_vec()).collect(),
+            anim: None,
+            expression: None,
+            timelapse: Some(crate::timelapse::Recorder::sidecar(&aom)),
+            ffmpeg: ayatsuri_update::ffmpeg::program().unwrap_or_else(|| PathBuf::from("ffmpeg")),
+        };
+        let (tx, rx) = channel();
+        let t = std::time::Instant::now();
+        let r = run(spec, &tx);
+        let mut frames = 0;
+        while let Ok(p) = rx.try_recv() {
+            if let Progress::Frames(a, _) = p {
+                frames = a;
+            }
+        }
+        eprintln!("{frames} frames in {:?}: {r:?}", t.elapsed());
+        assert!(r.is_ok(), "{r:?}");
+    }
 }

@@ -10,9 +10,11 @@
 //! ```text
 //!   file:  "AYTL1\n"  then per step:
 //!          u32 length | u64 unix ms | deflate( step )
-//!   step:  u8 kind (0 whole, 1 delta) | u32 total length
-//!          whole: the bytes
-//!          delta: u32 blocks changed, then per block: u32 index, u32 len, bytes
+//!   step:  u8 kind | u64 base (kinds 2 and 3) | u32 total length
+//!          kind 0 or 2, whole: the bytes
+//!          kind 1 or 3, delta: u32 blocks changed, then per block: u32 index, u32 len, bytes
+//!          base: the state the step was recorded on, hashed (0 for none),
+//!          so two editors writing one file stay on their own chains
 //! ```
 
 use std::io::Write;
@@ -41,12 +43,13 @@ fn get_u32(b: &[u8], at: &mut usize) -> Option<usize> {
 }
 
 /// One step's record: the whole model, or the blocks that changed from
-/// `before`.
-fn encode_step(before: Option<&[u8]>, now: &[u8], whole: bool) -> Vec<u8> {
+/// `before`. `base` names the state it was recorded on.
+fn encode_step(before: Option<&[u8]>, now: &[u8], whole: bool, base: u64) -> Vec<u8> {
     let mut out = Vec::new();
     match before {
         Some(prev) if !whole => {
-            out.push(1);
+            out.push(3);
+            out.extend_from_slice(&base.to_le_bytes());
             put_u32(&mut out, now.len());
             let changed: Vec<usize> = (0..now.len().div_ceil(BLOCK))
                 .filter(|&i| {
@@ -64,7 +67,8 @@ fn encode_step(before: Option<&[u8]>, now: &[u8], whole: bool) -> Vec<u8> {
             }
         }
         _ => {
-            out.push(0);
+            out.push(2);
+            out.extend_from_slice(&base.to_le_bytes());
             put_u32(&mut out, now.len());
             out.extend_from_slice(now);
         }
@@ -72,24 +76,45 @@ fn encode_step(before: Option<&[u8]>, now: &[u8], whole: bool) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(&out, 6)
 }
 
-/// Apply one step's record to the bytes of the step before. Also says
-/// which blocks it touched, or None for a whole step.
-fn decode_step_blocks(before: &[u8], packed: &[u8]) -> Option<(Vec<u8>, Option<Vec<usize>>)> {
+/// One step inflated: whole or delta, the state it was recorded on (not
+/// kept by the first files), and where its payload starts.
+struct Raw {
+    whole: bool,
+    base: Option<u64>,
+    raw: Vec<u8>,
+    at: usize,
+}
+
+fn inflate(packed: &[u8]) -> Option<Raw> {
     let raw = miniz_oxide::inflate::decompress_to_vec(packed).ok()?;
-    let mut at = 1usize;
     let kind = *raw.first()?;
-    let total = get_u32(&raw, &mut at)?;
-    if kind == 0 {
-        return raw.get(at..at + total).map(|b| (b.to_vec(), None));
+    let mut at = 1;
+    let base = if kind >= 2 {
+        let b: [u8; 8] = raw.get(at..at + 8)?.try_into().ok()?;
+        at += 8;
+        Some(u64::from_le_bytes(b))
+    } else {
+        None
+    };
+    Some(Raw { whole: kind % 2 == 0, base, raw, at })
+}
+
+/// Apply one step to the bytes of the step it was recorded on. Also says
+/// which blocks it touched, or None for a whole step.
+fn apply(before: &[u8], step: &Raw) -> Option<(Vec<u8>, Option<Vec<usize>>)> {
+    let mut at = step.at;
+    let total = get_u32(&step.raw, &mut at)?;
+    if step.whole {
+        return step.raw.get(at..at + total).map(|b| (b.to_vec(), None));
     }
     let mut out = before.to_vec();
     out.resize(total, 0);
-    let n = get_u32(&raw, &mut at)?;
+    let n = get_u32(&step.raw, &mut at)?;
     let mut touched = Vec::with_capacity(n);
     for _ in 0..n {
-        let i = get_u32(&raw, &mut at)?;
-        let len = get_u32(&raw, &mut at)?;
-        let bytes = raw.get(at..at + len)?;
+        let i = get_u32(&step.raw, &mut at)?;
+        let len = get_u32(&step.raw, &mut at)?;
+        let bytes = step.raw.get(at..at + len)?;
         at += len;
         let start = i * BLOCK;
         out.get_mut(start..start + len)?.copy_from_slice(bytes);
@@ -99,7 +124,7 @@ fn decode_step_blocks(before: &[u8], packed: &[u8]) -> Option<(Vec<u8>, Option<V
 }
 
 fn decode_step(before: &[u8], packed: &[u8]) -> Option<Vec<u8>> {
-    decode_step_blocks(before, packed).map(|(b, _)| b)
+    apply(before, &inflate(packed)?).map(|(b, _)| b)
 }
 
 fn hash_block(b: &[u8]) -> u64 {
@@ -109,12 +134,51 @@ fn hash_block(b: &[u8]) -> u64 {
     h.finish()
 }
 
+fn block_at(bytes: &[u8], k: usize) -> u64 {
+    hash_block(bytes.get(k * BLOCK..((k + 1) * BLOCK).min(bytes.len())).unwrap_or(&[]))
+}
+
+fn block_hashes(bytes: &[u8]) -> Vec<u64> {
+    (0..bytes.len().div_ceil(BLOCK)).map(|k| block_at(bytes, k)).collect()
+}
+
+/// One number for a state, from its block hashes: equal states hash
+/// equal, and a step only rehashes the blocks it touched.
+fn state_of(blocks: &[u64]) -> u64 {
+    blocks
+        .iter()
+        .enumerate()
+        .fold(0u64, |acc, (k, h)| acc.wrapping_add(h.wrapping_mul(k as u64 * 2 + 1)))
+}
+
+fn state_hash(bytes: &[u8]) -> u64 {
+    state_of(&block_hashes(bytes))
+}
+
+/// The block hashes after a step: the touched blocks and the tail, which
+/// changes with the length, are hashed again; a whole step hashes all.
+fn rehashed(mut blocks: Vec<u64>, bytes: &[u8], touched: Option<Vec<usize>>) -> Vec<u64> {
+    let Some(touched) = touched else { return block_hashes(bytes) };
+    let count = bytes.len().div_ceil(BLOCK);
+    let had = blocks.len();
+    blocks.resize(count, 0);
+    let tail = had.min(count).saturating_sub(1);
+    for k in touched.into_iter().chain(tail..count) {
+        if let Some(slot) = blocks.get_mut(k) {
+            *slot = block_at(bytes, k);
+        }
+    }
+    blocks
+}
+
 /// Records steps as the model changes. Before the model has a file, steps
 /// wait in memory and go out with the first save.
 #[derive(Default)]
 pub struct Recorder {
     path: Option<PathBuf>,
     last: Option<Vec<u8>>,
+    /// The state of `last`, named by the next step as what it builds on.
+    last_hash: u64,
     steps: usize,
     waiting: Vec<(u64, Vec<u8>)>,
 }
@@ -131,7 +195,7 @@ impl Recorder {
     pub fn open(model_path: Option<&Path>) -> Self {
         let path = model_path.map(Self::sidecar);
         let steps = path.as_deref().and_then(|p| index(p).ok()).map_or(0, |i| i.len());
-        Self { path, last: None, steps, waiting: Vec::new() }
+        Self { path, last: None, last_hash: 0, steps, waiting: Vec::new() }
     }
 
     /// Record the model as it is now. Same bytes as the last step: nothing.
@@ -143,7 +207,8 @@ impl Recorder {
         // the first step after opening is whole: the file's last step may
         // be from a different state of the model
         let whole = self.last.is_none() || self.steps.is_multiple_of(KEY_EVERY);
-        let packed = encode_step(self.last.as_deref(), &now, whole);
+        let packed = encode_step(self.last.as_deref(), &now, whole, self.last_hash);
+        self.last_hash = state_hash(&now);
         self.last = Some(now);
         self.steps += 1;
         self.waiting.push((now_ms(), packed));
@@ -207,13 +272,23 @@ pub fn index(path: &Path) -> Result<Vec<(u64, usize, usize)>, String> {
     Ok(out)
 }
 
-/// A timelapse opened for playback: steps are rebuilt on demand, walking
-/// forward from the nearest whole step.
+/// A timelapse opened for playback: steps are rebuilt on demand, back
+/// along the steps they were recorded on to a whole step, then forward.
 pub struct Player {
     bytes: Vec<u8>,
     pub steps: Vec<(u64, usize, usize)>,
+    /// Per step: the step it was recorded on, whether it holds the whole
+    /// model, its state, and whether it could be read at all.
+    parent: Vec<Option<usize>>,
+    whole: Vec<bool>,
+    state: Vec<u64>,
+    readable: Vec<bool>,
     cached: Option<(usize, Vec<u8>)>,
 }
+
+/// How many chain ends are kept in memory while a file is linked: one
+/// per editor that wrote it at the same time, with room to spare.
+const HEADS: usize = 4;
 
 impl Player {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -222,7 +297,18 @@ impl Player {
         if steps.is_empty() {
             return Err("this timelapse has no steps yet".into());
         }
-        Ok(Self { bytes, steps, cached: None })
+        let n = steps.len();
+        let mut p = Self {
+            bytes,
+            steps,
+            parent: vec![None; n],
+            whole: vec![false; n],
+            state: vec![0; n],
+            readable: vec![false; n],
+            cached: None,
+        };
+        p.link();
+        Ok(p)
     }
 
     fn packed(&self, i: usize) -> Option<&[u8]> {
@@ -230,54 +316,112 @@ impl Player {
         self.bytes.get(at..at + len)
     }
 
-    fn is_whole(&self, i: usize) -> bool {
-        self.packed(i)
-            .and_then(|p| miniz_oxide::inflate::decompress_to_vec(p).ok())
-            .is_some_and(|raw| raw.first() == Some(&0))
-    }
-
-    /// The steps that survive undo, in order. A step that brings the model
-    /// back to the state of an earlier step is an undo: it and everything
-    /// after that earlier step are dropped, so an edit that was taken back
-    /// never plays. A redo lands as a fresh step. States are told apart by
-    /// per-block hashes, so each step costs only the blocks it changed.
-    pub fn surviving(&self) -> Vec<usize> {
-        let mut keep: Vec<usize> = Vec::new();
-        let mut seen: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
-        let mut bytes: Vec<u8> = Vec::new();
-        let mut blocks: Vec<u64> = Vec::new();
+    /// Work out which step each step was recorded on. Steps name the
+    /// state they build on; a step from the first files is tried on the
+    /// live chain ends newest first, and a whole one continues from the
+    /// latest step it equals. Two editors writing one file give two
+    /// chains, and an undo lands on a state seen before.
+    fn link(&mut self) {
+        let mut by_state: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+        // chain ends nothing has been recorded on yet: step, bytes, block hashes
+        let mut heads: Vec<(usize, Vec<u8>, Vec<u64>)> = Vec::new();
         for i in 0..self.steps.len() {
-            let Some(packed) = self.packed(i) else { break };
-            let Some((next, touched)) = decode_step_blocks(&bytes, packed) else { break };
-            bytes = next;
-            let count = bytes.len().div_ceil(BLOCK);
-            let block = |k: usize| {
-                let r = k * BLOCK..((k + 1) * BLOCK).min(bytes.len());
-                hash_block(bytes.get(r).unwrap_or(&[]))
-            };
-            match touched {
-                None => blocks = (0..count).map(block).collect(),
-                Some(t) => {
-                    let had = blocks.len();
-                    blocks.resize(count, 0);
-                    // the last block's length changes with the model's
-                    for k in t.into_iter().chain(had.saturating_sub(1)..count) {
-                        if let Some(slot) = blocks.get_mut(k) {
-                            *slot = block(k);
+            let Some(step) = self.packed(i).and_then(inflate) else { continue };
+            let (parent, bytes, blocks) = if step.whole {
+                let Some((b, _)) = apply(&[], &step) else { continue };
+                let blocks = block_hashes(&b);
+                let h = state_of(&blocks);
+                // named, or the latest step it equals (opened again after
+                // a save), or else the newest chain end
+                let parent = step
+                    .base
+                    .filter(|&b| b != 0)
+                    .and_then(|b| by_state.get(&b).copied())
+                    .or_else(|| by_state.get(&h).copied())
+                    .or_else(|| heads.last().map(|x| x.0));
+                if let Some(j) = parent {
+                    heads.retain(|x| x.0 != j);
+                }
+                (parent, b, blocks)
+            } else {
+                let mut pick = None;
+                match step.base {
+                    Some(b) => {
+                        if let Some(k) = heads.iter().rposition(|x| self.state.get(x.0) == Some(&b))
+                        {
+                            let (j, hb, hbl) = heads.remove(k);
+                            if let Some((nb, t)) = apply(&hb, &step) {
+                                pick = Some((j, rehashed(hbl, &nb, t), nb));
+                            }
+                        } else if let Some(&j) = by_state.get(&b)
+                            && let Some(base) = self.bytes_at(j)
+                            && let Some((nb, _)) = apply(&base, &step)
+                        {
+                            pick = Some((j, block_hashes(&nb), nb));
+                        }
+                    }
+                    None => {
+                        for k in (0..heads.len()).rev() {
+                            let Some((nb, t)) = heads.get(k).and_then(|x| apply(&x.1, &step))
+                            else {
+                                continue;
+                            };
+                            if heads.len() > 1 && rmp_serde::from_slice::<Model>(&nb).is_err() {
+                                continue;
+                            }
+                            let (j, _, hbl) = heads.remove(k);
+                            pick = Some((j, rehashed(hbl, &nb, t), nb));
+                            break;
                         }
                     }
                 }
+                let Some((j, blocks, nb)) = pick else { continue };
+                (Some(j), nb, blocks)
+            };
+            let h = state_of(&blocks);
+            if let (Some(p), Some(w), Some(st), Some(r)) = (
+                self.parent.get_mut(i),
+                self.whole.get_mut(i),
+                self.state.get_mut(i),
+                self.readable.get_mut(i),
+            ) {
+                *p = parent;
+                *w = step.whole;
+                *st = h;
+                *r = true;
             }
-            let state = blocks
-                .iter()
-                .enumerate()
-                .fold(0u64, |acc, (k, h)| acc.wrapping_add(h.wrapping_mul(k as u64 * 2 + 1)));
+            by_state.insert(h, i);
+            heads.push((i, bytes, blocks));
+            if heads.len() > HEADS {
+                heads.remove(0);
+            }
+        }
+        self.cached = None;
+    }
+
+    /// The steps that play, in order: the chain the file ends on, without
+    /// the steps an undo took back. A step that brings the model back to
+    /// the state of an earlier step is an undo: it and everything after
+    /// that earlier step are dropped. A redo lands as a fresh step.
+    pub fn surviving(&self) -> Vec<usize> {
+        let Some(end) = (0..self.steps.len()).rev().find(|&i| self.readable.get(i) == Some(&true))
+        else {
+            return Vec::new();
+        };
+        let mut chain = vec![end];
+        let mut at = end;
+        while let Some(&Some(p)) = self.parent.get(at) {
+            chain.push(p);
+            at = p;
+        }
+        chain.reverse();
+        let mut keep: Vec<usize> = Vec::new();
+        let mut seen: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+        for i in chain {
+            let state = self.state.get(i).copied().unwrap_or(0);
             match seen.get(&state).copied() {
                 Some(at) if at < keep.len() => {
-                    // back to an earlier state: drop what came after it
-                    for gone in keep.drain(at + 1..) {
-                        let _ = gone;
-                    }
+                    keep.truncate(at + 1);
                     seen.retain(|_, v| *v <= at);
                 }
                 _ => {
@@ -289,26 +433,44 @@ impl Player {
         keep
     }
 
+    /// The bytes of step `i`: back along the parents to a whole step or
+    /// the cached one, then forward.
+    fn bytes_at(&mut self, i: usize) -> Option<Vec<u8>> {
+        let mut path = Vec::new();
+        let mut at = i;
+        let mut start = None;
+        loop {
+            if self.readable.get(at) != Some(&true) {
+                return None;
+            }
+            if let Some((c, b)) = &self.cached
+                && *c == at
+            {
+                start = Some(b.clone());
+                break;
+            }
+            path.push(at);
+            if self.whole.get(at) == Some(&true) {
+                break;
+            }
+            at = (*self.parent.get(at)?)?;
+        }
+        let mut bytes = match start {
+            Some(b) => b,
+            None => decode_step(&[], self.packed(path.pop()?)?)?,
+        };
+        for k in path.into_iter().rev() {
+            bytes = decode_step(&bytes, self.packed(k)?)?;
+        }
+        self.cached = Some((i, bytes.clone()));
+        Some(bytes)
+    }
+
     /// The model at step `i`.
     pub fn model(&mut self, i: usize) -> Option<Model> {
         let i = i.min(self.steps.len().saturating_sub(1));
-        let (mut at, mut bytes) = match self.cached.take() {
-            Some((c, b)) if c <= i && i - c <= KEY_EVERY => (c, b),
-            _ => {
-                let mut k = i;
-                while k > 0 && !self.is_whole(k) {
-                    k -= 1;
-                }
-                (k, decode_step(&[], self.packed(k)?)?)
-            }
-        };
-        while at < i {
-            at += 1;
-            bytes = decode_step(&bytes, self.packed(at)?)?;
-        }
-        let model = rmp_serde::from_slice(&bytes).ok();
-        self.cached = Some((i, bytes));
-        model
+        let bytes = self.bytes_at(i)?;
+        rmp_serde::from_slice(&bytes).ok()
     }
 }
 
@@ -653,6 +815,62 @@ mod tests {
         let p = Player::open(&Recorder::sidecar(&aom)).unwrap();
         // step 0 (1), step 5 (the redo to 2, a fresh step), step 6 (7)
         assert_eq!(p.surviving(), vec![0, 5, 6]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_editors_on_one_file_keep_their_own_chains() {
+        let dir = std::env::temp_dir().join(format!("ay-tl-two-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let aom = dir.join("m.aom");
+        let mut a = Recorder::open(Some(&aom));
+        let mut m = Model::new();
+        for w in [1.0, 2.0, 3.0] {
+            m.canvas.width = w;
+            a.record(&m);
+        }
+        // a second editor opens the file as it was saved, at width 1,
+        // and records two edits of its own: steps 3 (whole), 4 and 5
+        let mut b = Recorder::open(Some(&aom));
+        let mut mb = Model::new();
+        for w in [1.0, 10.0, 11.0] {
+            mb.canvas.width = w;
+            b.record(&mb);
+        }
+        // the first editor goes on from its own step 2: steps 6 and 7
+        for w in [4.0, 5.0] {
+            m.canvas.width = w;
+            a.record(&m);
+        }
+        let mut p = Player::open(&Recorder::sidecar(&aom)).unwrap();
+        assert_eq!(p.surviving(), vec![0, 1, 2, 6, 7]);
+        for (i, w) in [(3, 1.0), (4, 10.0), (5, 11.0), (6, 4.0), (7, 5.0), (2, 3.0), (1, 2.0)] {
+            assert_eq!(p.model(i).unwrap().canvas.width, w, "step {i}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reopening_a_saved_file_continues_its_chain() {
+        let dir = std::env::temp_dir().join(format!("ay-tl-reopen-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let aom = dir.join("m.aom");
+        let mut m = Model::new();
+        let mut a = Recorder::open(Some(&aom));
+        for w in [1.0, 2.0] {
+            m.canvas.width = w;
+            a.record(&m);
+        }
+        drop(a);
+        // opened again later: the first record is the model as saved
+        let mut a = Recorder::open(Some(&aom));
+        for w in [2.0, 3.0] {
+            m.canvas.width = w;
+            a.record(&m);
+        }
+        let p = Player::open(&Recorder::sidecar(&aom)).unwrap();
+        // step 2 equals step 1, so it continues from it and does not play twice
+        assert_eq!(p.surviving(), vec![0, 1, 3]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

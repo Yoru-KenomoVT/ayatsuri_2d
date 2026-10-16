@@ -29,9 +29,9 @@ pub fn cache_path(source: &Path) -> Option<PathBuf> {
     Some(cache_dir()?.join(format!("{stem}-{hash:08x}-{}-{}.png", meta.len(), stamp.unwrap_or(0))))
 }
 
-fn sample(t: &TexData, u: f32, v: f32) -> [f32; 4] {
-    let x = ((u * t.width as f32) as i64).clamp(0, t.width as i64 - 1) as usize;
-    let y = ((v * t.height as f32) as i64).clamp(0, t.height as i64 - 1) as usize;
+fn texel(t: &TexData, x: i64, y: i64) -> [f32; 4] {
+    let x = x.clamp(0, t.width as i64 - 1) as usize;
+    let y = y.clamp(0, t.height as i64 - 1) as usize;
     let at = (y * t.width as usize + x) * 4;
     let px = t.rgba.get(at..at + 4).unwrap_or(&[0, 0, 0, 0]);
     [
@@ -40,6 +40,37 @@ fn sample(t: &TexData, u: f32, v: f32) -> [f32; 4] {
         px.get(2).copied().unwrap_or(0) as f32 / 255.0,
         px.get(3).copied().unwrap_or(0) as f32 / 255.0,
     ]
+}
+
+/// The texture at (u, v), the four nearest texels blended, so art drawn
+/// larger than its page is smooth rather than blocky. Colour is weighted
+/// by alpha so a clear neighbour does not darken an edge.
+fn sample(t: &TexData, u: f32, v: f32) -> [f32; 4] {
+    let x = u * t.width as f32 - 0.5;
+    let y = v * t.height as f32 - 0.5;
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let (x0, y0) = (x0 as i64, y0 as i64);
+    let mut out = [0.0f32; 4];
+    for (dx, dy, w) in [
+        (0, 0, (1.0 - fx) * (1.0 - fy)),
+        (1, 0, fx * (1.0 - fy)),
+        (0, 1, (1.0 - fx) * fy),
+        (1, 1, fx * fy),
+    ] {
+        let p = texel(t, x0 + dx, y0 + dy);
+        let wa = w * p[3];
+        out[0] += p[0] * wa;
+        out[1] += p[1] * wa;
+        out[2] += p[2] * wa;
+        out[3] += wa;
+    }
+    if out[3] > 0.0 {
+        out[0] /= out[3];
+        out[1] /= out[3];
+        out[2] /= out[3];
+    }
+    out
 }
 
 struct Raster {
@@ -119,8 +150,10 @@ pub fn render(puppet: &Puppet, textures: &[TexData], width: usize) -> (usize, us
 /// canvas at 2× within memory.
 const BAND_PX: usize = 4 << 20;
 
-/// Render with `ss`×`ss` samples per pixel, in horizontal bands, each
-/// band drawn large and averaged down: edges come out smooth.
+/// Render at `width` with `ss` by `ss` samples per pixel averaged, so
+/// edges are smooth. The frame is drawn in horizontal bands across all
+/// cores, so the supersampled buffer stays small and a tall canvas is
+/// done in a fraction of the time.
 pub fn render_aa(
     puppet: &Puppet,
     textures: &[TexData],
@@ -132,55 +165,65 @@ pub fn render_aa(
     let width = width.max(1);
     let scale = width as f32 / c.width.max(1.0);
     let height = ((c.height.max(1.0) * scale) as usize).max(1);
-    let band = (BAND_PX / (width * ss * ss).max(1)).clamp(4, height);
+    // several bands per core: the art sits in the middle rows, so even
+    // bands would leave most cores idle while one did the face
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
+    let band =
+        (BAND_PX / (width * ss * ss).max(1)).min(height.div_ceil(threads * 4)).clamp(4, height);
     let mut out = vec![0u8; width * height * 4];
-    let mut y0 = 0;
-    while y0 < height {
-        let rows = band.min(height - y0);
-        let r = Raster {
-            w: width * ss,
-            h: rows * ss,
-            sx: scale * ss as f32,
-            sy_off: -((y0 * ss) as f32),
-            origin_x: c.origin_x,
-            origin_y: c.origin_y,
-            ppu: c.pixels_per_unit,
-        };
-        let fb = draw(&r, puppet, textures);
-        let n = (ss * ss) as f32;
-        for y in 0..rows {
-            for x in 0..width {
-                // alpha averaged; colour weighted by alpha so clear
-                // samples don't darken an edge
-                let (mut sa, mut sr, mut sg, mut sb) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-                for j in 0..ss {
-                    for i in 0..ss {
-                        let at = ((y * ss + j) * r.w + x * ss + i) * 4;
-                        if let Some(p) = fb.get(at..at + 4) {
-                            let a = p.get(3).copied().unwrap_or(0.0);
-                            sa += a;
-                            sr += p.first().copied().unwrap_or(0.0) * a;
-                            sg += p.get(1).copied().unwrap_or(0.0) * a;
-                            sb += p.get(2).copied().unwrap_or(0.0) * a;
-                        }
+    std::thread::scope(|scope| {
+        for (k, rows_out) in out.chunks_mut(band * width * 4).enumerate() {
+            let y0 = k * band;
+            scope.spawn(move || {
+                let rows = rows_out.len() / (width * 4);
+                let r = Raster {
+                    w: width * ss,
+                    h: rows * ss,
+                    sx: scale * ss as f32,
+                    sy_off: -((y0 * ss) as f32),
+                    origin_x: c.origin_x,
+                    origin_y: c.origin_y,
+                    ppu: c.pixels_per_unit,
+                };
+                let fb = draw(&r, puppet, textures);
+                resolve(&fb, r.w, ss, rows_out);
+            });
+        }
+    });
+    (width, height, out)
+}
+
+/// Average each `ss` by `ss` block of `fb` into one pixel of `rows_out`:
+/// alpha averaged, colour weighted by alpha so clear samples don't
+/// darken an edge.
+fn resolve(fb: &[f32], fw: usize, ss: usize, rows_out: &mut [u8]) {
+    let width = fw / ss.max(1);
+    let n = (ss * ss) as f32;
+    let to8 = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
+    for (y, row) in rows_out.chunks_mut(width * 4).enumerate() {
+        for (x, dst) in row.chunks_mut(4).enumerate() {
+            let (mut sa, mut sr, mut sg, mut sb) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for j in 0..ss {
+                for i in 0..ss {
+                    let at = ((y * ss + j) * fw + x * ss + i) * 4;
+                    if let Some(p) = fb.get(at..at + 4) {
+                        let a = p.get(3).copied().unwrap_or(0.0);
+                        sa += a;
+                        sr += p.first().copied().unwrap_or(0.0) * a;
+                        sg += p.get(1).copied().unwrap_or(0.0) * a;
+                        sb += p.get(2).copied().unwrap_or(0.0) * a;
                     }
                 }
-                let to8 = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
-                let px = [
-                    if sa > 0.0 { to8(sr / sa) } else { 0 },
-                    if sa > 0.0 { to8(sg / sa) } else { 0 },
-                    if sa > 0.0 { to8(sb / sa) } else { 0 },
-                    to8(sa / n),
-                ];
-                let at = ((y0 + y) * width + x) * 4;
-                if let Some(dst) = out.get_mut(at..at + 4) {
-                    dst.copy_from_slice(&px);
-                }
             }
+            let px = [
+                if sa > 0.0 { to8(sr / sa) } else { 0 },
+                if sa > 0.0 { to8(sg / sa) } else { 0 },
+                if sa > 0.0 { to8(sb / sa) } else { 0 },
+                to8(sa / n),
+            ];
+            dst.copy_from_slice(&px);
         }
-        y0 += rows;
     }
-    (width, height, out)
 }
 
 /// Draw every drawable into a float RGBA buffer the raster's size.
