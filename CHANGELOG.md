@@ -47,7 +47,9 @@
   window says so when it isn't. Physics runs during an animation render
   when it is on in the editor. The preview is a player: a transport bar
   with start, play, end, a scrubber, timecode, loop and a speed for the
-  timelapse; Space and the arrow keys work over it. Beside it an
+  timelapse, and a full-screen view; it sizes to the window, frames come
+  from a worker thread so playback stays smooth, and Space and the arrow
+  keys work over it. Beside it an
   animation lists the parameters the scene drives with their live values,
   and a timelapse lists what each step changed (meshes, deformers,
   parameters, parts, physics) and draws it over the frame: edited meshes
