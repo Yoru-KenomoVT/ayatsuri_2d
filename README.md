@@ -188,8 +188,7 @@ Save often, keep backups of models you care about, and please
 
 Not built yet:
 
-- the art path brush, texture atlas editor, skinning, model templates and the
-  temporary deform tool;
+- skinning, model templates and the temporary deform tool;
 - an expression editor and the full timeline (curve editor, graph view);
 - the embeddable runtime's C ABI (below).
 
