@@ -74,9 +74,11 @@ impl EditorUi {
         };
         let mut open = true;
         let mut apply = false;
-        egui::Window::new(tr("Texture Atlas")).open(&mut open).default_size([900.0, 640.0]).show(
-            ui.ctx(),
-            |ui| {
+        egui::Window::new(tr("Texture Atlas"))
+            .collapsible(false)
+            .open(&mut open)
+            .default_size([900.0, 640.0])
+            .show(ui.ctx(), |ui| {
                 // controls across the top
                 ui.horizontal(|ui| {
                     ui.label(tr("Page size"));
@@ -295,8 +297,7 @@ impl EditorUi {
                         }
                     });
                 });
-            },
-        );
+            });
         if apply {
             let (pieces, layout) = (win.pieces.clone(), win.layout.clone());
             let ctx = ui.ctx().clone();

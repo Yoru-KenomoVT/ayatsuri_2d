@@ -942,7 +942,7 @@ impl EditorUi {
                             ui.horizontal_top(|ui| {
                                 win.player_ui(ui, s, pw, fh);
                                 ui.add_space(6.0);
-                                win.side_panel(ui, s, STRIP_H + fh + BAR_H);
+                                win.side_panel(ui, s, STRIP_H + fh + RenderWin::bar_h(pw));
                             });
                         },
                     );
@@ -954,7 +954,7 @@ impl EditorUi {
         let mut pick_folder = false;
         let has_timelapse =
             s.aom_path.as_ref().is_some_and(|p| crate::timelapse::Recorder::sidecar(p).exists());
-        egui::Window::new(tr("Render")).open(&mut open).default_size([1180.0, 640.0]).min_width(860.0).show(ui.ctx(), |ui| {
+        egui::Window::new(tr("Render")).collapsible(false).open(&mut open).default_size([1180.0, 640.0]).min_width(860.0).show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut win.source, Source::Animation, tr("Animation"));
                 ui.add_enabled_ui(has_timelapse, |ui| {
@@ -1061,7 +1061,7 @@ impl EditorUi {
                     ui.horizontal_top(|ui| {
                         win.player_ui(ui, s, pw, fh);
                         ui.add_space(6.0);
-                        win.side_panel(ui, s, STRIP_H + fh + BAR_H);
+                        win.side_panel(ui, s, STRIP_H + fh + RenderWin::bar_h(pw));
                     });
                     ui.add_space(8.0);
                     win.queue_ui(ui);
@@ -1118,6 +1118,8 @@ const MIN_PLAYER_W: f32 = 320.0;
 fn no_icon(_: &Ui, _: egui::Rect, _: &egui::style::WidgetVisuals, _: bool) {}
 const STRIP_H: f32 = 22.0;
 const BAR_H: f32 = 34.0;
+/// Under this width the clock and toggles move to a second bar row.
+const NARROW: f32 = 560.0;
 /// Changes listed for one step before the list says "and more".
 const MAX_CHANGES: usize = 80;
 
@@ -1210,14 +1212,23 @@ impl RenderWin {
         let c = s.puppet.model().canvas;
         let aspect = (c.height / c.width.max(1.0)).max(0.1);
         let mut pw = (avail_w - SIDE_W - 14.0).max(MIN_PLAYER_W);
-        let max_fh = (avail_h - STRIP_H - BAR_H).max(160.0);
         let mut fh = pw * aspect;
-        if fh > max_fh {
-            fh = max_fh;
-            pw = (fh / aspect).clamp(MIN_PLAYER_W, pw);
+        // a short window: the frame shrinks and the player narrows with it,
+        // which may give the bar a second row, so the height is settled twice
+        for _ in 0..2 {
+            let max_fh = (avail_h - STRIP_H - Self::bar_h(pw)).max(160.0);
+            if fh > max_fh {
+                fh = max_fh;
+                pw = (fh / aspect).clamp(MIN_PLAYER_W, pw);
+            }
         }
         self.player_size = (pw, fh);
         (pw, fh)
+    }
+
+    /// The bar's height at a player width: one row, or two when narrow.
+    fn bar_h(pw: f32) -> f32 {
+        if pw < NARROW { BAR_H + 24.0 } else { BAR_H }
     }
 
     /// The player: a title strip, the frame on dark with the output's
@@ -1226,7 +1237,7 @@ impl RenderWin {
         use egui::{Align2, Color32, FontId, Rect, Sense, pos2, vec2};
         let canvas = if self.canvas.width > 0.0 { self.canvas } else { s.puppet.model().canvas };
         let (panel, panel_resp) =
-            ui.allocate_exact_size(vec2(pw, STRIP_H + fh + BAR_H), Sense::hover());
+            ui.allocate_exact_size(vec2(pw, STRIP_H + fh + Self::bar_h(pw)), Sense::hover());
         let p = ui.painter_at(panel);
         p.rect_filled(panel, 8.0, Color32::from_gray(20));
         // title strip: what plays, at what size and rate
@@ -1299,6 +1310,7 @@ impl RenderWin {
             self.last_tick = None;
         }
         // the transport bar
+        let narrow = pw < NARROW;
         let bar = Rect::from_min_size(
             pos2(panel.min.x + 6.0, frame.max.y + 5.0),
             vec2(pw - 12.0, BAR_H - 10.0),
@@ -1329,11 +1341,14 @@ impl RenderWin {
             self.playing = false;
         }
         b.add_space(4.0);
-        let right_w = match self.source {
-            Source::Animation => 172.0,
-            Source::Timelapse => 256.0,
+        // the clock and the toggles share the row when there is room, else
+        // they take a second row under the scrubber
+        let right_w = match (narrow, self.source) {
+            (true, _) => 0.0,
+            (false, Source::Animation) => 172.0,
+            (false, Source::Timelapse) => 256.0,
         };
-        let sw = (bar.width() - 84.0 - right_w).max(60.0);
+        let sw = (bar.width() - 84.0 - right_w - 8.0).max(60.0);
         match self.source {
             Source::Animation => {
                 let frac = if dur > 0.0 { self.time / dur } else { 0.0 };
@@ -1341,17 +1356,6 @@ impl RenderWin {
                     self.time = f * dur;
                     self.playing = false;
                 }
-                b.add_space(6.0);
-                b.label(
-                    egui::RichText::new(format!("{} / {}", clock(self.time), clock(dur)))
-                        .monospace()
-                        .size(11.5)
-                        .color(Color32::from_gray(200)),
-                )
-                .on_hover_text(trf(
-                    "Frame {frame} at {fps} fps",
-                    &[("frame", &((self.time * fps).round() as u32)), ("fps", &fps)],
-                ));
             }
             Source::Timelapse => {
                 let frac = if last > 0 { self.step as f32 / last as f32 } else { 0.0 };
@@ -1359,48 +1363,84 @@ impl RenderWin {
                     self.step = (f * last as f32).round() as usize;
                     self.playing = false;
                 }
-                b.add_space(6.0);
+            }
+        }
+        let mut row2;
+        let r: &mut Ui = if narrow {
+            let second = Rect::from_min_size(
+                pos2(bar.min.x, bar.max.y + 2.0),
+                vec2(bar.width(), BAR_H - 10.0),
+            );
+            row2 = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(second)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            row2.spacing_mut().item_spacing.x = 2.0;
+            row2.add_space(4.0);
+            &mut row2
+        } else {
+            b.add_space(6.0);
+            &mut b
+        };
+        let clock_text = egui::RichText::new(match self.source {
+            Source::Animation => format!("{} / {}", clock(self.time), clock(dur)),
+            Source::Timelapse => {
                 // the clock runs at the playback speed: twenty seconds at 1×
                 let total = 20.0 / self.speed.max(0.01);
                 let at = if last > 0 { self.step as f32 / last as f32 * total } else { 0.0 };
-                b.label(
-                    egui::RichText::new(format!("{} / {}", clock(at), clock(total)))
-                        .monospace()
-                        .size(11.5)
-                        .color(Color32::from_gray(200)),
-                )
-                .on_hover_text(trf(
-                    "Step {step} of {steps}",
-                    &[("step", &(self.step + usize::from(n > 0))), ("steps", &n)],
-                ));
-                b.add_space(2.0);
-                let speed_txt = if self.speed >= 1.0 {
-                    format!("{}×", self.speed as u32)
-                } else {
-                    format!("{}×", self.speed)
+                format!("{} / {}", clock(at), clock(total))
+            }
+        })
+        .monospace()
+        .size(11.5)
+        .color(Color32::from_gray(200));
+        let clock_tip = match self.source {
+            Source::Animation => trf(
+                "Frame {frame} at {fps} fps",
+                &[("frame", &((self.time * fps).round() as u32)), ("fps", &fps)],
+            ),
+            Source::Timelapse => trf(
+                "Step {step} of {steps}",
+                &[("step", &(self.step + usize::from(n > 0))), ("steps", &n)],
+            ),
+        };
+        r.label(clock_text).on_hover_text(clock_tip);
+        r.add_space(2.0);
+        if self.source == Source::Timelapse {
+            let speed_txt = if self.speed >= 1.0 {
+                format!("{}×", self.speed as u32)
+            } else {
+                format!("{}×", self.speed)
+            };
+            if text_button(
+                r,
+                &speed_txt,
+                tr("Speed: at 1× the whole timelapse plays in twenty seconds"),
+            )
+            .clicked()
+            {
+                self.speed = match self.speed {
+                    x if x < 0.5 => 0.5,
+                    x if x < 1.0 => 1.0,
+                    x if x < 2.0 => 2.0,
+                    x if x < 4.0 => 4.0,
+                    x if x < 8.0 => 8.0,
+                    _ => 0.25,
                 };
-                if text_button(
-                    &mut b,
-                    &speed_txt,
-                    tr("Speed: at 1× the whole timelapse plays in twenty seconds"),
-                )
-                .clicked()
-                {
-                    self.speed = match self.speed {
-                        x if x < 0.5 => 0.5,
-                        x if x < 1.0 => 1.0,
-                        x if x < 2.0 => 2.0,
-                        x if x < 4.0 => 4.0,
-                        x if x < 8.0 => 8.0,
-                        _ => 0.25,
-                    };
-                }
-                if icon_button(&mut b, egui_phosphor::regular::EYE, self.show_changes, tr("Highlight what changed at this step: meshes in orange, new ones in green, deformer grids")).clicked() {
-                    self.show_changes = !self.show_changes;
-                }
+            }
+            if icon_button(
+                r,
+                egui_phosphor::regular::EYE,
+                self.show_changes,
+                tr("Highlight what changed at this step: meshes in orange, new ones in green, deformer grids"),
+            )
+            .clicked()
+            {
+                self.show_changes = !self.show_changes;
             }
         }
-        if icon_button(&mut b, egui_phosphor::regular::REPEAT, self.loop_on, tr("Loop")).clicked() {
+        if icon_button(r, egui_phosphor::regular::REPEAT, self.loop_on, tr("Loop")).clicked() {
             self.loop_on = !self.loop_on;
         }
         let full_icon = if self.fullscreen {
@@ -1408,9 +1448,7 @@ impl RenderWin {
         } else {
             egui_phosphor::regular::CORNERS_OUT
         };
-        if icon_button(&mut b, full_icon, self.fullscreen, tr("Full screen (Esc to leave)"))
-            .clicked()
-        {
+        if icon_button(r, full_icon, self.fullscreen, tr("Full screen (Esc to leave)")).clicked() {
             self.fullscreen = !self.fullscreen;
         }
         // keys while the pointer is over the player

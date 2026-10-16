@@ -457,7 +457,7 @@ impl View {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         let mut open = true;
-        egui::Window::new(tr("Timelapse")).open(&mut open).default_width(520.0).show(ctx, |ui| {
+        egui::Window::new(tr("Timelapse")).collapsible(false).open(&mut open).default_width(520.0).show(ctx, |ui| {
             let span = match (self.player.steps.first(), self.player.steps.last()) {
                 (Some(a), Some(b)) => (b.0.saturating_sub(a.0)) / 60_000,
                 _ => 0,

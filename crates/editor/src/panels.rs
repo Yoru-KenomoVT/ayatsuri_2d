@@ -11270,6 +11270,7 @@ impl EditorUi {
         if self.show_guide_settings {
             let mut open = true;
             egui::Window::new(crate::i18n::tr("Guide Line Settings"))
+                .collapsible(false)
                 .open(&mut open)
                 .default_width(460.0)
                 .show(ui.ctx(), |ui| {
