@@ -72,18 +72,20 @@ fn encode_step(before: Option<&[u8]>, now: &[u8], whole: bool) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(&out, 6)
 }
 
-/// Apply one step's record to the bytes of the step before.
-fn decode_step(before: &[u8], packed: &[u8]) -> Option<Vec<u8>> {
+/// Apply one step's record to the bytes of the step before. Also says
+/// which blocks it touched, or None for a whole step.
+fn decode_step_blocks(before: &[u8], packed: &[u8]) -> Option<(Vec<u8>, Option<Vec<usize>>)> {
     let raw = miniz_oxide::inflate::decompress_to_vec(packed).ok()?;
     let mut at = 1usize;
     let kind = *raw.first()?;
     let total = get_u32(&raw, &mut at)?;
     if kind == 0 {
-        return raw.get(at..at + total).map(<[u8]>::to_vec);
+        return raw.get(at..at + total).map(|b| (b.to_vec(), None));
     }
     let mut out = before.to_vec();
     out.resize(total, 0);
     let n = get_u32(&raw, &mut at)?;
+    let mut touched = Vec::with_capacity(n);
     for _ in 0..n {
         let i = get_u32(&raw, &mut at)?;
         let len = get_u32(&raw, &mut at)?;
@@ -91,8 +93,20 @@ fn decode_step(before: &[u8], packed: &[u8]) -> Option<Vec<u8>> {
         at += len;
         let start = i * BLOCK;
         out.get_mut(start..start + len)?.copy_from_slice(bytes);
+        touched.push(i);
     }
-    Some(out)
+    Some((out, Some(touched)))
+}
+
+fn decode_step(before: &[u8], packed: &[u8]) -> Option<Vec<u8>> {
+    decode_step_blocks(before, packed).map(|(b, _)| b)
+}
+
+fn hash_block(b: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    b.hash(&mut h);
+    h.finish()
 }
 
 /// Records steps as the model changes. Before the model has a file, steps
@@ -220,6 +234,59 @@ impl Player {
         self.packed(i)
             .and_then(|p| miniz_oxide::inflate::decompress_to_vec(p).ok())
             .is_some_and(|raw| raw.first() == Some(&0))
+    }
+
+    /// The steps that survive undo, in order. A step that brings the model
+    /// back to the state of an earlier step is an undo: it and everything
+    /// after that earlier step are dropped, so an edit that was taken back
+    /// never plays. A redo lands as a fresh step. States are told apart by
+    /// per-block hashes, so each step costs only the blocks it changed.
+    pub fn surviving(&self) -> Vec<usize> {
+        let mut keep: Vec<usize> = Vec::new();
+        let mut seen: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut blocks: Vec<u64> = Vec::new();
+        for i in 0..self.steps.len() {
+            let Some(packed) = self.packed(i) else { break };
+            let Some((next, touched)) = decode_step_blocks(&bytes, packed) else { break };
+            bytes = next;
+            let count = bytes.len().div_ceil(BLOCK);
+            let block = |k: usize| {
+                let r = k * BLOCK..((k + 1) * BLOCK).min(bytes.len());
+                hash_block(bytes.get(r).unwrap_or(&[]))
+            };
+            match touched {
+                None => blocks = (0..count).map(block).collect(),
+                Some(t) => {
+                    let had = blocks.len();
+                    blocks.resize(count, 0);
+                    // the last block's length changes with the model's
+                    for k in t.into_iter().chain(had.saturating_sub(1)..count) {
+                        if let Some(slot) = blocks.get_mut(k) {
+                            *slot = block(k);
+                        }
+                    }
+                }
+            }
+            let state = blocks
+                .iter()
+                .enumerate()
+                .fold(0u64, |acc, (k, h)| acc.wrapping_add(h.wrapping_mul(k as u64 * 2 + 1)));
+            match seen.get(&state).copied() {
+                Some(at) if at < keep.len() => {
+                    // back to an earlier state: drop what came after it
+                    for gone in keep.drain(at + 1..) {
+                        let _ = gone;
+                    }
+                    seen.retain(|_, v| *v <= at);
+                }
+                _ => {
+                    seen.insert(state, keep.len());
+                    keep.push(i);
+                }
+            }
+        }
+        keep
     }
 
     /// The model at step `i`.
@@ -568,6 +635,24 @@ mod tests {
         for i in [0, 1, 49, 50, 51, 99, 119, 5, 77] {
             assert_eq!(p.model(i).unwrap().canvas.width, widths[i], "step {i}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undone_steps_do_not_survive() {
+        let dir = std::env::temp_dir().join(format!("ay-tl-undo-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let aom = dir.join("m.aom");
+        let mut rec = Recorder::open(Some(&aom));
+        let mut m = Model::new();
+        // widths: 1, 2, 3, undo to 2, undo to 1, redo to 2, then 7
+        for w in [1.0, 2.0, 3.0, 2.0, 1.0, 2.0, 7.0] {
+            m.canvas.width = w;
+            rec.record(&m);
+        }
+        let p = Player::open(&Recorder::sidecar(&aom)).unwrap();
+        // step 0 (1), step 5 (the redo to 2, a fresh step), step 6 (7)
+        assert_eq!(p.surviving(), vec![0, 5, 6]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

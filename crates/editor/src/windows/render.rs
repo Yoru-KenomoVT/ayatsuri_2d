@@ -95,6 +95,9 @@ struct Spec {
     transparent: bool,
     work_area: bool,
     hold: f32,
+    /// Timelapse steps per second of output; each step eases in over its
+    /// share of the second.
+    sps: f32,
     physics: bool,
     folder: PathBuf,
     name: String,
@@ -141,7 +144,10 @@ pub struct RenderWin {
     /// timelapse steps for a timelapse.
     playing: bool,
     time: f32,
-    step: usize,
+    /// Where in the timelapse the player is: a step and the way to the next.
+    pos: f32,
+    /// Timelapse steps per second at 1×.
+    sps: f32,
     last_tick: Option<std::time::Instant>,
     /// The thread that poses, diffs and rasters frames; the editor never
     /// waits on it, it just shows the newest frame that came back.
@@ -163,8 +169,6 @@ pub struct RenderWin {
     loop_on: bool,
     /// Timelapse speed: 1 plays the whole thing in twenty seconds.
     speed: f32,
-    /// Fractional steps carried between frames at low speeds.
-    carry: f32,
     /// Draw what changed at this step over the frame.
     show_changes: bool,
     changes: Vec<Change>,
@@ -203,7 +207,8 @@ impl RenderWin {
             preview: None,
             playing: false,
             time: 0.0,
-            step: 0,
+            pos: 0.0,
+            sps: 6.0,
             last_tick: None,
             worker: None,
             asked: None,
@@ -216,7 +221,6 @@ impl RenderWin {
             fullscreen: false,
             loop_on: true,
             speed: 1.0,
-            carry: 0.0,
             show_changes: true,
             changes: Vec::new(),
             counts: Counts::default(),
@@ -230,9 +234,8 @@ impl RenderWin {
     /// clock is on now. A worker is started for the source when missing.
     fn refresh_preview(&mut self, ctx: &egui::Context, s: &crate::session::Session) {
         if self.worker.as_ref().is_none_or(|w| w.source != self.source) {
-            let (worker, stamps) = Worker::start(ctx.clone(), s, self.source);
-            self.worker = worker;
-            self.stamps = stamps;
+            self.worker = Worker::start(ctx.clone(), s, self.source);
+            self.stamps.clear();
             self.asked = None;
             self.changes.clear();
             self.marks.clear();
@@ -253,6 +256,9 @@ impl RenderWin {
                 }
             }
             self.canvas = f.canvas;
+            if let Some(st) = f.stamps {
+                self.stamps = st;
+            }
             self.values = f.values;
             self.part_opacity = f.part_opacity;
             if let Some(info) = f.step {
@@ -278,7 +284,14 @@ impl RenderWin {
                 ms: (self.time * 1000.0) as u32,
                 width,
             },
-            Source::Timelapse => Key::Step { step: self.step, width },
+            Source::Timelapse => {
+                let step = self.pos.floor().max(0.0);
+                Key::Step {
+                    step: step as usize,
+                    frac: ((self.pos - step) * 255.0).round() as u8,
+                    width,
+                }
+            }
         };
         if self.asked != Some(key) {
             let _ = w.tx.send(key);
@@ -291,7 +304,7 @@ impl RenderWin {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Time { scene: usize, expression: Option<usize>, ms: u32, width: u16 },
-    Step { step: usize, width: u16 },
+    Step { step: usize, frac: u8, width: u16 },
 }
 
 /// A changed object drawn over the frame, in canvas pixels: line segments
@@ -318,6 +331,8 @@ struct Frame {
     values: Vec<f32>,
     part_opacity: Vec<f32>,
     step: Option<StepInfo>,
+    /// With a timelapse's first frame: when each surviving step was recorded.
+    stamps: Option<Vec<u64>>,
 }
 
 struct Worker {
@@ -332,11 +347,7 @@ const PLAYING_PX: f32 = 560.0 * 560.0;
 impl Worker {
     /// Start a preview thread for the source. For a timelapse the step
     /// timestamps come back with it, for the working-time readout.
-    fn start(
-        ctx: egui::Context,
-        s: &crate::session::Session,
-        source: Source,
-    ) -> (Option<Self>, Vec<u64>) {
+    fn start(ctx: egui::Context, s: &crate::session::Session, source: Source) -> Option<Self> {
         let (tx, req) = channel::<Key>();
         let (out, rx) = channel::<Frame>();
         let textures = s.preview_tex.clone();
@@ -349,17 +360,25 @@ impl Worker {
             }
             Source::Animation => None,
         };
-        let stamps: Vec<u64> = sidecar
-            .as_deref()
-            .and_then(|p| crate::timelapse::index(p).ok())
-            .map(|ix| ix.iter().map(|x| x.0).collect())
-            .unwrap_or_default();
         let spawned = std::thread::Builder::new().name("render-preview".into()).spawn(move || {
             let mut player =
                 sidecar.as_deref().and_then(|p| crate::timelapse::Player::open(p).ok());
+            // the steps that survive undo, their timestamps, and the
+            // finished model's canvas, which every frame is drawn on so
+            // the frame never changes shape mid-way
+            let list: Vec<usize> = player.as_ref().map(|pl| pl.surviving()).unwrap_or_default();
+            let mut stamps = player.as_ref().map(|pl| {
+                list.iter().filter_map(|&i| pl.steps.get(i).map(|x| x.0)).collect::<Vec<u64>>()
+            });
+            let final_canvas = player
+                .as_mut()
+                .and_then(|pl| list.last().and_then(|&i| pl.model(i)))
+                .map(|m| m.canvas);
             let mut puppet = ayatsuri_core::Puppet::new(model);
-            // the step shown last, the base of the next diff
-            let mut prev: Option<(usize, ayatsuri_core::Puppet)> = None;
+            // the step on show and the one after it, blended between
+            let mut cur: Option<(usize, Model)> = None;
+            let mut nxt: Option<(usize, Model)> = None;
+            let mut info: (Vec<Change>, Counts) = (Vec::new(), Counts::default());
             while let Ok(mut key) = req.recv() {
                 // only the newest request matters: the clock has moved on
                 while let Ok(k) = req.try_recv() {
@@ -387,37 +406,55 @@ impl Worker {
                             values: (0..n).map(|i| puppet.value(i)).collect(),
                             part_opacity: (0..parts).map(|i| puppet.part_user_opacity(i)).collect(),
                             step: None,
+                            stamps: None,
                         })
                     }
-                    Key::Step { step, width } => {
+                    Key::Step { step, frac, width } => {
                         let Some(pl) = &mut player else { continue };
-                        // the step before: the one shown last when going
-                        // forward, else rebuilt; step 0 measures nothing
-                        let before = match prev.take() {
-                            Some((i, pp)) if i < step => Some(pp),
-                            _ if step == 0 => None,
-                            _ => pl.model(step - 1).map(ayatsuri_core::Puppet::new),
+                        let n = list.len();
+                        if n == 0 {
+                            continue;
+                        }
+                        let step = step.min(n - 1);
+                        if cur.as_ref().is_none_or(|c| c.0 != step) {
+                            // going forward the next becomes the current;
+                            // anywhere else both are rebuilt
+                            let a = match nxt.take() {
+                                Some((i, m)) if i == step => Some(m),
+                                _ => list.get(step).and_then(|&i| pl.model(i)),
+                            };
+                            let Some(a) = a else { continue };
+                            let b = list.get(step + 1).and_then(|&i| pl.model(i));
+                            info = match &b {
+                                Some(b) => {
+                                    (crate::model_diff::diff(&a, b), crate::model_diff::counts(b))
+                                }
+                                None => (Vec::new(), crate::model_diff::counts(&a)),
+                            };
+                            cur = Some((step, a));
+                            nxt = b.map(|b| (step + 1, b));
+                        }
+                        let Some((_, a)) = &cur else { continue };
+                        let mut model = match &nxt {
+                            Some((_, b)) => crate::tween::blend(a, b, frac as f32 / 255.0),
+                            None => a.clone(),
                         };
-                        let Some(model) = pl.model(step) else { continue };
-                        let changes = before
-                            .as_ref()
-                            .map(|b| crate::model_diff::diff(b.model(), &model))
-                            .unwrap_or_default();
-                        let counts = crate::model_diff::counts(&model);
+                        if let Some(c) = final_canvas {
+                            model.canvas = c;
+                        }
                         let mut pp = ayatsuri_core::Puppet::new(model);
                         pp.update();
                         let (w, h, px) = crate::thumb::render(&pp, &textures, width as usize);
-                        let marks = marks(&pp, &changes);
-                        let canvas = pp.model().canvas;
-                        prev = Some((step, pp));
+                        let marks = marks(&pp, &info.0);
                         Some(Frame {
                             w,
                             h,
                             px,
-                            canvas,
+                            canvas: pp.model().canvas,
                             values: Vec::new(),
                             part_opacity: Vec::new(),
-                            step: Some(StepInfo { changes, counts, marks }),
+                            step: Some(StepInfo { changes: info.0.clone(), counts: info.1, marks }),
+                            stamps: stamps.take(),
                         })
                     }
                 };
@@ -429,7 +466,7 @@ impl Worker {
                 }
             }
         });
-        (spawned.ok().map(|_| Worker { source, tx, rx }), stamps)
+        spawned.ok().map(|_| Worker { source, tx, rx })
     }
 }
 
@@ -779,19 +816,40 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
         Source::Timelapse => {
             let path = spec.timelapse.as_ref().ok_or("this project has no timelapse yet")?;
             let mut player = crate::timelapse::Player::open(path)?;
-            let n = player.steps.len();
+            let list = player.surviving();
+            let n = list.len();
             if n == 0 {
                 return Err("the timelapse is empty".into());
             }
-            let stride = n.div_ceil(600).max(1);
-            let mut picks: Vec<usize> =
-                (0..n).step_by(stride).chain(std::iter::once(n - 1)).collect();
-            picks.dedup();
-            let hold = (spec.hold.max(0.0) * spec.fps.max(1) as f32).round() as usize;
-            let total = picks.len() + hold;
+            let fps = spec.fps.max(1) as f32;
+            let sps = spec.sps.max(0.1);
+            let hold = (spec.hold.max(0.0) * fps).round() as usize;
+            let moving = ((n - 1) as f32 / sps * fps).ceil() as usize + 1;
+            let total = moving + hold;
+            let final_canvas = list.last().and_then(|&i| player.model(i)).map(|m| m.canvas);
+            let mut cur: Option<(usize, Model)> = None;
+            let mut nxt: Option<(usize, Model)> = None;
             let mut last = None;
-            for &i in &picks {
-                let model = player.model(i).ok_or("a step could not be read")?;
+            for f in 0..moving {
+                let pos = (f as f32 / fps * sps).min((n - 1) as f32);
+                let step = pos.floor() as usize;
+                if cur.as_ref().is_none_or(|c| c.0 != step) {
+                    let a = match nxt.take() {
+                        Some((i, m)) if i == step => Some(m),
+                        _ => list.get(step).and_then(|&i| player.model(i)),
+                    };
+                    let a = a.ok_or("a step could not be read")?;
+                    nxt = list.get(step + 1).and_then(|&i| player.model(i)).map(|b| (step + 1, b));
+                    cur = Some((step, a));
+                }
+                let Some((_, a)) = &cur else { break };
+                let mut model = match &nxt {
+                    Some((_, b)) => crate::tween::blend(a, b, pos - step as f32),
+                    None => a.clone(),
+                };
+                if let Some(c) = final_canvas {
+                    model.canvas = c;
+                }
                 let mut puppet = ayatsuri_core::Puppet::new(model);
                 puppet.update();
                 let (w, h, px) = crate::thumb::render(&puppet, &tex, width);
@@ -906,16 +964,13 @@ impl EditorUi {
                     }
                 }
                 Source::Timelapse => {
-                    let n = win.stamps.len();
-                    win.carry += dt * win.speed * (n as f32 / 20.0).max(1.0);
-                    let whole = win.carry.floor();
-                    win.carry -= whole;
-                    win.step += whole as usize;
-                    if n > 0 && win.step >= n {
-                        if win.loop_on {
-                            win.step = 0;
+                    let end = win.stamps.len().saturating_sub(1) as f32;
+                    win.pos += dt * win.speed * win.sps;
+                    if win.pos >= end {
+                        if win.loop_on && end > 0.0 {
+                            win.pos %= end;
                         } else {
-                            win.step = n - 1;
+                            win.pos = end;
                             win.playing = false;
                         }
                     }
@@ -1019,6 +1074,13 @@ impl EditorUi {
                                 ui.end_row();
                             }
                             Source::Timelapse => {
+                                ui.label(tr("Steps per second"));
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::DragValue::new(&mut win.sps).range(0.5..=60.0).speed(0.1).max_decimals(1));
+                                    let secs = win.stamps.len().saturating_sub(1) as f32 / win.sps.max(0.1) + win.hold.max(0.0);
+                                    ui.weak(trf("≈ {length}", &[("length", &span((secs * 1000.0) as u64))]));
+                                }).response.on_hover_text(tr("Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video"));
+                                ui.end_row();
                                 ui.label(tr("Hold on the finished model"));
                                 ui.add(egui::DragValue::new(&mut win.hold).range(0.0..=30.0).suffix(" s").speed(0.1));
                                 ui.end_row();
@@ -1084,6 +1146,7 @@ impl EditorUi {
                 transparent: win.transparent && win.preset.alpha(),
                 work_area: win.work_area,
                 hold: win.hold,
+                sps: win.sps,
                 physics: self.physics_on,
                 folder,
                 name: stem,
@@ -1327,7 +1390,7 @@ impl RenderWin {
         let (dur, fps) = anim.map_or((0.0, 30.0), |a| (a.duration.max(0.0), a.fps));
         if icon_button(&mut b, egui_phosphor::regular::SKIP_BACK, false, tr("Start")).clicked() {
             self.time = 0.0;
-            self.step = 0;
+            self.pos = 0.0;
         }
         let play =
             if self.playing { egui_phosphor::regular::PAUSE } else { egui_phosphor::regular::PLAY };
@@ -1337,7 +1400,7 @@ impl RenderWin {
         }
         if icon_button(&mut b, egui_phosphor::regular::SKIP_FORWARD, false, tr("End")).clicked() {
             self.time = dur;
-            self.step = last;
+            self.pos = last as f32;
             self.playing = false;
         }
         b.add_space(4.0);
@@ -1358,9 +1421,9 @@ impl RenderWin {
                 }
             }
             Source::Timelapse => {
-                let frac = if last > 0 { self.step as f32 / last as f32 } else { 0.0 };
+                let frac = if last > 0 { self.pos / last as f32 } else { 0.0 };
                 if let Some(f) = scrubber(&mut b, frac, sw) {
-                    self.step = (f * last as f32).round() as usize;
+                    self.pos = f * last as f32;
                     self.playing = false;
                 }
             }
@@ -1386,10 +1449,9 @@ impl RenderWin {
         let clock_text = egui::RichText::new(match self.source {
             Source::Animation => format!("{} / {}", clock(self.time), clock(dur)),
             Source::Timelapse => {
-                // the clock runs at the playback speed: twenty seconds at 1×
-                let total = 20.0 / self.speed.max(0.01);
-                let at = if last > 0 { self.step as f32 / last as f32 * total } else { 0.0 };
-                format!("{} / {}", clock(at), clock(total))
+                // the clock runs at the playback rate
+                let rate = (self.sps * self.speed).max(0.01);
+                format!("{} / {}", clock(self.pos / rate), clock(last as f32 / rate))
             }
         })
         .monospace()
@@ -1402,7 +1464,7 @@ impl RenderWin {
             ),
             Source::Timelapse => trf(
                 "Step {step} of {steps}",
-                &[("step", &(self.step + usize::from(n > 0))), ("steps", &n)],
+                &[("step", &(self.pos.floor() as usize + usize::from(n > 0))), ("steps", &n)],
             ),
         };
         r.label(clock_text).on_hover_text(clock_tip);
@@ -1413,13 +1475,7 @@ impl RenderWin {
             } else {
                 format!("{}×", self.speed)
             };
-            if text_button(
-                r,
-                &speed_txt,
-                tr("Speed: at 1× the whole timelapse plays in twenty seconds"),
-            )
-            .clicked()
-            {
+            if text_button(r, &speed_txt, tr("Speed, on top of the steps per second")).clicked() {
                 self.speed = match self.speed {
                     x if x < 0.5 => 0.5,
                     x if x < 1.0 => 1.0,
@@ -1474,7 +1530,10 @@ impl RenderWin {
                         self.time = (self.time + dir * by / fps.max(1.0)).clamp(0.0, dur);
                     }
                     Source::Timelapse => {
-                        self.step = (self.step as f32 + dir * by).clamp(0.0, last as f32) as usize;
+                        // to the next whole step, or back to the last one
+                        let at =
+                            if dir > 0.0 { self.pos.floor() + by } else { self.pos.ceil() - by };
+                        self.pos = at.clamp(0.0, last as f32);
                     }
                 }
             }
@@ -1602,7 +1661,7 @@ impl RenderWin {
     fn changes_panel(&mut self, ui: &mut Ui, h: f32) {
         let pal = crate::theme::pal();
         let t0 = self.stamps.first().copied().unwrap_or(0);
-        let now = self.stamps.get(self.step).copied().unwrap_or(t0);
+        let now = self.stamps.get(self.pos.floor() as usize).copied().unwrap_or(t0);
         let end = self.stamps.last().copied().unwrap_or(t0);
         let (elapsed, total) = (now.saturating_sub(t0), end.saturating_sub(t0));
         ui.horizontal(|ui| {
@@ -1636,7 +1695,7 @@ impl RenderWin {
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.strong(if self.step == 0 { tr("As recording began") } else { tr("Changed") });
+            ui.strong(tr("Changed"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if !self.changes.is_empty() {
                     ui.weak(egui::RichText::new(self.changes.len().to_string()).small());
