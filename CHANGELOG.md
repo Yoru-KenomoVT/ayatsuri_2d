@@ -45,7 +45,13 @@
   queue on the right. Frames render on a worker thread; GIF and PNG are
   built in, the video formats stream to ffmpeg when it is on PATH and the
   window says so when it isn't. Physics runs during an animation render
-  when it is on in the editor.
+  when it is on in the editor. The preview is a player: a transport bar
+  with start, play, end, a scrubber, timecode, loop and a speed for the
+  timelapse; Space and the arrow keys work over it. Beside it an
+  animation lists the parameters the scene drives with their live values,
+  and a timelapse lists what each step changed (meshes, deformers,
+  parameters, parts, physics) and draws it over the frame: edited meshes
+  in orange, new ones in green, warp grids and rotation pivots.
 - **Export Model** replaces Export Image and Export as moc3: one window
   with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
