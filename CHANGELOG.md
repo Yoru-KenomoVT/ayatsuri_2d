@@ -79,6 +79,7 @@
 - The update banner and About show **What's new** for the release on
   offer: its changelog, folded away until opened.
 - The Clip by list has a search box and lists ArtPaths first.
+- Every new string of this release is in all six languages.
 
 ### Fixed
 
