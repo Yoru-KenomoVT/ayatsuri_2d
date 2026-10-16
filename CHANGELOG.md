@@ -57,8 +57,11 @@
   plays as the edits were made: between steps the model is blended, so a
   dragged point eases from where it was to where it went and a new mesh
   fades in, at a chosen number of steps per second (6 by default) in both
-  the player and the export. Steps that were undone are left out, the undo
-  with them; a redo plays once.
+  the player and the export. Each step is posed at the parameters the edit
+  was made on, so an eye moved at X 1, Y 1 is seen moving there, and the
+  panel says where. Steps that were undone are left out, the undo with
+  them; a redo plays once. Frames are drawn at twice the size and averaged
+  down, so edges are smooth in the video and in the paused preview.
 - **Export Model** replaces Export Image and Export as moc3: one window
   with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
