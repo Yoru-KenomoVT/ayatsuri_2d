@@ -203,6 +203,8 @@ pub struct GpuRenderer {
 struct Offscreen {
     msaa: wgpu::TextureView,
     color: wgpu::TextureView,
+    /// The resolved frame itself, for reading back.
+    color_tex: wgpu::Texture,
     blit_bind: wgpu::BindGroup,
     mode_binds: [wgpu::BindGroup; 3],
     mask: wgpu::TextureView,
@@ -637,24 +639,31 @@ impl GpuRenderer {
             return;
         }
         let size = wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 };
+        let make_tex = |label: &str, format, samples, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
         let make = |label: &str, format, samples, usage| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size,
-                    mip_level_count: 1,
-                    sample_count: samples,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default())
+            make_tex(label, format, samples, usage).create_view(&Default::default())
         };
         let att = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let att_bind = att | wgpu::TextureUsages::TEXTURE_BINDING;
         let msaa = make("ayatsuri-msaa", OFFSCREEN_FORMAT, self.samples, att);
-        let color = make("ayatsuri-offscreen", OFFSCREEN_FORMAT, 1, att_bind);
+        let color_tex = make_tex(
+            "ayatsuri-offscreen",
+            OFFSCREEN_FORMAT,
+            1,
+            att_bind | wgpu::TextureUsages::COPY_SRC,
+        );
+        let color = color_tex.create_view(&Default::default());
         let mask = make("ayatsuri-maskbuf", MASK_FORMAT, 1, att_bind);
         let blit_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -689,7 +698,58 @@ impl GpuRenderer {
                 ],
             })
         });
-        self.offscreen = Some(Offscreen { msaa, color, blit_bind, mode_binds, mask, w, h });
+        self.offscreen =
+            Some(Offscreen { msaa, color, color_tex, blit_bind, mode_binds, mask, w, h });
+    }
+
+    /// The last frame drawn, read back as premultiplied RGBA rows, for an
+    /// export that draws on the GPU. Waits for the GPU, so it is for a
+    /// worker, not the UI.
+    pub fn read_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u8>> {
+        let o = self.offscreen.as_ref()?;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let row = (o.w * 4).div_ceil(align) * align;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ayatsuri-readback"),
+            size: u64::from(row) * u64::from(o.h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &o.color_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(o.h),
+                },
+            },
+            wgpu::Extent3d { width: o.w, height: o.h, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        rx.recv().ok()?.ok()?;
+        let data = slice.get_mapped_range().ok()?;
+        let mut out = Vec::with_capacity((o.w * 4 * o.h) as usize);
+        for y in 0..o.h as usize {
+            let from = y * row as usize;
+            out.extend_from_slice(data.get(from..from + o.w as usize * 4)?);
+        }
+        drop(data);
+        buf.unmap();
+        Some(out)
     }
 
     pub fn prepare(
