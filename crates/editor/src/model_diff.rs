@@ -26,7 +26,7 @@ pub enum What {
     ArtPath,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Change {
     pub kind: Kind,
     pub what: What,
@@ -35,6 +35,9 @@ pub struct Change {
     pub index: Option<usize>,
     /// A few words on what about it changed, for an edit.
     pub detail: &'static str,
+    /// The parameter values (by index) of the keyform the edit was made
+    /// in, so a player can pose the model where the rigger was looking.
+    pub pose: Vec<(usize, f32)>,
 }
 
 /// How big a model is at a step.
@@ -65,6 +68,55 @@ fn same_binding(a: &Binding, b: &Binding) -> bool {
         && a.axes.iter().zip(&b.axes).all(|(x, y)| x.parameter == y.parameter && x.keys == y.keys)
 }
 
+/// The first keyform (of `per` values each) where two arrays differ.
+fn first_diff(a: &[f32], b: &[f32], per: usize) -> Option<usize> {
+    if per == 0 || a.len() != b.len() {
+        return None;
+    }
+    a.chunks(per).zip(b.chunks(per)).position(|(x, y)| x != y)
+}
+
+/// The parameter values a keyform sits at: the first axis varies fastest.
+fn keyform_pose(b: &Binding, keyform: usize) -> Vec<(usize, f32)> {
+    let mut out = Vec::new();
+    let mut stride = 1usize;
+    for ax in &b.axes {
+        let n = ax.keys.len().max(1);
+        if let Some(v) = ax.keys.get((keyform / stride) % n) {
+            out.push((ax.parameter as usize, *v));
+        }
+        stride = stride.saturating_mul(n);
+    }
+    out
+}
+
+/// Where an edited deformer's change sits, by its id.
+fn deformer_pose(before: &Model, after: &Model, id: &str) -> Vec<(usize, f32)> {
+    let (Some(a), Some(b)) =
+        (after.deformers.iter().find(|d| d.id == id), before.deformers.iter().find(|d| d.id == id))
+    else {
+        return Vec::new();
+    };
+    if !same_binding(&a.binding, &b.binding) {
+        return Vec::new();
+    }
+    let k = match (&a.kind, &b.kind) {
+        (DeformerKind::Warp(x), DeformerKind::Warp(y)) => {
+            first_diff(&y.positions, &x.positions, x.grid_points() * 2)
+                .or_else(|| first_diff(&y.opacities, &x.opacities, 1))
+        }
+        (DeformerKind::Rotation(x), DeformerKind::Rotation(y)) => {
+            first_diff(&y.angles, &x.angles, 1)
+                .or_else(|| first_diff(&y.origins_x, &x.origins_x, 1))
+                .or_else(|| first_diff(&y.origins_y, &x.origins_y, 1))
+                .or_else(|| first_diff(&y.scales, &x.scales, 1))
+                .or_else(|| first_diff(&y.opacities, &x.opacities, 1))
+        }
+        _ => None,
+    };
+    k.map(|k| keyform_pose(&a.binding, k)).unwrap_or_default()
+}
+
 fn packed<T: serde::Serialize>(v: &T) -> Vec<u8> {
     rmp_serde::to_vec(v).unwrap_or_default()
 }
@@ -88,6 +140,7 @@ fn by_id<T>(
                 name: id(a).to_string(),
                 index: Some(i),
                 detail: "",
+                pose: Vec::new(),
             }),
             Some(b) => {
                 if let Some(detail) = edited(b, a) {
@@ -97,6 +150,7 @@ fn by_id<T>(
                         name: id(a).to_string(),
                         index: Some(i),
                         detail,
+                        pose: Vec::new(),
                     });
                 }
             }
@@ -110,6 +164,7 @@ fn by_id<T>(
                 name: id(b).to_string(),
                 index: None,
                 detail: "",
+                pose: Vec::new(),
             });
         }
     }
@@ -149,6 +204,21 @@ pub fn diff(before: &Model, after: &Model) -> Vec<Change> {
         },
         &mut out,
     );
+    for c in &mut out {
+        if c.kind == Kind::Edited
+            && let Some(i) = c.index
+            && let (Some(a), Some(b)) =
+                (after.art_meshes.get(i), before.art_meshes.iter().find(|m| m.id == c.name))
+            && same_binding(&a.binding, &b.binding)
+        {
+            let per = a.vertex_count as usize * 2;
+            if let Some(k) = first_diff(&b.positions, &a.positions, per)
+                .or_else(|| first_diff(&b.opacities, &a.opacities, 1))
+            {
+                c.pose = keyform_pose(&a.binding, k);
+            }
+        }
+    }
     // deformers split by kind so the list and the overlay know what to draw
     let mut defs = Vec::new();
     by_id(
@@ -202,6 +272,7 @@ pub fn diff(before: &Model, after: &Model) -> Vec<Change> {
         &mut defs,
     );
     for mut c in defs {
+        c.pose = deformer_pose(before, after, &c.name);
         let kind_of = |m: &Model| {
             m.deformers.iter().find(|d| d.id == c.name).map(|d| match d.kind {
                 DeformerKind::Warp(_) => What::Warp,
@@ -270,6 +341,7 @@ pub fn diff(before: &Model, after: &Model) -> Vec<Change> {
             name: String::new(),
             index: None,
             detail: "",
+            pose: Vec::new(),
         }),
         (Some(_), None) => out.push(Change {
             kind: Kind::Removed,
@@ -277,6 +349,7 @@ pub fn diff(before: &Model, after: &Model) -> Vec<Change> {
             name: String::new(),
             index: None,
             detail: "",
+            pose: Vec::new(),
         }),
         (Some(b), Some(a)) if packed(b) != packed(a) => {
             let detail = if b.groups.len() != a.groups.len() { "groups" } else { "settings" };
@@ -286,6 +359,7 @@ pub fn diff(before: &Model, after: &Model) -> Vec<Change> {
                 name: String::new(),
                 index: None,
                 detail,
+                pose: Vec::new(),
             });
         }
         _ => {}
@@ -298,6 +372,7 @@ pub fn diff(before: &Model, after: &Model) -> Vec<Change> {
             name: String::new(),
             index: None,
             detail: "size",
+            pose: Vec::new(),
         });
     } else if bc.origin_x != ac.origin_x
         || bc.origin_y != ac.origin_y
@@ -309,6 +384,7 @@ pub fn diff(before: &Model, after: &Model) -> Vec<Change> {
             name: String::new(),
             index: None,
             detail: "origin or scale",
+            pose: Vec::new(),
         });
     }
     out
@@ -383,6 +459,26 @@ mod tests {
         assert!(kinds.contains(&(Kind::Removed, What::Mesh)));
         assert!(kinds.contains(&(Kind::Edited, What::Warp)));
         assert_eq!(d.iter().find(|x| x.what == What::Warp).unwrap().detail, "grid moved");
+    }
+
+    #[test]
+    fn an_edit_off_the_rest_pose_knows_where_it_was_made() {
+        use ayatsuri_format::model::BindingAxis;
+        let mut a = Model::new();
+        let mut m = mesh("eye");
+        m.binding.axes = vec![
+            BindingAxis { parameter: 0, keys: vec![-1.0, 0.0, 1.0] },
+            BindingAxis { parameter: 1, keys: vec![-1.0, 1.0] },
+        ];
+        m.positions = vec![0.0; 6 * 6];
+        m.opacities = vec![1.0; 6];
+        m.draw_orders = vec![500.0; 6];
+        a.art_meshes.push(m);
+        let mut b = a.clone();
+        // keyform 5 = x key 2 (1.0) + y key 1 (1.0) * stride 3
+        b.art_meshes[0].positions[5 * 6] = 3.0;
+        let d = diff(&a, &b);
+        assert_eq!(d[0].pose, vec![(0, 1.0), (1, 1.0)]);
     }
 
     #[test]

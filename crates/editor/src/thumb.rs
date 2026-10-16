@@ -112,18 +112,80 @@ impl Raster {
 
 /// Render the puppet to RGBA at `width` px wide, transparent background.
 pub fn render(puppet: &Puppet, textures: &[TexData], width: usize) -> (usize, usize, Vec<u8>) {
+    render_aa(puppet, textures, width, 1)
+}
+
+/// Pixels a band may hold at the supersampled size; bands keep a tall
+/// canvas at 2× within memory.
+const BAND_PX: usize = 4 << 20;
+
+/// Render with `ss`×`ss` samples per pixel, in horizontal bands, each
+/// band drawn large and averaged down: edges come out smooth.
+pub fn render_aa(
+    puppet: &Puppet,
+    textures: &[TexData],
+    width: usize,
+    ss: usize,
+) -> (usize, usize, Vec<u8>) {
     let c = puppet.model().canvas;
+    let ss = ss.clamp(1, 4);
+    let width = width.max(1);
     let scale = width as f32 / c.width.max(1.0);
     let height = ((c.height.max(1.0) * scale) as usize).max(1);
-    let r = Raster {
-        w: width,
-        h: height,
-        sx: scale,
-        sy_off: 0.0,
-        origin_x: c.origin_x,
-        origin_y: c.origin_y,
-        ppu: c.pixels_per_unit,
-    };
+    let band = (BAND_PX / (width * ss * ss).max(1)).clamp(4, height);
+    let mut out = vec![0u8; width * height * 4];
+    let mut y0 = 0;
+    while y0 < height {
+        let rows = band.min(height - y0);
+        let r = Raster {
+            w: width * ss,
+            h: rows * ss,
+            sx: scale * ss as f32,
+            sy_off: -((y0 * ss) as f32),
+            origin_x: c.origin_x,
+            origin_y: c.origin_y,
+            ppu: c.pixels_per_unit,
+        };
+        let fb = draw(&r, puppet, textures);
+        let n = (ss * ss) as f32;
+        for y in 0..rows {
+            for x in 0..width {
+                // alpha averaged; colour weighted by alpha so clear
+                // samples don't darken an edge
+                let (mut sa, mut sr, mut sg, mut sb) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                for j in 0..ss {
+                    for i in 0..ss {
+                        let at = ((y * ss + j) * r.w + x * ss + i) * 4;
+                        if let Some(p) = fb.get(at..at + 4) {
+                            let a = p.get(3).copied().unwrap_or(0.0);
+                            sa += a;
+                            sr += p.first().copied().unwrap_or(0.0) * a;
+                            sg += p.get(1).copied().unwrap_or(0.0) * a;
+                            sb += p.get(2).copied().unwrap_or(0.0) * a;
+                        }
+                    }
+                }
+                let to8 = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
+                let px = [
+                    if sa > 0.0 { to8(sr / sa) } else { 0 },
+                    if sa > 0.0 { to8(sg / sa) } else { 0 },
+                    if sa > 0.0 { to8(sb / sa) } else { 0 },
+                    to8(sa / n),
+                ];
+                let at = ((y0 + y) * width + x) * 4;
+                if let Some(dst) = out.get_mut(at..at + 4) {
+                    dst.copy_from_slice(&px);
+                }
+            }
+        }
+        y0 += rows;
+    }
+    (width, height, out)
+}
+
+/// Draw every drawable into a float RGBA buffer the raster's size.
+fn draw(r: &Raster, puppet: &Puppet, textures: &[TexData]) -> Vec<f32> {
+    let (width, height) = (r.w, r.h);
     let mut fb = vec![0f32; width * height * 4];
     let mut coverage = vec![0f32; width * height];
     let mut coverage_for: Vec<u32> = Vec::new();
@@ -178,8 +240,7 @@ pub fn render(puppet: &Puppet, textures: &[TexData], width: usize) -> (usize, us
             }
         });
     }
-    let px: Vec<u8> = fb.iter().map(|v| (v * 255.0).clamp(0.0, 255.0) as u8).collect();
-    (width, height, px)
+    fb
 }
 
 /// Render just one set of meshes, cropped to their bounds: the Parts

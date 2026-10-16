@@ -162,6 +162,8 @@ pub struct RenderWin {
     part_opacity: Vec<f32>,
     /// The shown step's changed objects, in canvas pixels, by change index.
     marks: Vec<(usize, Mark)>,
+    /// The parameters the shown step is posed at, by name.
+    pose: Vec<(String, f32)>,
     /// The player's size at the last layout, which sets the raster width.
     player_size: (f32, f32),
     /// The player and its panel over the whole screen.
@@ -217,6 +219,7 @@ impl RenderWin {
             values: Vec::new(),
             part_opacity: Vec::new(),
             marks: Vec::new(),
+            pose: Vec::new(),
             player_size: (540.0, 400.0),
             fullscreen: false,
             loop_on: true,
@@ -265,6 +268,7 @@ impl RenderWin {
                 self.changes = info.changes;
                 self.counts = info.counts;
                 self.marks = info.marks;
+                self.pose = info.pose;
                 self.picked = None;
             }
         }
@@ -283,6 +287,7 @@ impl RenderWin {
                 expression: self.expression,
                 ms: (self.time * 1000.0) as u32,
                 width,
+                aa: !self.playing,
             },
             Source::Timelapse => {
                 let step = self.pos.floor().max(0.0);
@@ -290,6 +295,7 @@ impl RenderWin {
                     step: step as usize,
                     frac: ((self.pos - step) * 255.0).round() as u8,
                     width,
+                    aa: !self.playing,
                 }
             }
         };
@@ -303,8 +309,8 @@ impl RenderWin {
 /// A frame the worker is asked for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
-    Time { scene: usize, expression: Option<usize>, ms: u32, width: u16 },
-    Step { step: usize, frac: u8, width: u16 },
+    Time { scene: usize, expression: Option<usize>, ms: u32, width: u16, aa: bool },
+    Step { step: usize, frac: u8, width: u16, aa: bool },
 }
 
 /// A changed object drawn over the frame, in canvas pixels: line segments
@@ -318,6 +324,9 @@ struct Mark {
 
 /// What a timelapse step changed, how big the model is, and the marks.
 struct StepInfo {
+    /// The parameters the step was posed at, by name, when the edit was
+    /// made off the rest pose.
+    pose: Vec<(String, f32)>,
     changes: Vec<Change>,
     counts: Counts,
     marks: Vec<(usize, Mark)>,
@@ -385,7 +394,7 @@ impl Worker {
                     key = k;
                 }
                 let frame = match key {
-                    Key::Time { scene, expression, ms, width } => {
+                    Key::Time { scene, expression, ms, width, aa } => {
                         if let Some(anim) = anims.get(scene) {
                             pose(
                                 &mut puppet,
@@ -395,7 +404,12 @@ impl Worker {
                             );
                         }
                         puppet.update();
-                        let (w, h, px) = crate::thumb::render(&puppet, &textures, width as usize);
+                        let (w, h, px) = crate::thumb::render_aa(
+                            &puppet,
+                            &textures,
+                            width as usize,
+                            if aa { 2 } else { 1 },
+                        );
                         let n = puppet.model().parameters.len();
                         let parts = puppet.model().parts.len();
                         Some(Frame {
@@ -409,7 +423,7 @@ impl Worker {
                             stamps: None,
                         })
                     }
-                    Key::Step { step, frac, width } => {
+                    Key::Step { step, frac, width, aa } => {
                         let Some(pl) = &mut player else { continue };
                         let n = list.len();
                         if n == 0 {
@@ -443,8 +457,25 @@ impl Worker {
                             model.canvas = c;
                         }
                         let mut pp = ayatsuri_core::Puppet::new(model);
+                        // posed where the edit was made, so an eye moved
+                        // at X 1, Y 1 is seen moving
+                        let pose = pose_of(&info.0);
+                        let names: Vec<(String, f32)> = pose
+                            .iter()
+                            .filter_map(|&(i, v)| {
+                                pp.model().parameters.get(i).map(|p| (p.id.clone(), v))
+                            })
+                            .collect();
+                        for (i, v) in pose {
+                            pp.set_value(i, v);
+                        }
                         pp.update();
-                        let (w, h, px) = crate::thumb::render(&pp, &textures, width as usize);
+                        let (w, h, px) = crate::thumb::render_aa(
+                            &pp,
+                            &textures,
+                            width as usize,
+                            if aa { 2 } else { 1 },
+                        );
                         let marks = marks(&pp, &info.0);
                         Some(Frame {
                             w,
@@ -453,7 +484,12 @@ impl Worker {
                             canvas: pp.model().canvas,
                             values: Vec::new(),
                             part_opacity: Vec::new(),
-                            step: Some(StepInfo { changes: info.0.clone(), counts: info.1, marks }),
+                            step: Some(StepInfo {
+                                pose: names,
+                                changes: info.0.clone(),
+                                counts: info.1,
+                                marks,
+                            }),
                             stamps: stamps.take(),
                         })
                     }
@@ -468,6 +504,21 @@ impl Worker {
         });
         spawned.ok().map(|_| Worker { source, tx, rx })
     }
+}
+
+/// Where a step's edits were made: the parameter values of their
+/// keyforms, later edits overriding earlier ones on the same parameter.
+fn pose_of(changes: &[Change]) -> Vec<(usize, f32)> {
+    let mut out: Vec<(usize, f32)> = Vec::new();
+    for c in changes {
+        for &(i, v) in &c.pose {
+            match out.iter_mut().find(|(k, _)| *k == i) {
+                Some(slot) => slot.1 = v,
+                None => out.push((i, v)),
+            }
+        }
+    }
+    out
 }
 
 /// The changed objects' geometry at this step, in canvas pixels.
@@ -761,7 +812,8 @@ fn pose(
 
 fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
     let canvas_w = spec.model.canvas.width.max(1.0);
-    let tex = textures(&spec.pngs, canvas_w, spec.width);
+    // pages at twice the detail, since frames are drawn at 2× and averaged
+    let tex = textures(&spec.pngs, canvas_w, spec.width.saturating_mul(2));
     let width = spec.width.clamp(16, 8192) as usize;
     let mut sink: Option<Sink> = None;
     let mut out = PathBuf::new();
@@ -809,7 +861,7 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
                     }
                 }
                 puppet.update();
-                let (w, h, px) = crate::thumb::render(&puppet, &tex, width);
+                let (w, h, px) = crate::thumb::render_aa(&puppet, &tex, width, 2);
                 push(w, h, px, frames)?;
             }
         }
@@ -829,6 +881,7 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
             let final_canvas = list.last().and_then(|&i| player.model(i)).map(|m| m.canvas);
             let mut cur: Option<(usize, Model)> = None;
             let mut nxt: Option<(usize, Model)> = None;
+            let mut pose: Vec<(usize, f32)> = Vec::new();
             let mut last = None;
             for f in 0..moving {
                 let pos = (f as f32 / fps * sps).min((n - 1) as f32);
@@ -840,6 +893,10 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
                     };
                     let a = a.ok_or("a step could not be read")?;
                     nxt = list.get(step + 1).and_then(|&i| player.model(i)).map(|b| (step + 1, b));
+                    pose = nxt
+                        .as_ref()
+                        .map(|(_, b)| pose_of(&crate::model_diff::diff(&a, b)))
+                        .unwrap_or_default();
                     cur = Some((step, a));
                 }
                 let Some((_, a)) = &cur else { break };
@@ -851,8 +908,11 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
                     model.canvas = c;
                 }
                 let mut puppet = ayatsuri_core::Puppet::new(model);
+                for &(i, v) in &pose {
+                    puppet.set_value(i, v);
+                }
                 puppet.update();
-                let (w, h, px) = crate::thumb::render(&puppet, &tex, width);
+                let (w, h, px) = crate::thumb::render_aa(&puppet, &tex, width, 2);
                 last = Some((w, h, px.clone()));
                 push(w, h, px, total)?;
             }
@@ -1696,6 +1756,12 @@ impl RenderWin {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.strong(tr("Changed"));
+            if !self.pose.is_empty() {
+                let at: Vec<String> =
+                    self.pose.iter().map(|(n, v)| format!("{n} {v:.2}")).collect();
+                ui.weak(egui::RichText::new(trf("at {pose}", &[("pose", &at.join(", "))])).small())
+                    .on_hover_text(tr("The parameters the rigger had set while making this edit"));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if !self.changes.is_empty() {
                     ui.weak(egui::RichText::new(self.changes.len().to_string()).small());
