@@ -53,7 +53,12 @@
   animation lists the parameters the scene drives with their live values,
   and a timelapse lists what each step changed (meshes, deformers,
   parameters, parts, physics) and draws it over the frame: edited meshes
-  in orange, new ones in green, warp grids and rotation pivots.
+  in orange, new ones in green, warp grids and rotation pivots. A timelapse
+  plays as the edits were made: between steps the model is blended, so a
+  dragged point eases from where it was to where it went and a new mesh
+  fades in, at a chosen number of steps per second (6 by default) in both
+  the player and the export. Steps that were undone are left out, the undo
+  with them; a redo plays once.
 - **Export Model** replaces Export Image and Export as moc3: one window
   with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
