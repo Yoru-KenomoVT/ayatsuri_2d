@@ -1017,5 +1017,7 @@
   "Steps per second": "1 秒あたりのステップ数",
   "≈ {length}": "≈ {length}",
   "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "各ステップは割り当てられた時間の中でドラッグしたときのように滑らかに変化します。値を上げると動画が短くなります",
-  "Speed, on top of the steps per second": "速度 (1 秒あたりのステップ数に掛ける)"
+  "Speed, on top of the steps per second": "速度 (1 秒あたりのステップ数に掛ける)",
+  "at {pose}": "{pose} にて",
+  "The parameters the rigger had set while making this edit": "この編集を行ったときに設定されていたパラメータ"
 }
