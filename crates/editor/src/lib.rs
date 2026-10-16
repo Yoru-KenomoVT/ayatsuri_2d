@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod api;
+mod atlas;
 mod discord;
 pub mod dock;
 mod export;
@@ -14,6 +15,7 @@ mod ffmpeg;
 mod gpu_view;
 pub(crate) mod i18n;
 pub mod logging;
+mod mesh_clip;
 mod panels;
 mod point_edit;
 mod prefs;

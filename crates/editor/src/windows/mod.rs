@@ -3,6 +3,7 @@
 
 pub(crate) mod about;
 mod api;
+pub(crate) mod atlas;
 mod dialog;
 mod export_moc3;
 mod model_info;

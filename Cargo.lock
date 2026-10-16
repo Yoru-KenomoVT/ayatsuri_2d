@@ -167,6 +167,7 @@ dependencies = [
  "ayatsuri-import",
  "ayatsuri-render",
  "ayatsuri-update",
+ "base64",
  "discord-rich-presence",
  "egui",
  "egui-phosphor",

@@ -743,6 +743,31 @@ impl Session {
 
     /// Swap in a model and texture set while keeping everything beside the
     /// model (names, visibility, animations, folders, undo), as one undo step.
+    /// `swap_in` for a paste that brings texture pages: the lists kept per
+    /// mesh and per parameter grow with what came in.
+    pub(crate) fn swap_in_pub(
+        &mut self,
+        ctx: &Context,
+        model: Model,
+        pngs: Vec<Vec<u8>>,
+    ) -> Result<(), String> {
+        self.swap_in(ctx, model, pngs)?;
+        let m = self.puppet.model();
+        let (meshes, params) = (m.art_meshes.len(), m.parameters.len());
+        let originals: Vec<(Vec<f32>, Vec<u16>)> = m
+            .art_meshes
+            .iter()
+            .skip(self.original_meshes.len())
+            .map(|a| (a.uvs.clone(), a.indices.clone()))
+            .collect();
+        self.mesh_names.resize(meshes, String::new());
+        self.mesh_shown.resize(meshes, true);
+        self.original_meshes.extend(originals);
+        self.param_colors.resize(params, None);
+        self.param_names.resize(params, String::new());
+        Ok(())
+    }
+
     fn swap_in(&mut self, ctx: &Context, model: Model, pngs: Vec<Vec<u8>>) -> Result<(), String> {
         let before = self.puppet.model().clone();
         let tex_names = (0..pngs.len()).map(|i| format!("texture_{i:02}")).collect();
@@ -1334,6 +1359,72 @@ impl Session {
         self.gpu_pages = Some(std::sync::Arc::new(pages));
         self.gpu_pages_uploaded.store(false, std::sync::atomic::Ordering::Release);
         self.modified = true;
+        Ok(())
+    }
+
+    /// Every page's size in pixels, as recorded at load.
+    pub fn page_sizes(&self) -> Vec<(u32, u32)> {
+        (0..self.texture_pngs.len())
+            .map(|i| self.residency.page_size(i).unwrap_or((1, 1)))
+            .collect()
+    }
+
+    /// Lay the texture atlas out again: the pieces go where the layout says,
+    /// on fresh pages of its size, every mesh's uvs follow, and the ArtPath
+    /// swatch page (if any) rides along unchanged at the end. One undo step.
+    pub fn apply_atlas(
+        &mut self,
+        ctx: &Context,
+        pieces: &[crate::atlas::Piece],
+        layout: &crate::atlas::Layout,
+    ) -> Result<(), String> {
+        if layout.pages == 0 {
+            return Err("the layout has no pages".into());
+        }
+        let sizes = self.page_sizes();
+        let pngs = self.texture_pngs.clone();
+        let decode = |i: usize| -> Option<image::RgbaImage> {
+            pngs.get(i)
+                .and_then(|png| image::load_from_memory(png).ok())
+                .map(|img| img.into_rgba8())
+        };
+        let pages = crate::atlas::build_pages(pieces, layout, decode);
+        let mut out: Vec<Vec<u8>> = Vec::with_capacity(pages.len() + 1);
+        for img in pages {
+            let mut png = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            out.push(png);
+        }
+        let mut next = self.puppet.model().clone();
+        crate::atlas::apply_to_model(&mut next, pieces, layout, &sizes, 0);
+        // the swatch page keeps its pixels; it moves to the end
+        if let Some(sw) = next.art_path_page {
+            let new_index = out.len() as u32;
+            if let Some(png) = self.texture_pngs.get(sw as usize) {
+                out.push(png.clone());
+            }
+            for m in &mut next.art_meshes {
+                if m.texture == sw {
+                    m.texture = new_index;
+                }
+            }
+            next.art_path_page = Some(new_index);
+        }
+        let (out, dropped) = prune_pages(&mut next, out);
+        if dropped > 0 {
+            info!("atlas: {dropped} empty page(s) removed");
+        }
+        self.swap_in(ctx, next, out)?;
+        // the atlas is a fresh set of quads underneath every mesh
+        self.original_meshes = self
+            .puppet
+            .model()
+            .art_meshes
+            .iter()
+            .map(|m| (m.uvs.clone(), m.indices.clone()))
+            .collect();
+        info!("atlas: {} page(s) of {} px", layout.pages, layout.page_size);
         Ok(())
     }
 

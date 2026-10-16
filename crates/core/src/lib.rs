@@ -823,6 +823,16 @@ impl Puppet {
         (p.x, p.y)
     }
 
+    /// A mesh's points as drawn now (model units, canvas frame), hidden or
+    /// not: what the clipboard keeps of a mesh pasted where its parent
+    /// deformer does not exist.
+    pub fn mesh_drawn_positions(&self, mesh: usize) -> Option<Vec<f32>> {
+        let m = self.model.art_meshes.get(mesh)?;
+        let len = (m.vertex_count as usize).saturating_mul(2);
+        let off = self.mesh_pos_off.get(mesh).copied()?;
+        self.mesh_pos.get(off..off.saturating_add(len)).map(<[f32]>::to_vec)
+    }
+
     /// A mesh's blended keyform positions before its parent deformer runs,
     /// in parent space. Mesh editing probes these through `deformer_point`
     /// to turn a screen drag into a parent-space offset.

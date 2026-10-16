@@ -180,6 +180,8 @@ pub struct EditorUi {
     timelapse_view: Option<crate::timelapse::View>,
     /// File > Export Animation / Export Timelapse, while open.
     pub(crate) render_win: Option<crate::windows::render::RenderWin>,
+    /// Modeling > Texture Atlas, while open.
+    pub(crate) atlas_win: Option<crate::windows::atlas::AtlasWin>,
     show_physics: bool,
     phys_sel: usize,
     phys_tab: usize,
@@ -327,8 +329,9 @@ pub struct EditorUi {
     point_clip: Option<PointClip>,
     /// Edit > Copy (true) or Paste (false) asked for from the menu.
     point_clip_cmd: Option<bool>,
-    /// Art meshes copied or cut, as they were then, ready to paste.
-    mesh_clip: Vec<MeshClip>,
+    /// Art meshes copied or cut, as they were then, ready to paste; the
+    /// same goes on the system clipboard as text.
+    mesh_clip: Option<crate::mesh_clip::ClipFile>,
     /// Edit > Cut, Copy or Paste asked for from the menu, outside Mesh Edit.
     mesh_clip_cmd: Option<ClipCmd>,
     /// How close (screen px) a click must be to pick a point.
@@ -406,15 +409,6 @@ pub struct EditorUi {
     home_rename: Option<(PathBuf, String)>,
     /// One line under the home actions after a file operation fails.
     home_note: Option<String>,
-}
-
-/// An art mesh on the clipboard: the mesh with every keyform, the ArtPath
-/// behind it if it was drawn as one, and the name it had.
-#[derive(Clone)]
-struct MeshClip {
-    mesh: ayatsuri_format::model::ArtMesh,
-    path: Option<ayatsuri_format::model::ArtPath>,
-    name: String,
 }
 
 /// Edit > Cut, Copy or Paste, from the menu, for art meshes.
@@ -930,6 +924,7 @@ impl Default for EditorUi {
             show_stats: false,
             timelapse_view: None,
             render_win: None,
+            atlas_win: None,
             show_physics: false,
             phys_sel: 0,
             phys_tab: 0,
@@ -1023,7 +1018,7 @@ impl Default for EditorUi {
             mesh_lasso: Vec::new(),
             point_clip: None,
             point_clip_cmd: None,
-            mesh_clip: Vec::new(),
+            mesh_clip: None,
             mesh_clip_cmd: None,
             mesh_autoconnect: true,
             erase_marked: std::collections::BTreeSet::new(),
@@ -1882,19 +1877,32 @@ impl EditorUi {
                     || (plain && i.key_pressed(egui::Key::C))
                 {
                     Some(ClipCmd::Copy)
-                } else if ev(|e| matches!(e, egui::Event::Paste(_)))
-                    || (plain && i.key_pressed(egui::Key::V))
-                {
-                    Some(ClipCmd::Paste)
                 } else {
                     None
                 }
             });
+            // egui turns Ctrl+V into the clipboard's text, so a paste is
+            // ours when the text is (from this project or another)
+            let pasted = ui.ctx().input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Paste(t) => crate::mesh_clip::ClipFile::from_text(t),
+                    _ => None,
+                })
+            });
+            let ctx = ui.ctx().clone();
             match self.mesh_clip_cmd.take().or(keys) {
-                Some(ClipCmd::Cut) => self.copy_meshes(true),
-                Some(ClipCmd::Copy) => self.copy_meshes(false),
-                Some(ClipCmd::Paste) => self.paste_meshes(),
-                None => {}
+                Some(ClipCmd::Cut) => self.copy_meshes(&ctx, true),
+                Some(ClipCmd::Copy) => self.copy_meshes(&ctx, false),
+                Some(ClipCmd::Paste) => {
+                    if let Some(clip) = self.mesh_clip.clone() {
+                        self.paste_meshes(&ctx, &clip);
+                    }
+                }
+                None => {
+                    if let Some(clip) = pasted {
+                        self.paste_meshes(&ctx, &clip);
+                    }
+                }
             }
         }
 
@@ -2189,7 +2197,7 @@ impl EditorUi {
                         ui.close();
                     }
                     let can_paste =
-                        if editing { self.point_clip.is_some() } else { !self.mesh_clip.is_empty() };
+                        if editing { self.point_clip.is_some() } else { self.mesh_clip.is_some() };
                     if ui
                         .add_enabled(
                             can_paste && self.session.is_some(),
@@ -2432,6 +2440,20 @@ impl EditorUi {
                             egui::Button::new(crate::i18n::tr("Convert to ArtPath")),
                         );
                     });
+                    if ui
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Texture Atlas…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            "Move and pack the meshes' texture pieces across pages; the \
+                             model draws the same",
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.open_atlas();
+                    }
                     ui.menu_button(crate::i18n::tr("ArtPath"), |ui| {
                         if ui
                             .add_enabled(
@@ -3098,6 +3120,7 @@ impl EditorUi {
         self.new_anim_window(ui);
         self.export_window(ui);
         self.render_window(ui);
+        self.atlas_window(ui);
         self.export_overwrite_window(ui);
         self.close_confirm_window(ui);
         self.workspace_windows(ui);
@@ -6371,69 +6394,41 @@ impl EditorUi {
     }
 
     /// Copy the selected art meshes as they are now, every keyform with
-    /// them; Cut deletes them after, as one undo step.
-    fn copy_meshes(&mut self, cut: bool) {
+    /// them, here and onto the system clipboard (so Ctrl+V works, and they
+    /// paste into another project); Cut deletes them after, as one undo step.
+    fn copy_meshes(&mut self, ctx: &egui::Context, cut: bool) {
         let meshes = self.selected_meshes();
         let Some(s) = &self.session else { return };
         if meshes.is_empty() {
             return;
         }
-        let model = s.puppet.model();
-        self.mesh_clip = meshes
-            .iter()
-            .filter_map(|&mi| {
-                let mesh = model.art_meshes.get(mi)?.clone();
-                Some(MeshClip {
-                    path: ayatsuri_core::edit::art_path_of(model, mi).cloned(),
-                    name: s.mesh_name(mi),
-                    mesh,
-                })
-            })
-            .collect();
-        log::info!("{} {} art mesh(es)", if cut { "cut" } else { "copied" }, self.mesh_clip.len());
+        let clip = crate::mesh_clip::copy(s, &meshes);
+        ctx.copy_text(clip.to_text());
+        log::info!("{} {} art mesh(es)", if cut { "cut" } else { "copied" }, clip.meshes.len());
+        self.mesh_clip = Some(clip);
         if cut {
             self.delete_meshes(meshes);
         }
     }
 
-    /// Paste the copied art meshes, each beside the mesh it was copied from
-    /// when that is still there, as one undo step, and select them.
-    fn paste_meshes(&mut self) {
-        if self.mesh_clip.is_empty() {
-            return;
-        }
+    /// Paste art meshes, as one undo step, and select them: beside their
+    /// originals in the project they came from, with their artwork as a new
+    /// page in another.
+    fn paste_meshes(&mut self, ctx: &egui::Context, clip: &crate::mesh_clip::ClipFile) {
         let Some(s) = &mut self.session else { return };
-        let clip = self.mesh_clip.clone();
-        let mut added = Vec::new();
-        let ok = s.edit(|m| {
-            for c in &clip {
-                let id = c.mesh.id.clone();
-                added.push(ayatsuri_core::edit::insert_art_mesh(
-                    m,
-                    c.mesh.clone(),
-                    c.path.clone(),
-                    Some(&id),
-                ));
+        match crate::mesh_clip::paste(s, ctx, clip) {
+            Ok(added) => {
+                for (i, name) in &added {
+                    if let Some(n) = s.mesh_names.get_mut(*i) {
+                        n.clone_from(name);
+                    }
+                }
+                log::info!("pasted {} art mesh(es)", added.len());
+                self.selected = added.first().map(|&(i, _)| Sel::Mesh(i));
+                self.multi_sel = added.iter().skip(1).map(|&(i, _)| i).collect();
             }
-            true
-        });
-        if !ok {
-            return;
+            Err(e) => log::warn!("paste: {e}"),
         }
-        // a copy beside its original is named after it; a cut comes back as it was
-        for (c, &i) in clip.iter().zip(&added) {
-            let kept = s.puppet.model().art_meshes.get(i).is_some_and(|m| m.id == c.mesh.id);
-            if let Some(n) = s.mesh_names.get_mut(i) {
-                *n = if kept {
-                    c.name.clone()
-                } else {
-                    crate::i18n::trf("{name} copy", &[("name", &c.name)])
-                };
-            }
-        }
-        log::info!("pasted {} art mesh(es)", added.len());
-        self.selected = added.first().map(|&i| Sel::Mesh(i));
-        self.multi_sel = added.iter().skip(1).copied().collect();
     }
 
     /// Delete art meshes as one undo step, and renumber everything the
@@ -7612,10 +7607,14 @@ impl EditorUi {
         }
     }
     fn textures_panel(&mut self, ui: &mut Ui) {
+        let mut open_atlas = false;
         let Some(s) = &self.session else {
             ui.weak(crate::i18n::tr("No textures."));
             return;
         };
+        if ui.button(crate::i18n::tr("Edit atlas…")).clicked() {
+            open_atlas = true;
+        }
         ScrollArea::vertical().id_salt("textures").show(ui, |ui| {
             for (i, t) in s.textures.iter().enumerate() {
                 match t {
@@ -7635,6 +7634,9 @@ impl EditorUi {
                 }
             }
         });
+        if open_atlas {
+            self.open_atlas();
+        }
     }
 
     // ---- View ----------------------------------------------------------------
@@ -10526,6 +10528,9 @@ impl EditorUi {
                             faces.len(),
                             s.mesh_name(mi)
                         );
+                        // something on the system clipboard, or egui never
+                        // reports the Ctrl+V that pastes them
+                        ui.ctx().copy_text(format!("Ayatsuri2D points: {}", points.len()));
                         self.point_clip = Some(PointClip { points, faces, from: s.mesh_name(mi) });
                     }
                 }
