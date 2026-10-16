@@ -16,6 +16,7 @@ mod gpu_view;
 pub(crate) mod i18n;
 pub mod logging;
 mod mesh_clip;
+mod model_diff;
 mod panels;
 mod point_edit;
 mod prefs;

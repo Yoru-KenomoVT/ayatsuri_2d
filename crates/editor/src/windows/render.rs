@@ -10,11 +10,12 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use ayatsuri_format::model::Model;
+use ayatsuri_format::model::{Canvas, Model};
 use ayatsuri_format::{Animation, CurveTarget, Expression, ExpressionBlend};
 use egui::Ui;
 
 use crate::i18n::{tr, trf};
+use crate::model_diff::{Change, Counts, Kind, What};
 use crate::panels::EditorUi;
 
 /// What the frames come from.
@@ -143,7 +144,22 @@ pub struct RenderWin {
     last_tick: Option<std::time::Instant>,
     shown: Option<(Source, usize, u32)>,
     puppet: Option<ayatsuri_core::Puppet>,
+    /// Which source the puppet was built for; switching rebuilds it.
+    puppet_src: Option<Source>,
     player: Option<crate::timelapse::Player>,
+    loop_on: bool,
+    /// Timelapse speed: 1 plays the whole thing in twenty seconds.
+    speed: f32,
+    /// Fractional steps carried between frames at low speeds.
+    carry: f32,
+    /// Draw what changed at this step over the frame.
+    show_changes: bool,
+    /// The step shown last and its model, the base of the next diff.
+    prev_step: Option<(usize, Model)>,
+    changes: Vec<Change>,
+    counts: Counts,
+    /// One change picked in the list, highlighted alone.
+    picked: Option<usize>,
     queue: Vec<Job>,
     rx: Option<Receiver<Progress>>,
 }
@@ -180,14 +196,28 @@ impl RenderWin {
             last_tick: None,
             shown: None,
             puppet: None,
+            puppet_src: None,
             player: None,
+            loop_on: true,
+            speed: 1.0,
+            carry: 0.0,
+            show_changes: true,
+            prev_step: None,
+            changes: Vec::new(),
+            counts: Counts::default(),
+            picked: None,
             queue: Vec::new(),
             rx: None,
         }
     }
 
-    /// Draw the preview frame for the current time or step.
+    /// Draw the preview frame for the current time or step; for a timelapse
+    /// also work out what changed since the step shown before.
     fn refresh_preview(&mut self, ctx: &egui::Context, s: &crate::session::Session) {
+        if self.puppet_src != Some(self.source) {
+            self.puppet = None;
+            self.puppet_src = Some(self.source);
+        }
         let frame = match self.source {
             Source::Animation => {
                 let puppet = self
@@ -213,10 +243,25 @@ impl RenderWin {
                             .ok();
                 }
                 let Some(player) = &mut self.player else { return };
+                // the step before: the one shown last when playing forward,
+                // else rebuilt; step 0 is measured against nothing
+                let before = match self.prev_step.take() {
+                    Some((i, m)) if i < self.step => Some(m),
+                    _ if self.step == 0 => Some(Model::new()),
+                    _ => player.model(self.step - 1),
+                };
                 let Some(model) = player.model(self.step) else { return };
+                if let Some(b) = &before {
+                    self.changes = crate::model_diff::diff(b, &model);
+                    self.picked = None;
+                }
+                self.counts = crate::model_diff::counts(&model);
+                self.prev_step = Some((self.step, model.clone()));
                 let mut puppet = ayatsuri_core::Puppet::new(model);
                 puppet.update();
-                crate::thumb::render(&puppet, &s.preview_tex, PREVIEW_W)
+                let frame = crate::thumb::render(&puppet, &s.preview_tex, PREVIEW_W);
+                self.puppet = Some(puppet);
+                frame
             }
         };
         let (w, h, px) = frame;
@@ -563,7 +608,11 @@ impl EditorUi {
         }
         let _ = ctx;
         win.puppet = None;
+        win.puppet_src = None;
         win.player = None;
+        win.prev_step = None;
+        win.changes.clear();
+        win.picked = None;
         win.shown = None;
         win.playing = false;
         self.render_win = Some(win);
@@ -629,16 +678,28 @@ impl EditorUi {
                     if let Some(a) = s.animations.get(win.scene) {
                         win.time += dt;
                         if win.time > a.duration {
-                            win.time = if a.duration > 0.0 { win.time % a.duration } else { 0.0 };
+                            if win.loop_on && a.duration > 0.0 {
+                                win.time %= a.duration;
+                            } else {
+                                win.time = a.duration.max(0.0);
+                                win.playing = false;
+                            }
                         }
                     }
                 }
                 Source::Timelapse => {
                     let n = win.player.as_ref().map_or(0, |p| p.steps.len());
-                    let per = (n as f32 / 600.0).max(1.0);
-                    win.step += (dt * win.fps as f32 * per).max(1.0) as usize;
+                    win.carry += dt * win.speed * (n as f32 / 20.0).max(1.0);
+                    let whole = win.carry.floor();
+                    win.carry -= whole;
+                    win.step += whole as usize;
                     if n > 0 && win.step >= n {
-                        win.step = 0;
+                        if win.loop_on {
+                            win.step = 0;
+                        } else {
+                            win.step = n - 1;
+                            win.playing = false;
+                        }
                     }
                 }
             }
@@ -655,7 +716,7 @@ impl EditorUi {
         let mut pick_folder = false;
         let has_timelapse =
             s.aom_path.as_ref().is_some_and(|p| crate::timelapse::Recorder::sidecar(p).exists());
-        egui::Window::new(tr("Render")).open(&mut open).default_size([1040.0, 600.0]).show(ui.ctx(), |ui| {
+        egui::Window::new(tr("Render")).open(&mut open).default_size([1290.0, 660.0]).show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut win.source, Source::Animation, tr("Animation"));
                 ui.add_enabled_ui(has_timelapse, |ui| {
@@ -755,96 +816,16 @@ impl EditorUi {
                     }
                 });
                 ui.separator();
-                // preview and queue
+                // the player with what drives the frame beside it, the
+                // queue underneath
                 ui.vertical(|ui| {
-                    ui.set_min_width(420.0);
-                    ui.strong(tr("Preview"));
-                    // the frame keeps the canvas's shape; the image sits
-                    // centred on dark or white, as the export will
-                    let c = s.puppet.model().canvas;
-                    let aspect = (c.height / c.width.max(1.0)).max(0.1);
-                    let fw = 420.0_f32;
-                    let fh = (fw * aspect).clamp(160.0, 380.0);
-                    let fill = if win.transparent && win.preset.alpha() {
-                        egui::Color32::from_gray(44)
-                    } else {
-                        egui::Color32::WHITE
-                    };
-                    let (frame_rect, _) = ui.allocate_exact_size(egui::vec2(fw, fh), egui::Sense::hover());
-                    let painter = ui.painter_at(frame_rect);
-                    painter.rect_filled(frame_rect, 6.0, fill);
-                    if let Some(t) = &win.preview {
-                        let size = t.size_vec2();
-                        let k = ((fw - 16.0) / size.x).min((fh - 16.0) / size.y).min(1.0);
-                        let shown = size * k;
-                        let at = egui::Rect::from_center_size(frame_rect.center(), shown);
-                        painter.image(t.id(), at, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-                    }
-                    painter.rect_stroke(frame_rect, 6.0, egui::Stroke::new(1.0, crate::theme::pal().text_faint.gamma_multiply(0.5)), egui::StrokeKind::Inside);
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        let icon = if win.playing { egui_phosphor::regular::PAUSE } else { egui_phosphor::regular::PLAY };
-                        if ui.add_sized([30.0, 24.0], egui::Button::new(egui::RichText::new(icon).size(15.0))).clicked() {
-                            win.playing = !win.playing;
-                            win.last_tick = None;
-                        }
-                        let slider_w = (fw - 30.0 - 72.0).max(80.0);
-                        ui.spacing_mut().slider_width = slider_w;
-                        match win.source {
-                            Source::Animation => {
-                                let end = s.animations.get(win.scene).map_or(0.0, |a| a.duration).max(0.0);
-                                if ui.add(egui::Slider::new(&mut win.time, 0.0..=end).show_value(false)).changed() {
-                                    win.playing = false;
-                                }
-                                ui.weak(egui::RichText::new(format!("{:6.2}s", win.time)).monospace());
-                            }
-                            Source::Timelapse => {
-                                let n = win.player.as_ref().map_or(0, |p| p.steps.len()).saturating_sub(1);
-                                if ui.add(egui::Slider::new(&mut win.step, 0..=n).show_value(false)).changed() {
-                                    win.playing = false;
-                                }
-                                ui.weak(egui::RichText::new(format!("{}/{}", win.step, n)).monospace());
-                            }
-                        }
+                    ui.horizontal_top(|ui| {
+                        win.player_ui(ui, s);
+                        ui.add_space(6.0);
+                        win.side_panel(ui, s);
                     });
                     ui.add_space(8.0);
-                    ui.strong(tr("Queue"));
-                    if win.queue.is_empty() {
-                        ui.weak(tr("Nothing queued yet."));
-                    }
-                    let mut remove = None;
-                    for (i, j) in win.queue.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.label(&j.label);
-                            match &j.state {
-                                State::Queued(_) => {
-                                    ui.weak(tr("queued"));
-                                    if ui.small_button("×").clicked() {
-                                        remove = Some(i);
-                                    }
-                                }
-                                State::Running => {
-                                    let f = if j.total > 0 { j.done as f32 / j.total as f32 } else { 0.0 };
-                                    ui.add(egui::ProgressBar::new(f).desired_width(110.0).text(format!("{}/{}", j.done, j.total)));
-                                }
-                                State::Done(m) => {
-                                    ui.colored_label(crate::theme::pal().warp_green, egui_phosphor::regular::CHECK).on_hover_text(m);
-                                    if ui.small_button("×").clicked() {
-                                        remove = Some(i);
-                                    }
-                                }
-                                State::Failed(e) => {
-                                    ui.colored_label(crate::theme::pal().accent, egui_phosphor::regular::WARNING).on_hover_text(e);
-                                    if ui.small_button("×").clicked() {
-                                        remove = Some(i);
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    if let Some(i) = remove {
-                        win.queue.remove(i);
-                    }
+                    win.queue_ui(ui);
                 });
             });
         });
@@ -887,4 +868,727 @@ impl EditorUi {
             self.render_win = None;
         }
     }
+}
+
+/// The player's width; the side panel takes the rest of the column.
+const PLAYER_W: f32 = 540.0;
+const SIDE_W: f32 = 240.0;
+const STRIP_H: f32 = 22.0;
+const BAR_H: f32 = 34.0;
+/// Changes listed for one step before the list says "and more".
+const MAX_CHANGES: usize = 80;
+
+/// MM:SS:FF at the scene's frame rate.
+fn timecode(t: f32, fps: f32) -> String {
+    let fps = fps.max(1.0);
+    let per = fps.round().max(1.0) as u64;
+    let frames = (t.max(0.0) * fps).round() as u64;
+    let secs = frames / per;
+    format!("{:02}:{:02}:{:02}", secs / 60, secs % 60, frames % per)
+}
+
+/// A wall-clock span in the largest two units that matter.
+fn span(ms: u64) -> String {
+    let s = ms / 1000;
+    let (h, m) = (s / 3600, (s / 60) % 60);
+    if h > 0 {
+        trf("{h} h {m} min", &[("h", &h), ("m", &m)])
+    } else if m > 0 {
+        trf("{m} min", &[("m", &m)])
+    } else {
+        trf("{s} s", &[("s", &s)])
+    }
+}
+
+/// A flat glyph button in the transport bar; `on` lights it in the accent.
+fn icon_button(ui: &mut Ui, icon: &str, on: bool, tip: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::click());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, 4.0, egui::Color32::from_white_alpha(18));
+    }
+    let col = if on {
+        crate::theme::pal().accent
+    } else if resp.hovered() {
+        egui::Color32::from_gray(240)
+    } else {
+        egui::Color32::from_gray(185)
+    };
+    p.text(rect.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(15.0), col);
+    resp.on_hover_text(tip)
+}
+
+/// A small text button in the bar, for the speed.
+fn text_button(ui: &mut Ui, text: &str, tip: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), egui::Sense::click());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, 4.0, egui::Color32::from_white_alpha(18));
+    }
+    let col =
+        if resp.hovered() { egui::Color32::from_gray(240) } else { egui::Color32::from_gray(185) };
+    p.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::monospace(11.5), col);
+    resp.on_hover_text(tip)
+}
+
+/// A scrubber: the played part in the accent, a knob that grows under the
+/// pointer. Returns the new position when clicked or dragged.
+fn scrubber(ui: &mut Ui, frac: f32, width: f32) -> Option<f32> {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(width.max(40.0), 24.0), egui::Sense::click_and_drag());
+    let p = ui.painter();
+    let pal = crate::theme::pal();
+    let (x0, x1, y) = (rect.min.x + 6.0, rect.max.x - 6.0, rect.center().y);
+    let frac = frac.clamp(0.0, 1.0);
+    let kx = x0 + (x1 - x0) * frac;
+    p.line_segment(
+        [egui::pos2(x0, y), egui::pos2(x1, y)],
+        egui::Stroke::new(3.0, egui::Color32::from_gray(58)),
+    );
+    p.line_segment([egui::pos2(x0, y), egui::pos2(kx, y)], egui::Stroke::new(3.0, pal.accent));
+    let hot = resp.hovered() || resp.dragged();
+    p.circle_filled(egui::pos2(kx, y), if hot { 7.0 } else { 5.0 }, pal.accent);
+    p.circle_stroke(
+        egui::pos2(kx, y),
+        if hot { 7.0 } else { 5.0 },
+        egui::Stroke::new(1.0, egui::Color32::from_gray(20)),
+    );
+    if (resp.clicked() || resp.dragged())
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        return Some(((pos.x - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0));
+    }
+    None
+}
+
+impl RenderWin {
+    /// The frame's height for a canvas shape at the player's width.
+    fn frame_h(c: Canvas) -> f32 {
+        let aspect = (c.height / c.width.max(1.0)).max(0.1);
+        (PLAYER_W * aspect).clamp(220.0, 400.0)
+    }
+
+    /// The player: a title strip, the frame on dark with the output's
+    /// background under the model, and a transport bar.
+    fn player_ui(&mut self, ui: &mut Ui, s: &crate::session::Session) {
+        use egui::{Align2, Color32, FontId, Rect, Sense, pos2, vec2};
+        let canvas = self.puppet.as_ref().map_or(s.puppet.model().canvas, |p| p.model().canvas);
+        let fh = Self::frame_h(s.puppet.model().canvas);
+        let (panel, panel_resp) =
+            ui.allocate_exact_size(vec2(PLAYER_W, STRIP_H + fh + BAR_H), Sense::hover());
+        let p = ui.painter_at(panel);
+        p.rect_filled(panel, 8.0, Color32::from_gray(20));
+        // title strip: what plays, at what size and rate
+        let strip = Rect::from_min_size(panel.min, vec2(PLAYER_W, STRIP_H));
+        let name = match self.source {
+            Source::Animation => {
+                s.animations.get(self.scene).map(|a| a.name.clone()).unwrap_or_default()
+            }
+            Source::Timelapse => tr("Timelapse").to_string(),
+        };
+        let c = s.puppet.model().canvas;
+        let out_h = (self.width as f32 * c.height / c.width.max(1.0)).round() as u32;
+        p.text(
+            pos2(strip.min.x + 10.0, strip.center().y),
+            Align2::LEFT_CENTER,
+            name,
+            FontId::proportional(11.5),
+            Color32::from_gray(200),
+        );
+        p.text(
+            pos2(strip.max.x - 10.0, strip.center().y),
+            Align2::RIGHT_CENTER,
+            format!("{}×{}  {} fps  {}", self.width, out_h, self.fps, tr(self.preset.label())),
+            FontId::monospace(10.5),
+            Color32::from_gray(120),
+        );
+        // the frame: the canvas letterboxed, on white or a checker as the
+        // export will be, the model over it
+        let frame =
+            Rect::from_min_size(pos2(panel.min.x, panel.min.y + STRIP_H), vec2(PLAYER_W, fh));
+        let transparent = self.transparent && self.preset.alpha();
+        let at = match &self.preview {
+            Some(t) => {
+                let size = t.size_vec2();
+                let k = ((frame.width() - 12.0) / size.x).min((frame.height() - 12.0) / size.y);
+                Rect::from_center_size(frame.center(), size * k)
+            }
+            None => frame.shrink(6.0),
+        };
+        if transparent {
+            let cp = p.with_clip_rect(at);
+            let cell = 10.0;
+            let (nx, ny) = ((at.width() / cell).ceil() as i32, (at.height() / cell).ceil() as i32);
+            for j in 0..ny {
+                for i in 0..nx {
+                    let dark = (i + j) % 2 == 0;
+                    let r = Rect::from_min_size(
+                        pos2(at.min.x + i as f32 * cell, at.min.y + j as f32 * cell),
+                        vec2(cell, cell),
+                    );
+                    cp.rect_filled(
+                        r,
+                        0.0,
+                        if dark { Color32::from_gray(58) } else { Color32::from_gray(74) },
+                    );
+                }
+            }
+        } else {
+            p.rect_filled(at, 0.0, Color32::WHITE);
+        }
+        if let Some(t) = &self.preview {
+            p.image(t.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        if self.source == Source::Timelapse && self.show_changes {
+            self.overlay(&p.with_clip_rect(at), at, canvas);
+        }
+        // click the frame to play or pause, as any player does
+        let frame_resp = ui.interact(frame, ui.id().with("render-frame"), Sense::click());
+        if frame_resp.clicked() {
+            self.playing = !self.playing;
+            self.last_tick = None;
+        }
+        // the transport bar
+        let bar = Rect::from_min_size(
+            pos2(panel.min.x + 6.0, frame.max.y + 5.0),
+            vec2(PLAYER_W - 12.0, BAR_H - 10.0),
+        );
+        let mut b = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        b.spacing_mut().item_spacing.x = 2.0;
+        let n = self.player.as_ref().map_or(0, |pl| pl.steps.len());
+        let last = n.saturating_sub(1);
+        let anim = s.animations.get(self.scene);
+        let (dur, fps) = anim.map_or((0.0, 30.0), |a| (a.duration.max(0.0), a.fps));
+        if icon_button(&mut b, egui_phosphor::regular::SKIP_BACK, false, tr("Start")).clicked() {
+            self.time = 0.0;
+            self.step = 0;
+            self.prev_step = None;
+        }
+        let play =
+            if self.playing { egui_phosphor::regular::PAUSE } else { egui_phosphor::regular::PLAY };
+        if icon_button(&mut b, play, false, tr("Play or pause (Space)")).clicked() {
+            self.playing = !self.playing;
+            self.last_tick = None;
+        }
+        if icon_button(&mut b, egui_phosphor::regular::SKIP_FORWARD, false, tr("End")).clicked() {
+            self.time = dur;
+            self.step = last;
+            self.playing = false;
+        }
+        b.add_space(4.0);
+        let right_w = match self.source {
+            Source::Animation => 148.0,
+            Source::Timelapse => 232.0,
+        };
+        let sw = (bar.width() - 84.0 - right_w).max(60.0);
+        match self.source {
+            Source::Animation => {
+                let frac = if dur > 0.0 { self.time / dur } else { 0.0 };
+                if let Some(f) = scrubber(&mut b, frac, sw) {
+                    self.time = f * dur;
+                    self.playing = false;
+                }
+                b.add_space(6.0);
+                b.label(
+                    egui::RichText::new(format!(
+                        "{} / {}",
+                        timecode(self.time, fps),
+                        timecode(dur, fps)
+                    ))
+                    .monospace()
+                    .size(11.5)
+                    .color(Color32::from_gray(200)),
+                );
+            }
+            Source::Timelapse => {
+                let frac = if last > 0 { self.step as f32 / last as f32 } else { 0.0 };
+                if let Some(f) = scrubber(&mut b, frac, sw) {
+                    let to = (f * last as f32).round() as usize;
+                    if to < self.step {
+                        self.prev_step = None;
+                    }
+                    self.step = to;
+                    self.playing = false;
+                }
+                b.add_space(6.0);
+                b.label(
+                    egui::RichText::new(format!("{} / {}", self.step + usize::from(n > 0), n))
+                        .monospace()
+                        .size(11.5)
+                        .color(Color32::from_gray(200)),
+                );
+                b.add_space(2.0);
+                let speed_txt = if self.speed >= 1.0 {
+                    format!("{}×", self.speed as u32)
+                } else {
+                    format!("{}×", self.speed)
+                };
+                if text_button(
+                    &mut b,
+                    &speed_txt,
+                    tr("Speed: at 1× the whole timelapse plays in twenty seconds"),
+                )
+                .clicked()
+                {
+                    self.speed = match self.speed {
+                        x if x < 0.5 => 0.5,
+                        x if x < 1.0 => 1.0,
+                        x if x < 2.0 => 2.0,
+                        x if x < 4.0 => 4.0,
+                        x if x < 8.0 => 8.0,
+                        _ => 0.25,
+                    };
+                }
+                if icon_button(&mut b, egui_phosphor::regular::EYE, self.show_changes, tr("Highlight what changed at this step: meshes in orange, new ones in green, deformer grids")).clicked() {
+                    self.show_changes = !self.show_changes;
+                }
+            }
+        }
+        if icon_button(&mut b, egui_phosphor::regular::REPEAT, self.loop_on, tr("Loop")).clicked() {
+            self.loop_on = !self.loop_on;
+        }
+        // keys while the pointer is over the player
+        if panel_resp.hovered() || frame_resp.hovered() {
+            let (space, left, right, shift) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Space),
+                    i.key_pressed(egui::Key::ArrowLeft),
+                    i.key_pressed(egui::Key::ArrowRight),
+                    i.modifiers.shift,
+                )
+            });
+            if space {
+                self.playing = !self.playing;
+                self.last_tick = None;
+            }
+            if left || right {
+                self.playing = false;
+                let dir: f32 = if right { 1.0 } else { -1.0 };
+                let by = if shift { 10.0 } else { 1.0 };
+                match self.source {
+                    Source::Animation => {
+                        self.time = (self.time + dir * by / fps.max(1.0)).clamp(0.0, dur);
+                    }
+                    Source::Timelapse => {
+                        let to = (self.step as f32 + dir * by).clamp(0.0, last as f32) as usize;
+                        if to < self.step {
+                            self.prev_step = None;
+                        }
+                        self.step = to;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draw this step's changed objects over the frame: meshes as
+    /// wireframes, warp grids as grids, rotation deformers as their pivot.
+    fn overlay(&self, p: &egui::Painter, at: egui::Rect, c: Canvas) {
+        use egui::{Stroke, pos2};
+        let Some(puppet) = &self.puppet else { return };
+        let pal = crate::theme::pal();
+        let k = at.width() / c.width.max(1.0);
+        let to = |x: f32, y: f32| {
+            pos2(
+                at.min.x + (c.origin_x + x * c.pixels_per_unit) * k,
+                at.min.y + (c.origin_y + y * c.pixels_per_unit) * k,
+            )
+        };
+        for (ci, ch) in self.changes.iter().enumerate() {
+            if self.picked.is_some_and(|pk| pk != ci) {
+                continue;
+            }
+            let Some(i) = ch.index else { continue };
+            let col = match ch.kind {
+                Kind::Added => pal.warp_green,
+                Kind::Edited => pal.accent,
+                Kind::Removed => pal.rotation_red,
+            };
+            match ch.what {
+                What::Mesh => {
+                    let Some(g) = puppet.mesh_geometry(i) else { continue };
+                    let (pts, _) = g.positions.as_chunks::<2>();
+                    let (tris, _) = g.indices.as_chunks::<3>();
+                    let stroke = Stroke::new(1.0, col.gamma_multiply(0.75));
+                    for &[a, b, d] in tris {
+                        let (Some(pa), Some(pb), Some(pd)) =
+                            (pts.get(a as usize), pts.get(b as usize), pts.get(d as usize))
+                        else {
+                            continue;
+                        };
+                        let (qa, qb, qd) = (to(pa[0], pa[1]), to(pb[0], pb[1]), to(pd[0], pd[1]));
+                        p.line_segment([qa, qb], stroke);
+                        p.line_segment([qb, qd], stroke);
+                        p.line_segment([qd, qa], stroke);
+                    }
+                }
+                What::Warp => {
+                    let Some((grid, rows, cols)) = puppet.warp_grid(i) else { continue };
+                    let (pts, _) = grid.as_chunks::<2>();
+                    let stride = cols as usize + 1;
+                    let stroke = Stroke::new(1.3, col);
+                    for r in 0..=rows as usize {
+                        let line: Vec<egui::Pos2> = (0..stride)
+                            .filter_map(|cc| pts.get(r * stride + cc))
+                            .map(|q| to(q[0], q[1]))
+                            .collect();
+                        p.add(egui::Shape::line(line, stroke));
+                    }
+                    for cc in 0..stride {
+                        let line: Vec<egui::Pos2> = (0..=rows as usize)
+                            .filter_map(|r| pts.get(r * stride + cc))
+                            .map(|q| to(q[0], q[1]))
+                            .collect();
+                        p.add(egui::Shape::line(line, stroke));
+                    }
+                    for q in pts {
+                        p.circle_filled(to(q[0], q[1]), 2.0, col);
+                    }
+                }
+                What::Rotation => {
+                    let Some(rot) = puppet.rotation_state(i) else { continue };
+                    let o = to(rot.origin.x, rot.origin.y);
+                    let a = rot.angle.to_radians();
+                    let tip = o + egui::vec2(a.sin(), -a.cos()) * 26.0;
+                    p.circle_stroke(o, 7.0, Stroke::new(2.0, col));
+                    p.circle_filled(o, 2.5, col);
+                    p.line_segment([o, tip], Stroke::new(2.0, col));
+                    p.circle_filled(tip, 3.0, col);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Beside the player: the parameters a scene drives, or what a timelapse
+    /// step changed.
+    fn side_panel(&mut self, ui: &mut Ui, s: &crate::session::Session) {
+        let h = STRIP_H + Self::frame_h(s.puppet.model().canvas) + BAR_H;
+        ui.allocate_ui_with_layout(
+            egui::vec2(SIDE_W, h),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_min_height(h);
+                match self.source {
+                    Source::Animation => self.params_panel(ui, s, h),
+                    Source::Timelapse => self.changes_panel(ui, h),
+                }
+            },
+        );
+    }
+
+    fn params_panel(&self, ui: &mut Ui, s: &crate::session::Session, h: f32) {
+        let anim = s.animations.get(self.scene);
+        let model = self.puppet.as_ref().map_or(s.puppet.model(), |p| p.model());
+        let live: Vec<&str> = anim
+            .map(|a| {
+                a.curves
+                    .iter()
+                    .filter(|c| c.target == CurveTarget::Parameter)
+                    .map(|c| c.id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let part_curves: Vec<&str> = anim
+            .map(|a| {
+                a.curves
+                    .iter()
+                    .filter(|c| c.target == CurveTarget::PartOpacity)
+                    .map(|c| c.id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.strong(tr("Parameters"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(egui::RichText::new(trf("{n} animated", &[("n", &live.len())])).small());
+            });
+        });
+        // animated first, in the scene's order, then the rest
+        let mut order: Vec<usize> = live
+            .iter()
+            .filter_map(|id| model.parameters.iter().position(|p| p.id == *id))
+            .collect();
+        order.dedup();
+        for (i, p) in model.parameters.iter().enumerate() {
+            if !live.contains(&p.id.as_str()) {
+                order.push(i);
+            }
+        }
+        egui::ScrollArea::vertical().id_salt("render-params").max_height(h - 24.0).show(ui, |ui| {
+            ui.set_min_width(SIDE_W - 14.0);
+            for i in order {
+                let Some(p) = model.parameters.get(i) else { continue };
+                let v = self.puppet.as_ref().map_or(p.default, |pp| pp.value(i));
+                value_row(
+                    ui,
+                    &p.id,
+                    v,
+                    p.min,
+                    p.max,
+                    p.default,
+                    p.decimals,
+                    live.contains(&p.id.as_str()),
+                );
+            }
+            if !part_curves.is_empty() {
+                ui.add_space(6.0);
+                ui.strong(tr("Part opacity"));
+                for id in part_curves {
+                    let Some(i) = model.parts.iter().position(|p| p.id == id) else { continue };
+                    let v = self.puppet.as_ref().map_or(1.0, |pp| pp.part_user_opacity(i));
+                    value_row(ui, id, v, 0.0, 1.0, 1.0, 2, true);
+                }
+            }
+        });
+    }
+
+    fn changes_panel(&mut self, ui: &mut Ui, h: f32) {
+        let pal = crate::theme::pal();
+        let (elapsed, total) = match &self.player {
+            Some(pl) => {
+                let t0 = pl.steps.first().map_or(0, |x| x.0);
+                let now = pl.steps.get(self.step).map_or(t0, |x| x.0);
+                let end = pl.steps.last().map_or(t0, |x| x.0);
+                (now.saturating_sub(t0), end.saturating_sub(t0))
+            }
+            None => (0, 0),
+        };
+        ui.horizontal(|ui| {
+            ui.strong(tr("This step"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(
+                    egui::RichText::new(trf(
+                        "{at} of {total}",
+                        &[("at", &span(elapsed)), ("total", &span(total))],
+                    ))
+                    .small(),
+                )
+                .on_hover_text(tr("Working time into the rig at this step"));
+            });
+        });
+        let c = self.counts;
+        egui::Grid::new("render-counts").num_columns(4).spacing([6.0, 1.0]).show(ui, |ui| {
+            let cell = |ui: &mut Ui, label: &str, n: usize| {
+                ui.weak(egui::RichText::new(label).small());
+                ui.label(egui::RichText::new(n.to_string()).monospace().small());
+            };
+            cell(ui, tr("Meshes"), c.meshes);
+            cell(ui, tr("Deformers"), c.deformers);
+            ui.end_row();
+            cell(ui, tr("Parameters"), c.parameters);
+            cell(ui, tr("Parts"), c.parts);
+            ui.end_row();
+            cell(ui, tr("Keyforms"), c.keyforms);
+            cell(ui, tr("Points"), c.points);
+            ui.end_row();
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.strong(if self.step == 0 { tr("As recording began") } else { tr("Changed") });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !self.changes.is_empty() {
+                    ui.weak(egui::RichText::new(self.changes.len().to_string()).small());
+                }
+            });
+        });
+        egui::ScrollArea::vertical().id_salt("render-changes").max_height(h - 112.0).show(
+            ui,
+            |ui| {
+                ui.set_min_width(SIDE_W - 14.0);
+                if self.changes.is_empty() {
+                    ui.weak(
+                        egui::RichText::new(tr("Nothing changed between these steps.")).small(),
+                    );
+                }
+                let w = ui.available_width();
+                let mut toggle = None;
+                for (i, ch) in self.changes.iter().enumerate().take(MAX_CHANGES) {
+                    let on = self.picked == Some(i);
+                    let (r, resp) =
+                        ui.allocate_exact_size(egui::vec2(w, 20.0), egui::Sense::click());
+                    let p = ui.painter();
+                    if on {
+                        p.rect_filled(r, 3.0, pal.select);
+                    } else if resp.hovered() {
+                        p.rect_filled(r, 3.0, pal.text_faint.gamma_multiply(0.15));
+                    }
+                    let col = match ch.kind {
+                        Kind::Added => pal.warp_green,
+                        Kind::Edited => pal.accent,
+                        Kind::Removed => pal.rotation_red,
+                    };
+                    p.circle_filled(egui::pos2(r.min.x + 7.0, r.center().y), 3.0, col);
+                    let icon = match ch.what {
+                        What::Mesh => egui_phosphor::regular::POLYGON,
+                        What::Warp => egui_phosphor::regular::GRID_FOUR,
+                        What::Rotation => egui_phosphor::regular::ARROW_CLOCKWISE,
+                        What::Parameter => egui_phosphor::regular::SLIDERS_HORIZONTAL,
+                        What::Part => egui_phosphor::regular::FOLDER_SIMPLE,
+                        What::Glue => egui_phosphor::regular::LINK_SIMPLE,
+                        What::Physics => egui_phosphor::regular::WAVES,
+                        What::ArtPath => egui_phosphor::regular::PEN_NIB,
+                        What::Canvas => egui_phosphor::regular::FRAME_CORNERS,
+                    };
+                    let name = match ch.what {
+                        What::Physics => tr("Physics").to_string(),
+                        What::Canvas => tr("Canvas").to_string(),
+                        _ => ch.name.clone(),
+                    };
+                    let detail = match ch.kind {
+                        Kind::Added => tr("added").to_string(),
+                        Kind::Removed => tr("removed").to_string(),
+                        Kind::Edited => tr(ch.detail).to_string(),
+                    };
+                    let dw = p
+                        .layout_no_wrap(
+                            detail.clone(),
+                            egui::FontId::proportional(10.5),
+                            pal.text_faint,
+                        )
+                        .size()
+                        .x;
+                    let name_clip = egui::Rect::from_min_max(
+                        egui::pos2(r.min.x + 16.0, r.min.y),
+                        egui::pos2((r.max.x - dw - 10.0).max(r.min.x + 30.0), r.max.y),
+                    );
+                    p.with_clip_rect(name_clip).text(
+                        egui::pos2(r.min.x + 16.0, r.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{icon} {name}"),
+                        egui::FontId::proportional(12.0),
+                        pal.text,
+                    );
+                    p.text(
+                        egui::pos2(r.max.x - 4.0, r.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        detail,
+                        egui::FontId::proportional(10.5),
+                        pal.text_faint,
+                    );
+                    let resp =
+                        resp.on_hover_text(tr("Click to highlight only this one on the frame"));
+                    if resp.clicked() {
+                        toggle = Some(i);
+                    }
+                }
+                if self.changes.len() > MAX_CHANGES {
+                    ui.weak(
+                        egui::RichText::new(trf(
+                            "  and {count} more",
+                            &[("count", &(self.changes.len() - MAX_CHANGES))],
+                        ))
+                        .small(),
+                    );
+                }
+                if let Some(i) = toggle {
+                    self.picked = if self.picked == Some(i) { None } else { Some(i) };
+                }
+            },
+        );
+    }
+
+    fn queue_ui(&mut self, ui: &mut Ui) {
+        ui.strong(tr("Queue"));
+        if self.queue.is_empty() {
+            ui.weak(tr("Nothing queued yet."));
+        }
+        let mut remove = None;
+        for (i, j) in self.queue.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(&j.label);
+                match &j.state {
+                    State::Queued(_) => {
+                        ui.weak(tr("queued"));
+                        if ui.small_button("×").clicked() {
+                            remove = Some(i);
+                        }
+                    }
+                    State::Running => {
+                        let f = if j.total > 0 { j.done as f32 / j.total as f32 } else { 0.0 };
+                        ui.add(
+                            egui::ProgressBar::new(f)
+                                .desired_width(160.0)
+                                .text(format!("{}/{}", j.done, j.total)),
+                        );
+                    }
+                    State::Done(m) => {
+                        ui.colored_label(
+                            crate::theme::pal().warp_green,
+                            egui_phosphor::regular::CHECK,
+                        )
+                        .on_hover_text(m);
+                        if ui.small_button("×").clicked() {
+                            remove = Some(i);
+                        }
+                    }
+                    State::Failed(e) => {
+                        ui.colored_label(
+                            crate::theme::pal().accent,
+                            egui_phosphor::regular::WARNING,
+                        )
+                        .on_hover_text(e);
+                        if ui.small_button("×").clicked() {
+                            remove = Some(i);
+                        }
+                    }
+                }
+            });
+        }
+        if let Some(i) = remove {
+            self.queue.remove(i);
+        }
+    }
+}
+
+/// One parameter the way a model viewer lists them: name and value above
+/// a track, the knob at the value, the stretch from the default filled in
+/// when the scene drives it.
+fn value_row(
+    ui: &mut Ui,
+    name: &str,
+    value: f32,
+    min: f32,
+    max: f32,
+    default: f32,
+    decimals: i32,
+    live: bool,
+) {
+    use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
+    let pal = crate::theme::pal();
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::hover());
+    let p = ui.painter();
+    let col = if live { pal.text } else { pal.text_faint };
+    let txt = format!("{:.*}", decimals.clamp(0, 3) as usize, value);
+    let tw = p.layout_no_wrap(txt.clone(), FontId::monospace(11.0), col).size().x;
+    let name_clip = Rect::from_min_max(r.min, pos2(r.max.x - tw - 8.0, r.max.y));
+    p.with_clip_rect(name_clip).text(
+        pos2(r.min.x, r.min.y + 2.0),
+        Align2::LEFT_TOP,
+        name,
+        FontId::proportional(11.5),
+        col,
+    );
+    p.text(pos2(r.max.x, r.min.y + 2.0), Align2::RIGHT_TOP, txt, FontId::monospace(11.0), col);
+    let ty = r.max.y - 7.0;
+    let span = (max - min).max(1e-6);
+    let fx = |v: f32| r.min.x + 4.0 + ((v - min) / span).clamp(0.0, 1.0) * (r.width() - 8.0);
+    p.line_segment(
+        [pos2(r.min.x + 4.0, ty), pos2(r.max.x - 4.0, ty)],
+        egui::Stroke::new(3.0, pal.text_faint.gamma_multiply(0.35)),
+    );
+    if live {
+        p.line_segment(
+            [pos2(fx(default), ty), pos2(fx(value), ty)],
+            egui::Stroke::new(3.0, pal.accent.gamma_multiply(0.85)),
+        );
+    }
+    p.circle_filled(pos2(fx(value), ty), 4.0, if live { pal.accent } else { pal.text_faint });
+    p.circle_stroke(pos2(fx(value), ty), 4.0, egui::Stroke::new(1.0, pal.panel_bg));
+    resp.on_hover_text(format!("{name}: {min} to {max}, {default} at rest"));
 }
