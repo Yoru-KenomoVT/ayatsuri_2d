@@ -61,7 +61,13 @@
   was made on, so an eye moved at X 1, Y 1 is seen moving there, and the
   panel says where. Steps that were undone are left out, the undo with
   them; a redo plays once. Frames are drawn at twice the size and averaged
-  down, so edges are smooth in the video and in the paused preview.
+  down, in bands across every core, so edges are smooth in the video and
+  in the paused preview and a tall canvas renders in a fraction of the
+  time; art is sampled bilinearly, so it is never blocky. The preview
+  draws with the full art once the pages are decoded. In full screen the
+  player and its panel sit together in the middle with a wider panel. A
+  render that fails says why, with ffmpeg's own words for a video, and
+  every outcome goes to the log.
 - **Export Model** replaces Export Image and Export as moc3: one window
   with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
@@ -72,7 +78,10 @@
   is kept in a small `.timelapse` file beside it, as compressed changes.
   Window > Timelapse plays it back with a scrubber and exports PNG frames
   and a GIF, plus an MP4 when ffmpeg is installed. Turn it off in
-  Settings > General.
+  Settings > General. Each step names the state it was recorded on, so
+  two copies of the app writing one project keep their own chains and a
+  file opened again after a save carries on from where it was; the
+  timelapse plays the chain the file ends on.
 - **ArtPath**: draw Bezier paths on the canvas (click for a corner, drag
   for a smooth point) with a stroke and an optional fill. Each becomes an
   ordinary ArtMesh, so it clips, sits under deformers, takes keys and
