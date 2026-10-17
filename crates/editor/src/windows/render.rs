@@ -2136,16 +2136,16 @@ impl RenderWin {
     /// The height the queue takes under the player: its header and up to
     /// two jobs, the rest scrolls.
     fn queue_h(&self) -> f32 {
-        8.0 + 28.0 + self.queue_body_h()
+        8.0 + 28.0 + self.queue_body_h() + 8.0
     }
 
     fn queue_body_h(&self) -> f32 {
-        if self.queue.is_empty() { 22.0 } else { self.queue.len().min(2) as f32 * (JOB_H + 6.0) }
+        if self.queue.is_empty() { 22.0 } else { self.queue.len().min(2) as f32 * (JOB_H + 8.0) }
     }
 
-    /// The jobs, one card each: name and format, a bar while it runs with
-    /// frames done and the time left, then how it ended. A running job
-    /// can be stopped, a finished one opened or cleared.
+    /// The jobs, one card each: name and format, a bar, and a line that
+    /// says how far it is or how it ended. A running job can be stopped,
+    /// a finished one opened or cleared.
     fn queue_ui(&mut self, ui: &mut Ui) {
         use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
         let pal = crate::theme::pal();
@@ -2183,123 +2183,184 @@ impl RenderWin {
                         egui::Stroke::new(1.0, pal.border),
                         egui::StrokeKind::Inside,
                     );
-                    let inner = card.shrink2(vec2(10.0, 8.0));
-                    // name, then the format in the faint colour after it
-                    let name_w = p
-                        .text(
-                            inner.min,
-                            Align2::LEFT_TOP,
-                            &j.name,
-                            FontId::proportional(13.0),
-                            pal.text,
-                        )
-                        .width();
-                    p.text(
-                        pos2(inner.min.x + name_w + 8.0, inner.min.y + 1.0),
+                    let inner = card.shrink2(vec2(12.0, 10.0));
+                    // the name, then the format in a small outlined tag
+                    let name = p.text(
+                        inner.min,
                         Align2::LEFT_TOP,
+                        &j.name,
+                        FontId::proportional(13.5),
+                        pal.text,
+                    );
+                    let tag_font = FontId::monospace(10.5);
+                    let tag_w = p
+                        .layout_no_wrap(
+                            tr(j.preset.label()).to_string(),
+                            tag_font.clone(),
+                            pal.text_faint,
+                        )
+                        .size()
+                        .x;
+                    let tag = Rect::from_min_size(
+                        pos2(name.max.x + 10.0, name.center().y - 9.0),
+                        vec2(tag_w + 12.0, 18.0),
+                    );
+                    p.rect(
+                        tag,
+                        4.0,
+                        egui::Color32::TRANSPARENT,
+                        egui::Stroke::new(1.0, pal.border),
+                        egui::StrokeKind::Inside,
+                    );
+                    p.text(
+                        tag.center(),
+                        Align2::CENTER_CENTER,
                         tr(j.preset.label()),
-                        FontId::monospace(11.0),
+                        tag_font,
                         pal.text_faint,
                     );
-                    // the button at the right end of the first line
-                    let btn = Rect::from_min_size(
-                        pos2(inner.max.x - 22.0, inner.min.y - 2.0),
-                        vec2(22.0, 20.0),
-                    );
-                    let mut sub = ui.new_child(
-                        egui::UiBuilder::new()
-                            .max_rect(btn)
-                            .layout(egui::Layout::right_to_left(egui::Align::Center)),
-                    );
+                    // the buttons, from the right end of the first line
+                    let mut right = inner.max.x;
+                    let mut pill =
+                        |ui: &mut Ui, key: &str, width: f32, tip: &str| -> (Rect, egui::Response) {
+                            let r = Rect::from_min_size(
+                                pos2(right - width, name.center().y - 11.0),
+                                vec2(width, 22.0),
+                            );
+                            right -= width + 6.0;
+                            let resp = ui.interact(r, ui.id().with((i, key)), Sense::click());
+                            let fill = if resp.hovered() {
+                                egui::Color32::from_white_alpha(18)
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
+                            p.rect(
+                                r,
+                                4.0,
+                                fill,
+                                egui::Stroke::new(1.0, pal.border),
+                                egui::StrokeKind::Inside,
+                            );
+                            (r, resp.on_hover_text(tip))
+                        };
+                    let ink = |hovered: bool| if hovered { pal.text } else { pal.text_faint };
                     match &j.state {
                         State::Running => {
-                            if icon_button(
-                                &mut sub,
-                                egui_phosphor::regular::STOP,
-                                false,
+                            let (r, resp) = pill(ui, "stop", 62.0, tr("Stop"));
+                            let col = ink(resp.hovered());
+                            // a filled square: the stop sign everyone knows
+                            p.rect_filled(
+                                Rect::from_center_size(
+                                    pos2(r.min.x + 13.0, r.center().y),
+                                    vec2(9.0, 9.0),
+                                ),
+                                1.5,
+                                col,
+                            );
+                            p.text(
+                                pos2(r.min.x + 23.0, r.center().y),
+                                Align2::LEFT_CENTER,
                                 tr("Stop"),
-                            )
-                            .clicked()
-                            {
+                                FontId::proportional(11.5),
+                                col,
+                            );
+                            if resp.clicked() {
                                 j.stop.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
                         }
                         State::Done => {
-                            let more = Rect::from_min_size(
-                                pos2(btn.min.x - 24.0, btn.min.y),
-                                vec2(22.0, 20.0),
+                            let (r, resp) = pill(ui, "clear", 26.0, tr("Clear"));
+                            p.text(
+                                r.center(),
+                                Align2::CENTER_CENTER,
+                                egui_phosphor::regular::X,
+                                FontId::proportional(13.0),
+                                ink(resp.hovered()),
                             );
-                            if icon_button(&mut sub, egui_phosphor::regular::X, false, tr("Clear"))
-                                .clicked()
-                            {
+                            if resp.clicked() {
                                 remove = Some(i);
                             }
-                            let mut sub2 = ui.new_child(
-                                egui::UiBuilder::new()
-                                    .max_rect(more)
-                                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
-                            );
-                            if icon_button(
-                                &mut sub2,
+                            let (r, resp) = pill(ui, "open", 26.0, tr("Open the folder"));
+                            p.text(
+                                r.center(),
+                                Align2::CENTER_CENTER,
                                 egui_phosphor::regular::FOLDER_SIMPLE,
-                                false,
-                                tr("Open the folder"),
-                            )
-                            .clicked()
-                            {
+                                FontId::proportional(13.0),
+                                ink(resp.hovered()),
+                            );
+                            if resp.clicked() {
                                 reveal = Some(j.folder.clone());
                             }
                         }
                         State::Queued(_) | State::Failed(_) | State::Stopped => {
-                            if icon_button(&mut sub, egui_phosphor::regular::X, false, tr("Clear"))
-                                .clicked()
-                            {
+                            let (r, resp) = pill(ui, "clear", 26.0, tr("Clear"));
+                            p.text(
+                                r.center(),
+                                Align2::CENTER_CENTER,
+                                egui_phosphor::regular::X,
+                                FontId::proportional(13.0),
+                                ink(resp.hovered()),
+                            );
+                            if resp.clicked() {
                                 remove = Some(i);
                             }
                         }
                     }
-                    // second line: the bar and what it says
-                    let line2 = pos2(inner.min.x, inner.max.y);
+                    // the bar, then the line under it
+                    let f = if j.total > 0 {
+                        (j.done as f32 / j.total as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let bar = Rect::from_min_size(
+                        pos2(inner.min.x, inner.min.y + 28.0),
+                        vec2(inner.width(), 4.0),
+                    );
+                    p.rect_filled(bar, 2.0, pal.track);
+                    let (fill, col) = match &j.state {
+                        State::Queued(_) => (0.0, pal.track),
+                        State::Running => (f, pal.accent),
+                        State::Done => (1.0, pal.warp_green),
+                        State::Failed(_) => (f.max(0.08), pal.rotation_red),
+                        State::Stopped => (f, pal.text_faint),
+                    };
+                    if fill > 0.0 {
+                        p.rect_filled(
+                            Rect::from_min_size(bar.min, vec2(bar.width() * fill, 4.0)),
+                            2.0,
+                            col,
+                        );
+                    }
+                    let line = pos2(inner.min.x, inner.min.y + 38.0);
                     let small = FontId::proportional(11.0);
+                    let right_small = FontId::monospace(11.0);
                     match &j.state {
                         State::Queued(_) => {
-                            p.text(
-                                line2,
-                                Align2::LEFT_BOTTOM,
-                                tr("Waiting"),
-                                small,
-                                pal.text_faint,
-                            );
+                            p.text(line, Align2::LEFT_TOP, tr("Waiting"), small, pal.text_faint);
                         }
                         State::Running => {
-                            let f = if j.total > 0 { j.done as f32 / j.total as f32 } else { 0.0 };
-                            let bar = Rect::from_min_size(
-                                pos2(inner.min.x, inner.min.y + 22.0),
-                                vec2(inner.width(), 4.0),
-                            );
-                            p.rect_filled(bar, 2.0, pal.track);
-                            let fill = Rect::from_min_size(
-                                bar.min,
-                                vec2(bar.width() * f.clamp(0.0, 1.0), 4.0),
-                            );
-                            p.rect_filled(fill, 2.0, pal.accent);
                             let left = match (j.started, j.done) {
-                                (Some(t), d) if d > 0 && j.total > d => {
-                                    let per = t.elapsed().as_secs_f32() / d as f32;
-                                    Some(per * (j.total - d) as f32)
-                                }
+                                (Some(t), d) if d > 0 && j.total > d => Some(
+                                    t.elapsed().as_secs_f32() / d as f32 * (j.total - d) as f32,
+                                ),
                                 _ => None,
                             };
                             let mut words = trf(
                                 "{done} of {total} frames",
                                 &[("done", &j.done), ("total", &j.total)],
                             );
-                            words.push_str(&format!(" · {:.0}%", f * 100.0));
                             if let Some(left) = left {
-                                words.push_str(" · ");
+                                words.push_str("   ");
                                 words.push_str(&trf("{time} left", &[("time", &span_short(left))]));
                             }
-                            p.text(line2, Align2::LEFT_BOTTOM, words, small, pal.text_faint);
+                            p.text(line, Align2::LEFT_TOP, words, small, pal.text_faint);
+                            p.text(
+                                pos2(inner.max.x, line.y),
+                                Align2::RIGHT_TOP,
+                                format!("{:.0}%", f * 100.0),
+                                right_small,
+                                pal.text,
+                            );
                         }
                         State::Done => {
                             let took =
@@ -2309,15 +2370,15 @@ impl RenderWin {
                                 &[("frames", &j.done), ("time", &took)],
                             );
                             let dot = p.text(
-                                line2,
-                                Align2::LEFT_BOTTOM,
+                                line,
+                                Align2::LEFT_TOP,
                                 egui_phosphor::regular::CHECK,
                                 small.clone(),
                                 pal.warp_green,
                             );
                             p.text(
-                                pos2(dot.max.x + 5.0, line2.y),
-                                Align2::LEFT_BOTTOM,
+                                pos2(dot.max.x + 6.0, line.y),
+                                Align2::LEFT_TOP,
                                 words,
                                 small,
                                 pal.text_faint,
@@ -2325,34 +2386,28 @@ impl RenderWin {
                         }
                         State::Failed(e) => {
                             let dot = p.text(
-                                line2,
-                                Align2::LEFT_BOTTOM,
+                                line,
+                                Align2::LEFT_TOP,
                                 egui_phosphor::regular::WARNING,
                                 small.clone(),
-                                pal.accent,
+                                pal.rotation_red,
                             );
-                            let clip =
-                                Rect::from_min_max(pos2(dot.max.x + 5.0, inner.min.y), inner.max);
+                            let clip = Rect::from_min_max(pos2(dot.max.x + 6.0, line.y), inner.max);
                             p.with_clip_rect(clip).text(
-                                pos2(dot.max.x + 5.0, line2.y),
-                                Align2::LEFT_BOTTOM,
+                                pos2(dot.max.x + 6.0, line.y),
+                                Align2::LEFT_TOP,
                                 e,
                                 small,
                                 pal.text_faint,
                             );
-                            ui.allocate_rect(clip, Sense::hover()).on_hover_text(e);
+                            ui.interact(clip, ui.id().with((i, "why")), Sense::hover())
+                                .on_hover_text(e);
                         }
                         State::Stopped => {
-                            p.text(
-                                line2,
-                                Align2::LEFT_BOTTOM,
-                                tr("Stopped"),
-                                small,
-                                pal.text_faint,
-                            );
+                            p.text(line, Align2::LEFT_TOP, tr("Stopped"), small, pal.text_faint);
                         }
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
             });
         if let Some(i) = remove {
@@ -2365,7 +2420,7 @@ impl RenderWin {
 }
 
 /// A job card's height.
-const JOB_H: f32 = 52.0;
+const JOB_H: f32 = 70.0;
 
 /// Show a folder in the system's file browser.
 fn open_folder(path: &std::path::Path) {
