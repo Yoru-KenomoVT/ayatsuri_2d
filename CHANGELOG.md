@@ -49,11 +49,11 @@
   Shift-select, box select, drag by whole frames with Shift snapping to
   other keys and the playhead, Ctrl-click to flip linear and auto, and
   right-click for the interpolation, select the row or delete. A folder
-  row sums up its children's keys and drags them together. Above the
-  lanes a navigator bar zooms and scrolls (Alt with the wheel zooms at
-  the pointer, a slider in the footer too), a frame ruler scrubs, and the
-  work area has a bar with handles. The scene row's bar drags to change
-  the length. Alt with an arrow nudges the selected keys a frame (ten
+  row sums up its children's keys and drags them together. A frame
+  ruler scrubs, Alt with the wheel zooms at the pointer (a slider in the
+  footer too), and the work area bar under the ruler bounds playback:
+  drag its handles, or press B and N to put its ends at the playhead.
+  The scene row's bar drags to change the length. Alt with an arrow nudges the selected keys a frame (ten
   with Shift), Delete removes them, Ctrl+A takes them all, and Insert
   frame / Remove frame ripple the scene at the playhead. Key edits have
   their own undo, one step per drag, ahead of the model's history while
@@ -61,8 +61,9 @@
   editor** in place of the lanes: the value curves of the selected keys'
   parameters (else the selected parameter, else every animated curve)
   over a fitted axis with a grid, square keys that drag in time and
-  value, bezier handles on selected keys that write the key's own
-  handles, and pills for the interpolation. The layout and the key
+  value, handles on every selected key (a drag turns the segment into a
+  bezier; the other handle swings with it unless Alt is held), and pills
+  for the interpolation. The layout and the key
   glyphs follow EffectCraft's timeline (MIT or Apache-2.0).
 - **Export Animation** and **Export Timelapse** open the new **Render**
   window: formats down the left (GIF, PNG sequence, MP4, WebM, MOV),
