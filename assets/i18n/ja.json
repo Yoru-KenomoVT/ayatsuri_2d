@@ -1019,5 +1019,20 @@
   "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "各ステップは割り当てられた時間の中でドラッグしたときのように滑らかに変化します。値を上げると動画が短くなります",
   "Speed, on top of the steps per second": "速度 (1 秒あたりのステップ数に掛ける)",
   "at {pose}": "{pose} にて",
-  "The parameters the rigger had set while making this edit": "この編集を行ったときに設定されていたパラメータ"
+  "The parameters the rigger had set while making this edit": "この編集を行ったときに設定されていたパラメータ",
+  "Draw with": "描画に使う",
+  "GPU": "GPU",
+  "Frames are drawn by the graphics card and read back; the processor only encodes.": "フレームはグラフィックカードが描画して読み戻します。プロセッサはエンコードのみ行います。",
+  "CPU": "CPU",
+  "Frames are drawn by the processor, on every core. Slow for a big canvas.": "フレームはプロセッサの全コアで描画します。大きなキャンバスでは遅くなります。",
+  "Smooth edges": "エッジを滑らかに",
+  "Draws each frame at twice the size and averages it down: four times the work.": "各フレームを2倍の大きさで描いて平均化します。処理量は4倍です。",
+  "Clear finished": "完了分を消す",
+  "Stop": "停止",
+  "Open the folder": "フォルダを開く",
+  "Waiting": "待機中",
+  "{time} left": "残り {time}",
+  "{frames} frames in {time}": "{frames} フレーム、{time}",
+  "Stopped": "停止しました",
+  "{m} min {s} s": "{m} 分 {s} 秒"
 }

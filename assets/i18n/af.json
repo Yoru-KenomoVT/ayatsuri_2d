@@ -1019,5 +1019,20 @@
   "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "Elke stap vloei in oor sy deel van die sekonde, soos dit gesleep is; hoër gee 'n korter video",
   "Speed, on top of the steps per second": "Spoed, bo-op die stappe per sekonde",
   "at {pose}": "by {pose}",
-  "The parameters the rigger had set while making this edit": "Die parameters wat die rigger gestel het terwyl hierdie wysiging gemaak is"
+  "The parameters the rigger had set while making this edit": "Die parameters wat die rigger gestel het terwyl hierdie wysiging gemaak is",
+  "Draw with": "Teken met",
+  "GPU": "GPU",
+  "Frames are drawn by the graphics card and read back; the processor only encodes.": "Rame word deur die grafiese kaart geteken en teruggelees; die verwerker enkodeer net.",
+  "CPU": "CPU",
+  "Frames are drawn by the processor, on every core. Slow for a big canvas.": "Rame word deur die verwerker geteken, op elke kern. Stadig vir 'n groot doek.",
+  "Smooth edges": "Gladde rande",
+  "Draws each frame at twice the size and averages it down: four times the work.": "Teken elke raam op dubbele grootte en bereken die gemiddelde: vier keer die werk.",
+  "Clear finished": "Voltooides verwyder",
+  "Stop": "Stop",
+  "Open the folder": "Maak die vouer oop",
+  "Waiting": "Wag",
+  "{time} left": "{time} oor",
+  "{frames} frames in {time}": "{frames} rame in {time}",
+  "Stopped": "Gestop",
+  "{m} min {s} s": "{m} min {s} s"
 }

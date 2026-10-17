@@ -1019,5 +1019,20 @@
   "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "각 단계는 자기 몫의 시간 동안 드래그했던 것처럼 부드럽게 변합니다. 값을 올리면 영상이 짧아집니다",
   "Speed, on top of the steps per second": "속도 (초당 단계 수에 곱함)",
   "at {pose}": "{pose}에서",
-  "The parameters the rigger had set while making this edit": "이 편집을 할 때 설정되어 있던 파라미터"
+  "The parameters the rigger had set while making this edit": "이 편집을 할 때 설정되어 있던 파라미터",
+  "Draw with": "그리기 장치",
+  "GPU": "GPU",
+  "Frames are drawn by the graphics card and read back; the processor only encodes.": "프레임은 그래픽 카드가 그려서 읽어 오고, 프로세서는 인코딩만 합니다.",
+  "CPU": "CPU",
+  "Frames are drawn by the processor, on every core. Slow for a big canvas.": "프레임을 프로세서의 모든 코어로 그립니다. 큰 캔버스에서는 느립니다.",
+  "Smooth edges": "가장자리 부드럽게",
+  "Draws each frame at twice the size and averages it down: four times the work.": "각 프레임을 두 배 크기로 그린 뒤 평균을 냅니다. 작업량은 네 배입니다.",
+  "Clear finished": "완료 항목 지우기",
+  "Stop": "중지",
+  "Open the folder": "폴더 열기",
+  "Waiting": "대기 중",
+  "{time} left": "{time} 남음",
+  "{frames} frames in {time}": "{frames}프레임, {time} 소요",
+  "Stopped": "중지됨",
+  "{m} min {s} s": "{m}분 {s}초"
 }

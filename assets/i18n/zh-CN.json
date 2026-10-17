@@ -1019,5 +1019,20 @@
   "Each step eases in over its share of the second, the way it was dragged; raise this for a shorter video": "每一步在其时间份额内像拖动时那样平滑过渡；调高可缩短视频",
   "Speed, on top of the steps per second": "速度（在每秒步数之上）",
   "at {pose}": "位于 {pose}",
-  "The parameters the rigger had set while making this edit": "进行此编辑时所设置的参数"
+  "The parameters the rigger had set while making this edit": "进行此编辑时所设置的参数",
+  "Draw with": "绘制方式",
+  "GPU": "GPU",
+  "Frames are drawn by the graphics card and read back; the processor only encodes.": "帧由显卡绘制并读回，处理器只负责编码。",
+  "CPU": "CPU",
+  "Frames are drawn by the processor, on every core. Slow for a big canvas.": "帧由处理器的所有核心绘制。大画布会很慢。",
+  "Smooth edges": "平滑边缘",
+  "Draws each frame at twice the size and averages it down: four times the work.": "以两倍尺寸绘制每一帧再缩小平均：工作量为四倍。",
+  "Clear finished": "清除已完成",
+  "Stop": "停止",
+  "Open the folder": "打开文件夹",
+  "Waiting": "等待中",
+  "{time} left": "剩余 {time}",
+  "{frames} frames in {time}": "{frames} 帧，用时 {time}",
+  "Stopped": "已停止",
+  "{m} min {s} s": "{m} 分 {s} 秒"
 }
