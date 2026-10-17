@@ -17,6 +17,7 @@ use egui::Ui;
 use crate::i18n::{tr, trf};
 use crate::model_diff::{Change, Counts, Kind, What};
 use crate::panels::EditorUi;
+use crate::windows::span_short;
 
 /// What the frames come from.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -99,6 +100,10 @@ struct Spec {
     /// share of the second.
     sps: f32,
     physics: bool,
+    /// Frames drawn by the GPU, or on the CPU; and, on the CPU, at twice
+    /// the size and averaged down.
+    gpu: bool,
+    aa: bool,
     folder: PathBuf,
     name: String,
     model: Model,
@@ -113,16 +118,32 @@ struct Spec {
 enum State {
     Queued(Box<Spec>),
     Running,
-    Done(String),
+    Done,
     Failed(String),
+    Stopped,
 }
 
 struct Job {
-    label: String,
+    name: String,
+    preset: Preset,
+    folder: PathBuf,
     done: usize,
     total: usize,
     state: State,
+    /// Raised by the stop button; the job sees it at the next frame.
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    started: Option<std::time::Instant>,
+    took: Option<std::time::Duration>,
 }
+
+impl Job {
+    fn label(&self) -> String {
+        format!("{} · {}", self.name, self.preset.label())
+    }
+}
+
+/// The error a stopped job ends with.
+const STOPPED: &str = "stopped";
 
 pub struct RenderWin {
     pub source: Source,
@@ -168,6 +189,11 @@ pub struct RenderWin {
     player_size: (f32, f32),
     /// The player and its panel over the whole screen.
     fullscreen: bool,
+    /// The window is open; jobs go on either way.
+    shown: bool,
+    /// Frames drawn by the GPU; else on the CPU, smoothed or not.
+    gpu: bool,
+    aa: bool,
     loop_on: bool,
     /// Timelapse speed: 1 plays the whole thing in twenty seconds.
     speed: f32,
@@ -222,6 +248,9 @@ impl RenderWin {
             pose: Vec::new(),
             player_size: (540.0, 400.0),
             fullscreen: false,
+            shown: true,
+            gpu: true,
+            aa: true,
             loop_on: true,
             speed: 1.0,
             show_changes: true,
@@ -721,6 +750,9 @@ impl Sink {
                 Ok((Sink::Gif(gif, image::Delay::from_numer_denom_ms(1000, spec.fps.max(1))), out))
             }
             Preset::Mp4 | Preset::Webm | Preset::Mov => {
+                // half the cores: the editor stays usable while it encodes
+                let threads =
+                    std::thread::available_parallelism().map_or(2, |n| n.get() / 2).max(1);
                 let mut cmd = std::process::Command::new(&spec.ffmpeg);
                 cmd.args(["-hide_banner", "-loglevel", "error", "-nostats"])
                     .args(["-y", "-f", "rawvideo", "-pix_fmt", "rgba"])
@@ -736,6 +768,8 @@ impl Sink {
                             "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                             "-c:v",
                             "libx264",
+                            "-preset",
+                            "faster",
                             "-pix_fmt",
                             "yuv420p",
                             "-crf",
@@ -753,13 +787,19 @@ impl Sink {
                             "0",
                             "-crf",
                             "30",
+                            "-row-mt",
+                            "1",
+                            "-cpu-used",
+                            "3",
                         ]);
                     }
                     _ => {
                         cmd.args(["-c:v", "png"]);
                     }
                 }
-                cmd.arg(&out)
+                cmd.arg("-threads")
+                    .arg(threads.to_string())
+                    .arg(&out)
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::piped());
@@ -799,6 +839,25 @@ impl Sink {
             Sink::Pipe(_, stdin, _) => {
                 use std::io::Write;
                 stdin.write_all(&px).map_err(|e| format!("ffmpeg: {e}"))
+            }
+        }
+    }
+
+    /// A job that stopped or failed: the half-written file goes; frames
+    /// already in a folder stay, each one is whole.
+    fn abandon(self, path: &std::path::Path) {
+        match self {
+            Sink::Png(..) => {}
+            Sink::Gif(gif, _) => {
+                drop(gif);
+                let _ = std::fs::remove_file(path);
+            }
+            Sink::Pipe(mut child, stdin, said) => {
+                drop(stdin);
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = said.join();
+                let _ = std::fs::remove_file(path);
             }
         }
     }
@@ -869,36 +928,114 @@ fn pose(
     }
 }
 
-fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
-    let canvas_w = spec.model.canvas.width.max(1.0);
-    // pages at twice the detail, since frames are drawn at 2× and averaged
-    let tex = textures(&spec.pngs, canvas_w, spec.width.saturating_mul(2));
-    let width = spec.width.clamp(16, 8192) as usize;
-    let mut sink: Option<Sink> = None;
-    let mut out = PathBuf::new();
-    let mut written = 0usize;
-    let mut push = |w: usize, h: usize, mut px: Vec<u8>, total: usize| -> Result<(), String> {
-        if !spec.transparent || !spec.preset.alpha() {
+/// Where a job's frames go, and how far it is.
+struct Out<'a> {
+    spec: &'a Spec,
+    tx: &'a Sender<Progress>,
+    stop: &'a std::sync::atomic::AtomicBool,
+    sink: Option<Sink>,
+    path: PathBuf,
+    written: usize,
+}
+
+impl Out<'_> {
+    fn push(&mut self, w: usize, h: usize, mut px: Vec<u8>, total: usize) -> Result<(), String> {
+        if self.stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(STOPPED.into());
+        }
+        if !self.spec.transparent || !self.spec.preset.alpha() {
             flatten(&mut px);
         }
-        if sink.is_none() {
-            let (s, o) = Sink::open(&spec, w as u32, h as u32)?;
-            sink = Some(s);
-            out = o;
+        if self.sink.is_none() {
+            let (s, o) = Sink::open(self.spec, w as u32, h as u32)?;
+            self.sink = Some(s);
+            self.path = o;
         }
-        if let Some(s) = &mut sink
+        if let Some(s) = &mut self.sink
             && let Err(e) = s.frame(w as u32, h as u32, px)
         {
             // ffmpeg's own words, when it was ffmpeg that stopped
-            return Err(match sink.take().map(Sink::finish) {
+            return Err(match self.sink.take().map(Sink::finish) {
                 Some(Err(why)) => why,
                 _ => e,
             });
         }
-        written += 1;
-        let _ = tx.send(Progress::Frames(written, total));
+        self.written += 1;
+        let _ = self.tx.send(Progress::Frames(self.written, total));
         Ok(())
-    };
+    }
+}
+
+/// Frames drawn by the GPU when there is one and it was asked for, else
+/// on the CPU, which decodes its own pages when first needed.
+struct Drawer {
+    gpu: Option<crate::gpu_frames::Frames>,
+    cpu: Option<Vec<ayatsuri_render::TexData>>,
+    width: usize,
+    ss: usize,
+}
+
+impl Drawer {
+    fn new(spec: &Spec, width: usize) -> Self {
+        let canvas_w = spec.model.canvas.width.max(1.0);
+        let gpu = spec
+            .gpu
+            .then(|| crate::gpu_frames::Frames::new(textures(&spec.pngs, canvas_w, width as u32)));
+        let gpu = gpu.flatten();
+        if spec.gpu && gpu.is_none() {
+            log::warn!("render: no GPU to draw frames with, drawing on the CPU");
+        }
+        Self { gpu, cpu: None, width, ss: if spec.aa { 2 } else { 1 } }
+    }
+
+    fn frame(&mut self, spec: &Spec, puppet: &ayatsuri_core::Puppet) -> (usize, usize, Vec<u8>) {
+        if let Some(g) = &mut self.gpu {
+            if let Some(f) = g.draw(puppet, self.width) {
+                return f;
+            }
+            log::warn!("render: the GPU could not draw a frame, drawing on the CPU");
+            self.gpu = None;
+        }
+        let (width, ss) = (self.width, self.ss);
+        let tex = self.cpu.get_or_insert_with(|| {
+            // pages at the detail the samples need
+            let canvas_w = spec.model.canvas.width.max(1.0);
+            textures(&spec.pngs, canvas_w, (width * ss) as u32)
+        });
+        crate::thumb::render_aa(puppet, tex, width, ss)
+    }
+}
+
+fn run(
+    spec: Spec,
+    tx: &Sender<Progress>,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
+    let width = spec.width.clamp(16, 8192) as usize;
+    let mut out = Out { spec: &spec, tx, stop, sink: None, path: PathBuf::new(), written: 0 };
+    let mut draw = Drawer::new(&spec, width);
+    match frames(&spec, &mut draw, &mut out) {
+        Ok(()) => {
+            match out.sink.take() {
+                Some(s) => s.finish()?,
+                None => return Err("nothing to render".into()),
+            }
+            Ok(trf(
+                "{frames} frames to {path}",
+                &[("frames", &out.written), ("path", &out.path.display())],
+            ))
+        }
+        Err(e) => {
+            if let Some(s) = out.sink.take() {
+                s.abandon(&out.path);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Every frame of the source, in order, to `out`.
+fn frames(spec: &Spec, draw: &mut Drawer, out: &mut Out<'_>) -> Result<(), String> {
     match spec.source {
         Source::Animation => {
             let anim = spec.anim.as_ref().ok_or("no scene to render")?;
@@ -926,8 +1063,8 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
                     }
                 }
                 puppet.update();
-                let (w, h, px) = crate::thumb::render_aa(&puppet, &tex, width, 2);
-                push(w, h, px, frames)?;
+                let (w, h, px) = draw.frame(spec, &puppet);
+                out.push(w, h, px, frames)?;
             }
         }
         Source::Timelapse => {
@@ -983,22 +1120,18 @@ fn run(spec: Spec, tx: &Sender<Progress>) -> Result<String, String> {
                     puppet.set_value(i, v);
                 }
                 puppet.update();
-                let (w, h, px) = crate::thumb::render_aa(&puppet, &tex, width, 2);
+                let (w, h, px) = draw.frame(spec, &puppet);
                 last = Some((w, h, px.clone()));
-                push(w, h, px, total)?;
+                out.push(w, h, px, total)?;
             }
             if let Some((w, h, px)) = last {
                 for _ in 0..hold {
-                    push(w, h, px.clone(), total)?;
+                    out.push(w, h, px.clone(), total)?;
                 }
             }
         }
     }
-    match sink {
-        Some(s) => s.finish()?,
-        None => return Err("nothing to render".into()),
-    }
-    Ok(trf("{frames} frames to {path}", &[("frames", &written), ("path", &out.display())]))
+    Ok(())
 }
 
 impl EditorUi {
@@ -1022,6 +1155,7 @@ impl EditorUi {
         win.marks.clear();
         win.picked = None;
         win.playing = false;
+        win.shown = true;
         self.render_win = Some(win);
     }
 
@@ -1044,13 +1178,18 @@ impl EditorUi {
                         if let Some(j) =
                             win.queue.iter_mut().find(|j| matches!(j.state, State::Running))
                         {
+                            j.took = j.started.map(|t| t.elapsed());
                             j.state = match r {
                                 Ok(m) => {
-                                    log::info!("render: {}: {m}", j.label);
-                                    State::Done(m)
+                                    log::info!("render: {}: {m}", j.label());
+                                    State::Done
+                                }
+                                Err(e) if e == STOPPED => {
+                                    log::info!("render: {} stopped", j.label());
+                                    State::Stopped
                                 }
                                 Err(e) => {
-                                    log::error!("render: {}: {e}", j.label);
+                                    log::error!("render: {}: {e}", j.label());
                                     State::Failed(e)
                                 }
                             };
@@ -1070,9 +1209,11 @@ impl EditorUi {
         {
             let (tx, rx) = channel();
             win.rx = Some(rx);
-            log::info!("render: {} started", j.label);
+            j.started = Some(std::time::Instant::now());
+            log::info!("render: {} started", j.label());
+            let stop = j.stop.clone();
             let spawned = std::thread::Builder::new().name("render".into()).spawn(move || {
-                let r = run(*spec, &tx);
+                let r = run(*spec, &tx, &stop);
                 let _ = tx.send(Progress::Done(r));
             });
             if spawned.is_err() {
@@ -1082,6 +1223,9 @@ impl EditorUi {
             }
         }
 
+        if !win.shown {
+            return;
+        }
         let Some(s) = &self.session else { return };
         // advance the preview while it plays, at the scene's own clock
         let now = std::time::Instant::now();
@@ -1244,6 +1388,20 @@ impl EditorUi {
                         ui.label(tr("Background"));
                         ui.add_enabled(win.preset.alpha(), egui::Checkbox::new(&mut win.transparent, tr("Transparent")));
                         ui.end_row();
+                        ui.label(tr("Draw with"));
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut win.gpu, true, tr("GPU"))
+                                .on_hover_text(tr("Frames are drawn by the graphics card and read back; the processor only encodes."));
+                            ui.selectable_value(&mut win.gpu, false, tr("CPU"))
+                                .on_hover_text(tr("Frames are drawn by the processor, on every core. Slow for a big canvas."));
+                        });
+                        ui.end_row();
+                        if !win.gpu {
+                            ui.label(tr("Smooth edges"));
+                            ui.checkbox(&mut win.aa, "")
+                                .on_hover_text(tr("Draws each frame at twice the size and averages it down: four times the work."));
+                            ui.end_row();
+                        }
                         ui.label(tr("Folder"));
                         ui.horizontal(|ui| {
                             let shown = win.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_else(|| tr("Choose…").to_string());
@@ -1263,7 +1421,8 @@ impl EditorUi {
                 // the player with what drives the frame beside it, the
                 // queue underneath
                 ui.vertical(|ui| {
-                    let (pw, fh) = win.fit(ui.available_width(), ui.available_height() - 70.0, s);
+                    let room = win.queue_h();
+                    let (pw, fh) = win.fit(ui.available_width(), ui.available_height() - room, s);
                     ui.horizontal_top(|ui| {
                         win.player_ui(ui, s, pw, fh);
                         ui.add_space(6.0);
@@ -1281,7 +1440,6 @@ impl EditorUi {
                 (_, Some(a)) => format!("{}-{}", s.name, a.name),
                 _ => s.name.clone(),
             };
-            let label = format!("{} · {}", stem, win.preset.label());
             let spec = Spec {
                 source: win.source,
                 preset: win.preset,
@@ -1292,8 +1450,10 @@ impl EditorUi {
                 hold: win.hold,
                 sps: win.sps,
                 physics: self.physics_on,
-                folder,
-                name: stem,
+                gpu: win.gpu,
+                aa: win.aa,
+                folder: folder.clone(),
+                name: stem.clone(),
                 model: s.puppet.model().clone(),
                 pngs: s.texture_pngs.clone(),
                 anim,
@@ -1301,17 +1461,31 @@ impl EditorUi {
                 timelapse: s.aom_path.as_ref().map(|p| crate::timelapse::Recorder::sidecar(p)),
                 ffmpeg: win.ffmpeg.clone().unwrap_or_else(|| PathBuf::from("ffmpeg")),
             };
-            win.queue.push(Job { label, done: 0, total: 0, state: State::Queued(Box::new(spec)) });
+            win.queue.push(Job {
+                name: stem,
+                preset: win.preset,
+                folder,
+                done: 0,
+                total: 0,
+                state: State::Queued(Box::new(spec)),
+                stop: Default::default(),
+                started: None,
+                took: None,
+            });
         }
         if pick_folder {
             self.pick_async(crate::panels::PickFor::RenderFolder, || {
                 rfd::FileDialog::new().set_title(tr("Render into which folder?")).pick_folder()
             });
         }
-        if !open {
-            // a job already running finishes on its own thread; its files
-            // land in the folder either way
-            self.render_win = None;
+        if !open && let Some(win) = &mut self.render_win {
+            // the queue goes on: jobs run and finish with the window shut,
+            // and are there when it opens again
+            win.shown = false;
+            win.playing = false;
+            win.fullscreen = false;
+            win.worker = None;
+            win.asked = None;
         }
     }
 }
@@ -1949,56 +2123,250 @@ impl RenderWin {
         );
     }
 
+    /// The height the queue takes under the player: its header and up to
+    /// two jobs, the rest scrolls.
+    fn queue_h(&self) -> f32 {
+        34.0 + self.queue.len().min(2) as f32 * (JOB_H + 6.0)
+    }
+
+    /// The jobs, one card each: name and format, a bar while it runs with
+    /// frames done and the time left, then how it ended. A running job
+    /// can be stopped, a finished one opened or cleared.
     fn queue_ui(&mut self, ui: &mut Ui) {
-        ui.strong(tr("Queue"));
-        if self.queue.is_empty() {
-            ui.weak(tr("Nothing queued yet."));
-        }
-        let mut remove = None;
-        for (i, j) in self.queue.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(&j.label);
-                match &j.state {
-                    State::Queued(_) => {
-                        ui.weak(tr("queued"));
-                        if ui.small_button("×").clicked() {
-                            remove = Some(i);
-                        }
-                    }
-                    State::Running => {
-                        let f = if j.total > 0 { j.done as f32 / j.total as f32 } else { 0.0 };
-                        ui.add(
-                            egui::ProgressBar::new(f)
-                                .desired_width(160.0)
-                                .text(format!("{}/{}", j.done, j.total)),
-                        );
-                    }
-                    State::Done(m) => {
-                        ui.colored_label(
-                            crate::theme::pal().warp_green,
-                            egui_phosphor::regular::CHECK,
-                        )
-                        .on_hover_text(m);
-                        if ui.small_button("×").clicked() {
-                            remove = Some(i);
-                        }
-                    }
-                    State::Failed(e) => {
-                        ui.colored_label(
-                            crate::theme::pal().accent,
-                            egui_phosphor::regular::WARNING,
-                        )
-                        .on_hover_text(e);
-                        if ui.small_button("×").clicked() {
-                            remove = Some(i);
-                        }
-                    }
+        use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
+        let pal = crate::theme::pal();
+        ui.horizontal(|ui| {
+            ui.strong(tr("Queue"));
+            let finished = self
+                .queue
+                .iter()
+                .any(|j| matches!(j.state, State::Done | State::Failed(_) | State::Stopped));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if finished && ui.small_button(tr("Clear finished")).clicked() {
+                    self.queue.retain(|j| matches!(j.state, State::Queued(_) | State::Running));
                 }
             });
+        });
+        if self.queue.is_empty() {
+            ui.weak(tr("Nothing queued yet."));
+            return;
         }
+        let mut remove = None;
+        let mut reveal = None;
+        egui::ScrollArea::vertical()
+            .id_salt("render-queue")
+            .max_height(self.queue_h() - 34.0)
+            .show(ui, |ui| {
+                for (i, j) in self.queue.iter().enumerate() {
+                    let w = ui.available_width();
+                    let (card, _) = ui.allocate_exact_size(vec2(w, JOB_H), Sense::hover());
+                    let p = ui.painter_at(card);
+                    p.rect(
+                        card,
+                        6.0,
+                        pal.panel_bg,
+                        egui::Stroke::new(1.0, pal.border),
+                        egui::StrokeKind::Inside,
+                    );
+                    let inner = card.shrink2(vec2(10.0, 8.0));
+                    // name, then the format in the faint colour after it
+                    let name_w = p
+                        .text(
+                            inner.min,
+                            Align2::LEFT_TOP,
+                            &j.name,
+                            FontId::proportional(13.0),
+                            pal.text,
+                        )
+                        .width();
+                    p.text(
+                        pos2(inner.min.x + name_w + 8.0, inner.min.y + 1.0),
+                        Align2::LEFT_TOP,
+                        tr(j.preset.label()),
+                        FontId::monospace(11.0),
+                        pal.text_faint,
+                    );
+                    // the button at the right end of the first line
+                    let btn = Rect::from_min_size(
+                        pos2(inner.max.x - 22.0, inner.min.y - 2.0),
+                        vec2(22.0, 20.0),
+                    );
+                    let mut sub = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(btn)
+                            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    );
+                    match &j.state {
+                        State::Running => {
+                            if icon_button(
+                                &mut sub,
+                                egui_phosphor::regular::STOP,
+                                false,
+                                tr("Stop"),
+                            )
+                            .clicked()
+                            {
+                                j.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                        State::Done => {
+                            let more = Rect::from_min_size(
+                                pos2(btn.min.x - 24.0, btn.min.y),
+                                vec2(22.0, 20.0),
+                            );
+                            if icon_button(&mut sub, egui_phosphor::regular::X, false, tr("Clear"))
+                                .clicked()
+                            {
+                                remove = Some(i);
+                            }
+                            let mut sub2 = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(more)
+                                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                            );
+                            if icon_button(
+                                &mut sub2,
+                                egui_phosphor::regular::FOLDER_SIMPLE,
+                                false,
+                                tr("Open the folder"),
+                            )
+                            .clicked()
+                            {
+                                reveal = Some(j.folder.clone());
+                            }
+                        }
+                        State::Queued(_) | State::Failed(_) | State::Stopped => {
+                            if icon_button(&mut sub, egui_phosphor::regular::X, false, tr("Clear"))
+                                .clicked()
+                            {
+                                remove = Some(i);
+                            }
+                        }
+                    }
+                    // second line: the bar and what it says
+                    let line2 = pos2(inner.min.x, inner.max.y);
+                    let small = FontId::proportional(11.0);
+                    match &j.state {
+                        State::Queued(_) => {
+                            p.text(
+                                line2,
+                                Align2::LEFT_BOTTOM,
+                                tr("Waiting"),
+                                small,
+                                pal.text_faint,
+                            );
+                        }
+                        State::Running => {
+                            let f = if j.total > 0 { j.done as f32 / j.total as f32 } else { 0.0 };
+                            let bar = Rect::from_min_size(
+                                pos2(inner.min.x, inner.min.y + 22.0),
+                                vec2(inner.width(), 4.0),
+                            );
+                            p.rect_filled(bar, 2.0, pal.track);
+                            let fill = Rect::from_min_size(
+                                bar.min,
+                                vec2(bar.width() * f.clamp(0.0, 1.0), 4.0),
+                            );
+                            p.rect_filled(fill, 2.0, pal.accent);
+                            let left = match (j.started, j.done) {
+                                (Some(t), d) if d > 0 && j.total > d => {
+                                    let per = t.elapsed().as_secs_f32() / d as f32;
+                                    Some(per * (j.total - d) as f32)
+                                }
+                                _ => None,
+                            };
+                            let mut words = trf(
+                                "{done} of {total} frames",
+                                &[("done", &j.done), ("total", &j.total)],
+                            );
+                            words.push_str(&format!(" · {:.0}%", f * 100.0));
+                            if let Some(left) = left {
+                                words.push_str(" · ");
+                                words.push_str(&trf("{time} left", &[("time", &span_short(left))]));
+                            }
+                            p.text(line2, Align2::LEFT_BOTTOM, words, small, pal.text_faint);
+                        }
+                        State::Done => {
+                            let took =
+                                j.took.map(|d| span_short(d.as_secs_f32())).unwrap_or_default();
+                            let words = trf(
+                                "{frames} frames in {time}",
+                                &[("frames", &j.done), ("time", &took)],
+                            );
+                            let dot = p.text(
+                                line2,
+                                Align2::LEFT_BOTTOM,
+                                egui_phosphor::regular::CHECK,
+                                small.clone(),
+                                pal.warp_green,
+                            );
+                            p.text(
+                                pos2(dot.max.x + 5.0, line2.y),
+                                Align2::LEFT_BOTTOM,
+                                words,
+                                small,
+                                pal.text_faint,
+                            );
+                        }
+                        State::Failed(e) => {
+                            let dot = p.text(
+                                line2,
+                                Align2::LEFT_BOTTOM,
+                                egui_phosphor::regular::WARNING,
+                                small.clone(),
+                                pal.accent,
+                            );
+                            let clip =
+                                Rect::from_min_max(pos2(dot.max.x + 5.0, inner.min.y), inner.max);
+                            p.with_clip_rect(clip).text(
+                                pos2(dot.max.x + 5.0, line2.y),
+                                Align2::LEFT_BOTTOM,
+                                e,
+                                small,
+                                pal.text_faint,
+                            );
+                            ui.allocate_rect(clip, Sense::hover()).on_hover_text(e);
+                        }
+                        State::Stopped => {
+                            p.text(
+                                line2,
+                                Align2::LEFT_BOTTOM,
+                                tr("Stopped"),
+                                small,
+                                pal.text_faint,
+                            );
+                        }
+                    }
+                    ui.add_space(6.0);
+                }
+            });
         if let Some(i) = remove {
             self.queue.remove(i);
         }
+        if let Some(folder) = reveal {
+            open_folder(&folder);
+        }
+    }
+}
+
+/// A job card's height.
+const JOB_H: f32 = 52.0;
+
+/// Show a folder in the system's file browser.
+fn open_folder(path: &std::path::Path) {
+    #[cfg(target_os = "linux")]
+    let cmd = "xdg-open";
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "windows")]
+    let cmd = "explorer";
+    if let Err(e) = std::process::Command::new(cmd)
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        log::warn!("could not open {}: {e}", path.display());
     }
 }
 
@@ -2081,6 +2449,8 @@ mod tests {
             hold: 1.0,
             sps: 6.0,
             physics: false,
+            gpu: std::env::var("AYATSURI_EXPORT_CPU").is_err(),
+            aa: true,
             folder: out,
             name: "timelapse-test".into(),
             model: payload.model,
@@ -2092,7 +2462,7 @@ mod tests {
         };
         let (tx, rx) = channel();
         let t = std::time::Instant::now();
-        let r = run(spec, &tx);
+        let r = run(spec, &tx, &std::sync::atomic::AtomicBool::new(false));
         let mut frames = 0;
         while let Ok(p) = rx.try_recv() {
             if let Progress::Frames(a, _) = p {

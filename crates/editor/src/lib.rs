@@ -12,6 +12,7 @@ mod discord;
 pub mod dock;
 mod export;
 mod ffmpeg;
+mod gpu_frames;
 mod gpu_view;
 pub(crate) mod i18n;
 pub mod logging;

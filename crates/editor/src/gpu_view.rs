@@ -95,14 +95,26 @@ pub fn callback(
     scale: f32,
     pixels_per_point: f32,
 ) -> egui::PaintCallback {
-    let c = puppet.model().canvas;
     let w = ((rect.width() * pixels_per_point) as u32).max(1);
     let h = ((rect.height() * pixels_per_point) as u32).max(1);
     let sx = scale * pixels_per_point / w as f32 * 2.0;
     let sy = -(scale * pixels_per_point / h as f32 * 2.0);
     let ox = (screen_origin.x - rect.min.x) * pixels_per_point / w as f32 * 2.0 - 1.0;
     let oy = 1.0 - (screen_origin.y - rect.min.y) * pixels_per_point / h as f32 * 2.0;
+    let mut packet = packet(puppet, w, h, [sx, sy, ox, oy]);
+    packet.textures = textures;
+    packet.uploaded = Some(uploaded);
+    packet.pages = pages;
+    packet.pages_uploaded = Some(pages_uploaded);
+    packet.drop_pages = drop_pages;
+    egui_wgpu::Callback::new_paint_callback(rect, ModelPaint { packet: Mutex::new(Some(packet)) })
+}
 
+/// The frame as the renderer takes it: every drawable's triangles in
+/// order, mask sets where they change, and how canvas pixels map to the
+/// target. Textures and pages are left for the caller to attach.
+pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
+    let c = puppet.model().canvas;
     let mut verts = Vec::new();
     let mut indices = Vec::new();
     let mut cmds = Vec::new();
@@ -152,18 +164,17 @@ pub fn callback(
         cmds.push(Cmd::Draw { indices: range, texture: d.texture, blend, mask });
     }
 
-    let packet = Packet {
+    Packet {
         vertices: verts,
         indices,
         cmds,
-        to_ndc: [sx, sy, ox, oy],
+        to_ndc,
         width: w,
         height: h,
-        textures,
-        uploaded: Some(uploaded),
-        pages,
-        pages_uploaded: Some(pages_uploaded),
-        drop_pages,
-    };
-    egui_wgpu::Callback::new_paint_callback(rect, ModelPaint { packet: Mutex::new(Some(packet)) })
+        textures: None,
+        uploaded: None,
+        pages: None,
+        pages_uploaded: None,
+        drop_pages: None,
+    }
 }

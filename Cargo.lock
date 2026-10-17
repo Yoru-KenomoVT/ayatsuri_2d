@@ -176,6 +176,7 @@ dependencies = [
  "log",
  "miniz_oxide 0.9.1",
  "openmoc3",
+ "pollster 0.4.0",
  "rfd",
  "rmp-serde",
  "serde",
