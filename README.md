@@ -189,7 +189,7 @@ Save often, keep backups of models you care about, and please
 Not built yet:
 
 - skinning, model templates and the temporary deform tool;
-- an expression editor and the full timeline (curve editor, graph view);
+- an expression editor;
 - the embeddable runtime's C ABI (below).
 
 See the [changelog](CHANGELOG.md) for what each release added.
@@ -346,7 +346,9 @@ terms. See [`docs/provenance.md`](docs/provenance.md).
 Standing on the shoulders of
 [Sakura Motion / PurismCore](https://github.com/SakuraMotion/PurismCore) and
 [OpenL2D](https://github.com/OpenL2D/moc3ingbird), both of which corrected our
-own findings more than once.
+own findings more than once. The Timeline's layout and key glyphs follow
+[EffectCraft](https://getartcraft.com/apps/effectcraft)'s timeline and graph
+editor (MIT or Apache-2.0).
 
 ---
 

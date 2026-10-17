@@ -38,6 +38,32 @@
   at a time instead of all of them. Model Statistics shows what is
   resident. `cargo xtask soak <model.aom> [seconds]` runs the evaluation,
   undo, decode and physics paths headless and fails if memory grows.
+- **The Timeline is a dope sheet in the After Effects layout.** A column
+  of names on the left: the scene, the parameter folders with their
+  parameters (every one, or only the animated ones), and the parts with
+  an opacity curve. Each row has a value that drags or types, and
+  previous key, key here, next key buttons; the key button fills when the
+  playhead sits on a key and adds or removes one. Keys in the lanes are
+  drawn by interpolation (a half disc for auto smooth, a diamond for
+  linear, a square for a step, an hourglass for a bezier); they select,
+  Shift-select, box select, drag by whole frames with Shift snapping to
+  other keys and the playhead, Ctrl-click to flip linear and auto, and
+  right-click for the interpolation, select the row or delete. A folder
+  row sums up its children's keys and drags them together. Above the
+  lanes a navigator bar zooms and scrolls (Alt with the wheel zooms at
+  the pointer, a slider in the footer too), a frame ruler scrubs, and the
+  work area has a bar with handles. The scene row's bar drags to change
+  the length. Alt with an arrow nudges the selected keys a frame (ten
+  with Shift), Delete removes them, Ctrl+A takes them all, and Insert
+  frame / Remove frame ripple the scene at the playhead. Key edits have
+  their own undo, one step per drag, ahead of the model's history while
+  the Animation workspace is up. The chart button opens a **graph
+  editor** in place of the lanes: the value curves of the selected keys'
+  parameters (else the selected parameter, else every animated curve)
+  over a fitted axis with a grid, square keys that drag in time and
+  value, bezier handles on selected keys that write the key's own
+  handles, and pills for the interpolation. The layout and the key
+  glyphs follow EffectCraft's timeline (MIT or Apache-2.0).
 - **Export Animation** and **Export Timelapse** open the new **Render**
   window: formats down the left (GIF, PNG sequence, MP4, WebM, MOV),
   settings in the middle (scene, an expression on top, work area, frame
