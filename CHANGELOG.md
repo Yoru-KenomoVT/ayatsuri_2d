@@ -76,7 +76,8 @@
   of cards: name and format, a bar with frames done and the time left,
   a stop button while a job runs, how it ended, and a button to open the
   folder; it keeps going with the window closed and is there when it
-  opens again.
+  opens again. With the eye on, a timelapse video carries the change
+  marks the player shows, drawn into each frame.
 - **Export Model** replaces Export Image and Export as moc3: one window
   with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
