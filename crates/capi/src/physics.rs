@@ -4,10 +4,12 @@
 use crate::error::{Status, guard, set_error};
 use crate::handle::{Model, model, model_mut};
 
-/// Advance the model by `dt` seconds and evaluate it: physics steps (when
-/// the model has a rig and it is on), parameters resolve, deformers and
-/// meshes move, draw order sorts. After this `ay2d_drawables` is current.
-/// `dt` of zero evaluates without moving physics.
+/// Advance the model by `dt` seconds and evaluate it: playing motions and
+/// the shown expression write their parameters over the pose, physics
+/// steps (when the model has a rig and it is on), parameters resolve,
+/// deformers and meshes move, draw order sorts. After this
+/// `ay2d_drawables` and `ay2d_motion_events` are current. `dt` of zero
+/// evaluates without moving motions or physics.
 ///
 /// # Safety
 /// `m` is a live handle.
@@ -22,6 +24,16 @@ pub unsafe extern "C" fn ay2d_update(m: *mut Model, dt: f32) -> Status {
             set_error(format!("dt {dt} is not a span of time"));
             return Status::Range;
         }
+        model.player.advance(dt);
+        model.exprs.advance(dt);
+        model.player.apply(
+            &mut model.puppet,
+            &model.scenes,
+            &model.comps,
+            &model.param_index,
+            &model.part_index,
+        );
+        model.exprs.apply(&mut model.puppet);
         if model.physics_on && dt > 0.0 && model.puppet.has_physics() {
             model.puppet.step_physics(dt);
         }

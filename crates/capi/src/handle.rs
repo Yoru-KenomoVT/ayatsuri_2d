@@ -2,9 +2,11 @@
 //! before it drives it. Ids are handed out as NUL-terminated strings that
 //! live as long as the model, so a binding reads them once.
 
+use std::collections::HashMap;
 use std::ffi::{CString, c_char};
 
 use ayatsuri_core::Puppet;
+use ayatsuri_format::{Animation, Composition};
 
 use crate::error::{Status, guard, set_error};
 
@@ -19,6 +21,13 @@ pub struct Model {
     /// Physics runs on update while this is set; on by default when the
     /// model has a rig.
     pub(crate) physics_on: bool,
+    /// The file's scenes and compositions, for the motion player.
+    pub(crate) scenes: Vec<Animation>,
+    pub(crate) comps: Vec<Composition>,
+    pub(crate) param_index: HashMap<String, usize>,
+    pub(crate) part_index: HashMap<String, usize>,
+    pub(crate) player: crate::motions::Player,
+    pub(crate) exprs: crate::expressions::Expressions,
     /// Where each visible drawable's data sits after the last update, in
     /// draw order, so `ay2d_drawables` hands out views without a sort.
     pub(crate) order: Vec<usize>,
@@ -118,6 +127,17 @@ pub unsafe extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
         let param_ids = cstrings(m.parameters.iter().map(|p| p.id.as_str()));
         let part_ids = cstrings(m.parts.iter().map(|p| p.id.as_str()));
         let mesh_ids = cstrings(m.art_meshes.iter().map(|a| a.id.as_str()));
+        let param_index: HashMap<String, usize> =
+            m.parameters.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect();
+        let part_index: HashMap<String, usize> =
+            m.parts.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect();
+        let player = crate::motions::Player::new(
+            &payload.animations,
+            &payload.compositions,
+            &param_index,
+            &part_index,
+        );
+        let exprs = crate::expressions::Expressions::new(&payload.expressions, &param_index);
         let mut puppet = Puppet::new(payload.model);
         puppet.update();
         let physics_on = puppet.has_physics();
@@ -128,6 +148,12 @@ pub unsafe extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
             part_ids,
             mesh_ids,
             physics_on,
+            scenes: payload.animations,
+            comps: payload.compositions,
+            param_index,
+            part_index,
+            player,
+            exprs,
             order: Vec::new(),
         };
         model.refresh_order();

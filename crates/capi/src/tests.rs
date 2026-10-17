@@ -241,6 +241,8 @@ fn the_header_names_every_entry_point() {
         include_str!("physics.rs"),
         include_str!("draw.rs"),
         include_str!("textures.rs"),
+        include_str!("motions.rs"),
+        include_str!("expressions.rs"),
     ];
     let mut missing = Vec::new();
     for src in sources {
@@ -254,4 +256,109 @@ fn the_header_names_every_entry_point() {
         }
     }
     assert!(missing.is_empty(), "not in ayatsuri.h: {missing:?}; run cargo xtask capi");
+}
+
+#[test]
+fn motions_play_fade_and_fire_events() {
+    let m = load();
+    unsafe {
+        assert_eq!(ay2d_motion_count(m), 2, "the scene and the composition");
+        assert_eq!(cstr(ay2d_motion_id(m, 0)), "wave");
+        assert_eq!(cstr(ay2d_motion_id(m, 1)), "both");
+        let name = CString::new("both").unwrap();
+        assert_eq!(ay2d_motion_index(m, name.as_ptr()), 1);
+        let mut info = MotionInfo::default();
+        assert_eq!(ay2d_motion_info(m, 0, &raw mut info), Status::Ok);
+        assert_eq!((info.duration, info.event_count, info.composition), (1.0, 1, 0));
+        assert_eq!(info.fade_in, -1.0, "no authored fade");
+        assert_eq!(ay2d_motion_info(m, 1, &raw mut info), Status::Ok);
+        assert_eq!((info.duration, info.composition), (2.0, 1));
+        assert_eq!(ay2d_motion_playing(m), -1);
+        assert_eq!(ay2d_motion_play(m, 0, 0, 0.0), Status::Ok, "full weight at once");
+        assert_eq!(ay2d_motion_playing(m), 0);
+        let mut out = [0.0f32; 2];
+        // half a second in, the curve says 0.5 and the event fired
+        let mut fired = 0;
+        for _ in 0..30 {
+            ay2d_update(m, 1.0 / 60.0);
+            let mut ev = [Event { motion: 0, time: 0.0, name: std::ptr::null() }];
+            let n = ay2d_motion_events(m, ev.as_mut_ptr(), 1);
+            if n > 0 {
+                fired += n;
+                assert_eq!(cstr(ev[0].name), "clap");
+                assert_eq!(ev[0].motion, 0);
+            }
+        }
+        assert_eq!(fired, 1, "the event fired exactly once");
+        ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+        assert!((out[0] - 0.5).abs() < 0.02, "the motion drives ParamA: {}", out[0]);
+        assert!((ay2d_motion_time(m) - 0.5).abs() < 0.02);
+        // play through and hold the last frame
+        for _ in 0..60 {
+            ay2d_update(m, 1.0 / 60.0);
+        }
+        assert_eq!(ay2d_motion_finished(m), 1);
+        ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+        assert!((out[0] - 1.0).abs() < 1e-4, "held at the end: {}", out[0]);
+        // seek back, slower
+        assert_eq!(ay2d_motion_seek(m, 0.0), Status::Ok);
+        assert_eq!(ay2d_motion_set_speed(m, 0.5), Status::Ok);
+        for _ in 0..60 {
+            ay2d_update(m, 1.0 / 60.0);
+        }
+        assert!((ay2d_motion_time(m) - 0.5).abs() < 0.02, "half speed: {}", ay2d_motion_time(m));
+        // the composition plays the scene at half speed too
+        assert_eq!(ay2d_motion_play(m, 1, 0, 0.0), Status::Ok);
+        for _ in 0..60 {
+            ay2d_update(m, 1.0 / 60.0);
+        }
+        ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+        assert!((out[0] - 0.5).abs() < 0.03, "composition at one second: {}", out[0]);
+        // a fade out over half a second leaves the host's value in charge
+        assert_eq!(ay2d_motion_stop(m, 0.5), Status::Ok);
+        assert_eq!(ay2d_motion_playing(m), -1);
+        let idx = [0u32];
+        for _ in 0..40 {
+            let v = [0.0f32];
+            ay2d_set_parameters(m, idx.as_ptr(), v.as_ptr(), 1);
+            ay2d_update(m, 1.0 / 60.0);
+        }
+        ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+        assert_eq!(out[0], 0.0, "faded out: the host's value stands");
+        assert_eq!(ay2d_motion_play(m, 5, 0, 0.0), Status::Range);
+        assert_eq!(ay2d_motion_seek(m, 0.0), Status::Range, "nothing playing");
+        ay2d_free(m);
+    }
+}
+
+#[test]
+fn expressions_lay_over_the_pose() {
+    let m = load();
+    unsafe {
+        assert_eq!(ay2d_expression_count(m), 1);
+        assert_eq!(cstr(ay2d_expression_id(m, 0)), "smile");
+        let name = CString::new("smile").unwrap();
+        assert_eq!(ay2d_expression_index(m, name.as_ptr()), 0);
+        assert_eq!(ay2d_expression_shown(m), -1);
+        let idx = [0u32];
+        let v = [0.5f32];
+        ay2d_set_parameters(m, idx.as_ptr(), v.as_ptr(), 1);
+        assert_eq!(ay2d_expression_set(m, 0, -1.0), Status::Ok, "authored fade: none");
+        assert_eq!(ay2d_expression_shown(m), 0);
+        ay2d_update(m, 0.0);
+        let mut out = [0.0f32; 2];
+        ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+        assert!((out[0] - 0.75).abs() < 1e-5, "0.5 plus the expression's 0.25: {}", out[0]);
+        // cleared over a second: half way, half the add
+        assert_eq!(ay2d_expression_clear(m, 1.0), Status::Ok);
+        assert_eq!(ay2d_expression_shown(m), -1);
+        for _ in 0..30 {
+            ay2d_set_parameters(m, idx.as_ptr(), v.as_ptr(), 1);
+            ay2d_update(m, 1.0 / 60.0);
+        }
+        ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+        assert!((out[0] - 0.625).abs() < 0.02, "half faded: {}", out[0]);
+        assert_eq!(ay2d_expression_set(m, 3, 0.0), Status::Range);
+        ay2d_free(m);
+    }
 }

@@ -5,7 +5,10 @@ use ayatsuri_format::model::{
     ArtMesh, Binding, BindingAxis, Model as Rig, Parameter, Part, PhysicsGroup, PhysicsInput,
     PhysicsIo, PhysicsNode, PhysicsOutput, PhysicsRange, PhysicsRig, flags,
 };
-use ayatsuri_format::payload::AomPayload;
+use ayatsuri_format::payload::{
+    Animation, AomPayload, Composition, Curve, CurveTarget, DisplayInfo, Event, Expression,
+    ExpressionBlend, ExpressionParam, Interp, Key, Layer, LayerSource,
+};
 
 /// A canvas with one parameter that slides a quad right, a second the rig
 /// drives, one part and one texture page.
@@ -105,9 +108,69 @@ pub fn small_aom() -> Vec<u8> {
             norm_angle: PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
         }],
     });
+    // a one-second scene sliding ParamA from 0 to 1, with an event half way
+    let key = |t: f32, v: f32| Key { time: t, value: v, interp: Interp::Linear };
+    let wave = Animation {
+        name: "wave".into(),
+        fps: 30.0,
+        duration: 1.0,
+        looped: false,
+        curves: vec![Curve {
+            target: CurveTarget::Parameter,
+            id: "ParamA".into(),
+            keys: vec![key(0.0, 0.0), key(1.0, 1.0)],
+            fade_in: None,
+            fade_out: None,
+        }],
+        events: vec![Event { time: 0.5, value: "clap".into() }],
+        ..Default::default()
+    };
+    // a composition that plays the scene at half speed over two seconds
+    let both = Composition {
+        name: "both".into(),
+        fps: 30.0,
+        duration: 2.0,
+        looped: false,
+        work_area: None,
+        layers: vec![Layer {
+            source: LayerSource::Scene("wave".into()),
+            start: 0.0,
+            in_point: 0.0,
+            out_point: 1.0,
+            speed: 0.5,
+            weight: 1.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            enabled: true,
+            additive: false,
+            pan: 0.0,
+        }],
+    };
+    let smile = Expression {
+        name: "smile".into(),
+        fade_in: Some(0.0),
+        fade_out: Some(0.0),
+        params: vec![ExpressionParam {
+            id: "ParamA".into(),
+            value: 0.25,
+            blend: ExpressionBlend::Add,
+        }],
+    };
+    let display = DisplayInfo {
+        param_names: vec!["Slide".into(), "Sway".into()],
+        groups: vec![("Motion".into(), vec![0, 1])],
+        part_names: vec!["Body".into()],
+        mesh_names: vec!["The quad".into()],
+        model_groups: Some(vec![("Parameter".into(), "LipSync".into(), vec!["ParamA".into()])]),
+        ..Default::default()
+    };
     let payload = AomPayload {
         model,
         textures: vec![serde_bytes::ByteBuf::from(b"not really a png".to_vec())],
+        display: Some(display),
+        animations: vec![wave],
+        compositions: vec![both],
+        expressions: vec![smile],
         ..Default::default()
     };
     ayatsuri_format::write(&payload).unwrap_or_default()

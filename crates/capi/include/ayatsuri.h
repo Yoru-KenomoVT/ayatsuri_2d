@@ -109,6 +109,49 @@ typedef struct ay2d_canvas_info {
   float origin_y;
 } ay2d_canvas_info;
 
+/*
+ Facts about a clip, for a host's motion list.
+ */
+typedef struct ay2d_motion_info {
+  /*
+   Seconds.
+   */
+  float duration;
+  float fps;
+  /*
+   1 when the clip was authored to loop.
+   */
+  int32_t looped;
+  /*
+   1 when the clip is a composition rather than a scene.
+   */
+  int32_t composition;
+  /*
+   Authored fades in seconds; -1 when the clip leaves them to the player.
+   */
+  float fade_in;
+  float fade_out;
+  uint32_t event_count;
+} ay2d_motion_info;
+
+/*
+ An event a motion fired since the last update.
+ */
+typedef struct ay2d_event {
+  /*
+   The motion that fired it, by index.
+   */
+  uint32_t motion;
+  /*
+   Its time on the motion's clock, in seconds.
+   */
+  float time;
+  /*
+   The event's text, NUL-terminated, alive as long as the model.
+   */
+  const char *name;
+} ay2d_event;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -155,6 +198,57 @@ enum ay2d_status ay2d_mesh_geometry(const struct ay2d_model *m,
  did not. The pointer is good until the next failing call on the thread.
  */
 const char *ay2d_last_error(void);
+
+/*
+ How many expressions the model carries.
+
+ # Safety
+ `m` is a live handle.
+ */
+uint32_t ay2d_expression_count(const struct ay2d_model *m);
+
+/*
+ An expression's name, NUL-terminated, alive as long as the model.
+
+ # Safety
+ `m` is a live handle.
+ */
+const char *ay2d_expression_id(const struct ay2d_model *m, uint32_t i);
+
+/*
+ The index of the expression with this name, or -1.
+
+ # Safety
+ `m` is a live handle; `name` is a NUL-terminated string.
+ */
+int32_t ay2d_expression_index(const struct ay2d_model *m, const char *name);
+
+/*
+ Show expression `i`: the one shown before fades out over its own fade
+ while this one fades in over `fade_in` seconds (below zero: its
+ authored fade or the spec's second; zero: at once).
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_expression_set(struct ay2d_model *m, uint32_t i, float fade_in);
+
+/*
+ Fade the shown expression out over `fade_out` seconds (below zero: its
+ own fade or the spec's second; zero: at once).
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_expression_clear(struct ay2d_model *m, float fade_out);
+
+/*
+ The expression shown (the last one set and not cleared), or -1.
+
+ # Safety
+ `m` is a live handle.
+ */
+int32_t ay2d_expression_shown(const struct ay2d_model *m);
 
 /*
  Load a model from the bytes of an `.aom` file. The bytes are read, not
@@ -252,6 +346,114 @@ const char *ay2d_mesh_id(const struct ay2d_model *m, uint32_t i);
 int32_t ay2d_parameter_index(const struct ay2d_model *m, const char *id);
 
 /*
+ How many motions the model carries: its scenes, then its compositions.
+
+ # Safety
+ `m` is a live handle.
+ */
+uint32_t ay2d_motion_count(const struct ay2d_model *m);
+
+/*
+ A motion's name, NUL-terminated, alive as long as the model. Null past
+ the count.
+
+ # Safety
+ `m` is a live handle.
+ */
+const char *ay2d_motion_id(const struct ay2d_model *m, uint32_t i);
+
+/*
+ The index of the motion with this name, or -1.
+
+ # Safety
+ `m` is a live handle; `name` is a NUL-terminated string.
+ */
+int32_t ay2d_motion_index(const struct ay2d_model *m, const char *name);
+
+/*
+ Facts about motion `i`.
+
+ # Safety
+ `m` is a live handle; `out` points at one writable info.
+ */
+enum ay2d_status ay2d_motion_info(const struct ay2d_model *m,
+                                  uint32_t i,
+                                  struct ay2d_motion_info *out);
+
+/*
+ Start motion `i` from its beginning. Whatever was playing fades out
+ over its own fade (or the spec's second) while this one fades in over
+ `fade_in` seconds; `fade_in` below zero takes the motion's authored
+ fade, zero starts it at full weight. `looping` repeats it; zero plays
+ it once and holds its last frame.
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_motion_play(struct ay2d_model *m, uint32_t i, int32_t looping, float fade_in);
+
+/*
+ Fade every playing motion out over `fade_out` seconds (below zero: the
+ motion's own fade or the spec's second; zero: at once).
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_motion_stop(struct ay2d_model *m, float fade_out);
+
+/*
+ The motion in front (the last one started and not stopped), or -1.
+
+ # Safety
+ `m` is a live handle.
+ */
+int32_t ay2d_motion_playing(const struct ay2d_model *m);
+
+/*
+ 1 when the motion in front played once through and now holds its last
+ frame; 0 while it runs, loops, or when nothing plays.
+
+ # Safety
+ `m` is a live handle.
+ */
+int32_t ay2d_motion_finished(const struct ay2d_model *m);
+
+/*
+ Where the motion in front is on its clock, in seconds; -1 when nothing
+ plays.
+
+ # Safety
+ `m` is a live handle.
+ */
+float ay2d_motion_time(const struct ay2d_model *m);
+
+/*
+ Put the motion in front at `t` seconds on its clock.
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_motion_seek(struct ay2d_model *m, float t);
+
+/*
+ Play the motion in front at `speed` times its rate (1 is as authored).
+
+ # Safety
+ `m` is a live handle.
+ */
+enum ay2d_status ay2d_motion_set_speed(struct ay2d_model *m, float speed);
+
+/*
+ The events motions fired during the last `ay2d_update`, into `out`.
+ Returns how many there were; with `n` smaller only the first `n` are
+ written. Poll after each update; the list is replaced by the next one.
+
+ # Safety
+ `m` is a live handle; `out` holds `n` writable events, or `n` is zero.
+ */
+uint32_t ay2d_motion_events(const struct ay2d_model *m, struct ay2d_event *out, size_t n);
+
+/*
  Every parameter's minimum, maximum and default, by index. Each array
  holds `ay2d_parameter_count` floats; any may be null to skip it.
 
@@ -319,10 +521,12 @@ enum ay2d_status ay2d_set_part_opacities(struct ay2d_model *m,
                                          size_t n);
 
 /*
- Advance the model by `dt` seconds and evaluate it: physics steps (when
- the model has a rig and it is on), parameters resolve, deformers and
- meshes move, draw order sorts. After this `ay2d_drawables` is current.
- `dt` of zero evaluates without moving physics.
+ Advance the model by `dt` seconds and evaluate it: playing motions and
+ the shown expression write their parameters over the pose, physics
+ steps (when the model has a rig and it is on), parameters resolve,
+ deformers and meshes move, draw order sorts. After this
+ `ay2d_drawables` and `ay2d_motion_events` are current. `dt` of zero
+ evaluates without moving motions or physics.
 
  # Safety
  `m` is a live handle.

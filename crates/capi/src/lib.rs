@@ -8,9 +8,11 @@
 
 mod draw;
 mod error;
+mod expressions;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 mod handle;
+mod motions;
 mod params;
 mod parts;
 mod physics;
@@ -23,10 +25,19 @@ pub use draw::{
     Drawable, ay2d_drawables, ay2d_mesh_geometry,
 };
 pub use error::{Status, ay2d_last_error};
+pub use expressions::{
+    ay2d_expression_clear, ay2d_expression_count, ay2d_expression_id, ay2d_expression_index,
+    ay2d_expression_set, ay2d_expression_shown,
+};
 pub use handle::{
     Canvas, Model, ay2d_canvas, ay2d_free, ay2d_load, ay2d_mesh_count, ay2d_mesh_id,
     ay2d_parameter_count, ay2d_parameter_id, ay2d_parameter_index, ay2d_part_count, ay2d_part_id,
     ay2d_texture_count,
+};
+pub use motions::{
+    Event, MotionInfo, ay2d_motion_count, ay2d_motion_events, ay2d_motion_finished, ay2d_motion_id,
+    ay2d_motion_index, ay2d_motion_info, ay2d_motion_play, ay2d_motion_playing, ay2d_motion_seek,
+    ay2d_motion_set_speed, ay2d_motion_stop, ay2d_motion_time,
 };
 pub use params::{
     ay2d_get_parameters, ay2d_parameter_ranges, ay2d_set_all_parameters, ay2d_set_parameters,

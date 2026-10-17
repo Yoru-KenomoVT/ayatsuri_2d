@@ -29,6 +29,8 @@ item_types = ["constants", "globals", "enums", "structs", "opaque", "typedefs", 
 "Drawable" = "ay2d_drawable"
 "Geometry" = "ay2d_geometry"
 "Canvas" = "ay2d_canvas_info"
+"MotionInfo" = "ay2d_motion_info"
+"Event" = "ay2d_event"
 
 [enum]
 rename_variants = "ScreamingSnakeCase"
