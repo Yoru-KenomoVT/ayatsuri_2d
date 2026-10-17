@@ -1421,6 +1421,9 @@ impl EditorUi {
                 // the player with what drives the frame beside it, the
                 // queue underneath
                 ui.vertical(|ui| {
+                    // the queue gets exactly its room under the player, never
+                    // more: a column that asked for more each frame would grow
+                    // the window without end
                     let room = win.queue_h();
                     let (pw, fh) = win.fit(ui.available_width(), ui.available_height() - room, s);
                     ui.horizontal_top(|ui| {
@@ -1428,8 +1431,15 @@ impl EditorUi {
                         ui.add_space(6.0);
                         win.side_panel(ui, s, STRIP_H + fh + RenderWin::bar_h(pw), SIDE_W);
                     });
-                    ui.add_space(8.0);
-                    win.queue_ui(ui);
+                    let w = pw + 6.0 + SIDE_W;
+                    let (slot, _) = ui.allocate_exact_size(egui::vec2(w, room), egui::Sense::hover());
+                    let mut q = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(slot.shrink2(egui::vec2(0.0, 4.0)))
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
+                    q.set_clip_rect(slot);
+                    win.queue_ui(&mut q);
                 });
             });
         });
@@ -2126,7 +2136,11 @@ impl RenderWin {
     /// The height the queue takes under the player: its header and up to
     /// two jobs, the rest scrolls.
     fn queue_h(&self) -> f32 {
-        34.0 + self.queue.len().min(2) as f32 * (JOB_H + 6.0)
+        8.0 + 28.0 + self.queue_body_h()
+    }
+
+    fn queue_body_h(&self) -> f32 {
+        if self.queue.is_empty() { 22.0 } else { self.queue.len().min(2) as f32 * (JOB_H + 6.0) }
     }
 
     /// The jobs, one card each: name and format, a bar while it runs with
@@ -2155,7 +2169,8 @@ impl RenderWin {
         let mut reveal = None;
         egui::ScrollArea::vertical()
             .id_salt("render-queue")
-            .max_height(self.queue_h() - 34.0)
+            .min_scrolled_height(0.0)
+            .max_height(self.queue_body_h())
             .show(ui, |ui| {
                 for (i, j) in self.queue.iter().enumerate() {
                     let w = ui.available_width();
