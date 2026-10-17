@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ayatsuri_format::{Animation, CurveTarget, Interp, Key};
 use egui::{
-    Align, Align2, Color32, CursorIcon, FontId, Id, Layout, Painter, Pos2, Rect, Sense, Shape,
-    Stroke, Ui, UiBuilder, pos2, vec2,
+    Align, Align2, Color32, CursorIcon, FontId, Id, Layout, Modifiers, Painter, Pos2, Rect, Sense,
+    Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
 };
 
 use crate::i18n::tr;
@@ -99,6 +99,32 @@ fn half_of(i: Interp) -> Half {
     }
 }
 
+/// One key, named by what its curve drives and the frame it sits on, so
+/// a selection survives the keys being redrawn.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct KeyRef {
+    target: u8,
+    id: String,
+    frame: i64,
+}
+
+fn tgt(t: CurveTarget) -> u8 {
+    match t {
+        CurveTarget::Parameter => 0,
+        CurveTarget::PartOpacity => 1,
+        CurveTarget::Model => 2,
+    }
+}
+
+/// A drag of the selected keys: where it started and how many frames it
+/// has moved them so far, polled from the pointer each frame because the
+/// key widgets change ids as they move.
+struct KeyDrag {
+    origin_x: f32,
+    anchor: f32,
+    applied: i64,
+}
+
 pub struct Timeline {
     /// Pixels per second; None fits the whole scene.
     pps: Option<f32>,
@@ -112,6 +138,11 @@ pub struct Timeline {
     show_all: bool,
     editing: Option<(Id, String)>,
     scrub: Option<f32>,
+    selected: BTreeSet<KeyRef>,
+    drag: Option<KeyDrag>,
+    box_from: Option<Pos2>,
+    /// The last click landed in the palette, so Delete and Escape are its.
+    focused: bool,
 }
 
 impl Default for Timeline {
@@ -125,6 +156,10 @@ impl Default for Timeline {
             show_all: true,
             editing: None,
             scrub: None,
+            selected: BTreeSet::new(),
+            drag: None,
+            box_from: None,
+            focused: false,
         }
     }
 }
@@ -304,6 +339,27 @@ enum Edit {
     Value(usize, f32),
     PartValue(usize, f32),
     Duration(f32),
+    /// Add a key at the playhead on this curve, or remove the one there.
+    ToggleKey(CurveTarget, String),
+    /// Jump to the previous (false) or next (true) key of a curve.
+    JumpKey(CurveTarget, String, bool),
+    /// Move the selected keys by whole frames.
+    Move(i64),
+    /// Give the selected keys an interpolation.
+    SetInterp(Interp),
+    Delete,
+}
+
+const INTERPS: [(&str, Interp); 5] = [
+    ("Auto smooth", Interp::Auto),
+    ("Linear", Interp::Linear),
+    ("Stepped", Interp::Stepped),
+    ("Inverse stepped", Interp::InverseStepped),
+    ("Bezier", Interp::Bezier { out: (0.0, 0.0), into: (0.0, 0.0) }),
+];
+
+fn same_kind(a: Interp, b: Interp) -> bool {
+    std::mem::discriminant(&a) == std::mem::discriminant(&b)
 }
 
 impl Timeline {
@@ -807,6 +863,16 @@ impl Timeline {
         let name_font = FontId::proportional(11.5);
         let playhead_frame = (*tp.time * fps).round() as i64;
         let mut toggles: Vec<(String, bool)> = Vec::new();
+        // the empty lane goes in first so the keys drawn over it win the pointer
+        ui.set_clip_rect(rows_right.intersect(outer_clip));
+        let bg = ui.interact(rows_right, ui.id().with("tl-lanes"), Sense::click_and_drag());
+        ui.set_clip_rect(rect.intersect(outer_clip));
+        let mods = ui.input(|i| i.modifiers);
+        let mut key_hits: Vec<(KeyRef, Pos2)> = Vec::new();
+        let mut snap_times: Vec<f32> = vec![0.0, duration, *tp.time];
+        if let Some((w0, w1)) = anim.work_area {
+            snap_times.extend([w0, w1]);
+        }
         for (i, row) in rows.iter().enumerate() {
             let y = rows_top - self.scroll_y + i as f32 * ROW_H;
             if y + ROW_H < rows_top || y > rows_bottom {
@@ -910,20 +976,30 @@ impl Timeline {
                         name_font.clone(),
                         pal.text,
                     );
-                    // a hollow diamond wherever any child has a key
-                    let mut frames: BTreeSet<i64> = BTreeSet::new();
+                    // a hollow diamond wherever any child has a key; it
+                    // selects and drags every child key on that frame
+                    let mut frames: BTreeMap<i64, Vec<KeyRef>> = BTreeMap::new();
                     for (target, id) in &row.children {
                         if let Some(c) =
                             anim.curves.iter().find(|c| c.target == *target && &c.id == id)
                         {
-                            frames.extend(c.keys.iter().map(|k| (k.time * fps).round() as i64));
+                            for k in &c.keys {
+                                let fr = (k.time * fps).round() as i64;
+                                frames.entry(fr).or_default().push(KeyRef {
+                                    target: tgt(*target),
+                                    id: id.clone(),
+                                    frame: fr,
+                                });
+                            }
                         }
                     }
-                    for fr in frames {
+                    ui.set_clip_rect(rows_right.intersect(outer_clip));
+                    for (fr, refs) in frames {
                         let x = tm.x(fr as f32 * frame_s);
                         if x < rr.min.x - 8.0 || x > rr.max.x + 8.0 {
                             continue;
                         }
+                        let all_sel = refs.iter().all(|k| self.selected.contains(k));
                         let c = pos2(x, cy);
                         gp.add(Shape::convex_polygon(
                             vec![
@@ -932,9 +1008,36 @@ impl Timeline {
                                 c + vec2(0.0, 4.5),
                                 c + vec2(-4.5, 0.0),
                             ],
-                            Color32::TRANSPARENT,
-                            Stroke::new(1.0, pal.text_faint),
+                            if all_sel { pal.accent } else { Color32::TRANSPARENT },
+                            Stroke::new(1.0, if all_sel { pal.accent } else { pal.text_faint }),
                         ));
+                        let r_sum = ui.interact(
+                            Rect::from_center_size(c, vec2(12.0, 14.0)),
+                            ui.id().with(("tl-sum", i, fr)),
+                            Sense::click_and_drag(),
+                        );
+                        if r_sum.clicked() {
+                            self.focused = true;
+                            if !mods.shift {
+                                self.selected.clear();
+                            }
+                            self.selected.extend(refs.iter().cloned());
+                        }
+                        if r_sum.drag_started()
+                            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                        {
+                            if !all_sel {
+                                if !mods.shift {
+                                    self.selected.clear();
+                                }
+                                self.selected.extend(refs.iter().cloned());
+                            }
+                            self.drag = Some(KeyDrag {
+                                origin_x: origin.x,
+                                anchor: fr as f32 * frame_s,
+                                applied: 0,
+                            });
+                        }
                     }
                 }
                 RowKind::Param(_) | RowKind::Part(_) => {
@@ -1048,18 +1151,140 @@ impl Timeline {
                         if on_key { pal.accent } else { Color32::TRANSPARENT },
                         Stroke::new(1.0, if on_key { pal.accent } else { pal.text_faint }),
                     ));
+                    if let Some((target, id)) = &row.curve {
+                        let nav_id = ui.id().with(("tl-nav", i));
+                        let r_prev = ui.interact(
+                            Rect::from_center_size(nav_c + vec2(-16.0, 0.0), vec2(14.0, 16.0)),
+                            nav_id.with("prev"),
+                            Sense::click(),
+                        );
+                        let r_key = ui.interact(
+                            Rect::from_center_size(nav_c, vec2(14.0, 16.0)),
+                            nav_id.with("key"),
+                            Sense::click(),
+                        );
+                        let r_next = ui.interact(
+                            Rect::from_center_size(nav_c + vec2(16.0, 0.0), vec2(14.0, 16.0)),
+                            nav_id.with("next"),
+                            Sense::click(),
+                        );
+                        if r_prev.on_hover_text(tr("Previous key")).clicked() && has_prev {
+                            edits.push(Edit::JumpKey(*target, id.clone(), false));
+                        }
+                        if r_next.on_hover_text(tr("Next key")).clicked() && has_next {
+                            edits.push(Edit::JumpKey(*target, id.clone(), true));
+                        }
+                        if r_key.on_hover_text(tr("Add or remove a key here")).clicked() {
+                            edits.push(Edit::ToggleKey(*target, id.clone()));
+                        }
+                    }
 
                     ui.set_clip_rect(rows_right.intersect(outer_clip));
+                    let Some((target, id)) = row.curve.clone() else { continue };
                     for (ki, k) in keys.iter().enumerate() {
+                        let frame = (k.time * fps).round() as i64;
+                        let kref = KeyRef { target: tgt(target), id: id.clone(), frame };
+                        let is_sel = self.selected.contains(&kref);
+                        if !is_sel {
+                            snap_times.push(k.time);
+                        }
                         let x = tm.x(k.time);
                         if x < rr.min.x - 8.0 || x > rr.max.x + 8.0 {
                             continue;
                         }
+                        let c = pos2(x, cy);
+                        key_hits.push((kref.clone(), c));
                         let left_half = keys
                             .get(ki.wrapping_sub(1))
                             .map(|prev| half_of(prev.interp))
                             .unwrap_or(half_of(k.interp));
-                        key_glyph(&gp, pos2(x, cy), KEY_PX, left_half, half_of(k.interp), pal.text);
+                        let fill = if is_sel { pal.accent } else { pal.text };
+                        key_glyph(&gp, c, KEY_PX, left_half, half_of(k.interp), fill);
+                        let resp = ui
+                            .interact(
+                                Rect::from_center_size(c, vec2(12.0, 14.0)),
+                                ui.id().with(("tl-key", kref.target, &kref.id, frame)),
+                                Sense::click_and_drag(),
+                            )
+                            .on_hover_text(format!(
+                                "{:.3} {} {}",
+                                k.value,
+                                tr("at"),
+                                timecode(k.time, fps)
+                            ));
+                        if resp.clicked() {
+                            self.focused = true;
+                            if mods.command {
+                                // Ctrl flips linear and auto, Ctrl+Alt holds
+                                self.selected.clear();
+                                self.selected.insert(kref.clone());
+                                let next = if mods.alt {
+                                    if matches!(k.interp, Interp::Stepped) {
+                                        Interp::Auto
+                                    } else {
+                                        Interp::Stepped
+                                    }
+                                } else if matches!(k.interp, Interp::Linear) {
+                                    Interp::Auto
+                                } else {
+                                    Interp::Linear
+                                };
+                                edits.push(Edit::SetInterp(next));
+                            } else if mods.shift {
+                                if !self.selected.remove(&kref) {
+                                    self.selected.insert(kref.clone());
+                                }
+                            } else {
+                                self.selected.clear();
+                                self.selected.insert(kref.clone());
+                            }
+                        }
+                        if resp.double_clicked() {
+                            edits.push(Edit::Seek(k.time));
+                            *tp.playing = false;
+                        }
+                        if resp.drag_started()
+                            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                        {
+                            self.focused = true;
+                            if !is_sel {
+                                if !mods.shift {
+                                    self.selected.clear();
+                                }
+                                self.selected.insert(kref.clone());
+                            }
+                            self.drag =
+                                Some(KeyDrag { origin_x: origin.x, anchor: k.time, applied: 0 });
+                        }
+                        if resp.secondary_clicked() && !is_sel {
+                            self.selected.clear();
+                            self.selected.insert(kref.clone());
+                        }
+                        let selected = &mut self.selected;
+                        resp.context_menu(|ui| {
+                            for (label, interp) in INTERPS {
+                                if ui
+                                    .selectable_label(same_kind(k.interp, interp), tr(label))
+                                    .clicked()
+                                {
+                                    edits.push(Edit::SetInterp(interp));
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
+                            if ui.button(tr("Select all keys in this row")).clicked() {
+                                selected.extend(keys.iter().map(|k| KeyRef {
+                                    target: tgt(target),
+                                    id: id.clone(),
+                                    frame: (k.time * fps).round() as i64,
+                                }));
+                                ui.close();
+                            }
+                            if ui.button(tr("Delete keys")).clicked() {
+                                edits.push(Edit::Delete);
+                                ui.close();
+                            }
+                        });
                     }
                 }
             }
@@ -1067,6 +1292,116 @@ impl Timeline {
         ui.set_clip_rect(rect.intersect(outer_clip));
         for (name, was_open) in toggles {
             self.folded.insert(name, was_open);
+        }
+
+        // ---- a drag of the selected keys, polled from the pointer ----
+        let mut drag_done = false;
+        if let Some(d) = &mut self.drag {
+            let (down, ptr) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
+            match ptr {
+                Some(ptr) if down => {
+                    let mut target = d.anchor + (ptr.x - d.origin_x) / pps;
+                    if mods.shift {
+                        let tol = 8.0 / pps;
+                        if let Some(c) = snap_times
+                            .iter()
+                            .copied()
+                            .filter(|c| (c - target).abs() <= tol)
+                            .min_by(|a, b| (a - target).abs().total_cmp(&(b - target).abs()))
+                        {
+                            target = c;
+                        }
+                    }
+                    let total = ((target - d.anchor) * fps).round() as i64;
+                    if total != d.applied {
+                        edits.push(Edit::Move(total - d.applied));
+                        d.applied = total;
+                    }
+                    ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+                    let text = format!(
+                        "{}   {:+} f",
+                        timecode(d.anchor + d.applied as f32 * frame_s, fps),
+                        d.applied
+                    );
+                    let font = FontId::proportional(11.0);
+                    let size = p.layout_no_wrap(text.clone(), font.clone(), pal.text).size();
+                    let tip = Rect::from_min_size(ptr + vec2(14.0, 14.0), size + vec2(10.0, 6.0));
+                    p.rect_filled(tip, 3.0, pal.panel_bg);
+                    p.rect_stroke(tip, 3.0, Stroke::new(1.0, pal.border), StrokeKind::Middle);
+                    p.text(tip.min + vec2(5.0, 3.0), Align2::LEFT_TOP, text, font, pal.text);
+                }
+                _ => drag_done = true,
+            }
+        }
+        if drag_done {
+            self.drag = None;
+        }
+
+        // ---- box select on the empty lane ----
+        if bg.clicked() {
+            self.focused = true;
+            if !mods.shift {
+                self.selected.clear();
+            }
+        }
+        if bg.drag_started() {
+            self.focused = true;
+            self.box_from = ui.input(|i| i.pointer.press_origin());
+        }
+        if bg.dragged()
+            && let (Some(a), Some(b)) = (self.box_from, ui.input(|i| i.pointer.latest_pos()))
+        {
+            let r = Rect::from_two_pos(a, b);
+            p.rect_filled(r, 0.0, pal.accent.gamma_multiply(0.12));
+            p.rect_stroke(r, 0.0, Stroke::new(1.0, pal.accent), StrokeKind::Middle);
+        }
+        if bg.drag_stopped() {
+            if let (Some(a), Some(b)) = (self.box_from, ui.input(|i| i.pointer.latest_pos())) {
+                let r = Rect::from_two_pos(a, b);
+                if !mods.shift {
+                    self.selected.clear();
+                }
+                for (k, c) in &key_hits {
+                    if r.contains(*c) {
+                        self.selected.insert(k.clone());
+                    }
+                }
+            }
+            self.box_from = None;
+        }
+
+        // ---- keys on the keyboard, once the palette was clicked ----
+        if ui.input(|i| i.pointer.any_pressed()) && !ui.rect_contains_pointer(rect) {
+            self.focused = false;
+        }
+        if self.focused && !ui.ctx().egui_wants_keyboard_input() {
+            let (del, esc, all) = ui.input_mut(|i| {
+                (
+                    i.consume_key(Modifiers::NONE, egui::Key::Delete)
+                        || i.consume_key(Modifiers::NONE, egui::Key::Backspace),
+                    i.consume_key(Modifiers::NONE, egui::Key::Escape),
+                    i.consume_key(Modifiers::COMMAND, egui::Key::A),
+                )
+            });
+            if del && !self.selected.is_empty() {
+                edits.push(Edit::Delete);
+            }
+            if esc {
+                self.selected.clear();
+            }
+            if all {
+                self.selected = anim
+                    .curves
+                    .iter()
+                    .flat_map(|c| {
+                        c.keys.iter().map(move |k| KeyRef {
+                            target: tgt(c.target),
+                            id: c.id.clone(),
+                            frame: (k.time * fps).round() as i64,
+                        })
+                    })
+                    .collect();
+            }
         }
 
         // a slim scrollbar on the right when the rows overflow
@@ -1158,8 +1493,11 @@ impl Timeline {
             let at_px = (tm.x(*tp.time) - tm.x0).clamp(0.0, lanes.width());
             self.set_zoom(npps, fit, duration, *tp.time, at_px);
         }
-        let status =
-            format!("{} / {} f", (*tp.time * fps).round() as i64, (duration * fps).round() as i64);
+        let status = if self.selected.is_empty() {
+            format!("{} / {} f", (*tp.time * fps).round() as i64, (duration * fps).round() as i64)
+        } else {
+            crate::i18n::trf("{n} keys selected", &[("n", &self.selected.len())])
+        };
         p.text(
             pos2(rect.max.x - 8.0, fy),
             Align2::RIGHT_CENTER,
@@ -1222,6 +1560,155 @@ impl Timeline {
                     }
                     s.modified = true;
                 }
+            }
+            Edit::ToggleKey(target, id) => {
+                let value = match target {
+                    CurveTarget::Parameter => {
+                        let Some(pi) = s.puppet.model().parameters.iter().position(|p| p.id == id)
+                        else {
+                            return;
+                        };
+                        s.puppet.value(pi)
+                    }
+                    CurveTarget::PartOpacity => s
+                        .animations
+                        .get(ai)
+                        .and_then(|a| {
+                            a.curves
+                                .iter()
+                                .find(|c| c.target == target && c.id == id)
+                                .and_then(|c| ayatsuri_core::anim::sample(a, c, *tp.time))
+                        })
+                        .unwrap_or(1.0),
+                    CurveTarget::Model => return,
+                };
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                let t = (*tp.time * fps).round() / fps;
+                if let Some(c) = ayatsuri_core::anim::curve_mut(a, target, &id)
+                    && !ayatsuri_core::anim::remove_key(c, t, fps)
+                {
+                    ayatsuri_core::anim::set_key(c, t, value, fps, Interp::Auto);
+                }
+                a.curves.retain(|c| !c.keys.is_empty());
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
+            Edit::JumpKey(target, id, next) => {
+                let t = *tp.time;
+                let Some(a) = s.animations.get(ai) else { return };
+                let Some(c) = a.curves.iter().find(|c| c.target == target && c.id == id) else {
+                    return;
+                };
+                let to = if next {
+                    c.keys.iter().map(|k| k.time).find(|k| *k > t + 1e-4)
+                } else {
+                    c.keys.iter().map(|k| k.time).rev().find(|k| *k < t - 1e-4)
+                };
+                if let Some(to) = to {
+                    *tp.time = to;
+                    *tp.playing = false;
+                }
+            }
+            Edit::Move(delta) => {
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                // the earliest selected key stops at frame 0
+                let first = self.selected.iter().map(|k| k.frame).min().unwrap_or(0);
+                let delta = delta.max(-first);
+                if delta == 0 {
+                    return;
+                }
+                let mut moved = BTreeSet::new();
+                for c in &mut a.curves {
+                    let t = tgt(c.target);
+                    let picked: BTreeSet<i64> = self
+                        .selected
+                        .iter()
+                        .filter(|k| k.target == t && k.id == c.id)
+                        .map(|k| k.frame)
+                        .collect();
+                    if picked.is_empty() {
+                        continue;
+                    }
+                    let frame_of = |k: &Key| (k.time * fps).round() as i64;
+                    let mut sel: Vec<Key> = Vec::new();
+                    let mut rest: Vec<Key> = Vec::new();
+                    for k in c.keys.drain(..) {
+                        if picked.contains(&frame_of(&k)) {
+                            let fr = frame_of(&k) + delta;
+                            sel.push(Key { time: fr as f32 / fps, ..k });
+                        } else {
+                            rest.push(k);
+                        }
+                    }
+                    // a moved key takes the place of any key it lands on
+                    let taken: BTreeSet<i64> = sel.iter().map(frame_of).collect();
+                    rest.retain(|k| !taken.contains(&frame_of(k)));
+                    rest.extend(sel);
+                    rest.sort_by(|x, y| x.time.total_cmp(&y.time));
+                    c.keys = rest;
+                    moved.extend(taken.into_iter().map(|frame| KeyRef {
+                        target: t,
+                        id: c.id.clone(),
+                        frame,
+                    }));
+                }
+                self.selected = moved;
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
+            Edit::SetInterp(interp) => {
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                for c in &mut a.curves {
+                    let t = tgt(c.target);
+                    let picked: BTreeSet<i64> = self
+                        .selected
+                        .iter()
+                        .filter(|k| k.target == t && k.id == c.id)
+                        .map(|k| k.frame)
+                        .collect();
+                    if picked.is_empty() {
+                        continue;
+                    }
+                    // a free bezier starts from the auto handles of its segment
+                    let spans: Vec<f32> = (0..c.keys.len())
+                        .map(|i| match (c.keys.get(i), c.keys.get(i + 1)) {
+                            (Some(k0), Some(k1)) => (k1.time - k0.time).max(0.0),
+                            _ => 1.0 / fps,
+                        })
+                        .collect();
+                    for (k, span) in c.keys.iter_mut().zip(spans) {
+                        if !picked.contains(&((k.time * fps).round() as i64)) {
+                            continue;
+                        }
+                        k.interp = match interp {
+                            Interp::Bezier { .. } => {
+                                Interp::Bezier { out: (span / 3.0, 0.0), into: (-span / 3.0, 0.0) }
+                            }
+                            other => other,
+                        };
+                    }
+                }
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
+            Edit::Delete => {
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                for c in &mut a.curves {
+                    let t = tgt(c.target);
+                    let picked: BTreeSet<i64> = self
+                        .selected
+                        .iter()
+                        .filter(|k| k.target == t && k.id == c.id)
+                        .map(|k| k.frame)
+                        .collect();
+                    if !picked.is_empty() {
+                        c.keys.retain(|k| !picked.contains(&((k.time * fps).round() as i64)));
+                    }
+                }
+                a.curves.retain(|c| !c.keys.is_empty());
+                self.selected.clear();
+                s.modified = true;
+                *tp.applied = f32::NAN;
             }
         }
     }
