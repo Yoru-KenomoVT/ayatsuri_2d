@@ -77,7 +77,10 @@
   a stop button while a job runs, how it ended, and a button to open the
   folder; it keeps going with the window closed and is there when it
   opens again. With the eye on, a timelapse video carries the change
-  marks the player shows, drawn into each frame.
+  marks the player shows, drawn into each frame. The window remembers
+  its folder, format and settings between sessions, as the moc3 and
+  image exports remember their folder, and every file dialog opens
+  there.
 - **Export Model** replaces Export Image and Export as moc3: one window
   with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
