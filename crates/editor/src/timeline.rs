@@ -1,8 +1,8 @@
 //! The Timeline palette: a dope sheet in the After Effects layout over the
 //! current scene's curves. Names on the left (the scene, parameter folders,
 //! parameters, parts), lanes of keys on the right under a frame ruler, a
-//! navigator for zoom and scroll, a work area bar, the playhead, and the
-//! palette's own undo of key edits.
+//! work area bar that bounds playback, the playhead, and the palette's own
+//! undo of key edits.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,8 +20,6 @@ const HEADER_H: f32 = 48.0;
 const COLHDR_H: f32 = 20.0;
 const FOOTER_H: f32 = 22.0;
 const ROW_H: f32 = 19.0;
-const RULER_H: f32 = 24.0;
-const NAV_H: f32 = 8.0;
 const MAX_PPS: f32 = 4000.0;
 const KEY_PX: f32 = 11.0;
 const MIN_SPLIT: f32 = 190.0;
@@ -421,6 +419,21 @@ const INTERPS: [(&str, Interp); 5] = [
     ("Bezier", Interp::Bezier { out: (0.0, 0.0), into: (0.0, 0.0) }),
 ];
 
+/// The handles a segment shows in the graph: none for a step, along the
+/// line for linear, else the ones the sampler uses (auto's flat thirds or
+/// the free bezier's own). Each is relative to its own key.
+fn seg_handles(k0: &Key, k1: &Key) -> Option<((f32, f32), (f32, f32))> {
+    match k0.interp {
+        Interp::Stepped | Interp::InverseStepped => None,
+        Interp::Linear => {
+            let span = (k1.time - k0.time).max(0.0);
+            let dv = k1.value - k0.value;
+            Some(((span / 3.0, dv / 3.0), (-span / 3.0, -dv / 3.0)))
+        }
+        _ => Some(ayatsuri_core::anim::handles(k0, k1)),
+    }
+}
+
 fn same_kind(a: Interp, b: Interp) -> bool {
     std::mem::discriminant(&a) == std::mem::discriminant(&b)
 }
@@ -800,50 +813,9 @@ impl Timeline {
             self.graph_range = None;
         }
 
-        // ---- header, right: navigator and ruler ----
-        let nav = Rect::from_min_max(
-            pos2(lanes.min.x + 6.0, rect.min.y + 5.0),
-            pos2(lanes.max.x - 6.0, rect.min.y + 5.0 + NAV_H),
-        );
-        p.rect_filled(nav, 3.0, pal.border);
-        let nav_w = nav.width().max(1.0);
-        let vis0 = nav.min.x + (self.start / duration) * nav_w;
-        let vis1 = nav.min.x + ((self.start + span).min(duration) / duration) * nav_w;
-        let bar = Rect::from_min_max(pos2(vis0, nav.min.y), pos2(vis1, nav.max.y));
-        p.rect_filled(bar, 3.0, pal.track);
-        let handle =
-            |x: f32| Rect::from_center_size(pos2(x, nav.center().y), vec2(6.0, NAV_H + 2.0));
-        p.rect_filled(handle(vis0 + 3.0), 3.0, pal.accent);
-        p.rect_filled(handle(vis1 - 3.0), 3.0, pal.accent);
-        let id = ui.id().with("tl-nav");
-        let r_mid = ui
-            .interact(bar.shrink2(vec2(6.0, 0.0)), id.with("mid"), Sense::drag())
-            .on_hover_cursor(CursorIcon::Grab);
-        let r_l = ui
-            .interact(handle(vis0 + 3.0).expand2(vec2(2.0, 3.0)), id.with("l"), Sense::drag())
-            .on_hover_cursor(CursorIcon::ResizeHorizontal);
-        let r_r = ui
-            .interact(handle(vis1 - 3.0).expand2(vec2(2.0, 3.0)), id.with("r"), Sense::drag())
-            .on_hover_cursor(CursorIcon::ResizeHorizontal);
-        let per_px = duration / nav_w;
-        if r_mid.dragged() {
-            self.start =
-                (self.start + r_mid.drag_delta().x * per_px).clamp(0.0, (duration - span).max(0.0));
-        }
-        if r_l.dragged() {
-            let end = self.start + span;
-            let s0 = (self.start + r_l.drag_delta().x * per_px).clamp(0.0, end - 8.0 / MAX_PPS);
-            let lane_w = (lanes.width() - 12.0).max(1.0);
-            self.set_zoom(lane_w / (end - s0), fit, duration, end, lane_w);
-        }
-        if r_r.dragged() {
-            let new_span = (span + r_r.drag_delta().x * per_px).max(8.0 / MAX_PPS);
-            let npps = (lanes.width() - 12.0).max(1.0) / new_span;
-            self.set_zoom(npps, fit, duration, self.start, 0.0);
-        }
-
+        // ---- header, right: the ruler ----
         let ruler = Rect::from_min_max(
-            pos2(lanes.min.x, rect.min.y + HEADER_H - RULER_H),
+            pos2(lanes.min.x, rect.min.y),
             pos2(lanes.max.x, rect.min.y + HEADER_H),
         );
         p.rect_filled(ruler, 0.0, pal.header);
@@ -919,17 +891,17 @@ impl Timeline {
             let (w0, w1) = anim.work_area.unwrap_or((0.0, duration));
             let (w0, w1) = (w0.clamp(0.0, duration), w1.clamp(0.0, duration));
             let bar = Rect::from_min_max(
-                pos2(tm.x(w0), colhdr_r.min.y + 4.0),
-                pos2(tm.x(w1), colhdr_r.max.y - 5.0),
+                pos2(tm.x(w0), colhdr_r.min.y + 3.0),
+                pos2(tm.x(w1), colhdr_r.max.y - 4.0),
             );
             p.rect_filled(bar.intersect(colhdr_r), 2.0, pal.track);
             let h0 = Rect::from_center_size(
-                pos2(bar.min.x + 2.5, bar.center().y),
-                vec2(5.0, bar.height() + 2.0),
+                pos2(bar.min.x + 3.0, bar.center().y),
+                vec2(6.0, bar.height() + 2.0),
             );
             let h1 = Rect::from_center_size(
-                pos2(bar.max.x - 2.5, bar.center().y),
-                vec2(5.0, bar.height() + 2.0),
+                pos2(bar.max.x - 3.0, bar.center().y),
+                vec2(6.0, bar.height() + 2.0),
             );
             p.rect_filled(h0, 2.0, pal.accent);
             p.rect_filled(h1, 2.0, pal.accent);
@@ -940,11 +912,13 @@ impl Timeline {
                 .on_hover_cursor(CursorIcon::Grab)
                 .on_hover_text(tr("Work area: the part that plays and exports"));
             let r0 = ui
-                .interact(h0.expand2(vec2(2.0, 3.0)), wid.with("a"), Sense::drag())
-                .on_hover_cursor(CursorIcon::ResizeHorizontal);
+                .interact(h0.expand2(vec2(4.0, 3.0)), wid.with("a"), Sense::drag())
+                .on_hover_cursor(CursorIcon::ResizeHorizontal)
+                .on_hover_text(tr("Work area start (B sets it at the playhead)"));
             let r1 = ui
-                .interact(h1.expand2(vec2(2.0, 3.0)), wid.with("b"), Sense::drag())
-                .on_hover_cursor(CursorIcon::ResizeHorizontal);
+                .interact(h1.expand2(vec2(4.0, 3.0)), wid.with("b"), Sense::drag())
+                .on_hover_cursor(CursorIcon::ResizeHorizontal)
+                .on_hover_text(tr("Work area end (N sets it at the playhead)"));
             ui.set_clip_rect(rect.intersect(outer_clip));
             let snap = |t: f32| ((t * fps).round() / fps).clamp(0.0, duration);
             let mut next = None;
@@ -1557,20 +1531,24 @@ impl Timeline {
                     }
                     key_hits.push((kref.clone(), pos));
                     if is_sel {
-                        // the handles of a free bezier: out of this key, and into
-                        // it from the segment before
+                        // every selected key shows its handles, as in After
+                        // Effects: out of this key and into it from the segment
+                        // before. A step has none; auto and linear show the
+                        // handles their curve really uses, and a drag turns the
+                        // segment into a free bezier.
                         let mut handles: Vec<(bool, (f32, f32), f32)> = Vec::new();
-                        if let (Interp::Bezier { out, .. }, Some(next)) =
-                            (k.interp, keys.get(ki + 1))
+                        if let Some(next) = keys.get(ki + 1)
+                            && let Some((out, _)) = seg_handles(k, next)
                         {
                             handles.push((true, out, next.time - k.time));
                         }
                         if let Some(prev) = keys.get(ki.wrapping_sub(1))
-                            && let Interp::Bezier { into, .. } = prev.interp
+                            && let Some((_, into)) = seg_handles(prev, k)
                         {
                             handles.push((false, into, k.time - prev.time));
                         }
-                        for (out, h, span) in handles {
+                        let ys = plot.height() / (hi - lo).max(1e-6);
+                        for (out, h, span) in handles.clone() {
                             let hp = pos2(tm.x(k.time + h.0), ymap(k.value + h.1));
                             gp.line_segment([pos, hp], Stroke::new(1.0, handle_col));
                             gp.circle_filled(hp, 3.5, handle_col);
@@ -1590,11 +1568,29 @@ impl Timeline {
                                 let dt = tm.t(ptr.x) - k.time;
                                 let dt =
                                     if out { dt.clamp(0.0, span) } else { dt.clamp(-span, 0.0) };
-                                edits.push(Edit::SetHandle(
-                                    kref.clone(),
-                                    out,
-                                    (dt, vmap(ptr.y) - k.value),
-                                ));
+                                let dv = vmap(ptr.y) - k.value;
+                                edits.push(Edit::SetHandle(kref.clone(), out, (dt, dv)));
+                                // the other handle swings round to stay in line
+                                // (on screen), keeping its length; Alt breaks them
+                                let d = vec2(dt * pps, -dv * ys);
+                                if !mods.alt
+                                    && d.length() > 1e-3
+                                    && let Some((_, o, ospan)) =
+                                        handles.iter().find(|(oo, ..)| *oo != out)
+                                {
+                                    let len = vec2(o.0 * pps, -o.1 * ys).length();
+                                    let nd = -d.normalized() * len;
+                                    let nt = if out {
+                                        (nd.x / pps).clamp(-*ospan, 0.0)
+                                    } else {
+                                        (nd.x / pps).clamp(0.0, *ospan)
+                                    };
+                                    edits.push(Edit::SetHandle(
+                                        kref.clone(),
+                                        !out,
+                                        (nt, -nd.y / ys),
+                                    ));
+                                }
                             }
                             if r_h.drag_stopped() {
                                 self.graph_range = None;
@@ -1803,7 +1799,7 @@ impl Timeline {
             self.focused = false;
         }
         if self.focused && !ui.ctx().egui_wants_keyboard_input() {
-            let (del, esc, all, nudge) = ui.input_mut(|i| {
+            let (del, esc, all, nudge, wa_start, wa_end) = ui.input_mut(|i| {
                 // Alt with an arrow nudges the selected keys a frame, ten with Shift
                 let step = |i: &mut egui::InputState, key: egui::Key| {
                     if i.consume_key(Modifiers::ALT | Modifiers::SHIFT, key) {
@@ -1821,8 +1817,24 @@ impl Timeline {
                     i.consume_key(Modifiers::NONE, egui::Key::Escape),
                     i.consume_key(Modifiers::COMMAND, egui::Key::A),
                     nudge,
+                    i.consume_key(Modifiers::NONE, egui::Key::B),
+                    i.consume_key(Modifiers::NONE, egui::Key::N),
                 )
             });
+            // B and N put the work area's start or end at the playhead, as
+            // in After Effects; the whole scene again when they meet its ends
+            if wa_start || wa_end {
+                let (w0, w1) = anim.work_area.unwrap_or((0.0, duration));
+                let at = (*tp.time * fps).round() / fps;
+                let (a, b) = if wa_start {
+                    (at.min(duration - frame_s), w1.max(at + frame_s).min(duration))
+                } else {
+                    (w0.min(at - frame_s).max(0.0), at.max(frame_s))
+                };
+                let whole = a <= 0.0 && b >= duration - frame_s * 0.5;
+                self.merge = None;
+                edits.push(Edit::WorkArea(if whole { None } else { Some((a, b)) }));
+            }
             if nudge != 0 && !self.selected.is_empty() {
                 self.merge = None;
                 edits.push(Edit::Move(nudge));
@@ -1871,17 +1883,37 @@ impl Timeline {
             }
         }
 
+        // ---- the lanes outside the work area sit dimmed ----
+        if let Some((w0, w1)) = anim.work_area {
+            let dim = Color32::from_black_alpha(70);
+            let (x0, x1) = (tm.x(w0.max(0.0)), tm.x(w1.min(duration)));
+            if x0 > rows_right.min.x {
+                gp.rect_filled(
+                    Rect::from_min_max(rows_right.min, pos2(x0, rows_right.max.y)),
+                    0.0,
+                    dim,
+                );
+            }
+            if x1 < rows_right.max.x {
+                gp.rect_filled(
+                    Rect::from_min_max(pos2(x1, rows_right.min.y), rows_right.max),
+                    0.0,
+                    dim,
+                );
+            }
+        }
+
         // ---- playhead ----
         let px = tm.x(*tp.time);
         if px >= lanes.min.x - 1.0 && px <= lanes.max.x + 1.0 {
             p.line_segment(
-                [pos2(px, ruler.min.y + 10.0), pos2(px, rows_bottom)],
+                [pos2(px, ruler.max.y - 14.0), pos2(px, rows_bottom)],
                 Stroke::new(1.0, pal.accent),
             );
             p.add(Shape::convex_polygon(
                 vec![
-                    pos2(px - 6.0, ruler.min.y + 8.0),
-                    pos2(px + 6.0, ruler.min.y + 8.0),
+                    pos2(px - 6.0, ruler.max.y - 16.0),
+                    pos2(px + 6.0, ruler.max.y - 16.0),
                     pos2(px + 6.0, ruler.max.y - 8.0),
                     pos2(px, ruler.max.y - 2.0),
                     pos2(px - 6.0, ruler.max.y - 8.0),
@@ -1899,8 +1931,8 @@ impl Timeline {
             Stroke::new(1.0, pal.border),
         );
         let fy = footer.center().y;
-        let z0 = lanes.min.x + 26.0;
-        let z1 = (z0 + 140.0).min(lanes.max.x - 26.0);
+        let z0 = left.min.x + 72.0;
+        let z1 = (left.max.x - 22.0).max(z0 + 40.0);
         p.text(
             pos2(z0 - 14.0, fy),
             Align2::CENTER_CENTER,
@@ -1962,11 +1994,12 @@ impl Timeline {
         );
         // frames go in and out at the playhead, ten at a time with Shift
         let fr = Rect::from_min_max(
-            pos2(rect.min.x + 70.0, rows_bottom + 1.0),
-            pos2(left.max.x - 4.0, rect.max.y - 1.0),
+            pos2(lanes.min.x + 6.0, rows_bottom + 1.0),
+            pos2((lanes.max.x - 110.0).max(lanes.min.x + 6.0), rect.max.y - 1.0),
         );
         let mut h = ui
             .new_child(UiBuilder::new().max_rect(fr).layout(Layout::left_to_right(Align::Center)));
+        h.set_clip_rect(fr.intersect(outer_clip));
         h.spacing_mut().item_spacing.x = 4.0;
         let count = if mods.shift { 10 } else { 1 };
         if h.small_button(tr("Insert frame"))
@@ -2296,32 +2329,24 @@ impl Timeline {
                 else {
                     return;
                 };
-                let auto = |span: f32| ((span / 3.0, 0.0), (-span / 3.0, 0.0));
+                // the side not dragged keeps the shape the segment had
                 if out {
-                    let span = c
-                        .keys
-                        .get(i + 1)
-                        .zip(c.keys.get(i))
-                        .map(|(n, k)| n.time - k.time)
-                        .unwrap_or(0.0);
+                    let seed =
+                        c.keys.get(i).zip(c.keys.get(i + 1)).and_then(|(k, n)| seg_handles(k, n));
                     if let Some(k) = c.keys.get_mut(i) {
                         let into = match k.interp {
                             Interp::Bezier { into, .. } => into,
-                            _ => auto(span).1,
+                            _ => seed.map(|s| s.1).unwrap_or((0.0, 0.0)),
                         };
                         k.interp = Interp::Bezier { out: h, into };
                     }
                 } else if i > 0 {
-                    let span = c
-                        .keys
-                        .get(i)
-                        .zip(c.keys.get(i - 1))
-                        .map(|(k, p)| k.time - p.time)
-                        .unwrap_or(0.0);
+                    let seed =
+                        c.keys.get(i - 1).zip(c.keys.get(i)).and_then(|(p, k)| seg_handles(p, k));
                     if let Some(prev) = c.keys.get_mut(i - 1) {
                         let out = match prev.interp {
                             Interp::Bezier { out, .. } => out,
-                            _ => auto(span).0,
+                            _ => seed.map(|s| s.0).unwrap_or((0.0, 0.0)),
                         };
                         prev.interp = Interp::Bezier { out, into: h };
                     }

@@ -2884,12 +2884,18 @@ impl EditorUi {
         {
             let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
             if self.anim_playing {
+                // play runs inside the work area when the scene has one
+                let (w0, w1) = anim.work_area.unwrap_or((0.0, anim.duration));
+                let (w0, w1) = (w0.clamp(0.0, anim.duration), w1.clamp(w0, anim.duration));
+                if self.anim_time < w0 {
+                    self.anim_time = w0;
+                }
                 self.anim_time += dt;
-                if self.anim_time > anim.duration {
-                    if anim.looped && anim.duration > 0.0 {
-                        self.anim_time %= anim.duration;
+                if self.anim_time > w1 {
+                    if anim.looped && w1 > w0 {
+                        self.anim_time = w0 + (self.anim_time - w0) % (w1 - w0);
                     } else {
-                        self.anim_time = anim.duration;
+                        self.anim_time = w1;
                         self.anim_playing = false;
                     }
                 }
