@@ -27,6 +27,7 @@ mod session;
 pub mod theme;
 mod thumb;
 pub(crate) mod timelapse;
+mod timeline;
 mod tween;
 mod update;
 mod windows;

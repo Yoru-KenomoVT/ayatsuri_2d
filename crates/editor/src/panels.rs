@@ -224,6 +224,7 @@ pub struct EditorUi {
     anim_playing: bool,
     anim_autokey: bool,
     anim_applied: f32,
+    timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
     pub(crate) export_dlg: Option<ExportDlg>,
     /// Collapsed rows in the Deformer palette, and canvas-locked deformers.
@@ -960,6 +961,7 @@ impl Default for EditorUi {
             anim_playing: false,
             anim_autokey: true,
             anim_applied: f32::NAN,
+            timeline: crate::timeline::Timeline::default(),
             new_anim: None,
             export_dlg: None,
             def_collapsed: std::collections::HashSet::new(),
@@ -3973,250 +3975,22 @@ impl EditorUi {
             ui.weak(crate::i18n::tr("No model loaded."));
             return;
         };
-        if s.animations.is_empty() {
-            ui.horizontal(|ui| {
-                ui.weak(crate::i18n::tr("No animation yet."));
-                if ui.button(crate::i18n::tr("New Animation…")).clicked() {
-                    self.new_anim = Some(AnimNew {
-                        name: "idle".into(),
-                        fps: 30.0,
-                        duration: 3.0,
-                        looped: true,
-                    });
-                }
-            });
-            return;
-        }
-        if s.current_anim.is_none_or(|i| i >= s.animations.len()) {
-            s.current_anim = Some(0);
-        }
-        let ai = s.current_anim.unwrap_or(0);
-
-        // transport row
-        let mut seek: Option<f32> = None;
-        let (fps, duration) = s
-            .animations
-            .get(ai)
-            .map(|a| (a.fps.max(1.0), a.duration.max(0.0)))
-            .unwrap_or((30.0, 0.0));
-        let frame = 1.0 / fps;
-        ui.horizontal(|ui| {
-            let current = s.animations.get(ai).map(|a| a.name.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("anim-pick")
-                .selected_text(truncate(&current, 14))
-                .width(110.0)
-                .show_ui(ui, |ui| {
-                    for (i, a) in s.animations.iter().enumerate() {
-                        if ui.selectable_label(i == ai, &a.name).clicked() {
-                            s.current_anim = Some(i);
-                            self.anim_applied = f32::NAN;
-                        }
-                    }
-                });
-            if ui
-                .button(egui_phosphor::regular::SKIP_BACK)
-                .on_hover_text(crate::i18n::tr("To start"))
-                .clicked()
-            {
-                seek = Some(0.0);
-            }
-            if ui
-                .button(egui_phosphor::regular::MINUS)
-                .on_hover_text(crate::i18n::tr("Previous frame"))
-                .clicked()
-            {
-                seek = Some((self.anim_time - frame).max(0.0));
-            }
-            let play_icon = if self.anim_playing {
-                egui_phosphor::regular::PAUSE
-            } else {
-                egui_phosphor::regular::PLAY
-            };
-            if ui.button(play_icon).clicked() {
-                self.anim_playing = !self.anim_playing;
-            }
-            if ui
-                .button(egui_phosphor::regular::PLUS)
-                .on_hover_text(crate::i18n::tr("Next frame"))
-                .clicked()
-            {
-                seek = Some((self.anim_time + frame).min(duration));
-            }
-            if ui
-                .button(egui_phosphor::regular::SKIP_FORWARD)
-                .on_hover_text(crate::i18n::tr("To end"))
-                .clicked()
-            {
-                seek = Some(duration);
-            }
-            ui.label(format!(
-                "{:>3} / {:.0}",
-                (self.anim_time * fps).round() as i64,
-                (duration * fps).round()
-            ));
-            ui.separator();
-            ui.checkbox(&mut self.anim_autokey, crate::i18n::tr("Auto key"));
-            if let Some(a) = s.animations.get_mut(ai) {
-                ui.checkbox(&mut a.looped, crate::i18n::tr("Loop"));
-                ui.weak(crate::i18n::tr("Len"));
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut a.duration)
-                            .range(0.1..=600.0)
-                            .speed(0.05)
-                            .suffix("s"),
-                    )
-                    .changed()
-                {
-                    s.modified = true;
-                }
-            }
-        });
-        ui.separator();
-
-        // dope sheet: ruler on top, one row per track, diamonds on keys
-        let names: Vec<(String, String)> = s
-            .animations
-            .get(ai)
-            .map(|a| {
-                a.curves
-                    .iter()
-                    .filter(|c| c.target == ayatsuri_format::CurveTarget::Parameter)
-                    .map(|t| {
-                        let label = s
-                            .puppet
-                            .model()
-                            .parameters
-                            .iter()
-                            .position(|p| p.id == t.id)
-                            .and_then(|pi| s.param_names.get(pi).cloned())
-                            .unwrap_or_else(|| t.id.clone());
-                        (t.id.clone(), label)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let label_w = 110.0;
-        let avail = ui.available_width();
-        let lane_w = (avail - label_w - 8.0).max(60.0);
-        let x_of = |t: f32, left: f32| left + label_w + (t / duration.max(1e-3)) * lane_w;
-
-        let (ruler, rresp) = ui.allocate_exact_size(vec2(avail, 18.0), Sense::click_and_drag());
-        let p = ui.painter();
-        p.rect_filled(ruler, 0.0, theme::pal().header);
-        let frames = (duration * fps).round().max(1.0) as i64;
-        let step = ((frames as f32 / (lane_w / 40.0)).ceil() as i64).max(1);
-        let mut f = 0i64;
-        while f <= frames {
-            let x = x_of(f as f32 / fps, ruler.min.x);
-            p.line_segment(
-                [pos2(x, ruler.max.y - 5.0), pos2(x, ruler.max.y)],
-                Stroke::new(1.0, theme::pal().text_faint),
-            );
-            p.text(
-                pos2(x + 2.0, ruler.min.y + 2.0),
-                Align2::LEFT_TOP,
-                f.to_string(),
-                FontId::proportional(9.0),
-                theme::pal().text_faint,
-            );
-            f += step;
-        }
-        if (rresp.dragged() || rresp.clicked())
-            && let Some(ptr) = rresp.interact_pointer_pos()
-        {
-            let t = ((ptr.x - ruler.min.x - label_w) / lane_w * duration).clamp(0.0, duration);
-            // snap to whole frames, like every dope sheet
-            seek = Some((t * fps).round() / fps);
-            self.anim_playing = false;
-        }
-
-        let mut delete: Option<(String, f32)> = None;
-        let rows_top = ui.cursor().min.y;
-        ScrollArea::vertical().id_salt("anim-rows").show(ui, |ui| {
-            if names.is_empty() {
-                ui.weak(crate::i18n::tr(
-                    "Move a parameter to record a key (Auto key), or press K on a selected row.",
-                ));
-            }
-            for (param, label) in &names {
-                let (row, _) = ui.allocate_exact_size(vec2(avail, 16.0), Sense::hover());
-                let p = ui.painter();
-                p.text(
-                    pos2(row.min.x + 4.0, row.center().y),
-                    Align2::LEFT_CENTER,
-                    truncate(label, 15),
-                    FontId::proportional(10.5),
-                    theme::pal().text,
-                );
-                p.line_segment(
-                    [pos2(row.min.x + label_w, row.max.y), pos2(row.max.x, row.max.y)],
-                    Stroke::new(0.5, theme::pal().border),
-                );
-                let points = s
-                    .animations
-                    .get(ai)
-                    .and_then(|a| ayatsuri_core::anim::param_curve(a, param))
-                    .map(|c| c.keys.iter().map(|k| k.time).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                for t in points {
-                    let c = pos2(x_of(t, row.min.x), row.center().y);
-                    let r = Rect::from_center_size(c, vec2(9.0, 9.0));
-                    let kresp = ui.interact(
-                        r,
-                        egui::Id::new(("key", param, (t * 1000.0) as i64)),
-                        Sense::click(),
-                    );
-                    let col = if kresp.hovered() { theme::pal().accent } else { theme::pal().text };
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        vec![
-                            c + vec2(0.0, -4.0),
-                            c + vec2(4.0, 0.0),
-                            c + vec2(0.0, 4.0),
-                            c + vec2(-4.0, 0.0),
-                        ],
-                        col,
-                        Stroke::NONE,
-                    ));
-                    if kresp.clicked() {
-                        seek = Some(t);
-                        self.anim_playing = false;
-                    }
-                    kresp.context_menu(|ui| {
-                        if ui.button(crate::i18n::tr("Delete key")).clicked() {
-                            delete = Some((param.clone(), t));
-                            ui.close();
-                        }
-                    });
-                }
-            }
-        });
-        // the playhead runs through ruler and rows
-        let px = x_of(self.anim_time, ruler.min.x);
-        ui.painter().line_segment(
-            [pos2(px, ruler.min.y), pos2(px, ui.cursor().min.y.max(rows_top + 16.0))],
-            Stroke::new(1.5, theme::pal().accent),
-        );
-
-        if let Some((param, t)) = delete
-            && let Some(a) = s.animations.get_mut(ai)
-        {
-            let fps_a = a.fps;
-            if let Some(c) = a
-                .curves
-                .iter_mut()
-                .find(|c| c.target == ayatsuri_format::CurveTarget::Parameter && c.id == param)
-            {
-                ayatsuri_core::anim::remove_key(c, t, fps_a);
-            }
-            a.curves.retain(|c| !c.keys.is_empty());
-            s.modified = true;
-            self.anim_applied = f32::NAN;
+        let mut tp = crate::timeline::Transport {
+            time: &mut self.anim_time,
+            playing: &mut self.anim_playing,
+            autokey: &mut self.anim_autokey,
+            applied: &mut self.anim_applied,
+            sel_param: &mut self.sel_param,
+        };
+        if let Some(crate::timeline::Request::NewScene) = self.timeline.show(ui, s, &mut tp) {
+            self.new_anim =
+                Some(AnimNew { name: "idle".into(), fps: 30.0, duration: 3.0, looped: true });
         }
         // K keys the selected parameter row by hand
         if ui.ctx().input(|i| i.key_pressed(egui::Key::K))
             && !ui.ctx().egui_wants_keyboard_input()
             && let Some(pi) = self.sel_param
+            && let Some(ai) = s.current_anim
             && let Some(id) = s.puppet.model().parameters.get(pi).map(|p| p.id.clone())
         {
             let v = s.puppet.value(pi);
@@ -4235,9 +4009,6 @@ impl EditorUi {
                 }
                 s.modified = true;
             }
-        }
-        if let Some(t) = seek {
-            self.anim_time = t;
         }
     }
 
