@@ -252,6 +252,7 @@ fn the_header_names_every_entry_point() {
         include_str!("textures.rs"),
         include_str!("motions.rs"),
         include_str!("expressions.rs"),
+        include_str!("bundle.rs"),
     ];
     let mut missing = Vec::new();
     for src in sources {
@@ -386,6 +387,7 @@ fn unsafe_stays_in_one_file() {
         ("textures.rs", include_str!("textures.rs")),
         ("motions.rs", include_str!("motions.rs")),
         ("expressions.rs", include_str!("expressions.rs")),
+        ("bundle.rs", include_str!("bundle.rs")),
         ("fixture.rs", include_str!("fixture.rs")),
         ("tests.rs", include_str!("tests.rs")),
     ];
@@ -398,4 +400,51 @@ fn unsafe_stays_in_one_file() {
             assert!(!needles.iter().any(|n| code.contains(n.as_str())), "{name}: {line}");
         }
     }
+}
+
+/// A moc3 is the rig alone; the bundle's JSON files come in by hand.
+#[test]
+fn a_moc3_loads_and_takes_its_bundle_files() {
+    use ayatsuri_format::read;
+    let payload = read(&small_aom()).unwrap();
+    let moc =
+        ayatsuri_import::to_moc3(&payload.model, ayatsuri_import::ExportVersion::DEFAULT).unwrap();
+    let m = ay2d_load(moc.as_ptr(), moc.len());
+    assert!(!m.is_null(), "{}", last_error());
+    assert_eq!(ay2d_parameter_count(m), 2);
+    assert_eq!(ay2d_mesh_count(m), 1);
+    assert_eq!(ay2d_texture_count(m), 1, "the rig draws from one page");
+    let mut p: *const u8 = std::ptr::null();
+    let mut n: usize = 7;
+    assert_eq!(ay2d_texture(m, 0, &raw mut p, &raw mut n), Status::Ok);
+    assert_eq!(n, 0, "no bytes of its own");
+    assert_eq!(ay2d_has_physics(m), 0, "a moc3 carries no rig; physics3.json does");
+    assert_eq!(ay2d_motion_count(m), 0);
+    assert_eq!(ay2d_expression_count(m), 0);
+    // the bundle files, as the host would read them beside the moc3
+    let physics = ayatsuri_import::to_physics3(payload.model.physics.as_ref().unwrap());
+    assert_eq!(ay2d_add_physics3(m, physics.as_ptr(), physics.len()), Status::Ok);
+    assert_eq!(ay2d_has_physics(m), 1);
+    let motion = ayatsuri_import::to_motion3(&payload.animations[0]);
+    let name = CString::new("wave").unwrap();
+    assert_eq!(ay2d_add_motion3(m, name.as_ptr(), motion.as_ptr(), motion.len()), 0);
+    assert_eq!(cstr(ay2d_motion_id(m, 0)), "wave");
+    let expr = ayatsuri_import::to_exp3(&payload.expressions[0]);
+    let ename = CString::new("smile").unwrap();
+    assert_eq!(ay2d_add_expression3(m, ename.as_ptr(), expr.as_ptr(), expr.len()), 0);
+    assert_eq!(ay2d_motion_play(m, 0, 0, 0.0), Status::Ok);
+    for _ in 0..30 {
+        ay2d_update(m, 1.0 / 60.0);
+    }
+    let mut out = [0.0f32; 2];
+    ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+    assert!(
+        (out[0] - 0.5).abs() < 0.02,
+        "the added motion drives the moc3's parameter: {}",
+        out[0]
+    );
+    let junk = b"{ not json";
+    assert_eq!(ay2d_add_motion3(m, name.as_ptr(), junk.as_ptr(), junk.len()), -1);
+    assert!(last_error().contains("motion3"));
+    ay2d_free(m);
 }

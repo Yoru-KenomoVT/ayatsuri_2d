@@ -23,14 +23,13 @@ indexing_slicing = "deny"
 [features]
 # `fixture`: a small model written to .aom, for the tests and for the C
 # host example that drives the built library end to end.
-fixture = ["dep:serde_bytes"]
+fixture = []
 
 [dependencies]
 ayatsuri-core = { workspace = true }
 ayatsuri-format = { workspace = true }
-serde_bytes = { workspace = true, optional = true }
-
-[dev-dependencies]
+# moc3 and the Cubism JSON files only: no paint or project parsers here
+ayatsuri-import = { workspace = true, default-features = false }
 serde_bytes = { workspace = true }
 
 [[example]]

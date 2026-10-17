@@ -139,28 +139,12 @@ impl Player {
         params: &HashMap<String, usize>,
         parts: &HashMap<String, usize>,
     ) -> Self {
-        let mut clips = Vec::with_capacity(scenes.len() + comps.len());
+        let mut player =
+            Self { clips: Vec::with_capacity(scenes.len() + comps.len()), ..Self::default() };
         for (i, a) in scenes.iter().enumerate() {
-            let drives = a
-                .curves
-                .iter()
-                .map(|c| match c.target {
-                    CurveTarget::Parameter => params.get(&c.id).map(|&p| Drive::Param(p)),
-                    CurveTarget::PartOpacity => parts.get(&c.id).map(|&p| Drive::Part(p)),
-                    CurveTarget::Model => None,
-                })
-                .collect();
-            clips.push(Clip {
-                id: cstring(&a.name),
-                source: Source::Scene(i, drives),
-                duration: a.duration.max(0.0),
-                fps: a.fps,
-                looped: a.looped,
-                fade_in: a.fade_in,
-                fade_out: a.fade_out,
-                events: a.events.iter().map(|e| (e.time, cstring(&e.value))).collect(),
-            });
+            player.add_scene(i, a, params, parts);
         }
+        let clips = &mut player.clips;
         for (i, c) in comps.iter().enumerate() {
             clips.push(Clip {
                 id: cstring(&c.name),
@@ -173,7 +157,37 @@ impl Player {
                 events: Vec::new(),
             });
         }
-        Self { clips, playing: Vec::new(), fired: Vec::new() }
+        player
+    }
+
+    /// A scene added after load (a motion3 file): its clip goes on the end.
+    pub(crate) fn add_scene(
+        &mut self,
+        index: usize,
+        a: &Animation,
+        params: &HashMap<String, usize>,
+        parts: &HashMap<String, usize>,
+    ) -> usize {
+        let drives = a
+            .curves
+            .iter()
+            .map(|c| match c.target {
+                CurveTarget::Parameter => params.get(&c.id).map(|&p| Drive::Param(p)),
+                CurveTarget::PartOpacity => parts.get(&c.id).map(|&p| Drive::Part(p)),
+                CurveTarget::Model => None,
+            })
+            .collect();
+        self.clips.push(Clip {
+            id: cstring(&a.name),
+            source: Source::Scene(index, drives),
+            duration: a.duration.max(0.0),
+            fps: a.fps,
+            looped: a.looped,
+            fade_in: a.fade_in,
+            fade_out: a.fade_out,
+            events: a.events.iter().map(|e| (e.time, cstring(&e.value))).collect(),
+        });
+        self.clips.len() - 1
     }
 
     fn play(&mut self, clip: usize, looping: bool, fade_in: f32) {

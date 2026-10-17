@@ -169,6 +169,29 @@ uint32_t ay2d_abi_version(void);
 const char *ay2d_version(void);
 
 /*
+ Give the model a pendulum rig from a `physics3.json` (`len` bytes at
+ `json`), replacing any it has. Parameter and part values stay as they
+ are; physics comes on.
+ */
+enum ay2d_status ay2d_add_physics3(struct ay2d_model *m, const uint8_t *json, size_t len);
+
+/*
+ Add a motion from a `motion3.json` under `name`; returns its index for
+ `ay2d_motion_play`, or -1 with a reason. Curves on parameters or parts
+ the model lacks are kept but drive nothing.
+ */
+int32_t ay2d_add_motion3(struct ay2d_model *m, const char *name, const uint8_t *json, size_t len);
+
+/*
+ Add an expression from an `exp3.json` under `name`; returns its index
+ for `ay2d_expression_set`, or -1 with a reason.
+ */
+int32_t ay2d_add_expression3(struct ay2d_model *m,
+                             const char *name,
+                             const uint8_t *json,
+                             size_t len);
+
+/*
  The visible meshes after the last update, back to front, into `out`.
  Returns how many there are; with `n` smaller than that (zero and a
  null `out` to just ask) only the first `n` are written. Masks are not
@@ -243,11 +266,17 @@ enum ay2d_status ay2d_expression_clear(struct ay2d_model *m, float fade_out);
 int32_t ay2d_expression_shown(const struct ay2d_model *m);
 
 /*
- Load a model from the bytes of an `.aom` file. The bytes (`len` of them
- at `bytes`) are read, not kept: the host may free them as soon as this
- returns. Null when the bytes are not a model; `ay2d_last_error` says
- why. The model is evaluated once at its defaults, so drawables are
- ready at once.
+ Load a model from the bytes (`len` of them at `bytes`) of an `.aom`
+ file, or of a `.moc3`. The bytes are read, not kept: the host may free
+ them as soon as this returns. Null when the bytes are not a model;
+ `ay2d_last_error` says why. The model is evaluated once at its
+ defaults, so drawables are ready at once.
+
+ An `.aom` carries everything: textures, motions, expressions, physics,
+ names. A `.moc3` is the rig alone; the host keeps the bundle's textures
+ (`ay2d_texture_count` still says how many pages the rig draws from) and
+ adds the bundle's JSON files with `ay2d_add_physics3`,
+ `ay2d_add_motion3` and `ay2d_add_expression3`.
  */
 struct ay2d_model *ay2d_load(const uint8_t *bytes, size_t len);
 

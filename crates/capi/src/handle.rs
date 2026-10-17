@@ -131,20 +131,45 @@ pub(crate) fn put<T>(out: *mut T, value: T) -> Status {
     Status::Ok
 }
 
-/// Load a model from the bytes of an `.aom` file. The bytes (`len` of them
-/// at `bytes`) are read, not kept: the host may free them as soon as this
-/// returns. Null when the bytes are not a model; `ay2d_last_error` says
-/// why. The model is evaluated once at its defaults, so drawables are
-/// ready at once.
+/// Load a model from the bytes (`len` of them at `bytes`) of an `.aom`
+/// file, or of a `.moc3`. The bytes are read, not kept: the host may free
+/// them as soon as this returns. Null when the bytes are not a model;
+/// `ay2d_last_error` says why. The model is evaluated once at its
+/// defaults, so drawables are ready at once.
+///
+/// An `.aom` carries everything: textures, motions, expressions, physics,
+/// names. A `.moc3` is the rig alone; the host keeps the bundle's textures
+/// (`ay2d_texture_count` still says how many pages the rig draws from) and
+/// adds the bundle's JSON files with `ay2d_add_physics3`,
+/// `ay2d_add_motion3` and `ay2d_add_expression3`.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
     guard(std::ptr::null_mut(), || {
         let Ok(bytes) = input(bytes, len) else { return std::ptr::null_mut() };
-        let payload = match ayatsuri_format::read(bytes) {
-            Ok(p) => p,
-            Err(e) => {
-                set_error(format!("not a model: {e}"));
-                return std::ptr::null_mut();
+        let payload = if bytes.starts_with(b"MOC3") {
+            match ayatsuri_import::from_moc3(bytes) {
+                Ok(model) => {
+                    // the rig says how many pages it draws from
+                    let pages =
+                        model.art_meshes.iter().map(|a| a.texture as usize + 1).max().unwrap_or(0);
+                    ayatsuri_format::payload::AomPayload {
+                        model,
+                        textures: vec![serde_bytes::ByteBuf::new(); pages],
+                        ..Default::default()
+                    }
+                }
+                Err(e) => {
+                    set_error(format!("not a model: {e}"));
+                    return std::ptr::null_mut();
+                }
+            }
+        } else {
+            match ayatsuri_format::read(bytes) {
+                Ok(p) => p,
+                Err(e) => {
+                    set_error(format!("not a model: {e}"));
+                    return std::ptr::null_mut();
+                }
             }
         };
         let m = &payload.model;
@@ -186,6 +211,12 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
 }
 
 impl Model {
+    /// What follows every evaluation: the draw order, and later the
+    /// change flags.
+    pub(crate) fn after_update(&mut self) {
+        self.refresh_order();
+    }
+
     /// The drawables' mesh indices after an update, in draw order.
     pub(crate) fn refresh_order(&mut self) {
         self.order.clear();

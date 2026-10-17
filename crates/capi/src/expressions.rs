@@ -54,20 +54,30 @@ impl Expressions {
         exprs: &[Expression],
         params: &std::collections::HashMap<String, usize>,
     ) -> Self {
-        let sets = exprs
-            .iter()
-            .map(|e| Set {
-                id: cstring(&e.name),
-                params: e
-                    .params
-                    .iter()
-                    .filter_map(|p| params.get(&p.id).map(|&i| (i, p.value, p.blend)))
-                    .collect(),
-                fade_in: e.fade_in,
-                fade_out: e.fade_out,
-            })
-            .collect();
-        Self { sets, shown: Vec::new() }
+        let mut out = Self::default();
+        for e in exprs {
+            out.add(e, params);
+        }
+        out
+    }
+
+    /// An expression added after load (an exp3 file); returns its index.
+    pub(crate) fn add(
+        &mut self,
+        e: &Expression,
+        params: &std::collections::HashMap<String, usize>,
+    ) -> usize {
+        self.sets.push(Set {
+            id: cstring(&e.name),
+            params: e
+                .params
+                .iter()
+                .filter_map(|p| params.get(&p.id).map(|&i| (i, p.value, p.blend)))
+                .collect(),
+            fade_in: e.fade_in,
+            fade_out: e.fade_out,
+        });
+        self.sets.len() - 1
     }
 
     fn set(&mut self, set: usize, fade_in: f32) {
