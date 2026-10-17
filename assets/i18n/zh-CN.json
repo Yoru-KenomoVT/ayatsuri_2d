@@ -1057,5 +1057,7 @@
   "Linear": "线性",
   "Stepped": "阶跃",
   "Inverse stepped": "反向阶跃",
-  "Bezier": "贝塞尔"
+  "Bezier": "贝塞尔",
+  "Work area start (B sets it at the playhead)": "工作区域起点（按 B 设为播放头位置）",
+  "Work area end (N sets it at the playhead)": "工作区域终点（按 N 设为播放头位置）"
 }

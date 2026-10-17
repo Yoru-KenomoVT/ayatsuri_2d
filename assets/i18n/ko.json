@@ -1057,5 +1057,7 @@
   "Linear": "선형",
   "Stepped": "스텝",
   "Inverse stepped": "역스텝",
-  "Bezier": "베지어"
+  "Bezier": "베지어",
+  "Work area start (B sets it at the playhead)": "작업 영역 시작 (B로 재생 헤드 위치에)",
+  "Work area end (N sets it at the playhead)": "작업 영역 끝 (N으로 재생 헤드 위치에)"
 }

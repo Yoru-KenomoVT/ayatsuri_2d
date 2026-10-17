@@ -1057,5 +1057,7 @@
   "Linear": "Lineair",
   "Stepped": "Getrapt",
   "Inverse stepped": "Omgekeerd getrapt",
-  "Bezier": "Bézier"
+  "Bezier": "Bézier",
+  "Work area start (B sets it at the playhead)": "Begin van het werkgebied (B zet het bij de afspeelkop)",
+  "Work area end (N sets it at the playhead)": "Einde van het werkgebied (N zet het bij de afspeelkop)"
 }

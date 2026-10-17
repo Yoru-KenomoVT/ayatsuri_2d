@@ -1057,5 +1057,7 @@
   "Linear": "リニア",
   "Stepped": "ステップ",
   "Inverse stepped": "逆ステップ",
-  "Bezier": "ベジェ"
+  "Bezier": "ベジェ",
+  "Work area start (B sets it at the playhead)": "ワークエリアの開始 (B で再生ヘッドの位置に)",
+  "Work area end (N sets it at the playhead)": "ワークエリアの終了 (N で再生ヘッドの位置に)"
 }
