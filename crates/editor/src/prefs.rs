@@ -8,6 +8,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::dock::DockNode;
 
+/// What the Render window keeps between sessions. Zero or None means
+/// the window's own default.
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct RenderPrefs {
+    pub folder: Option<PathBuf>,
+    pub format: Option<String>,
+    pub width: u32,
+    pub fps: u32,
+    pub sps: f32,
+    pub hold: f32,
+    pub transparent: bool,
+    pub gpu: Option<bool>,
+    pub aa: Option<bool>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -71,6 +87,10 @@ pub struct Prefs {
     pub guide_snap_off: bool,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
+    /// The Render window as it was last used: folder, format and settings.
+    pub render: RenderPrefs,
+    /// Where the last moc3 or image export went.
+    pub export_folder: Option<PathBuf>,
     /// The release the user said "Later" to; its banner stays hidden.
     pub update_dismissed: Option<String>,
     /// Physics page splitters as the user left them: settings column

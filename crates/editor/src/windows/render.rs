@@ -66,6 +66,21 @@ impl Preset {
         matches!(self, Preset::PngSeq | Preset::Webm | Preset::Mov)
     }
 
+    /// A short name for the preferences file.
+    fn key(self) -> &'static str {
+        match self {
+            Preset::Gif => "gif",
+            Preset::PngSeq => "png",
+            Preset::Mp4 => "mp4",
+            Preset::Webm => "webm",
+            Preset::Mov => "mov",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Preset::ALL.into_iter().find(|p| p.key() == key)
+    }
+
     fn ext(self) -> &'static str {
         match self {
             Preset::Gif => "gif",
@@ -137,6 +152,9 @@ struct Job {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     started: Option<std::time::Instant>,
     took: Option<std::time::Duration>,
+    /// The time left as shown: settled once a second and eased, so it
+    /// does not jump with every frame's timing.
+    eta: Option<(std::time::Instant, f32)>,
 }
 
 impl Job {
@@ -215,23 +233,56 @@ impl RenderWin {
         self.folder = Some(dir);
     }
 
-    pub fn new(source: Source, scene_fps: f32, canvas_width: f32, folder: Option<PathBuf>) -> Self {
+    /// The window's settings, for the preferences.
+    pub fn prefs(&self) -> crate::prefs::RenderPrefs {
+        crate::prefs::RenderPrefs {
+            folder: self.folder.clone(),
+            format: Some(self.preset.key().to_string()),
+            width: self.width,
+            fps: self.fps,
+            sps: self.sps,
+            hold: self.hold,
+            transparent: self.transparent,
+            gpu: Some(self.gpu),
+            aa: Some(self.aa),
+        }
+    }
+
+    /// A window with the defaults, then whatever the preferences remember
+    /// from the last time: the folder, the format when it can still be
+    /// made, and the settings.
+    pub fn new(
+        source: Source,
+        scene_fps: f32,
+        canvas_width: f32,
+        folder: Option<PathBuf>,
+        p: &crate::prefs::RenderPrefs,
+    ) -> Self {
         let ffmpeg = ayatsuri_update::ffmpeg::program();
+        let has = ffmpeg.is_some();
+        let preset = p
+            .format
+            .as_deref()
+            .and_then(Preset::from_key)
+            .filter(|f| has || !f.ffmpeg())
+            .unwrap_or(if has { Preset::Mp4 } else { Preset::Gif });
+        let fps = match (p.fps, source) {
+            (f, _) if f > 0 => f,
+            (_, Source::Timelapse) => 30,
+            _ => scene_fps.round().clamp(1.0, 240.0) as u32,
+        };
+        let remembered = p.folder.clone().filter(|d| d.is_dir());
         RenderWin {
             source,
-            preset: if ffmpeg.is_some() { Preset::Mp4 } else { Preset::Gif },
+            preset,
             scene: 0,
             expression: None,
-            fps: if source == Source::Timelapse {
-                30
-            } else {
-                scene_fps.round().clamp(1.0, 240.0) as u32
-            },
-            width: (canvas_width.max(1.0) as u32).min(1920),
+            fps,
+            width: if p.width > 0 { p.width } else { (canvas_width.max(1.0) as u32).min(1920) },
             work_area: true,
-            transparent: false,
-            hold: 2.0,
-            folder,
+            transparent: p.transparent,
+            hold: if p.hold > 0.0 { p.hold } else { 2.0 },
+            folder: remembered.or(folder),
             ffmpeg,
             ffmpeg_get: None,
             ffmpeg_failed: None,
@@ -239,7 +290,7 @@ impl RenderWin {
             playing: false,
             time: 0.0,
             pos: 0.0,
-            sps: 6.0,
+            sps: if p.sps > 0.0 { p.sps } else { 6.0 },
             last_tick: None,
             worker: None,
             asked: None,
@@ -252,8 +303,8 @@ impl RenderWin {
             player_size: (540.0, 400.0),
             fullscreen: false,
             shown: true,
-            gpu: true,
-            aa: true,
+            gpu: p.gpu.unwrap_or(true),
+            aa: p.aa.unwrap_or(true),
             loop_on: true,
             speed: 1.0,
             show_changes: true,
@@ -1272,10 +1323,10 @@ impl EditorUi {
         let Some(s) = &self.session else { return };
         let fps = s.current_anim.and_then(|i| s.animations.get(i)).map_or(30.0, |a| a.fps);
         let folder = s.aom_path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf()));
-        let mut win = self
-            .render_win
-            .take()
-            .unwrap_or_else(|| RenderWin::new(source, fps, s.puppet.model().canvas.width, folder));
+        let p = &self.prefs.render;
+        let mut win = self.render_win.take().unwrap_or_else(|| {
+            RenderWin::new(source, fps, s.puppet.model().canvas.width, folder, p)
+        });
         win.source = source;
         if let Some(i) = s.current_anim {
             win.scene = i;
@@ -1577,6 +1628,10 @@ impl EditorUi {
                 });
             });
         });
+        if enqueue {
+            self.prefs.render = win.prefs();
+            self.prefs.save();
+        }
         if enqueue && let Some(folder) = win.folder.clone() {
             let anim = s.animations.get(win.scene).cloned();
             let stem = match (win.source, &anim) {
@@ -1616,11 +1671,17 @@ impl EditorUi {
                 stop: Default::default(),
                 started: None,
                 took: None,
+                eta: None,
             });
         }
         if pick_folder {
-            self.pick_async(crate::panels::PickFor::RenderFolder, || {
-                rfd::FileDialog::new().set_title(tr("Render into which folder?")).pick_folder()
+            let start = win.folder.clone();
+            self.pick_async(crate::panels::PickFor::RenderFolder, move || {
+                let mut d = rfd::FileDialog::new().set_title(tr("Render into which folder?"));
+                if let Some(s) = start {
+                    d = d.set_directory(s);
+                }
+                d.pick_folder()
             });
         }
         if !open && let Some(win) = &mut self.render_win {
@@ -2306,7 +2367,7 @@ impl RenderWin {
             .min_scrolled_height(0.0)
             .max_height(self.queue_body_h())
             .show(ui, |ui| {
-                for (i, j) in self.queue.iter().enumerate() {
+                for (i, j) in self.queue.iter_mut().enumerate() {
                     let w = ui.available_width();
                     let (card, _) = ui.allocate_exact_size(vec2(w, JOB_H), Sense::hover());
                     let p = ui.painter_at(card);
@@ -2473,23 +2534,39 @@ impl RenderWin {
                             p.text(line, Align2::LEFT_TOP, tr("Waiting"), small, pal.text_faint);
                         }
                         State::Running => {
-                            let left = match (j.started, j.done) {
+                            let now = std::time::Instant::now();
+                            let fresh = match (j.started, j.done) {
                                 (Some(t), d) if d > 0 && j.total > d => Some(
-                                    t.elapsed().as_secs_f32() / d as f32 * (j.total - d) as f32,
+                                    now.duration_since(t).as_secs_f32() / d as f32
+                                        * (j.total - d) as f32,
                                 ),
                                 _ => None,
                             };
+                            if let Some(new) = fresh
+                                && j.eta.is_none_or(|(at, _)| {
+                                    now.duration_since(at).as_secs_f32() >= 1.0
+                                })
+                            {
+                                let eased = match j.eta {
+                                    Some((_, old)) => old * 0.6 + new * 0.4,
+                                    None => new,
+                                };
+                                j.eta = Some((now, eased));
+                            }
                             let mut words = trf(
                                 "{done} of {total} frames",
                                 &[("done", &j.done), ("total", &j.total)],
                             );
-                            if let Some(left) = left {
+                            if let Some((_, left)) = j.eta {
+                                // to the five seconds past a minute: steadier to read
+                                let left =
+                                    if left >= 60.0 { (left / 5.0).round() * 5.0 } else { left };
                                 words.push_str("   ");
                                 words.push_str(&trf("{time} left", &[("time", &span_short(left))]));
                             }
                             p.text(line, Align2::LEFT_TOP, words, small, pal.text_faint);
                             p.text(
-                                pos2(inner.max.x, line.y),
+                                pos2(inner.max.x - 2.0, line.y),
                                 Align2::RIGHT_TOP,
                                 format!("{:.0}%", f * 100.0),
                                 right_small,

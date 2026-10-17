@@ -1492,8 +1492,10 @@ impl EditorUi {
             (PickFor::ExportImage(w, j, t), Some(path)) => self.export_image_to(path, w, j, t),
             (PickFor::RenderFolder, Some(dir)) => {
                 if let Some(w) = &mut self.render_win {
-                    w.set_folder(dir);
+                    w.set_folder(dir.clone());
                 }
+                self.prefs.render.folder = Some(dir);
+                self.prefs.save();
             }
             (PickFor::ExportMoc3(dlg), Some(dir)) => self.export_moc3_to(&dlg, &dir),
             // a cancelled folder pick leaves the export dialog as it was
@@ -5533,15 +5535,21 @@ impl EditorUi {
         let Some(s) = &self.session else { return };
         let (ext, label) = if jpeg { ("jpg", "JPEG image") } else { ("png", "PNG image") };
         let file = format!("{}.{ext}", s.name);
+        let start = self.prefs.export_folder.clone().filter(|d| d.is_dir());
         self.pick_async(PickFor::ExportImage(width, jpeg, transparent), move || {
-            rfd::FileDialog::new()
-                .add_filter(crate::i18n::tr(label), &[ext])
-                .set_file_name(file)
-                .save_file()
+            let mut d = rfd::FileDialog::new().add_filter(crate::i18n::tr(label), &[ext]);
+            if let Some(s) = start {
+                d = d.set_directory(s);
+            }
+            d.set_file_name(file).save_file()
         });
     }
 
     fn export_image_to(&mut self, path: PathBuf, width: u32, jpeg: bool, transparent: bool) {
+        if let Some(dir) = path.parent() {
+            self.prefs.export_folder = Some(dir.to_path_buf());
+            self.prefs.save();
+        }
         let Some(s) = &self.session else { return };
         let mut tex = Vec::new();
         for png in &s.texture_pngs {

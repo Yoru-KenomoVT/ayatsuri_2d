@@ -159,10 +159,14 @@ impl EditorUi {
             });
         if go_moc3 {
             let Some(dlg) = self.export_dlg.take() else { return };
-            self.pick_async(crate::panels::PickFor::ExportMoc3(Box::new(dlg)), || {
-                rfd::FileDialog::new()
-                    .set_title(crate::i18n::tr("Export as moc3: choose a folder"))
-                    .pick_folder()
+            let start = self.prefs.export_folder.clone().filter(|d| d.is_dir());
+            self.pick_async(crate::panels::PickFor::ExportMoc3(Box::new(dlg)), move || {
+                let mut d = rfd::FileDialog::new()
+                    .set_title(crate::i18n::tr("Export as moc3: choose a folder"));
+                if let Some(s) = start {
+                    d = d.set_directory(s);
+                }
+                d.pick_folder()
             });
         } else if let Some((w, jpeg, transparent)) = go_image {
             self.export_image(w, jpeg, transparent);
@@ -174,6 +178,8 @@ impl EditorUi {
     /// Write the Cubism bundle into the picked folder.
     /// Export to a folder, asking first when it already holds a model.
     pub(crate) fn export_moc3_to(&mut self, dlg: &crate::panels::ExportDlg, dir: &std::path::Path) {
+        self.prefs.export_folder = Some(dir.to_path_buf());
+        self.prefs.save();
         let found = crate::export::existing_models(dir);
         if found.is_empty() {
             self.export_moc3_now(dlg, dir);
