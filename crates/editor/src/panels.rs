@@ -2963,6 +2963,7 @@ impl EditorUi {
                     && !ui.ctx().input(|i| i.pointer.any_down())
                     && let Some(a) = s.animations.get_mut(ai)
                 {
+                    self.timeline.remember(ai, a, None);
                     let fps_a = a.fps;
                     for (id, v) in &keyed {
                         if let Some(c) = ayatsuri_core::anim::curve_mut(
@@ -3995,6 +3996,7 @@ impl EditorUi {
         {
             let v = s.puppet.value(pi);
             if let Some(a) = s.animations.get_mut(ai) {
+                self.timeline.remember(ai, a, None);
                 let fps_a = a.fps;
                 if let Some(c) =
                     ayatsuri_core::anim::curve_mut(a, ayatsuri_format::CurveTarget::Parameter, &id)
@@ -4874,14 +4876,24 @@ impl EditorUi {
                 self.show_settings = true;
                 self.settings_tab = 3;
             }
+            // in the Animation workspace the Timeline's key edits come
+            // back first; the model's own history is behind them
             "undo" => {
                 if let Some(s) = &mut self.session {
-                    s.undo();
+                    if self.workspace == Workspace::Animation && self.timeline.undo(s) {
+                        self.anim_applied = f32::NAN;
+                    } else {
+                        s.undo();
+                    }
                 }
             }
             "redo" | "redo-alt" => {
                 if let Some(s) = &mut self.session {
-                    s.redo();
+                    if self.workspace == Workspace::Animation && self.timeline.redo(s) {
+                        self.anim_applied = f32::NAN;
+                    } else {
+                        s.redo();
+                    }
                 }
             }
             "select-parent" => self.select_parent(),

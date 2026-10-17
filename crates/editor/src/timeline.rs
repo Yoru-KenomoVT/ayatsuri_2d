@@ -143,6 +143,11 @@ pub struct Timeline {
     box_from: Option<Pos2>,
     /// The last click landed in the palette, so Delete and Escape are its.
     focused: bool,
+    /// Scenes as they were before each key edit, with the scene's index;
+    /// one drag folds into one step by its merge key.
+    undo: Vec<(usize, Animation)>,
+    redo: Vec<(usize, Animation)>,
+    merge: Option<&'static str>,
 }
 
 impl Default for Timeline {
@@ -160,6 +165,9 @@ impl Default for Timeline {
             drag: None,
             box_from: None,
             focused: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            merge: None,
         }
     }
 }
@@ -339,6 +347,7 @@ enum Edit {
     Value(usize, f32),
     PartValue(usize, f32),
     Duration(f32),
+    WorkArea(Option<(f32, f32)>),
     /// Add a key at the playhead on this curve, or remove the one there.
     ToggleKey(CurveTarget, String),
     /// Jump to the previous (false) or next (true) key of a curve.
@@ -362,7 +371,46 @@ fn same_kind(a: Interp, b: Interp) -> bool {
     std::mem::discriminant(&a) == std::mem::discriminant(&b)
 }
 
+const UNDO_STEPS: usize = 64;
+
 impl Timeline {
+    /// Keep the scene as it is before an edit. Edits that share a merge key
+    /// while the pointer stays down fold into the step already kept.
+    pub fn remember(&mut self, ai: usize, anim: &Animation, merge: Option<&'static str>) {
+        if merge.is_some() && merge == self.merge {
+            return;
+        }
+        self.merge = merge;
+        self.redo.clear();
+        self.undo.push((ai, anim.clone()));
+        if self.undo.len() > UNDO_STEPS {
+            self.undo.remove(0);
+        }
+    }
+
+    /// Take the last key edit back. True when there was one.
+    pub fn undo(&mut self, s: &mut Session) -> bool {
+        let Some((ai, before)) = self.undo.pop() else { return false };
+        let Some(a) = s.animations.get_mut(ai) else { return false };
+        self.redo.push((ai, std::mem::replace(a, before)));
+        s.current_anim = Some(ai);
+        s.modified = true;
+        self.merge = None;
+        self.selected.clear();
+        true
+    }
+
+    pub fn redo(&mut self, s: &mut Session) -> bool {
+        let Some((ai, after)) = self.redo.pop() else { return false };
+        let Some(a) = s.animations.get_mut(ai) else { return false };
+        self.undo.push((ai, std::mem::replace(a, after)));
+        s.current_anim = Some(ai);
+        s.modified = true;
+        self.merge = None;
+        self.selected.clear();
+        true
+    }
+
     fn set_zoom(&mut self, pps: f32, fit: f32, duration: f32, at_t: f32, at_px: f32) {
         let npps = pps.clamp(fit, MAX_PPS.max(fit));
         if npps <= fit {
@@ -530,6 +578,9 @@ impl Timeline {
         let frame_s = 1.0 / fps;
         let duration = anim.duration.max(frame_s);
         let mut edits: Vec<Edit> = Vec::new();
+        if ui.input(|i| i.pointer.any_released()) {
+            self.merge = None;
+        }
 
         // ---- geometry ----
         self.split = self.split.clamp(MIN_SPLIT, (rect.width() - 160.0).max(MIN_SPLIT));
@@ -804,6 +855,60 @@ impl Timeline {
             Rect::from_min_max(pos2(lanes.min.x, rows_top - COLHDR_H), pos2(lanes.max.x, rows_top));
         p.rect_filled(colhdr_l, 0.0, pal.panel_bg);
         p.rect_filled(colhdr_r, 0.0, pal.chrome);
+        {
+            // the work area: the part of the scene that plays and exports
+            let (w0, w1) = anim.work_area.unwrap_or((0.0, duration));
+            let (w0, w1) = (w0.clamp(0.0, duration), w1.clamp(0.0, duration));
+            let bar = Rect::from_min_max(
+                pos2(tm.x(w0), colhdr_r.min.y + 4.0),
+                pos2(tm.x(w1), colhdr_r.max.y - 5.0),
+            );
+            p.rect_filled(bar.intersect(colhdr_r), 2.0, pal.track);
+            let h0 = Rect::from_center_size(
+                pos2(bar.min.x + 2.5, bar.center().y),
+                vec2(5.0, bar.height() + 2.0),
+            );
+            let h1 = Rect::from_center_size(
+                pos2(bar.max.x - 2.5, bar.center().y),
+                vec2(5.0, bar.height() + 2.0),
+            );
+            p.rect_filled(h0, 2.0, pal.accent);
+            p.rect_filled(h1, 2.0, pal.accent);
+            ui.set_clip_rect(colhdr_r.intersect(outer_clip));
+            let wid = ui.id().with("tl-work");
+            let r_mid = ui
+                .interact(bar.shrink2(vec2(6.0, 0.0)), wid.with("mid"), Sense::drag())
+                .on_hover_cursor(CursorIcon::Grab)
+                .on_hover_text(tr("Work area: the part that plays and exports"));
+            let r0 = ui
+                .interact(h0.expand2(vec2(2.0, 3.0)), wid.with("a"), Sense::drag())
+                .on_hover_cursor(CursorIcon::ResizeHorizontal);
+            let r1 = ui
+                .interact(h1.expand2(vec2(2.0, 3.0)), wid.with("b"), Sense::drag())
+                .on_hover_cursor(CursorIcon::ResizeHorizontal);
+            ui.set_clip_rect(rect.intersect(outer_clip));
+            let snap = |t: f32| ((t * fps).round() / fps).clamp(0.0, duration);
+            let mut next = None;
+            if r0.dragged()
+                && let Some(ptr) = r0.interact_pointer_pos()
+            {
+                next = Some((snap(tm.t(ptr.x)).min(w1 - frame_s), w1));
+            }
+            if r1.dragged()
+                && let Some(ptr) = r1.interact_pointer_pos()
+            {
+                next = Some((w0, snap(tm.t(ptr.x)).max(w0 + frame_s)));
+            }
+            if r_mid.dragged() {
+                let len = w1 - w0;
+                let s0 = snap(w0 + r_mid.drag_delta().x / pps).min(duration - len);
+                next = Some((s0, s0 + len));
+            }
+            if let Some((a, b)) = next {
+                let whole = a <= 0.0 && b >= duration - frame_s * 0.5;
+                edits.push(Edit::WorkArea(if whole { None } else { Some((a, b)) }));
+            }
+        }
         let keys_x = left.max.x - KEYS_W - 4.0;
         let value_x = keys_x - VALUE_W - 4.0;
         let small = FontId::proportional(10.5);
@@ -1546,14 +1651,23 @@ impl Timeline {
                     return;
                 };
                 let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, Some("part"));
                 if let Some(c) = ayatsuri_core::anim::curve_mut(a, CurveTarget::PartOpacity, &id) {
                     ayatsuri_core::anim::set_key(c, *tp.time, v, fps, Interp::Auto);
                 }
                 s.modified = true;
                 *tp.applied = f32::NAN;
             }
+            Edit::WorkArea(w) => {
+                if let Some(a) = s.animations.get_mut(ai) {
+                    self.remember(ai, a, Some("work-area"));
+                    a.work_area = w;
+                    s.modified = true;
+                }
+            }
             Edit::Duration(d) => {
                 if let Some(a) = s.animations.get_mut(ai) {
+                    self.remember(ai, a, Some("duration"));
                     a.duration = d.max(1.0 / fps);
                     if let Some((w0, w1)) = a.work_area {
                         a.work_area = Some((w0.min(a.duration), w1.min(a.duration)));
@@ -1583,6 +1697,7 @@ impl Timeline {
                     CurveTarget::Model => return,
                 };
                 let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, None);
                 let t = (*tp.time * fps).round() / fps;
                 if let Some(c) = ayatsuri_core::anim::curve_mut(a, target, &id)
                     && !ayatsuri_core::anim::remove_key(c, t, fps)
@@ -1617,6 +1732,7 @@ impl Timeline {
                 if delta == 0 {
                     return;
                 }
+                self.remember(ai, a, Some("key-drag"));
                 let mut moved = BTreeSet::new();
                 for c in &mut a.curves {
                     let t = tgt(c.target);
@@ -1658,6 +1774,7 @@ impl Timeline {
             }
             Edit::SetInterp(interp) => {
                 let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, None);
                 for c in &mut a.curves {
                     let t = tgt(c.target);
                     let picked: BTreeSet<i64> = self
@@ -1693,6 +1810,7 @@ impl Timeline {
             }
             Edit::Delete => {
                 let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, None);
                 for c in &mut a.curves {
                     let t = tgt(c.target);
                     let picked: BTreeSet<i64> = self
@@ -1733,6 +1851,22 @@ mod tests {
         tl.set_zoom(200.0, 50.0, 3.0, 1.0, 100.0);
         assert_eq!(tl.pps, Some(200.0));
         assert!((tl.start - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_drag_is_one_undo_step() {
+        let mut tl = Timeline::default();
+        let a = Animation { name: "a".into(), fps: 30.0, duration: 1.0, ..Animation::default() };
+        tl.remember(0, &a, Some("key-drag"));
+        tl.remember(0, &a, Some("key-drag"));
+        tl.remember(0, &a, Some("key-drag"));
+        assert_eq!(tl.undo.len(), 1);
+        tl.merge = None;
+        tl.remember(0, &a, Some("key-drag"));
+        assert_eq!(tl.undo.len(), 2);
+        tl.remember(0, &a, None);
+        tl.remember(0, &a, None);
+        assert_eq!(tl.undo.len(), 4);
     }
 
     #[test]
