@@ -13,6 +13,7 @@ pub mod artpath;
 pub mod automesh;
 pub mod bezier;
 pub mod blend;
+pub mod comp;
 pub mod deform;
 pub mod edit;
 pub mod keyform;

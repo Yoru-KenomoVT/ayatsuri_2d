@@ -137,7 +137,13 @@ pub struct Session {
     pub animations: Vec<ayatsuri_format::Animation>,
     /// Expressions (exp3.json) that ride with the model.
     pub expressions: Vec<ayatsuri_format::Expression>,
+    /// Compositions: layers of scenes over one clock; they ride in the
+    /// .aom too.
+    pub compositions: Vec<ayatsuri_format::Composition>,
     pub current_anim: Option<usize>,
+    /// The composition the Timeline shows instead of a scene, when it
+    /// shows one.
+    pub current_comp: Option<usize>,
     pub puppet: Puppet,
     /// Downscaled for the Texture palette and the non-GPU fallback view.
     pub textures: Vec<Option<TextureHandle>>,
@@ -784,7 +790,9 @@ impl Session {
         self.author = old.author;
         self.animations = old.animations;
         self.expressions = old.expressions;
+        self.compositions = old.compositions;
         self.current_anim = old.current_anim;
+        self.current_comp = old.current_comp;
         self.param_names = old.param_names;
         self.param_colors = old.param_colors;
         self.groups = old.groups;
@@ -863,7 +871,9 @@ impl Session {
         self.author = old.author;
         self.animations = old.animations;
         self.expressions = old.expressions;
+        self.compositions = old.compositions;
         self.current_anim = old.current_anim;
+        self.current_comp = old.current_comp;
         self.param_names = old.param_names;
         self.param_colors = old.param_colors;
         self.groups = old.groups;
@@ -923,6 +933,7 @@ impl Session {
         s.timelapse_pref = payload.meta.timelapse;
         s.animations = payload.animations;
         s.expressions = payload.expressions;
+        s.compositions = payload.compositions;
         if let Some(d) = payload.display {
             s.model_groups = d.model_groups.clone();
             s.guides = d.guides.clone();
@@ -1260,6 +1271,8 @@ impl Session {
             mesh_previews: HashMap::new(),
             animations: Vec::new(),
             expressions: Vec::new(),
+            compositions: Vec::new(),
+            current_comp: None,
             current_anim: None,
             part_shown: vec![true; n_parts],
             mesh_shown: vec![true; n_meshes],
@@ -1638,6 +1651,7 @@ impl Session {
                 .map(|b| serde_bytes::ByteBuf::from(b.clone()))
                 .collect(),
             animations: self.animations.clone(),
+            compositions: self.compositions.clone(),
             expressions: self.expressions.clone(),
             display: Some(ayatsuri_format::DisplayInfo {
                 param_names: self.param_names.clone(),
