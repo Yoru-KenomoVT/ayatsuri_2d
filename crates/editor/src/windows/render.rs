@@ -104,6 +104,9 @@ struct Spec {
     /// the size and averaged down.
     gpu: bool,
     aa: bool,
+    /// Draw what each timelapse step changed over its frames, as the
+    /// player does with the eye on.
+    changes: bool,
     folder: PathBuf,
     name: String,
     model: Model,
@@ -570,6 +573,128 @@ fn pose_of(changes: &[Change]) -> Vec<(usize, f32)> {
         }
     }
     out
+}
+
+/// The overlay's colours as the theme has them, for a worker thread.
+fn mark_colours() -> [[f32; 3]; 3] {
+    let pal = crate::theme::pal();
+    let f = |c: egui::Color32| [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0];
+    [f(pal.warp_green), f(pal.accent), f(pal.rotation_red)]
+}
+
+fn mark_colour(colours: &[[f32; 3]; 3], kind: Kind) -> [f32; 3] {
+    match kind {
+        Kind::Added => colours[0],
+        Kind::Edited => colours[1],
+        Kind::Removed => colours[2],
+    }
+}
+
+/// Blend a colour into a straight-alpha RGBA frame at `cover`.
+fn blend_px(px: &mut [u8], w: usize, h: usize, x: i64, y: i64, col: [f32; 3], cover: f32) {
+    if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 || cover <= 0.0 {
+        return;
+    }
+    let at = (y as usize * w + x as usize) * 4;
+    let Some(p) = px.get_mut(at..at + 4) else { return };
+    let a = cover.min(1.0);
+    let da = p.get(3).copied().unwrap_or(0) as f32 / 255.0;
+    let oa = a + da * (1.0 - a);
+    for (c, &sc) in p.iter_mut().take(3).zip(col.iter()) {
+        let dc = *c as f32 / 255.0;
+        let oc = if oa > 0.0 { (sc * a + dc * da * (1.0 - a)) / oa } else { 0.0 };
+        *c = (oc * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    if let Some(pa) = p.get_mut(3) {
+        *pa = (oa * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// A line of `width` pixels, anti-aliased by distance.
+fn stamp_line(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    a: [f32; 2],
+    b: [f32; 2],
+    width: f32,
+    col: [f32; 3],
+) {
+    let r = width / 2.0;
+    let (x0, y0, x1, y1) = (a[0], a[1], b[0], b[1]);
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let len2 = dx * dx + dy * dy;
+    let minx = (x0.min(x1) - r - 1.0).floor() as i64;
+    let maxx = (x0.max(x1) + r + 1.0).ceil() as i64;
+    let miny = (y0.min(y1) - r - 1.0).floor() as i64;
+    let maxy = (y0.max(y1) + r + 1.0).ceil() as i64;
+    for y in miny..=maxy {
+        for x in minx..=maxx {
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let t = if len2 > 0.0 { ((cx - x0) * dx + (cy - y0) * dy) / len2 } else { 0.0 };
+            let t = t.clamp(0.0, 1.0);
+            let (qx, qy) = (x0 + dx * t, y0 + dy * t);
+            let d = ((cx - qx).powi(2) + (cy - qy).powi(2)).sqrt();
+            blend_px(px, w, h, x, y, col, r + 0.5 - d);
+        }
+    }
+}
+
+/// A filled disc, or a ring when `ring` is set.
+fn stamp_disc(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    c: [f32; 2],
+    radius: f32,
+    ring: Option<f32>,
+    col: [f32; 3],
+) {
+    let r = radius + 1.0;
+    for y in ((c[1] - r).floor() as i64)..=((c[1] + r).ceil() as i64) {
+        for x in ((c[0] - r).floor() as i64)..=((c[0] + r).ceil() as i64) {
+            let d = ((x as f32 + 0.5 - c[0]).powi(2) + (y as f32 + 0.5 - c[1]).powi(2)).sqrt();
+            let cover = match ring {
+                Some(t) => t / 2.0 + 0.5 - (d - radius).abs(),
+                None => radius + 0.5 - d,
+            };
+            blend_px(px, w, h, x, y, col, cover);
+        }
+    }
+}
+
+/// The change marks drawn into a frame, as the player's overlay draws
+/// them: `k` is frame pixels per canvas pixel.
+fn stamp_marks(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    k: f32,
+    marks: &[(usize, Mark)],
+    colours: &[[f32; 3]; 3],
+) {
+    let to = |x: f32, y: f32| [x * k, y * k];
+    // lines a touch heavier than on screen: video compression eats thin ones
+    let s = (w as f32 / 900.0).clamp(1.0, 4.0);
+    for (_, m) in marks {
+        let col = mark_colour(colours, m.kind);
+        let lw = if m.dots.is_empty() { 1.2 } else { 1.6 } * s;
+        for sg in &m.segs {
+            stamp_line(px, w, h, to(sg[0], sg[1]), to(sg[2], sg[3]), lw, col);
+        }
+        for d in &m.dots {
+            stamp_disc(px, w, h, to(d[0], d[1]), 2.2 * s, None, col);
+        }
+        if let Some([x, y, angle]) = m.pivot {
+            let o = to(x, y);
+            let a = angle.to_radians();
+            let tip = [o[0] + a.sin() * 26.0 * s, o[1] - a.cos() * 26.0 * s];
+            stamp_disc(px, w, h, o, 7.0 * s, Some(2.0 * s), col);
+            stamp_disc(px, w, h, o, 2.5 * s, None, col);
+            stamp_line(px, w, h, o, tip, 2.0 * s, col);
+            stamp_disc(px, w, h, tip, 3.0 * s, None, col);
+        }
+    }
 }
 
 /// The changed objects' geometry at this step, in canvas pixels.
@@ -1085,6 +1210,8 @@ fn frames(spec: &Spec, draw: &mut Drawer, out: &mut Out<'_>) -> Result<(), Strin
             let mut cur: Option<(usize, Model)> = None;
             let mut nxt: Option<(usize, Model)> = None;
             let mut pose: Vec<(usize, f32)> = Vec::new();
+            let mut changed: Vec<Change> = Vec::new();
+            let colours = mark_colours();
             let mut last = None;
             for f in 0..moving {
                 let pos = (f as f32 / fps * sps).min((n - 1) as f32);
@@ -1101,10 +1228,11 @@ fn frames(spec: &Spec, draw: &mut Drawer, out: &mut Out<'_>) -> Result<(), Strin
                         )
                     })?;
                     nxt = list.get(step + 1).and_then(|&i| player.model(i)).map(|b| (step + 1, b));
-                    pose = nxt
+                    changed = nxt
                         .as_ref()
-                        .map(|(_, b)| pose_of(&crate::model_diff::diff(&a, b)))
+                        .map(|(_, b)| crate::model_diff::diff(&a, b))
                         .unwrap_or_default();
+                    pose = pose_of(&changed);
                     cur = Some((step, a));
                 }
                 let Some((_, a)) = &cur else { break };
@@ -1120,7 +1248,11 @@ fn frames(spec: &Spec, draw: &mut Drawer, out: &mut Out<'_>) -> Result<(), Strin
                     puppet.set_value(i, v);
                 }
                 puppet.update();
-                let (w, h, px) = draw.frame(spec, &puppet);
+                let (w, h, mut px) = draw.frame(spec, &puppet);
+                if spec.changes && !changed.is_empty() {
+                    let k = w as f32 / puppet.model().canvas.width.max(1.0);
+                    stamp_marks(&mut px, w, h, k, &marks(&puppet, &changed), &colours);
+                }
                 last = Some((w, h, px.clone()));
                 out.push(w, h, px, total)?;
             }
@@ -1425,7 +1557,9 @@ impl EditorUi {
                     // more: a column that asked for more each frame would grow
                     // the window without end
                     let room = win.queue_h();
-                    let (pw, fh) = win.fit(ui.available_width(), ui.available_height() - room, s);
+                    let gap = ui.spacing().item_spacing.y;
+                    let (pw, fh) =
+                        win.fit(ui.available_width(), ui.available_height() - room - gap - 2.0, s);
                     ui.horizontal_top(|ui| {
                         win.player_ui(ui, s, pw, fh);
                         ui.add_space(6.0);
@@ -1438,7 +1572,7 @@ impl EditorUi {
                             .max_rect(slot.shrink2(egui::vec2(0.0, 4.0)))
                             .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
-                    q.set_clip_rect(slot);
+                    q.set_clip_rect(slot.intersect(ui.clip_rect()));
                     win.queue_ui(&mut q);
                 });
             });
@@ -1462,6 +1596,7 @@ impl EditorUi {
                 physics: self.physics_on,
                 gpu: win.gpu,
                 aa: win.aa,
+                changes: win.show_changes,
                 folder: folder.clone(),
                 name: stem.clone(),
                 model: s.puppet.model().clone(),
@@ -1602,15 +1737,15 @@ impl RenderWin {
     fn fit(&mut self, avail_w: f32, avail_h: f32, s: &crate::session::Session) -> (f32, f32) {
         let c = s.puppet.model().canvas;
         let aspect = (c.height / c.width.max(1.0)).max(0.1);
-        let mut pw = (avail_w - SIDE_W - 14.0).max(MIN_PLAYER_W);
-        let mut fh = pw * aspect;
+        let mut pw = (avail_w - SIDE_W - 14.0).max(MIN_PLAYER_W).floor();
+        let mut fh = (pw * aspect).floor();
         // a short window: the frame shrinks and the player narrows with it,
         // which may give the bar a second row, so the height is settled twice
         for _ in 0..2 {
-            let max_fh = (avail_h - STRIP_H - Self::bar_h(pw)).max(160.0);
+            let max_fh = (avail_h - STRIP_H - Self::bar_h(pw)).max(160.0).floor();
             if fh > max_fh {
                 fh = max_fh;
-                pw = (fh / aspect).clamp(MIN_PLAYER_W, pw);
+                pw = (fh / aspect).clamp(MIN_PLAYER_W, pw).floor();
             }
         }
         self.player_size = (pw, fh);
@@ -1906,19 +2041,18 @@ impl RenderWin {
 
     /// Beside the player: the parameters a scene drives, or what a timelapse
     /// step changed.
+    /// The panel takes exactly `w` by `h` and is clipped to it: whatever
+    /// it holds, it can never push the window larger.
     fn side_panel(&mut self, ui: &mut Ui, s: &crate::session::Session, h: f32, w: f32) {
-        ui.allocate_ui_with_layout(
-            egui::vec2(w, h),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.set_min_height(h);
-                ui.set_max_width(w);
-                match self.source {
-                    Source::Animation => self.params_panel(ui, s, h, w),
-                    Source::Timelapse => self.changes_panel(ui, h, w),
-                }
-            },
+        let (slot, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+        let mut p = ui.new_child(
+            egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::top_down(egui::Align::Min)),
         );
+        p.set_clip_rect(slot.intersect(ui.clip_rect()));
+        match self.source {
+            Source::Animation => self.params_panel(&mut p, s, h, w),
+            Source::Timelapse => self.changes_panel(&mut p, h, w),
+        }
     }
 
     fn params_panel(&self, ui: &mut Ui, s: &crate::session::Session, h: f32, w: f32) {
@@ -2521,6 +2655,7 @@ mod tests {
             physics: false,
             gpu: std::env::var("AYATSURI_EXPORT_CPU").is_err(),
             aa: true,
+            changes: true,
             folder: out,
             name: "timelapse-test".into(),
             model: payload.model,
