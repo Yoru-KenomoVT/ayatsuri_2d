@@ -253,6 +253,8 @@ fn the_header_names_every_entry_point() {
         include_str!("motions.rs"),
         include_str!("expressions.rs"),
         include_str!("bundle.rs"),
+        include_str!("info.rs"),
+        include_str!("changes.rs"),
     ];
     let mut missing = Vec::new();
     for src in sources {
@@ -388,6 +390,8 @@ fn unsafe_stays_in_one_file() {
         ("motions.rs", include_str!("motions.rs")),
         ("expressions.rs", include_str!("expressions.rs")),
         ("bundle.rs", include_str!("bundle.rs")),
+        ("info.rs", include_str!("info.rs")),
+        ("changes.rs", include_str!("changes.rs")),
         ("fixture.rs", include_str!("fixture.rs")),
         ("tests.rs", include_str!("tests.rs")),
     ];
@@ -446,5 +450,57 @@ fn a_moc3_loads_and_takes_its_bundle_files() {
     let junk = b"{ not json";
     assert_eq!(ay2d_add_motion3(m, name.as_ptr(), junk.as_ptr(), junk.len()), -1);
     assert!(last_error().contains("motion3"));
+    ay2d_free(m);
+}
+
+#[test]
+fn names_keys_parents_and_groups() {
+    let m = load();
+    assert_eq!(cstr(ay2d_parameter_name(m, 0)), "Slide");
+    assert_eq!(cstr(ay2d_parameter_name(m, 1)), "Sway");
+    assert_eq!(cstr(ay2d_part_name(m, 0)), "Body");
+    assert_eq!(cstr(ay2d_mesh_name(m, 0)), "The quad");
+    assert!(ay2d_parameter_name(m, 9).is_null());
+    assert_eq!(ay2d_parameter_repeat(m, 0), 0);
+    let mut keys = [9.0f32; 4];
+    assert_eq!(ay2d_parameter_keys(m, 0, keys.as_mut_ptr(), 4), 2, "rigged at 0 and 1");
+    assert_eq!(&keys[..2], &[0.0, 1.0]);
+    assert_eq!(ay2d_parameter_keys(m, 1, keys.as_mut_ptr(), 4), 0, "nothing rigged on it");
+    assert_eq!(ay2d_parameter_keys(m, 7, keys.as_mut_ptr(), 4), 0);
+    assert_eq!(ay2d_part_parent(m, 0), -1);
+    assert_eq!(ay2d_mesh_part(m, 0), 0);
+    assert_eq!(ay2d_parameter_group_count(m), 1);
+    assert_eq!(cstr(ay2d_parameter_group_name(m, 0)), "Motion");
+    let mut members = [7u32; 4];
+    assert_eq!(ay2d_parameter_group(m, 0, members.as_mut_ptr(), 4), 2);
+    assert_eq!(&members[..2], &[0, 1]);
+    assert_eq!(ay2d_model_group_count(m), 1);
+    assert_eq!(cstr(ay2d_model_group_name(m, 0)), "LipSync");
+    assert_eq!(ay2d_model_group(m, 0, members.as_mut_ptr(), 4), 1);
+    assert_eq!(members[0], 0);
+    ay2d_free(m);
+}
+
+#[test]
+fn change_flags_say_what_moved() {
+    let m = load();
+    let mut flags = [0u32; 1];
+    assert_eq!(ay2d_mesh_changes(m, flags.as_mut_ptr(), 1), Status::Ok);
+    assert_eq!(flags[0], 15, "everything is new after load");
+    ay2d_update(m, 0.0);
+    ay2d_mesh_changes(m, flags.as_mut_ptr(), 1);
+    assert_eq!(flags[0], 0, "nothing moved");
+    let idx = [0u32];
+    let v = [1.0f32];
+    ay2d_set_parameters(m, idx.as_ptr(), v.as_ptr(), 1);
+    ay2d_update(m, 0.0);
+    ay2d_mesh_changes(m, flags.as_mut_ptr(), 1);
+    assert_eq!(flags[0], AY2D_CHANGED_POSITIONS, "only the vertices moved");
+    let half = [0.5f32];
+    ay2d_set_part_opacities(m, idx.as_ptr(), half.as_ptr(), 1);
+    ay2d_update(m, 0.0);
+    ay2d_mesh_changes(m, flags.as_mut_ptr(), 1);
+    assert_eq!(flags[0], AY2D_CHANGED_OPACITY);
+    assert_eq!(ay2d_mesh_changes(m, flags.as_mut_ptr(), 0), Status::TooSmall);
     ay2d_free(m);
 }

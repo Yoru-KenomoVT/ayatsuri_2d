@@ -28,6 +28,8 @@ pub struct Model {
     pub(crate) part_index: HashMap<String, usize>,
     pub(crate) player: crate::motions::Player,
     pub(crate) exprs: crate::expressions::Expressions,
+    pub(crate) info: crate::info::Info,
+    pub(crate) changes: crate::changes::Changes,
     /// Where each visible drawable's data sits after the last update, in
     /// draw order, so `ay2d_drawables` hands out views without a sort.
     pub(crate) order: Vec<usize>,
@@ -187,6 +189,7 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
             &part_index,
         );
         let exprs = crate::expressions::Expressions::new(&payload.expressions, &param_index);
+        let info = crate::info::Info::new(m, payload.display.as_ref(), &param_index);
         let mut puppet = Puppet::new(payload.model);
         puppet.update();
         let physics_on = puppet.has_physics();
@@ -203,9 +206,11 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
             part_index,
             player,
             exprs,
+            info,
+            changes: crate::changes::Changes::default(),
             order: Vec::new(),
         };
-        model.refresh_order();
+        model.after_update();
         Box::into_raw(Box::new(model))
     })
 }
@@ -215,6 +220,7 @@ impl Model {
     /// change flags.
     pub(crate) fn after_update(&mut self) {
         self.refresh_order();
+        self.changes.after_update(&self.puppet, &self.order);
     }
 
     /// The drawables' mesh indices after an update, in draw order.

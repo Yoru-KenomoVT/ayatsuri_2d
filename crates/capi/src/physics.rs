@@ -37,7 +37,7 @@ pub extern "C" fn ay2d_update(m: *mut Model, dt: f32) -> Status {
             model.puppet.step_physics(dt);
         }
         model.puppet.update();
-        model.refresh_order();
+        model.after_update();
         Status::Ok
     })
 }

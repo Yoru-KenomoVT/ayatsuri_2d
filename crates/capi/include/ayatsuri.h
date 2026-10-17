@@ -23,6 +23,26 @@
 #define AY2D_ABI_VERSION 1
 
 /*
+ The mesh's vertex positions moved.
+ */
+#define AY2D_CHANGED_POSITIONS 1
+
+/*
+ The mesh came into or went out of the drawables.
+ */
+#define AY2D_CHANGED_VISIBILITY 2
+
+/*
+ The mesh's opacity changed.
+ */
+#define AY2D_CHANGED_OPACITY 4
+
+/*
+ The mesh's place in the draw order changed.
+ */
+#define AY2D_CHANGED_ORDER 8
+
+/*
  Drawn with additive blending.
  */
 #define AY2D_FLAG_ADDITIVE 1
@@ -192,6 +212,14 @@ int32_t ay2d_add_expression3(struct ay2d_model *m,
                              size_t len);
 
 /*
+ What changed for every mesh in the last update, as `AY2D_CHANGED_*`
+ bits by mesh index, into `out` (`ay2d_mesh_count` entries). A host
+ streaming positions to the GPU uploads the meshes with the positions
+ bit and leaves the rest. After load every bit is set.
+ */
+enum ay2d_status ay2d_mesh_changes(const struct ay2d_model *m, uint32_t *out, size_t n);
+
+/*
  The visible meshes after the last update, back to front, into `out`.
  Returns how many there are; with `n` smaller than that (zero and a
  null `out` to just ask) only the first `n` are written. Masks are not
@@ -351,6 +379,78 @@ const char *ay2d_mesh_id(const struct ay2d_model *m, uint32_t i);
  `m` is a live handle; `id` is a NUL-terminated string.
  */
 int32_t ay2d_parameter_index(const struct ay2d_model *m, const char *id);
+
+/*
+ A parameter's display name ("Angle X"), the id when the file names
+ none. NUL-terminated, alive as long as the model.
+ */
+const char *ay2d_parameter_name(const struct ay2d_model *m, uint32_t i);
+
+/*
+ A part's display name, as [`ay2d_parameter_name`].
+ */
+const char *ay2d_part_name(const struct ay2d_model *m, uint32_t i);
+
+/*
+ A mesh's display name, as [`ay2d_parameter_name`].
+ */
+const char *ay2d_mesh_name(const struct ay2d_model *m, uint32_t i);
+
+/*
+ 1 when parameter `i` wraps around its range instead of clamping
+ (turn-around heads).
+ */
+int32_t ay2d_parameter_repeat(const struct ay2d_model *m, uint32_t i);
+
+/*
+ The values parameter `i` was rigged at (the keyform positions), sorted,
+ into `out`. Returns how many there are; with `n` smaller only the first
+ `n` are written. A UI shows these as the dots on a slider.
+ */
+uint32_t ay2d_parameter_keys(const struct ay2d_model *m, uint32_t i, float *out, size_t n);
+
+/*
+ The part that holds part `i`, or -1 at the top.
+ */
+int32_t ay2d_part_parent(const struct ay2d_model *m, uint32_t i);
+
+/*
+ The part that holds mesh `i`, or -1 when it sits at the top.
+ */
+int32_t ay2d_mesh_part(const struct ay2d_model *m, uint32_t i);
+
+/*
+ How many parameter folders the file's palette has.
+ */
+uint32_t ay2d_parameter_group_count(const struct ay2d_model *m);
+
+/*
+ A folder's name, NUL-terminated, alive as long as the model.
+ */
+const char *ay2d_parameter_group_name(const struct ay2d_model *m, uint32_t g);
+
+/*
+ The parameters in folder `g`, by index, into `out`. Returns how many
+ there are; with `n` smaller only the first `n` are written.
+ */
+uint32_t ay2d_parameter_group(const struct ay2d_model *m, uint32_t g, uint32_t *out, size_t n);
+
+/*
+ How many standard groups (EyeBlink, LipSync...) the model names.
+ */
+uint32_t ay2d_model_group_count(const struct ay2d_model *m);
+
+/*
+ A standard group's name ("EyeBlink", "LipSync"), NUL-terminated, alive
+ as long as the model.
+ */
+const char *ay2d_model_group_name(const struct ay2d_model *m, uint32_t g);
+
+/*
+ The parameters in standard group `g`, by index, into `out`: the ones a
+ blink or a lip sync should drive. Returns how many there are.
+ */
+uint32_t ay2d_model_group(const struct ay2d_model *m, uint32_t g, uint32_t *out, size_t n);
 
 /*
  How many motions the model carries: its scenes, then its compositions.

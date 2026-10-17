@@ -7,12 +7,14 @@
 //! reports through `ay2d_last_error` and returns a status or a null.
 
 mod bundle;
+mod changes;
 mod draw;
 mod error;
 mod expressions;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 mod handle;
+mod info;
 mod motions;
 mod params;
 mod parts;
@@ -22,6 +24,10 @@ mod textures;
 use std::ffi::c_char;
 
 pub use bundle::{ay2d_add_expression3, ay2d_add_motion3, ay2d_add_physics3};
+pub use changes::{
+    AY2D_CHANGED_OPACITY, AY2D_CHANGED_ORDER, AY2D_CHANGED_POSITIONS, AY2D_CHANGED_VISIBILITY,
+    ay2d_mesh_changes,
+};
 pub use draw::{
     AY2D_FLAG_ADDITIVE, AY2D_FLAG_DOUBLE_SIDED, AY2D_FLAG_INVERTED_MASK, AY2D_FLAG_MULTIPLICATIVE,
     Drawable, ay2d_drawables, ay2d_mesh_geometry,
@@ -35,6 +41,12 @@ pub use handle::{
     Canvas, Model, ay2d_canvas, ay2d_free, ay2d_load, ay2d_mesh_count, ay2d_mesh_id,
     ay2d_parameter_count, ay2d_parameter_id, ay2d_parameter_index, ay2d_part_count, ay2d_part_id,
     ay2d_texture_count,
+};
+pub use info::{
+    ay2d_mesh_name, ay2d_mesh_part, ay2d_model_group, ay2d_model_group_count,
+    ay2d_model_group_name, ay2d_parameter_group, ay2d_parameter_group_count,
+    ay2d_parameter_group_name, ay2d_parameter_keys, ay2d_parameter_name, ay2d_parameter_repeat,
+    ay2d_part_name, ay2d_part_parent,
 };
 pub use motions::{
     Event, MotionInfo, ay2d_motion_count, ay2d_motion_events, ay2d_motion_finished, ay2d_motion_id,
