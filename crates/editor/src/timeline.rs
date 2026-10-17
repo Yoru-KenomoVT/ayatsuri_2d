@@ -405,6 +405,12 @@ enum Edit {
     /// Place a bezier handle: the key's out handle (true) or the handle
     /// into it from the segment before, each (seconds, value) from the key.
     SetHandle(KeyRef, bool, (f32, f32)),
+    /// Open up frames at the playhead: later keys move on and the scene
+    /// grows by as much (Live2D's insert blank frames).
+    InsertFrames(i64),
+    /// Take frames out at the playhead: keys on them go, later keys move
+    /// back and the scene shrinks by as much.
+    RemoveFrames(i64),
 }
 
 const INTERPS: [(&str, Interp); 5] = [
@@ -1797,14 +1803,30 @@ impl Timeline {
             self.focused = false;
         }
         if self.focused && !ui.ctx().egui_wants_keyboard_input() {
-            let (del, esc, all) = ui.input_mut(|i| {
+            let (del, esc, all, nudge) = ui.input_mut(|i| {
+                // Alt with an arrow nudges the selected keys a frame, ten with Shift
+                let step = |i: &mut egui::InputState, key: egui::Key| {
+                    if i.consume_key(Modifiers::ALT | Modifiers::SHIFT, key) {
+                        10
+                    } else if i.consume_key(Modifiers::ALT, key) {
+                        1
+                    } else {
+                        0
+                    }
+                };
+                let nudge = step(i, egui::Key::ArrowRight) - step(i, egui::Key::ArrowLeft);
                 (
                     i.consume_key(Modifiers::NONE, egui::Key::Delete)
                         || i.consume_key(Modifiers::NONE, egui::Key::Backspace),
                     i.consume_key(Modifiers::NONE, egui::Key::Escape),
                     i.consume_key(Modifiers::COMMAND, egui::Key::A),
+                    nudge,
                 )
             });
+            if nudge != 0 && !self.selected.is_empty() {
+                self.merge = None;
+                edits.push(Edit::Move(nudge));
+            }
             if del && !self.selected.is_empty() {
                 edits.push(Edit::Delete);
             }
@@ -1907,7 +1929,10 @@ impl Timeline {
             4.0,
             if r_zoom.hovered() || r_zoom.dragged() { pal.accent } else { pal.text },
         );
-        if (r_zoom.dragged() || r_zoom.clicked())
+        if r_zoom.double_clicked() {
+            self.pps = None;
+            self.start = 0.0;
+        } else if (r_zoom.dragged() || r_zoom.clicked())
             && let Some(ptr) = r_zoom.interact_pointer_pos()
         {
             let f = ((ptr.x - z0) / (z1 - z0).max(1.0)).clamp(0.0, 1.0);
@@ -1935,6 +1960,31 @@ impl Timeline {
             small,
             pal.text_faint,
         );
+        // frames go in and out at the playhead, ten at a time with Shift
+        let fr = Rect::from_min_max(
+            pos2(rect.min.x + 70.0, rows_bottom + 1.0),
+            pos2(left.max.x - 4.0, rect.max.y - 1.0),
+        );
+        let mut h = ui
+            .new_child(UiBuilder::new().max_rect(fr).layout(Layout::left_to_right(Align::Center)));
+        h.spacing_mut().item_spacing.x = 4.0;
+        let count = if mods.shift { 10 } else { 1 };
+        if h.small_button(tr("Insert frame"))
+            .on_hover_text(tr(
+                "Open up a frame at the playhead; later keys move on. Shift inserts ten.",
+            ))
+            .clicked()
+        {
+            edits.push(Edit::InsertFrames(count));
+        }
+        if h.small_button(tr("Remove frame"))
+            .on_hover_text(tr(
+                "Take the frame at the playhead out; later keys move back. Shift removes ten.",
+            ))
+            .clicked()
+        {
+            edits.push(Edit::RemoveFrames(count));
+        }
 
         // ---- the split between names and lanes ----
         let grip = Rect::from_min_max(
@@ -2276,6 +2326,55 @@ impl Timeline {
                         prev.interp = Interp::Bezier { out, into: h };
                     }
                 }
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
+            Edit::InsertFrames(n) => {
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, None);
+                let at = (*tp.time * fps).round() as i64;
+                let dt = n as f32 / fps;
+                for c in &mut a.curves {
+                    for k in &mut c.keys {
+                        if (k.time * fps).round() as i64 >= at {
+                            k.time += dt;
+                        }
+                    }
+                }
+                a.duration += dt;
+                if let Some((w0, w1)) = a.work_area {
+                    let at_t = at as f32 / fps;
+                    a.work_area = Some((
+                        if w0 >= at_t { w0 + dt } else { w0 },
+                        if w1 >= at_t { w1 + dt } else { w1 },
+                    ));
+                }
+                self.selected.clear();
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
+            Edit::RemoveFrames(n) => {
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, None);
+                let at = (*tp.time * fps).round() as i64;
+                let dt = n as f32 / fps;
+                for c in &mut a.curves {
+                    c.keys.retain(|k| {
+                        let f = (k.time * fps).round() as i64;
+                        f < at || f >= at + n
+                    });
+                    for k in &mut c.keys {
+                        if (k.time * fps).round() as i64 >= at + n {
+                            k.time -= dt;
+                        }
+                    }
+                }
+                a.curves.retain(|c| !c.keys.is_empty());
+                a.duration = (a.duration - dt).max(1.0 / fps);
+                if let Some((w0, w1)) = a.work_area {
+                    a.work_area = Some((w0.min(a.duration), w1.min(a.duration)));
+                }
+                self.selected.clear();
                 s.modified = true;
                 *tp.applied = f32::NAN;
             }
