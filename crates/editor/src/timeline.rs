@@ -148,6 +148,46 @@ pub struct Timeline {
     undo: Vec<(usize, Animation)>,
     redo: Vec<(usize, Animation)>,
     merge: Option<&'static str>,
+    /// The graph editor in place of the key lanes.
+    pub graph: bool,
+    /// The value range held still while something in the graph is dragged.
+    graph_range: Option<(f32, f32)>,
+    grab: Option<GraphGrab>,
+}
+
+/// A drag of the selected keys in the graph: frames and value moved so far.
+struct GraphGrab {
+    press: Pos2,
+    applied_f: i64,
+    applied_v: f32,
+}
+
+const GRAPH_COLORS: [Color32; 6] = [
+    Color32::from_rgb(0xe8, 0xc8, 0x40),
+    Color32::from_rgb(0xd0, 0x70, 0xe0),
+    Color32::from_rgb(0x40, 0xc8, 0xc8),
+    Color32::from_rgb(0xf0, 0x90, 0x40),
+    Color32::from_rgb(0x9c, 0xd8, 0x50),
+    Color32::from_rgb(0xf0, 0x70, 0x90),
+];
+
+/// A grid step of 1, 2 or 5 times a power of ten near `x`.
+fn nice_step(x: f32) -> f32 {
+    let e = 10f32.powf(x.max(1e-6).log10().floor());
+    let m = x / e;
+    e * if m <= 1.0 {
+        1.0
+    } else if m <= 2.0 {
+        2.0
+    } else if m <= 5.0 {
+        5.0
+    } else {
+        10.0
+    }
+}
+
+fn step_decimals(step: f32) -> usize {
+    if step >= 1.0 { 0 } else { (-step.log10().floor()).clamp(0.0, 4.0) as usize }
 }
 
 impl Default for Timeline {
@@ -168,6 +208,9 @@ impl Default for Timeline {
             undo: Vec::new(),
             redo: Vec::new(),
             merge: None,
+            graph: false,
+            graph_range: None,
+            grab: None,
         }
     }
 }
@@ -357,6 +400,11 @@ enum Edit {
     /// Give the selected keys an interpolation.
     SetInterp(Interp),
     Delete,
+    /// Move the selected keys' values.
+    Offset(f32),
+    /// Place a bezier handle: the key's out handle (true) or the handle
+    /// into it from the segment before, each (seconds, value) from the key.
+    SetHandle(KeyRef, bool, (f32, f32)),
 }
 
 const INTERPS: [(&str, Interp); 5] = [
@@ -740,6 +788,11 @@ impl Timeline {
         ) {
             self.show_all = !self.show_all;
         }
+        if icon_button(&mut h, egui_phosphor::regular::CHART_LINE, tr("Graph editor"), self.graph) {
+            self.graph = !self.graph;
+            self.grab = None;
+            self.graph_range = None;
+        }
 
         // ---- header, right: navigator and ruler ----
         let nav = Rect::from_min_max(
@@ -974,6 +1027,41 @@ impl Timeline {
         ui.set_clip_rect(rect.intersect(outer_clip));
         let mods = ui.input(|i| i.modifiers);
         let mut key_hits: Vec<(KeyRef, Pos2)> = Vec::new();
+        // the graph shows the curves holding selected keys, else the selected
+        // parameter's, else every animated curve
+        let shown: Vec<((CurveTarget, String), Color32)> = if self.graph {
+            let mut list: Vec<(CurveTarget, String)> = anim
+                .curves
+                .iter()
+                .filter(|c| self.selected.iter().any(|k| k.target == tgt(c.target) && k.id == c.id))
+                .map(|c| (c.target, c.id.clone()))
+                .collect();
+            if list.is_empty()
+                && let Some(pi) = *tp.sel_param
+                && let Some(pr) = s.puppet.model().parameters.get(pi)
+                && ayatsuri_core::anim::param_curve(&anim, &pr.id)
+                    .is_some_and(|c| !c.keys.is_empty())
+            {
+                list.push((CurveTarget::Parameter, pr.id.clone()));
+            }
+            if list.is_empty() {
+                list = anim
+                    .curves
+                    .iter()
+                    .filter(|c| c.target != CurveTarget::Model && !c.keys.is_empty())
+                    .take(12)
+                    .map(|c| (c.target, c.id.clone()))
+                    .collect();
+            }
+            list.into_iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    (c, GRAPH_COLORS.get(i % GRAPH_COLORS.len()).copied().unwrap_or(pal.accent))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut snap_times: Vec<f32> = vec![0.0, duration, *tp.time];
         if let Some((w0, w1)) = anim.work_area {
             snap_times.extend([w0, w1]);
@@ -1039,23 +1127,27 @@ impl Timeline {
                         small.clone(),
                         pal.text_faint,
                     );
-                    let bar = Rect::from_min_max(
-                        pos2(tm.x(0.0), y + 4.0),
-                        pos2(tm.x(duration), y + ROW_H - 4.0),
-                    );
-                    gp.rect_filled(bar.intersect(rr), 3.0, mix(pal.track, pal.accent, 0.35));
-                    let end =
-                        Rect::from_center_size(pos2(tm.x(duration), cy), vec2(8.0, ROW_H - 4.0));
-                    ui.set_clip_rect(rows_right.intersect(outer_clip));
-                    let r_end = ui
-                        .interact(end, ui.id().with("tl-scene-end"), Sense::drag())
-                        .on_hover_cursor(CursorIcon::ResizeHorizontal)
-                        .on_hover_text(tr("Drag to change the length"));
-                    if r_end.dragged()
-                        && let Some(ptr) = r_end.interact_pointer_pos()
-                    {
-                        let t = tm.t(ptr.x).max(frame_s);
-                        edits.push(Edit::Duration((t * fps).round() / fps));
+                    if !self.graph {
+                        let bar = Rect::from_min_max(
+                            pos2(tm.x(0.0), y + 4.0),
+                            pos2(tm.x(duration), y + ROW_H - 4.0),
+                        );
+                        gp.rect_filled(bar.intersect(rr), 3.0, mix(pal.track, pal.accent, 0.35));
+                        let end = Rect::from_center_size(
+                            pos2(tm.x(duration), cy),
+                            vec2(8.0, ROW_H - 4.0),
+                        );
+                        ui.set_clip_rect(rows_right.intersect(outer_clip));
+                        let r_end = ui
+                            .interact(end, ui.id().with("tl-scene-end"), Sense::drag())
+                            .on_hover_cursor(CursorIcon::ResizeHorizontal)
+                            .on_hover_text(tr("Drag to change the length"));
+                        if r_end.dragged()
+                            && let Some(ptr) = r_end.interact_pointer_pos()
+                        {
+                            let t = tm.t(ptr.x).max(frame_s);
+                            edits.push(Edit::Duration((t * fps).round() / fps));
+                        }
                     }
                 }
                 RowKind::Folder(name) => {
@@ -1081,72 +1173,86 @@ impl Timeline {
                         name_font.clone(),
                         pal.text,
                     );
-                    // a hollow diamond wherever any child has a key; it
-                    // selects and drags every child key on that frame
-                    let mut frames: BTreeMap<i64, Vec<KeyRef>> = BTreeMap::new();
-                    for (target, id) in &row.children {
-                        if let Some(c) =
-                            anim.curves.iter().find(|c| c.target == *target && &c.id == id)
-                        {
-                            for k in &c.keys {
-                                let fr = (k.time * fps).round() as i64;
-                                frames.entry(fr).or_default().push(KeyRef {
-                                    target: tgt(*target),
-                                    id: id.clone(),
-                                    frame: fr,
-                                });
+                    if !self.graph {
+                        // a hollow diamond wherever any child has a key; it
+                        // selects and drags every child key on that frame
+                        let mut frames: BTreeMap<i64, Vec<KeyRef>> = BTreeMap::new();
+                        for (target, id) in &row.children {
+                            if let Some(c) =
+                                anim.curves.iter().find(|c| c.target == *target && &c.id == id)
+                            {
+                                for k in &c.keys {
+                                    let fr = (k.time * fps).round() as i64;
+                                    frames.entry(fr).or_default().push(KeyRef {
+                                        target: tgt(*target),
+                                        id: id.clone(),
+                                        frame: fr,
+                                    });
+                                }
                             }
                         }
-                    }
-                    ui.set_clip_rect(rows_right.intersect(outer_clip));
-                    for (fr, refs) in frames {
-                        let x = tm.x(fr as f32 * frame_s);
-                        if x < rr.min.x - 8.0 || x > rr.max.x + 8.0 {
-                            continue;
-                        }
-                        let all_sel = refs.iter().all(|k| self.selected.contains(k));
-                        let c = pos2(x, cy);
-                        gp.add(Shape::convex_polygon(
-                            vec![
-                                c + vec2(0.0, -4.5),
-                                c + vec2(4.5, 0.0),
-                                c + vec2(0.0, 4.5),
-                                c + vec2(-4.5, 0.0),
-                            ],
-                            if all_sel { pal.accent } else { Color32::TRANSPARENT },
-                            Stroke::new(1.0, if all_sel { pal.accent } else { pal.text_faint }),
-                        ));
-                        let r_sum = ui.interact(
-                            Rect::from_center_size(c, vec2(12.0, 14.0)),
-                            ui.id().with(("tl-sum", i, fr)),
-                            Sense::click_and_drag(),
-                        );
-                        if r_sum.clicked() {
-                            self.focused = true;
-                            if !mods.shift {
-                                self.selected.clear();
+                        ui.set_clip_rect(rows_right.intersect(outer_clip));
+                        for (fr, refs) in frames {
+                            let x = tm.x(fr as f32 * frame_s);
+                            if x < rr.min.x - 8.0 || x > rr.max.x + 8.0 {
+                                continue;
                             }
-                            self.selected.extend(refs.iter().cloned());
-                        }
-                        if r_sum.drag_started()
-                            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
-                        {
-                            if !all_sel {
+                            let all_sel = refs.iter().all(|k| self.selected.contains(k));
+                            let c = pos2(x, cy);
+                            gp.add(Shape::convex_polygon(
+                                vec![
+                                    c + vec2(0.0, -4.5),
+                                    c + vec2(4.5, 0.0),
+                                    c + vec2(0.0, 4.5),
+                                    c + vec2(-4.5, 0.0),
+                                ],
+                                if all_sel { pal.accent } else { Color32::TRANSPARENT },
+                                Stroke::new(1.0, if all_sel { pal.accent } else { pal.text_faint }),
+                            ));
+                            let r_sum = ui.interact(
+                                Rect::from_center_size(c, vec2(12.0, 14.0)),
+                                ui.id().with(("tl-sum", i, fr)),
+                                Sense::click_and_drag(),
+                            );
+                            if r_sum.clicked() {
+                                self.focused = true;
                                 if !mods.shift {
                                     self.selected.clear();
                                 }
                                 self.selected.extend(refs.iter().cloned());
                             }
-                            self.drag = Some(KeyDrag {
-                                origin_x: origin.x,
-                                anchor: fr as f32 * frame_s,
-                                applied: 0,
-                            });
+                            if r_sum.drag_started()
+                                && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                            {
+                                if !all_sel {
+                                    if !mods.shift {
+                                        self.selected.clear();
+                                    }
+                                    self.selected.extend(refs.iter().cloned());
+                                }
+                                self.drag = Some(KeyDrag {
+                                    origin_x: origin.x,
+                                    anchor: fr as f32 * frame_s,
+                                    applied: 0,
+                                });
+                            }
                         }
                     }
                 }
                 RowKind::Param(_) | RowKind::Part(_) => {
                     let mut x = indent;
+                    if let Some((_, col)) =
+                        shown.iter().find(|(c, _)| Some(c) == row.curve.as_ref())
+                    {
+                        lp.rect_filled(
+                            Rect::from_min_max(
+                                pos2(left.min.x + 1.0, y + 2.0),
+                                pos2(left.min.x + 4.0, y + ROW_H - 2.0),
+                            ),
+                            1.0,
+                            *col,
+                        );
+                    }
                     if let Some(c) = row.color {
                         lp.rect_filled(
                             Rect::from_center_size(pos2(x + 4.0, cy), vec2(8.0, 8.0)),
@@ -1284,6 +1390,9 @@ impl Timeline {
                         }
                     }
 
+                    if self.graph {
+                        continue;
+                    }
                     ui.set_clip_rect(rows_right.intersect(outer_clip));
                     let Some((target, id)) = row.curve.clone() else { continue };
                     for (ki, k) in keys.iter().enumerate() {
@@ -1317,34 +1426,9 @@ impl Timeline {
                                 tr("at"),
                                 timecode(k.time, fps)
                             ));
-                        if resp.clicked() {
-                            self.focused = true;
-                            if mods.command {
-                                // Ctrl flips linear and auto, Ctrl+Alt holds
-                                self.selected.clear();
-                                self.selected.insert(kref.clone());
-                                let next = if mods.alt {
-                                    if matches!(k.interp, Interp::Stepped) {
-                                        Interp::Auto
-                                    } else {
-                                        Interp::Stepped
-                                    }
-                                } else if matches!(k.interp, Interp::Linear) {
-                                    Interp::Auto
-                                } else {
-                                    Interp::Linear
-                                };
-                                edits.push(Edit::SetInterp(next));
-                            } else if mods.shift {
-                                if !self.selected.remove(&kref) {
-                                    self.selected.insert(kref.clone());
-                                }
-                            } else {
-                                self.selected.clear();
-                                self.selected.insert(kref.clone());
-                            }
-                        }
-                        if resp.double_clicked() {
+                        if self
+                            .key_clicks(&resp, &kref, k, keys, target, &id, fps, mods, &mut edits)
+                        {
                             edits.push(Edit::Seek(k.time));
                             *tp.playing = false;
                         }
@@ -1361,35 +1445,6 @@ impl Timeline {
                             self.drag =
                                 Some(KeyDrag { origin_x: origin.x, anchor: k.time, applied: 0 });
                         }
-                        if resp.secondary_clicked() && !is_sel {
-                            self.selected.clear();
-                            self.selected.insert(kref.clone());
-                        }
-                        let selected = &mut self.selected;
-                        resp.context_menu(|ui| {
-                            for (label, interp) in INTERPS {
-                                if ui
-                                    .selectable_label(same_kind(k.interp, interp), tr(label))
-                                    .clicked()
-                                {
-                                    edits.push(Edit::SetInterp(interp));
-                                    ui.close();
-                                }
-                            }
-                            ui.separator();
-                            if ui.button(tr("Select all keys in this row")).clicked() {
-                                selected.extend(keys.iter().map(|k| KeyRef {
-                                    target: tgt(target),
-                                    id: id.clone(),
-                                    frame: (k.time * fps).round() as i64,
-                                }));
-                                ui.close();
-                            }
-                            if ui.button(tr("Delete keys")).clicked() {
-                                edits.push(Edit::Delete);
-                                ui.close();
-                            }
-                        });
                     }
                 }
             }
@@ -1397,6 +1452,268 @@ impl Timeline {
         ui.set_clip_rect(rect.intersect(outer_clip));
         for (name, was_open) in toggles {
             self.folded.insert(name, was_open);
+        }
+
+        // ---- the graph editor over the lanes ----
+        if self.graph {
+            let plot = Rect::from_min_max(
+                pos2(rows_right.min.x, rows_right.min.y + 6.0),
+                pos2(rows_right.max.x, rows_right.max.y - 26.0),
+            );
+            p.rect_filled(rows_right, 0.0, pal.chrome);
+            let n = ((plot.width() / 2.0) as usize).max(2);
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            let mut lines: Vec<(Color32, Vec<(f32, f32)>)> = Vec::new();
+            for ((target, id), col) in &shown {
+                let Some(c) = anim.curves.iter().find(|c| c.target == *target && &c.id == id)
+                else {
+                    continue;
+                };
+                let pts: Vec<(f32, f32)> = (0..=n)
+                    .map(|i| {
+                        let x = plot.min.x + plot.width() * i as f32 / n as f32;
+                        let t = tm.t(x).clamp(0.0, duration);
+                        let v = ayatsuri_core::anim::sample_curve(c, t, anim.restricted_beziers)
+                            .unwrap_or(0.0);
+                        (x, v)
+                    })
+                    .collect();
+                for (_, v) in &pts {
+                    lo = lo.min(*v);
+                    hi = hi.max(*v);
+                }
+                for (ki, k) in c.keys.iter().enumerate() {
+                    lo = lo.min(k.value);
+                    hi = hi.max(k.value);
+                    if let (Interp::Bezier { out, into }, Some(next)) =
+                        (k.interp, c.keys.get(ki + 1))
+                    {
+                        lo = lo.min(k.value + out.1).min(next.value + into.1);
+                        hi = hi.max(k.value + out.1).max(next.value + into.1);
+                    }
+                }
+                lines.push((*col, pts));
+            }
+            if lines.is_empty() {
+                (lo, hi) = (0.0, 1.0);
+            }
+            if hi - lo < 1e-6 {
+                hi = lo + 1.0;
+            }
+            let pad = (hi - lo) * 0.08;
+            let (lo, hi) = self.graph_range.unwrap_or((lo - pad, hi + pad));
+            let ymap = |v: f32| plot.max.y - (v - lo) / (hi - lo) * plot.height();
+            let vmap = |y: f32| lo + (plot.max.y - y) / plot.height() * (hi - lo);
+
+            let step = nice_step((hi - lo) / 6.0);
+            let dec = step_decimals(step);
+            let mut g = (lo / step).ceil() * step;
+            while g <= hi {
+                let y = ymap(g);
+                gp.line_segment(
+                    [pos2(plot.min.x, y), pos2(plot.max.x, y)],
+                    Stroke::new(1.0, pal.text.gamma_multiply(0.08)),
+                );
+                gp.text(
+                    pos2(plot.min.x + 4.0, y - 1.0),
+                    Align2::LEFT_BOTTOM,
+                    format!("{g:.dec$}"),
+                    FontId::proportional(10.0),
+                    pal.text_faint,
+                );
+                g += step;
+            }
+            for (col, pts) in &lines {
+                gp.add(Shape::line(
+                    pts.iter().map(|(x, v)| pos2(*x, ymap(*v))).collect(),
+                    Stroke::new(1.5, *col),
+                ));
+            }
+
+            ui.set_clip_rect(rows_right.intersect(outer_clip));
+            let handle_col = Color32::from_rgb(0xd8, 0xd8, 0x60);
+            for ((target, id), col) in &shown {
+                let Some(c) = anim.curves.iter().find(|c| c.target == *target && &c.id == id)
+                else {
+                    continue;
+                };
+                let keys = c.keys.as_slice();
+                for (ki, k) in keys.iter().enumerate() {
+                    let frame = (k.time * fps).round() as i64;
+                    let kref = KeyRef { target: tgt(*target), id: id.clone(), frame };
+                    let is_sel = self.selected.contains(&kref);
+                    if !is_sel {
+                        snap_times.push(k.time);
+                    }
+                    let pos = pos2(tm.x(k.time), ymap(k.value));
+                    if pos.x < plot.min.x - 8.0 || pos.x > plot.max.x + 8.0 {
+                        continue;
+                    }
+                    key_hits.push((kref.clone(), pos));
+                    if is_sel {
+                        // the handles of a free bezier: out of this key, and into
+                        // it from the segment before
+                        let mut handles: Vec<(bool, (f32, f32), f32)> = Vec::new();
+                        if let (Interp::Bezier { out, .. }, Some(next)) =
+                            (k.interp, keys.get(ki + 1))
+                        {
+                            handles.push((true, out, next.time - k.time));
+                        }
+                        if let Some(prev) = keys.get(ki.wrapping_sub(1))
+                            && let Interp::Bezier { into, .. } = prev.interp
+                        {
+                            handles.push((false, into, k.time - prev.time));
+                        }
+                        for (out, h, span) in handles {
+                            let hp = pos2(tm.x(k.time + h.0), ymap(k.value + h.1));
+                            gp.line_segment([pos, hp], Stroke::new(1.0, handle_col));
+                            gp.circle_filled(hp, 3.5, handle_col);
+                            let r_h = ui
+                                .interact(
+                                    Rect::from_center_size(hp, vec2(10.0, 10.0)),
+                                    ui.id().with(("tl-handle", kref.target, &kref.id, frame, out)),
+                                    Sense::drag(),
+                                )
+                                .on_hover_cursor(CursorIcon::Move);
+                            if r_h.drag_started() {
+                                self.graph_range = Some((lo, hi));
+                            }
+                            if r_h.dragged()
+                                && let Some(ptr) = r_h.interact_pointer_pos()
+                            {
+                                let dt = tm.t(ptr.x) - k.time;
+                                let dt =
+                                    if out { dt.clamp(0.0, span) } else { dt.clamp(-span, 0.0) };
+                                edits.push(Edit::SetHandle(
+                                    kref.clone(),
+                                    out,
+                                    (dt, vmap(ptr.y) - k.value),
+                                ));
+                            }
+                            if r_h.drag_stopped() {
+                                self.graph_range = None;
+                            }
+                        }
+                    }
+                    let fill = if is_sel { pal.accent } else { mix(pal.text, Color32::WHITE, 0.3) };
+                    gp.rect_filled(Rect::from_center_size(pos, vec2(7.0, 7.0)), 0.0, fill);
+                    gp.rect_stroke(
+                        Rect::from_center_size(pos, vec2(7.0, 7.0)),
+                        0.0,
+                        Stroke::new(1.0, *col),
+                        StrokeKind::Outside,
+                    );
+                    let resp = ui
+                        .interact(
+                            Rect::from_center_size(pos, vec2(11.0, 11.0)),
+                            ui.id().with(("tl-gkey", kref.target, &kref.id, frame)),
+                            Sense::click_and_drag(),
+                        )
+                        .on_hover_text(format!(
+                            "{:.3} {} {}",
+                            k.value,
+                            tr("at"),
+                            timecode(k.time, fps)
+                        ));
+                    if self.key_clicks(&resp, &kref, k, keys, *target, id, fps, mods, &mut edits) {
+                        edits.push(Edit::Seek(k.time));
+                        *tp.playing = false;
+                    }
+                    if resp.drag_started()
+                        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                    {
+                        self.focused = true;
+                        if !is_sel {
+                            if !mods.shift {
+                                self.selected.clear();
+                            }
+                            self.selected.insert(kref.clone());
+                        }
+                        self.grab = Some(GraphGrab { press: origin, applied_f: 0, applied_v: 0.0 });
+                        self.graph_range = Some((lo, hi));
+                    }
+                }
+            }
+            ui.set_clip_rect(rect.intersect(outer_clip));
+
+            // a drag in the graph moves the selected keys in time and value
+            let mut grab_done = false;
+            if let Some(g) = &mut self.grab {
+                let (down, ptr) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
+                match ptr {
+                    Some(ptr) if down => {
+                        let dx = ptr.x - g.press.x;
+                        let dy = ptr.y - g.press.y;
+                        let mut df = (dx / pps * fps).round() as i64;
+                        let mut dv = vmap(ptr.y) - vmap(g.press.y);
+                        if mods.shift {
+                            if dx.abs() >= dy.abs() {
+                                dv = 0.0;
+                            } else {
+                                df = 0;
+                            }
+                        }
+                        if df != g.applied_f {
+                            edits.push(Edit::Move(df - g.applied_f));
+                            g.applied_f = df;
+                        }
+                        if (dv - g.applied_v).abs() > 1e-6 {
+                            edits.push(Edit::Offset(dv - g.applied_v));
+                            g.applied_v = dv;
+                        }
+                        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+                    }
+                    _ => grab_done = true,
+                }
+            }
+            if grab_done {
+                self.grab = None;
+                self.graph_range = None;
+            }
+
+            // the pills under the plot set the selected keys' interpolation
+            let mut x = plot.min.x + 6.0;
+            let by = plot.max.y + 4.0;
+            for (label, interp) in INTERPS {
+                let text = tr(label);
+                let font = FontId::proportional(11.0);
+                let w = p.layout_no_wrap(text.to_string(), font.clone(), pal.text).size().x + 14.0;
+                let r = Rect::from_min_size(pos2(x, by), vec2(w, 18.0));
+                if r.max.x > plot.max.x {
+                    break;
+                }
+                let resp = ui.interact(r, ui.id().with(("tl-pill", label)), Sense::click());
+                let on = !self.selected.is_empty()
+                    && anim.curves.iter().any(|c| {
+                        c.keys.iter().any(|k| {
+                            same_kind(k.interp, interp)
+                                && self.selected.contains(&KeyRef {
+                                    target: tgt(c.target),
+                                    id: c.id.clone(),
+                                    frame: (k.time * fps).round() as i64,
+                                })
+                        })
+                    });
+                let fill = if on {
+                    pal.accent.gamma_multiply(0.55)
+                } else if resp.hovered() {
+                    mix(pal.chrome, pal.text, 0.12)
+                } else {
+                    mix(pal.chrome, pal.panel_bg, 0.8)
+                };
+                p.rect_filled(r, 3.0, fill);
+                p.text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    text,
+                    font,
+                    if on { Color32::WHITE } else { pal.text },
+                );
+                if resp.clicked() && !self.selected.is_empty() {
+                    edits.push(Edit::SetInterp(interp));
+                }
+                x += w + 4.0;
+            }
         }
 
         // ---- a drag of the selected keys, polled from the pointer ----
@@ -1637,6 +1954,75 @@ impl Timeline {
         request
     }
 
+    /// What a click on a key does, in the lanes or the graph: plain selects
+    /// it alone, Shift toggles it, Ctrl flips linear and auto (Ctrl+Alt
+    /// holds), a right click selects it and opens the menu. True on a
+    /// double click.
+    #[allow(clippy::too_many_arguments)]
+    fn key_clicks(
+        &mut self,
+        resp: &egui::Response,
+        kref: &KeyRef,
+        k: &Key,
+        keys: &[Key],
+        target: CurveTarget,
+        id: &str,
+        fps: f32,
+        mods: Modifiers,
+        edits: &mut Vec<Edit>,
+    ) -> bool {
+        let is_sel = self.selected.contains(kref);
+        if resp.clicked() {
+            self.focused = true;
+            if mods.command {
+                self.selected.clear();
+                self.selected.insert(kref.clone());
+                let next = if mods.alt {
+                    if matches!(k.interp, Interp::Stepped) { Interp::Auto } else { Interp::Stepped }
+                } else if matches!(k.interp, Interp::Linear) {
+                    Interp::Auto
+                } else {
+                    Interp::Linear
+                };
+                edits.push(Edit::SetInterp(next));
+            } else if mods.shift {
+                if !self.selected.remove(kref) {
+                    self.selected.insert(kref.clone());
+                }
+            } else {
+                self.selected.clear();
+                self.selected.insert(kref.clone());
+            }
+        }
+        if resp.secondary_clicked() && !is_sel {
+            self.selected.clear();
+            self.selected.insert(kref.clone());
+        }
+        let selected = &mut self.selected;
+        resp.context_menu(|ui| {
+            for (label, interp) in INTERPS {
+                if ui.selectable_label(same_kind(k.interp, interp), tr(label)).clicked() {
+                    edits.push(Edit::SetInterp(interp));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button(tr("Select all keys in this row")).clicked() {
+                selected.extend(keys.iter().map(|k| KeyRef {
+                    target: tgt(target),
+                    id: id.to_string(),
+                    frame: (k.time * fps).round() as i64,
+                }));
+                ui.close();
+            }
+            if ui.button(tr("Delete keys")).clicked() {
+                edits.push(Edit::Delete);
+                ui.close();
+            }
+        });
+        resp.double_clicked()
+    }
+
     fn apply(&mut self, s: &mut Session, ai: usize, e: Edit, tp: &mut Transport, fps: f32) {
         match e {
             Edit::Seek(t) => {
@@ -1808,6 +2194,91 @@ impl Timeline {
                 s.modified = true;
                 *tp.applied = f32::NAN;
             }
+            Edit::Offset(dv) => {
+                let ranges: Vec<(String, f32, f32)> = s
+                    .puppet
+                    .model()
+                    .parameters
+                    .iter()
+                    .map(|p| (p.id.clone(), p.min, p.max))
+                    .collect();
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, Some("key-drag"));
+                for c in &mut a.curves {
+                    let t = tgt(c.target);
+                    let picked: BTreeSet<i64> = self
+                        .selected
+                        .iter()
+                        .filter(|k| k.target == t && k.id == c.id)
+                        .map(|k| k.frame)
+                        .collect();
+                    if picked.is_empty() {
+                        continue;
+                    }
+                    let (lo, hi) = match c.target {
+                        CurveTarget::Parameter => ranges
+                            .iter()
+                            .find(|(id, ..)| *id == c.id)
+                            .map(|(_, lo, hi)| (*lo, *hi))
+                            .unwrap_or((f32::MIN, f32::MAX)),
+                        CurveTarget::PartOpacity => (0.0, 1.0),
+                        CurveTarget::Model => (f32::MIN, f32::MAX),
+                    };
+                    for k in &mut c.keys {
+                        if picked.contains(&((k.time * fps).round() as i64)) {
+                            k.value = (k.value + dv).clamp(lo, hi);
+                        }
+                    }
+                }
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
+            Edit::SetHandle(kref, out, h) => {
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, Some("handle"));
+                let Some(c) =
+                    a.curves.iter_mut().find(|c| tgt(c.target) == kref.target && c.id == kref.id)
+                else {
+                    return;
+                };
+                let Some(i) =
+                    c.keys.iter().position(|k| (k.time * fps).round() as i64 == kref.frame)
+                else {
+                    return;
+                };
+                let auto = |span: f32| ((span / 3.0, 0.0), (-span / 3.0, 0.0));
+                if out {
+                    let span = c
+                        .keys
+                        .get(i + 1)
+                        .zip(c.keys.get(i))
+                        .map(|(n, k)| n.time - k.time)
+                        .unwrap_or(0.0);
+                    if let Some(k) = c.keys.get_mut(i) {
+                        let into = match k.interp {
+                            Interp::Bezier { into, .. } => into,
+                            _ => auto(span).1,
+                        };
+                        k.interp = Interp::Bezier { out: h, into };
+                    }
+                } else if i > 0 {
+                    let span = c
+                        .keys
+                        .get(i)
+                        .zip(c.keys.get(i - 1))
+                        .map(|(k, p)| k.time - p.time)
+                        .unwrap_or(0.0);
+                    if let Some(prev) = c.keys.get_mut(i - 1) {
+                        let out = match prev.interp {
+                            Interp::Bezier { out, .. } => out,
+                            _ => auto(span).0,
+                        };
+                        prev.interp = Interp::Bezier { out, into: h };
+                    }
+                }
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
             Edit::Delete => {
                 let Some(a) = s.animations.get_mut(ai) else { return };
                 self.remember(ai, a, None);
@@ -1867,6 +2338,15 @@ mod tests {
         tl.remember(0, &a, None);
         tl.remember(0, &a, None);
         assert_eq!(tl.undo.len(), 4);
+    }
+
+    #[test]
+    fn grid_steps_are_round_numbers() {
+        assert_eq!(nice_step(0.17), 0.2);
+        assert_eq!(nice_step(3.0), 5.0);
+        assert_eq!(nice_step(0.01), 0.01);
+        assert_eq!(step_decimals(0.2), 1);
+        assert_eq!(step_decimals(5.0), 0);
     }
 
     #[test]
