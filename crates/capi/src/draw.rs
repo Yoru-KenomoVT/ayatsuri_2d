@@ -3,7 +3,7 @@
 //! are good until the next `ay2d_update` or `ay2d_free`.
 
 use crate::error::{Status, guard, set_error};
-use crate::handle::{Model, model, output};
+use crate::handle::{Model, model, output, put};
 
 /// Drawn with additive blending.
 pub const AY2D_FLAG_ADDITIVE: u32 = 1;
@@ -41,13 +41,12 @@ pub struct Drawable {
 /// among the drawables unless drawn in their own right; use
 /// `ay2d_mesh_geometry` to render a mask.
 ///
-/// # Safety
 /// `m` is a live handle; `out` holds `n` writable drawables, or `n` is zero.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_drawables(m: *const Model, out: *mut Drawable, n: usize) -> u32 {
+pub extern "C" fn ay2d_drawables(m: *const Model, out: *mut Drawable, n: usize) -> u32 {
     guard(0, || {
-        let Ok(model) = (unsafe { model(m) }) else { return 0 };
-        let Ok(out) = (unsafe { output(out, n) }) else { return 0 };
+        let Ok(model) = model(m) else { return 0 };
+        let Ok(out) = output(out, n) else { return 0 };
         let mut written = 0;
         for (slot, d) in out.iter_mut().zip(model.puppet.drawables()) {
             *slot = Drawable {
@@ -75,31 +74,22 @@ pub unsafe extern "C" fn ay2d_drawables(m: *const Model, out: *mut Drawable, n: 
 /// `uvs` and `indices` never change for a mesh; upload them once and read
 /// `positions` after each update. Fails with range past the mesh count.
 ///
-/// # Safety
 /// `m` is a live handle; `out` points at one writable drawable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_mesh_geometry(
-    m: *const Model,
-    mesh: u32,
-    out: *mut Drawable,
-) -> Status {
+pub extern "C" fn ay2d_mesh_geometry(m: *const Model, mesh: u32, out: *mut Drawable) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model(m) } {
+        let model = match model(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
-        if out.is_null() {
-            set_error("drawable pointer is null");
-            return Status::Null;
-        }
         let Some(g) = model.puppet.mesh_geometry(mesh as usize) else {
             set_error(format!("mesh {mesh} is past the model's {}", model.mesh_ids.len()));
             return Status::Range;
         };
         let am = model.puppet.model().art_meshes.get(mesh as usize);
-        // SAFETY: the host promises one writable Drawable
-        unsafe {
-            *out = Drawable {
+        put(
+            out,
+            Drawable {
                 mesh,
                 texture: g.texture,
                 flags: am.map_or(0, |a| u32::from(a.flags)),
@@ -111,8 +101,7 @@ pub unsafe extern "C" fn ay2d_mesh_geometry(
                 uvs: g.uvs.as_ptr(),
                 indices: g.indices.as_ptr(),
                 masks: am.map_or(std::ptr::null(), |a| a.masks.as_ptr()),
-            };
-        }
-        Status::Ok
+            },
+        )
     })
 }

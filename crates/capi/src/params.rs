@@ -7,10 +7,9 @@ use crate::handle::{Model, input, model, model_mut, output};
 /// Every parameter's minimum, maximum and default, by index. Each array
 /// holds `ay2d_parameter_count` floats; any may be null to skip it.
 ///
-/// # Safety
 /// `m` is a live handle; each non-null array holds `n` writable floats.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_parameter_ranges(
+pub extern "C" fn ay2d_parameter_ranges(
     m: *const Model,
     min: *mut f32,
     max: *mut f32,
@@ -18,7 +17,7 @@ pub unsafe extern "C" fn ay2d_parameter_ranges(
     n: usize,
 ) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model(m) } {
+        let model = match model(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -35,7 +34,7 @@ pub unsafe extern "C" fn ay2d_parameter_ranges(
             if dst.is_null() {
                 continue;
             }
-            let out = match unsafe { output(dst, params.len()) } {
+            let out = match output(dst, params.len()) {
                 Ok(o) => o,
                 Err(s) => return s,
             };
@@ -50,16 +49,11 @@ pub unsafe extern "C" fn ay2d_parameter_ranges(
 /// Every parameter's current value, by index, into `values`
 /// (`ay2d_parameter_count` floats).
 ///
-/// # Safety
 /// `m` is a live handle; `values` holds `n` writable floats.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_get_parameters(
-    m: *const Model,
-    values: *mut f32,
-    n: usize,
-) -> Status {
+pub extern "C" fn ay2d_get_parameters(m: *const Model, values: *mut f32, n: usize) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model(m) } {
+        let model = match model(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -68,7 +62,7 @@ pub unsafe extern "C" fn ay2d_get_parameters(
             set_error(format!("{n} given, the model has {count} parameters"));
             return Status::TooSmall;
         }
-        let out = match unsafe { output(values, count) } {
+        let out = match output(values, count) {
             Ok(o) => o,
             Err(s) => return s,
         };
@@ -84,21 +78,20 @@ pub unsafe extern "C" fn ay2d_get_parameters(
 /// whole call before anything changes. Nothing is evaluated until
 /// `ay2d_update`.
 ///
-/// # Safety
 /// `m` is a live handle; `indices` and `values` hold `n` readable items.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_set_parameters(
+pub extern "C" fn ay2d_set_parameters(
     m: *mut Model,
     indices: *const u32,
     values: *const f32,
     n: usize,
 ) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model_mut(m) } {
+        let model = match model_mut(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
-        let (idx, vals) = match (unsafe { input(indices, n) }, unsafe { input(values, n) }) {
+        let (idx, vals) = match (input(indices, n), input(values, n)) {
             (Ok(i), Ok(v)) => (i, v),
             (Err(s), _) | (_, Err(s)) => return s,
         };
@@ -126,16 +119,11 @@ fn clamped(model: &Model, i: usize, v: f32) -> f32 {
 /// Set every parameter from one array of `ay2d_parameter_count` values,
 /// by index. The usual frame call for a host that keeps the whole pose.
 ///
-/// # Safety
 /// `m` is a live handle; `values` holds `n` readable floats.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_set_all_parameters(
-    m: *mut Model,
-    values: *const f32,
-    n: usize,
-) -> Status {
+pub extern "C" fn ay2d_set_all_parameters(m: *mut Model, values: *const f32, n: usize) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model_mut(m) } {
+        let model = match model_mut(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -144,7 +132,7 @@ pub unsafe extern "C" fn ay2d_set_all_parameters(
             set_error(format!("{n} given, the model has {count} parameters"));
             return Status::TooSmall;
         }
-        let vals = match unsafe { input(values, count) } {
+        let vals = match input(values, count) {
             Ok(v) => v,
             Err(s) => return s,
         };

@@ -1,7 +1,7 @@
 //! The ABI driven the way a host drives it: raw pointers in, statuses and
 //! views out, on a small model written to .aom first.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
 use super::*;
 
@@ -9,18 +9,39 @@ use crate::fixture::small_aom;
 
 fn load() -> *mut Model {
     let bytes = small_aom();
-    let m = unsafe { ay2d_load(bytes.as_ptr(), bytes.len()) };
+    let m = { ay2d_load(bytes.as_ptr(), bytes.len()) };
     assert!(!m.is_null(), "{}", last_error());
     m
 }
 
 fn last_error() -> String {
-    unsafe { CStr::from_ptr(ay2d_last_error()) }.to_string_lossy().into_owned()
+    cstr(ay2d_last_error())
 }
 
 fn cstr(p: *const std::ffi::c_char) -> String {
-    assert!(!p.is_null());
-    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    crate::handle::cstr_in(p).unwrap().to_string_lossy().into_owned()
+}
+
+/// A drawable with nothing in it, for an output slot.
+fn blank() -> Drawable {
+    Drawable {
+        mesh: 0,
+        texture: 0,
+        flags: 0,
+        opacity: 0.0,
+        vertex_count: 0,
+        index_count: 0,
+        mask_count: 0,
+        positions: std::ptr::null(),
+        uvs: std::ptr::null(),
+        indices: std::ptr::null(),
+        masks: std::ptr::null(),
+    }
+}
+
+/// The first `n` floats behind a drawable's pointer.
+fn floats(p: *const f32, n: usize) -> Vec<f32> {
+    crate::handle::input(p, n).unwrap().to_vec()
 }
 
 #[test]
@@ -32,26 +53,26 @@ fn versions_are_there() {
 #[test]
 fn garbage_is_a_null_with_a_reason() {
     let junk = b"definitely not a model";
-    let m = unsafe { ay2d_load(junk.as_ptr(), junk.len()) };
+    let m = { ay2d_load(junk.as_ptr(), junk.len()) };
     assert!(m.is_null());
     assert!(last_error().contains("not a model"), "{}", last_error());
-    let m = unsafe { ay2d_load(std::ptr::null(), 4) };
+    let m = { ay2d_load(std::ptr::null(), 4) };
     assert!(m.is_null());
     assert!(last_error().contains("null"));
 }
 
 #[test]
 fn a_null_handle_answers_nothing() {
-    assert_eq!(unsafe { ay2d_parameter_count(std::ptr::null()) }, 0);
+    assert_eq!({ ay2d_parameter_count(std::ptr::null()) }, 0);
     assert!(last_error().contains("null"));
-    assert_eq!(unsafe { ay2d_update(std::ptr::null_mut(), 0.016) }, Status::Null);
-    unsafe { ay2d_free(std::ptr::null_mut()) };
+    assert_eq!({ ay2d_update(std::ptr::null_mut(), 0.016) }, Status::Null);
+    ay2d_free(std::ptr::null_mut());
 }
 
 #[test]
 fn counts_ids_and_lookups() {
     let m = load();
-    unsafe {
+    {
         assert_eq!(ay2d_parameter_count(m), 2);
         assert_eq!(ay2d_part_count(m), 1);
         assert_eq!(ay2d_mesh_count(m), 1);
@@ -75,7 +96,7 @@ fn counts_ids_and_lookups() {
 #[test]
 fn parameters_go_in_and_out_as_arrays() {
     let m = load();
-    unsafe {
+    {
         let (mut lo, mut hi, mut def) = ([0.0f32; 2], [0.0f32; 2], [9.0f32; 2]);
         assert_eq!(
             ay2d_parameter_ranges(m, lo.as_mut_ptr(), hi.as_mut_ptr(), def.as_mut_ptr(), 2),
@@ -123,33 +144,21 @@ fn parameters_go_in_and_out_as_arrays() {
 #[test]
 fn an_update_moves_the_drawables() {
     let m = load();
-    unsafe {
-        let mut d = [Drawable {
-            mesh: 0,
-            texture: 0,
-            flags: 0,
-            opacity: 0.0,
-            vertex_count: 0,
-            index_count: 0,
-            mask_count: 0,
-            positions: std::ptr::null(),
-            uvs: std::ptr::null(),
-            indices: std::ptr::null(),
-            masks: std::ptr::null(),
-        }];
+    {
+        let mut d = [blank()];
         assert_eq!(ay2d_drawables(m, std::ptr::null_mut(), 0), 1, "a count without an array");
         assert_eq!(ay2d_drawables(m, d.as_mut_ptr(), 1), 1);
         assert_eq!(d[0].vertex_count, 4);
         assert_eq!(d[0].index_count, 6);
         assert_eq!(d[0].flags & AY2D_FLAG_DOUBLE_SIDED, AY2D_FLAG_DOUBLE_SIDED);
-        let x0 = *d[0].positions;
+        let x0 = floats(d[0].positions, 1)[0];
         assert!((x0 - 0.0).abs() < 1e-5, "at rest the quad sits at 0: {x0}");
         let idx = [0u32];
         let val = [1.0f32];
         ay2d_set_parameters(m, idx.as_ptr(), val.as_ptr(), 1);
         assert_eq!(ay2d_update(m, 0.0), Status::Ok);
         ay2d_drawables(m, d.as_mut_ptr(), 1);
-        let x1 = *d[0].positions;
+        let x1 = floats(d[0].positions, 1)[0];
         assert!((x1 - 1.0).abs() < 1e-5, "at key 1 the quad sits at 1: {x1}");
         assert_eq!(ay2d_update(m, -1.0), Status::Range);
         // the geometry call sees the same mesh
@@ -164,7 +173,7 @@ fn an_update_moves_the_drawables() {
 #[test]
 fn part_opacity_fades_the_mesh() {
     let m = load();
-    unsafe {
+    {
         let mut out = [5.0f32];
         assert_eq!(ay2d_get_part_opacities(m, out.as_mut_ptr(), 1), Status::Ok);
         assert_eq!(out[0], 1.0);
@@ -172,9 +181,9 @@ fn part_opacity_fades_the_mesh() {
         let half = [0.5f32];
         assert_eq!(ay2d_set_part_opacities(m, idx.as_ptr(), half.as_ptr(), 1), Status::Ok);
         ay2d_update(m, 0.0);
-        let mut d = std::mem::MaybeUninit::<Drawable>::uninit();
+        let mut d = [blank()];
         assert_eq!(ay2d_drawables(m, d.as_mut_ptr(), 1), 1);
-        assert!((d.assume_init().opacity - 0.5).abs() < 1e-5);
+        assert!((d[0].opacity - 0.5).abs() < 1e-5);
         let bad = [3u32];
         assert_eq!(ay2d_set_part_opacities(m, bad.as_ptr(), half.as_ptr(), 1), Status::Range);
         ay2d_free(m);
@@ -184,7 +193,7 @@ fn part_opacity_fades_the_mesh() {
 #[test]
 fn physics_runs_only_while_on() {
     let m = load();
-    unsafe {
+    {
         assert_eq!(ay2d_has_physics(m), 1);
         let idx = [0u32];
         let mut out = [0.0f32; 2];
@@ -216,11 +225,11 @@ fn physics_runs_only_while_on() {
 #[test]
 fn textures_come_back_as_stored() {
     let m = load();
-    unsafe {
+    {
         let mut p: *const u8 = std::ptr::null();
         let mut n: usize = 0;
         assert_eq!(ay2d_texture(m, 0, &raw mut p, &raw mut n), Status::Ok);
-        assert_eq!(std::slice::from_raw_parts(p, n), b"not really a png");
+        assert_eq!(crate::handle::input(p, n).unwrap(), b"not really a png");
         assert_eq!(ay2d_texture(m, 1, &raw mut p, &raw mut n), Status::Range);
         ay2d_free(m);
     }
@@ -261,7 +270,7 @@ fn the_header_names_every_entry_point() {
 #[test]
 fn motions_play_fade_and_fire_events() {
     let m = load();
-    unsafe {
+    {
         assert_eq!(ay2d_motion_count(m), 2, "the scene and the composition");
         assert_eq!(cstr(ay2d_motion_id(m, 0)), "wave");
         assert_eq!(cstr(ay2d_motion_id(m, 1)), "both");
@@ -334,7 +343,7 @@ fn motions_play_fade_and_fire_events() {
 #[test]
 fn expressions_lay_over_the_pose() {
     let m = load();
-    unsafe {
+    {
         assert_eq!(ay2d_expression_count(m), 1);
         assert_eq!(cstr(ay2d_expression_id(m, 0)), "smile");
         let name = CString::new("smile").unwrap();
@@ -360,5 +369,33 @@ fn expressions_lay_over_the_pose() {
         assert!((out[0] - 0.625).abs() < 0.02, "half faded: {}", out[0]);
         assert_eq!(ay2d_expression_set(m, 3, 0.0), Status::Range);
         ay2d_free(m);
+    }
+}
+
+/// The whole boundary sits in handle.rs: no other file of the crate uses
+/// the `unsafe` keyword for a block or a function.
+#[test]
+fn unsafe_stays_in_one_file() {
+    let others = [
+        ("lib.rs", include_str!("lib.rs")),
+        ("error.rs", include_str!("error.rs")),
+        ("params.rs", include_str!("params.rs")),
+        ("parts.rs", include_str!("parts.rs")),
+        ("physics.rs", include_str!("physics.rs")),
+        ("draw.rs", include_str!("draw.rs")),
+        ("textures.rs", include_str!("textures.rs")),
+        ("motions.rs", include_str!("motions.rs")),
+        ("expressions.rs", include_str!("expressions.rs")),
+        ("fixture.rs", include_str!("fixture.rs")),
+        ("tests.rs", include_str!("tests.rs")),
+    ];
+    // the keyword is spelled in pieces so this file passes its own check
+    let kw = ["un", "safe"].concat();
+    let needles = [format!("{kw} {{"), format!("{kw} fn"), format!("{kw} extern")];
+    for (name, src) in others {
+        for line in src.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            assert!(!needles.iter().any(|n| code.contains(n.as_str())), "{name}: {line}");
+        }
     }
 }

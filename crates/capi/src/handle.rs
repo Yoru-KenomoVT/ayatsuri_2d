@@ -3,7 +3,7 @@
 //! live as long as the model, so a binding reads them once.
 
 use std::collections::HashMap;
-use std::ffi::{CString, c_char};
+use std::ffi::{CStr, CString, c_char};
 
 use ayatsuri_core::Puppet;
 use ayatsuri_format::{Animation, Composition};
@@ -49,37 +49,41 @@ fn cstrings<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<CString> {
     ids.map(|id| CString::new(id.replace('\0', "")).unwrap_or_default()).collect()
 }
 
-/// The model behind a handle, or a status when there is none.
-///
-/// # Safety
-/// `m` is null or a handle `ay2d_load` returned and `ay2d_free` has not
-/// taken back.
-pub(crate) unsafe fn model<'a>(m: *const Model) -> Result<&'a Model, Status> {
+// ---- the boundary -------------------------------------------------------
+//
+// Every raw pointer the host hands over is turned into a reference, a slice
+// or a string here and nowhere else; the other modules are safe Rust over
+// these six helpers. The contracts are the ABI's (ayatsuri.h): a handle is
+// one `ay2d_load` returned and `ay2d_free` has not taken back, an array
+// pointer covers its stated length, a string ends in NUL. A test keeps the
+// `unsafe` keyword out of every other file.
+
+/// The model behind a handle, or `Null` when there is none. The host
+/// promises `m` is null or a live handle from `ay2d_load`.
+pub(crate) fn model<'a>(m: *const Model) -> Result<&'a Model, Status> {
     if m.is_null() {
         set_error("model handle is null");
         return Err(Status::Null);
     }
-    // SAFETY: a non-null handle from ay2d_load is a live Box<Model>
+    // SAFETY: the ABI's contract; a non-null handle from ay2d_load is a
+    // live Box<Model> until ay2d_free
     Ok(unsafe { &*m })
 }
 
-/// # Safety
-/// As [`model`], and no other reference to the model is alive.
-pub(crate) unsafe fn model_mut<'a>(m: *mut Model) -> Result<&'a mut Model, Status> {
+/// As [`model`]; the host promises no other reference is alive, which the
+/// one-thread-per-model rule gives.
+pub(crate) fn model_mut<'a>(m: *mut Model) -> Result<&'a mut Model, Status> {
     if m.is_null() {
         set_error("model handle is null");
         return Err(Status::Null);
     }
-    // SAFETY: a non-null handle from ay2d_load is a live Box<Model>
+    // SAFETY: the ABI's contract, as for `model`
     Ok(unsafe { &mut *m })
 }
 
-/// A slice over a host array, or a status when the pointer is null while
-/// the length is not.
-///
-/// # Safety
-/// `ptr` points at `n` readable `T`s, or `n` is zero.
-pub(crate) unsafe fn input<'a, T>(ptr: *const T, n: usize) -> Result<&'a [T], Status> {
+/// A slice over a host array; the host promises `ptr` covers `n` readable
+/// elements (a null pointer with `n` of zero is an empty array).
+pub(crate) fn input<'a, T>(ptr: *const T, n: usize) -> Result<&'a [T], Status> {
     if n == 0 {
         return Ok(&[]);
     }
@@ -87,13 +91,13 @@ pub(crate) unsafe fn input<'a, T>(ptr: *const T, n: usize) -> Result<&'a [T], St
         set_error("array pointer is null");
         return Err(Status::Null);
     }
-    // SAFETY: the host promises n readable elements
+    // SAFETY: the ABI's contract; n readable elements at ptr
     Ok(unsafe { std::slice::from_raw_parts(ptr, n) })
 }
 
-/// # Safety
-/// `ptr` points at `n` writable `T`s, or `n` is zero.
-pub(crate) unsafe fn output<'a, T>(ptr: *mut T, n: usize) -> Result<&'a mut [T], Status> {
+/// A writable slice over a host array; the host promises `ptr` covers `n`
+/// writable elements.
+pub(crate) fn output<'a, T>(ptr: *mut T, n: usize) -> Result<&'a mut [T], Status> {
     if n == 0 {
         return Ok(&mut []);
     }
@@ -101,21 +105,41 @@ pub(crate) unsafe fn output<'a, T>(ptr: *mut T, n: usize) -> Result<&'a mut [T],
         set_error("array pointer is null");
         return Err(Status::Null);
     }
-    // SAFETY: the host promises n writable elements
+    // SAFETY: the ABI's contract; n writable elements at ptr
     Ok(unsafe { std::slice::from_raw_parts_mut(ptr, n) })
 }
 
-/// Load a model from the bytes of an `.aom` file. The bytes are read, not
-/// kept: the host may free them as soon as this returns. Null when the
-/// bytes are not a model; `ay2d_last_error` says why. The model is
-/// evaluated once at its defaults, so drawables are ready at once.
-///
-/// # Safety
-/// `bytes` points at `len` readable bytes.
+/// A host string; the host promises it ends in NUL.
+pub(crate) fn cstr_in<'a>(ptr: *const c_char) -> Result<&'a CStr, Status> {
+    if ptr.is_null() {
+        set_error("string pointer is null");
+        return Err(Status::Null);
+    }
+    // SAFETY: the ABI's contract; a NUL-terminated string at ptr
+    Ok(unsafe { CStr::from_ptr(ptr) })
+}
+
+/// Write one value to a host slot; the host promises `out` points at one
+/// writable `T`.
+pub(crate) fn put<T>(out: *mut T, value: T) -> Status {
+    if out.is_null() {
+        set_error("output pointer is null");
+        return Status::Null;
+    }
+    // SAFETY: the ABI's contract; one writable T at out
+    unsafe { *out = value };
+    Status::Ok
+}
+
+/// Load a model from the bytes of an `.aom` file. The bytes (`len` of them
+/// at `bytes`) are read, not kept: the host may free them as soon as this
+/// returns. Null when the bytes are not a model; `ay2d_last_error` says
+/// why. The model is evaluated once at its defaults, so drawables are
+/// ready at once.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
+pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
     guard(std::ptr::null_mut(), || {
-        let Ok(bytes) = (unsafe { input(bytes, len) }) else { return std::ptr::null_mut() };
+        let Ok(bytes) = input(bytes, len) else { return std::ptr::null_mut() };
         let payload = match ayatsuri_format::read(bytes) {
             Ok(p) => p,
             Err(e) => {
@@ -169,83 +193,73 @@ impl Model {
     }
 }
 
-/// Free a model. Null is fine. Every pointer the model handed out (ids,
-/// drawables, textures) dies with it.
-///
-/// # Safety
-/// `m` is null or a handle `ay2d_load` returned, freed once.
+/// Free a model, once. Null is fine. Every pointer the model handed out
+/// (ids, drawables, textures) dies with it.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_free(m: *mut Model) {
+// the one entry point that consumes its pointer; the contract is the ABI's
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn ay2d_free(m: *mut Model) {
     if !m.is_null() {
-        // SAFETY: the handle came from Box::into_raw in ay2d_load
+        // SAFETY: the ABI's contract; the handle came from Box::into_raw in
+        // ay2d_load and is freed once
         drop(unsafe { Box::from_raw(m) });
     }
 }
 
 /// How many parameters the model has.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_parameter_count(m: *const Model) -> u32 {
-    guard(0, || unsafe { model(m) }.map_or(0, |m| m.param_ids.len() as u32))
+pub extern "C" fn ay2d_parameter_count(m: *const Model) -> u32 {
+    guard(0, || model(m).map_or(0, |m| m.param_ids.len() as u32))
 }
 
 /// How many parts the model has.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_part_count(m: *const Model) -> u32 {
-    guard(0, || unsafe { model(m) }.map_or(0, |m| m.part_ids.len() as u32))
+pub extern "C" fn ay2d_part_count(m: *const Model) -> u32 {
+    guard(0, || model(m).map_or(0, |m| m.part_ids.len() as u32))
 }
 
 /// How many meshes the model has; a drawable's `mesh` is an index into
 /// them, and so is every mesh-wise call.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_mesh_count(m: *const Model) -> u32 {
-    guard(0, || unsafe { model(m) }.map_or(0, |m| m.mesh_ids.len() as u32))
+pub extern "C" fn ay2d_mesh_count(m: *const Model) -> u32 {
+    guard(0, || model(m).map_or(0, |m| m.mesh_ids.len() as u32))
 }
 
 /// How many texture pages the model carries.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_texture_count(m: *const Model) -> u32 {
-    guard(0, || unsafe { model(m) }.map_or(0, |m| m.textures.len() as u32))
+pub extern "C" fn ay2d_texture_count(m: *const Model) -> u32 {
+    guard(0, || model(m).map_or(0, |m| m.textures.len() as u32))
 }
 
 /// The canvas: size in pixels and the model-unit to pixel mapping.
 ///
-/// # Safety
 /// `m` is a live handle; `out` points at one writable canvas.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_canvas(m: *const Model, out: *mut Canvas) -> Status {
+pub extern "C" fn ay2d_canvas(m: *const Model, out: *mut Canvas) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model(m) } {
+        let model = match model(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
-        if out.is_null() {
-            set_error("canvas pointer is null");
-            return Status::Null;
-        }
         let c = model.puppet.model().canvas;
-        // SAFETY: the host promises one writable Canvas
-        unsafe {
-            *out = Canvas {
+        put(
+            out,
+            Canvas {
                 width: c.width,
                 height: c.height,
                 pixels_per_unit: c.pixels_per_unit,
                 origin_x: c.origin_x,
                 origin_y: c.origin_y,
-            };
-        }
-        Status::Ok
+            },
+        )
     })
 }
 
@@ -262,52 +276,37 @@ fn id_at(ids: &[CString], i: u32) -> *const c_char {
 /// A parameter's id (`ParamAngleX`...), NUL-terminated, alive as long as
 /// the model. Null past the count.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_parameter_id(m: *const Model, i: u32) -> *const c_char {
-    guard(std::ptr::null(), || {
-        unsafe { model(m) }.map_or(std::ptr::null(), |m| id_at(&m.param_ids, i))
-    })
+pub extern "C" fn ay2d_parameter_id(m: *const Model, i: u32) -> *const c_char {
+    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.param_ids, i)))
 }
 
 /// A part's id, as [`ay2d_parameter_id`].
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_part_id(m: *const Model, i: u32) -> *const c_char {
-    guard(std::ptr::null(), || {
-        unsafe { model(m) }.map_or(std::ptr::null(), |m| id_at(&m.part_ids, i))
-    })
+pub extern "C" fn ay2d_part_id(m: *const Model, i: u32) -> *const c_char {
+    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.part_ids, i)))
 }
 
 /// A mesh's id, as [`ay2d_parameter_id`].
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_mesh_id(m: *const Model, i: u32) -> *const c_char {
-    guard(std::ptr::null(), || {
-        unsafe { model(m) }.map_or(std::ptr::null(), |m| id_at(&m.mesh_ids, i))
-    })
+pub extern "C" fn ay2d_mesh_id(m: *const Model, i: u32) -> *const c_char {
+    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.mesh_ids, i)))
 }
 
 /// The index of the parameter with this id, or -1 when the model has none.
 /// Resolve ids once at load; drive by index after.
 ///
-/// # Safety
 /// `m` is a live handle; `id` is a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_parameter_index(m: *const Model, id: *const c_char) -> i32 {
+pub extern "C" fn ay2d_parameter_index(m: *const Model, id: *const c_char) -> i32 {
     guard(-1, || {
-        let Ok(model) = (unsafe { model(m) }) else { return -1 };
-        if id.is_null() {
-            set_error("id is null");
-            return -1;
-        }
-        // SAFETY: the host promises a NUL-terminated string
-        let want = unsafe { std::ffi::CStr::from_ptr(id) };
+        let Ok(model) = model(m) else { return -1 };
+        let Ok(want) = cstr_in(id) else { return -1 };
         model.param_ids.iter().position(|p| p.as_c_str() == want).map_or(-1, |i| i as i32)
     })
 }

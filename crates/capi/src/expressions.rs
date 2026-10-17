@@ -1,13 +1,13 @@
 //! Expressions: the model's exp3 sets, one shown at a time, faded in over
 //! the pose after motions have had their say and before physics.
 
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CString, c_char};
 
 use ayatsuri_core::Puppet;
 use ayatsuri_format::{Expression, ExpressionBlend};
 
 use crate::error::{Status, guard, set_error};
-use crate::handle::{Model, model, model_mut};
+use crate::handle::{Model, cstr_in, model, model_mut};
 use crate::motions::cstring;
 
 const DEFAULT_FADE: f32 = 1.0;
@@ -124,21 +124,19 @@ impl Expressions {
 
 /// How many expressions the model carries.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_expression_count(m: *const Model) -> u32 {
-    guard(0, || unsafe { model(m) }.map_or(0, |m| m.exprs.sets.len() as u32))
+pub extern "C" fn ay2d_expression_count(m: *const Model) -> u32 {
+    guard(0, || model(m).map_or(0, |m| m.exprs.sets.len() as u32))
 }
 
 /// An expression's name, NUL-terminated, alive as long as the model.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_expression_id(m: *const Model, i: u32) -> *const c_char {
+pub extern "C" fn ay2d_expression_id(m: *const Model, i: u32) -> *const c_char {
     guard(std::ptr::null(), || {
-        let Ok(model) = (unsafe { model(m) }) else { return std::ptr::null() };
+        let Ok(model) = model(m) else { return std::ptr::null() };
         match model.exprs.sets.get(i as usize) {
             Some(s) => s.id.as_ptr(),
             None => {
@@ -151,18 +149,12 @@ pub unsafe extern "C" fn ay2d_expression_id(m: *const Model, i: u32) -> *const c
 
 /// The index of the expression with this name, or -1.
 ///
-/// # Safety
 /// `m` is a live handle; `name` is a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_expression_index(m: *const Model, name: *const c_char) -> i32 {
+pub extern "C" fn ay2d_expression_index(m: *const Model, name: *const c_char) -> i32 {
     guard(-1, || {
-        let Ok(model) = (unsafe { model(m) }) else { return -1 };
-        if name.is_null() {
-            set_error("name is null");
-            return -1;
-        }
-        // SAFETY: the host promises a NUL-terminated string
-        let want = unsafe { CStr::from_ptr(name) };
+        let Ok(model) = model(m) else { return -1 };
+        let Ok(want) = cstr_in(name) else { return -1 };
         model.exprs.sets.iter().position(|s| s.id.as_c_str() == want).map_or(-1, |i| i as i32)
     })
 }
@@ -171,12 +163,11 @@ pub unsafe extern "C" fn ay2d_expression_index(m: *const Model, name: *const c_c
 /// while this one fades in over `fade_in` seconds (below zero: its
 /// authored fade or the spec's second; zero: at once).
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_expression_set(m: *mut Model, i: u32, fade_in: f32) -> Status {
+pub extern "C" fn ay2d_expression_set(m: *mut Model, i: u32, fade_in: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model_mut(m) } {
+        let model = match model_mut(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -196,12 +187,11 @@ pub unsafe extern "C" fn ay2d_expression_set(m: *mut Model, i: u32, fade_in: f32
 /// Fade the shown expression out over `fade_out` seconds (below zero: its
 /// own fade or the spec's second; zero: at once).
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_expression_clear(m: *mut Model, fade_out: f32) -> Status {
+pub extern "C" fn ay2d_expression_clear(m: *mut Model, fade_out: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model_mut(m) } {
+        let model = match model_mut(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -216,9 +206,8 @@ pub unsafe extern "C" fn ay2d_expression_clear(m: *mut Model, fade_out: f32) -> 
 
 /// The expression shown (the last one set and not cleared), or -1.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_expression_shown(m: *const Model) -> i32 {
-    guard(-1, || unsafe { model(m) }.map_or(-1, |m| m.exprs.current().map_or(-1, |i| i as i32)))
+pub extern "C" fn ay2d_expression_shown(m: *const Model) -> i32 {
+    guard(-1, || model(m).map_or(-1, |m| m.exprs.current().map_or(-1, |i| i as i32)))
 }

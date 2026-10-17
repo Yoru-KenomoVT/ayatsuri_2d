@@ -7,16 +7,11 @@ use crate::handle::{Model, input, model, model_mut, output};
 /// Every part's host opacity, by index, into `values`
 /// (`ay2d_part_count` floats, 0 to 1; 1 when never set).
 ///
-/// # Safety
 /// `m` is a live handle; `values` holds `n` writable floats.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_get_part_opacities(
-    m: *const Model,
-    values: *mut f32,
-    n: usize,
-) -> Status {
+pub extern "C" fn ay2d_get_part_opacities(m: *const Model, values: *mut f32, n: usize) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model(m) } {
+        let model = match model(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -25,7 +20,7 @@ pub unsafe extern "C" fn ay2d_get_part_opacities(
             set_error(format!("{n} given, the model has {count} parts"));
             return Status::TooSmall;
         }
-        let out = match unsafe { output(values, count) } {
+        let out = match output(values, count) {
             Ok(o) => o,
             Err(s) => return s,
         };
@@ -40,21 +35,20 @@ pub unsafe extern "C" fn ay2d_get_part_opacities(
 /// clamped to 0 to 1. An index past the model fails the whole call before
 /// anything changes. Nothing is evaluated until `ay2d_update`.
 ///
-/// # Safety
 /// `m` is a live handle; `indices` and `values` hold `n` readable items.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_set_part_opacities(
+pub extern "C" fn ay2d_set_part_opacities(
     m: *mut Model,
     indices: *const u32,
     values: *const f32,
     n: usize,
 ) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model_mut(m) } {
+        let model = match model_mut(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
-        let (idx, vals) = match (unsafe { input(indices, n) }, unsafe { input(values, n) }) {
+        let (idx, vals) = match (input(indices, n), input(values, n)) {
             (Ok(i), Ok(v)) => (i, v),
             (Err(s), _) | (_, Err(s)) => return s,
         };

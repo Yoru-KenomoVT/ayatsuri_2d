@@ -11,12 +11,11 @@ use crate::handle::{Model, model, model_mut};
 /// `ay2d_drawables` and `ay2d_motion_events` are current. `dt` of zero
 /// evaluates without moving motions or physics.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_update(m: *mut Model, dt: f32) -> Status {
+pub extern "C" fn ay2d_update(m: *mut Model, dt: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match unsafe { model_mut(m) } {
+        let model = match model_mut(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -45,21 +44,19 @@ pub unsafe extern "C" fn ay2d_update(m: *mut Model, dt: f32) -> Status {
 
 /// 1 when the model carries a pendulum rig, else 0.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_has_physics(m: *const Model) -> i32 {
-    guard(0, || unsafe { model(m) }.map_or(0, |m| i32::from(m.puppet.has_physics())))
+pub extern "C" fn ay2d_has_physics(m: *const Model) -> i32 {
+    guard(0, || model(m).map_or(0, |m| i32::from(m.puppet.has_physics())))
 }
 
 /// Run (1) or hold (0) the rig on update. On by default when the model
 /// has one; off, the physics-driven parameters keep their set values.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_set_physics(m: *mut Model, on: i32) -> Status {
-    guard(Status::Internal, || match unsafe { model_mut(m) } {
+pub extern "C" fn ay2d_set_physics(m: *mut Model, on: i32) -> Status {
+    guard(Status::Internal, || match model_mut(m) {
         Ok(model) => {
             model.physics_on = on != 0;
             Status::Ok
@@ -70,11 +67,10 @@ pub unsafe extern "C" fn ay2d_set_physics(m: *mut Model, on: i32) -> Status {
 
 /// Wind on the rig, in the same units gravity has (down is 0, -1).
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_set_wind(m: *mut Model, x: f32, y: f32) -> Status {
-    guard(Status::Internal, || match unsafe { model_mut(m) } {
+pub extern "C" fn ay2d_set_wind(m: *mut Model, x: f32, y: f32) -> Status {
+    guard(Status::Internal, || match model_mut(m) {
         Ok(model) => {
             if !(x.is_finite() && y.is_finite()) {
                 set_error("wind is not finite");
@@ -89,11 +85,10 @@ pub unsafe extern "C" fn ay2d_set_wind(m: *mut Model, x: f32, y: f32) -> Status 
 
 /// Put every pendulum back at rest, as after a scene cut.
 ///
-/// # Safety
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ay2d_reset_physics(m: *mut Model) -> Status {
-    guard(Status::Internal, || match unsafe { model_mut(m) } {
+pub extern "C" fn ay2d_reset_physics(m: *mut Model) -> Status {
+    guard(Status::Internal, || match model_mut(m) {
         Ok(model) => {
             model.puppet.reset_physics();
             Status::Ok

@@ -175,7 +175,6 @@ const char *ay2d_version(void);
  among the drawables unless drawn in their own right; use
  `ay2d_mesh_geometry` to render a mask.
 
- # Safety
  `m` is a live handle; `out` holds `n` writable drawables, or `n` is zero.
  */
 uint32_t ay2d_drawables(const struct ay2d_model *m, struct ay2d_drawable *out, size_t n);
@@ -186,7 +185,6 @@ uint32_t ay2d_drawables(const struct ay2d_model *m, struct ay2d_drawable *out, s
  `uvs` and `indices` never change for a mesh; upload them once and read
  `positions` after each update. Fails with range past the mesh count.
 
- # Safety
  `m` is a live handle; `out` points at one writable drawable.
  */
 enum ay2d_status ay2d_mesh_geometry(const struct ay2d_model *m,
@@ -202,7 +200,6 @@ const char *ay2d_last_error(void);
 /*
  How many expressions the model carries.
 
- # Safety
  `m` is a live handle.
  */
 uint32_t ay2d_expression_count(const struct ay2d_model *m);
@@ -210,7 +207,6 @@ uint32_t ay2d_expression_count(const struct ay2d_model *m);
 /*
  An expression's name, NUL-terminated, alive as long as the model.
 
- # Safety
  `m` is a live handle.
  */
 const char *ay2d_expression_id(const struct ay2d_model *m, uint32_t i);
@@ -218,7 +214,6 @@ const char *ay2d_expression_id(const struct ay2d_model *m, uint32_t i);
 /*
  The index of the expression with this name, or -1.
 
- # Safety
  `m` is a live handle; `name` is a NUL-terminated string.
  */
 int32_t ay2d_expression_index(const struct ay2d_model *m, const char *name);
@@ -228,7 +223,6 @@ int32_t ay2d_expression_index(const struct ay2d_model *m, const char *name);
  while this one fades in over `fade_in` seconds (below zero: its
  authored fade or the spec's second; zero: at once).
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_expression_set(struct ay2d_model *m, uint32_t i, float fade_in);
@@ -237,7 +231,6 @@ enum ay2d_status ay2d_expression_set(struct ay2d_model *m, uint32_t i, float fad
  Fade the shown expression out over `fade_out` seconds (below zero: its
  own fade or the spec's second; zero: at once).
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_expression_clear(struct ay2d_model *m, float fade_out);
@@ -245,35 +238,28 @@ enum ay2d_status ay2d_expression_clear(struct ay2d_model *m, float fade_out);
 /*
  The expression shown (the last one set and not cleared), or -1.
 
- # Safety
  `m` is a live handle.
  */
 int32_t ay2d_expression_shown(const struct ay2d_model *m);
 
 /*
- Load a model from the bytes of an `.aom` file. The bytes are read, not
- kept: the host may free them as soon as this returns. Null when the
- bytes are not a model; `ay2d_last_error` says why. The model is
- evaluated once at its defaults, so drawables are ready at once.
-
- # Safety
- `bytes` points at `len` readable bytes.
+ Load a model from the bytes of an `.aom` file. The bytes (`len` of them
+ at `bytes`) are read, not kept: the host may free them as soon as this
+ returns. Null when the bytes are not a model; `ay2d_last_error` says
+ why. The model is evaluated once at its defaults, so drawables are
+ ready at once.
  */
 struct ay2d_model *ay2d_load(const uint8_t *bytes, size_t len);
 
 /*
- Free a model. Null is fine. Every pointer the model handed out (ids,
- drawables, textures) dies with it.
-
- # Safety
- `m` is null or a handle `ay2d_load` returned, freed once.
+ Free a model, once. Null is fine. Every pointer the model handed out
+ (ids, drawables, textures) dies with it.
  */
 void ay2d_free(struct ay2d_model *m);
 
 /*
  How many parameters the model has.
 
- # Safety
  `m` is a live handle.
  */
 uint32_t ay2d_parameter_count(const struct ay2d_model *m);
@@ -281,7 +267,6 @@ uint32_t ay2d_parameter_count(const struct ay2d_model *m);
 /*
  How many parts the model has.
 
- # Safety
  `m` is a live handle.
  */
 uint32_t ay2d_part_count(const struct ay2d_model *m);
@@ -290,7 +275,6 @@ uint32_t ay2d_part_count(const struct ay2d_model *m);
  How many meshes the model has; a drawable's `mesh` is an index into
  them, and so is every mesh-wise call.
 
- # Safety
  `m` is a live handle.
  */
 uint32_t ay2d_mesh_count(const struct ay2d_model *m);
@@ -298,7 +282,6 @@ uint32_t ay2d_mesh_count(const struct ay2d_model *m);
 /*
  How many texture pages the model carries.
 
- # Safety
  `m` is a live handle.
  */
 uint32_t ay2d_texture_count(const struct ay2d_model *m);
@@ -306,7 +289,6 @@ uint32_t ay2d_texture_count(const struct ay2d_model *m);
 /*
  The canvas: size in pixels and the model-unit to pixel mapping.
 
- # Safety
  `m` is a live handle; `out` points at one writable canvas.
  */
 enum ay2d_status ay2d_canvas(const struct ay2d_model *m, struct ay2d_canvas_info *out);
@@ -315,7 +297,6 @@ enum ay2d_status ay2d_canvas(const struct ay2d_model *m, struct ay2d_canvas_info
  A parameter's id (`ParamAngleX`...), NUL-terminated, alive as long as
  the model. Null past the count.
 
- # Safety
  `m` is a live handle.
  */
 const char *ay2d_parameter_id(const struct ay2d_model *m, uint32_t i);
@@ -323,7 +304,6 @@ const char *ay2d_parameter_id(const struct ay2d_model *m, uint32_t i);
 /*
  A part's id, as [`ay2d_parameter_id`].
 
- # Safety
  `m` is a live handle.
  */
 const char *ay2d_part_id(const struct ay2d_model *m, uint32_t i);
@@ -331,7 +311,6 @@ const char *ay2d_part_id(const struct ay2d_model *m, uint32_t i);
 /*
  A mesh's id, as [`ay2d_parameter_id`].
 
- # Safety
  `m` is a live handle.
  */
 const char *ay2d_mesh_id(const struct ay2d_model *m, uint32_t i);
@@ -340,7 +319,6 @@ const char *ay2d_mesh_id(const struct ay2d_model *m, uint32_t i);
  The index of the parameter with this id, or -1 when the model has none.
  Resolve ids once at load; drive by index after.
 
- # Safety
  `m` is a live handle; `id` is a NUL-terminated string.
  */
 int32_t ay2d_parameter_index(const struct ay2d_model *m, const char *id);
@@ -348,7 +326,6 @@ int32_t ay2d_parameter_index(const struct ay2d_model *m, const char *id);
 /*
  How many motions the model carries: its scenes, then its compositions.
 
- # Safety
  `m` is a live handle.
  */
 uint32_t ay2d_motion_count(const struct ay2d_model *m);
@@ -357,7 +334,6 @@ uint32_t ay2d_motion_count(const struct ay2d_model *m);
  A motion's name, NUL-terminated, alive as long as the model. Null past
  the count.
 
- # Safety
  `m` is a live handle.
  */
 const char *ay2d_motion_id(const struct ay2d_model *m, uint32_t i);
@@ -365,7 +341,6 @@ const char *ay2d_motion_id(const struct ay2d_model *m, uint32_t i);
 /*
  The index of the motion with this name, or -1.
 
- # Safety
  `m` is a live handle; `name` is a NUL-terminated string.
  */
 int32_t ay2d_motion_index(const struct ay2d_model *m, const char *name);
@@ -373,7 +348,6 @@ int32_t ay2d_motion_index(const struct ay2d_model *m, const char *name);
 /*
  Facts about motion `i`.
 
- # Safety
  `m` is a live handle; `out` points at one writable info.
  */
 enum ay2d_status ay2d_motion_info(const struct ay2d_model *m,
@@ -387,7 +361,6 @@ enum ay2d_status ay2d_motion_info(const struct ay2d_model *m,
  fade, zero starts it at full weight. `looping` repeats it; zero plays
  it once and holds its last frame.
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_motion_play(struct ay2d_model *m, uint32_t i, int32_t looping, float fade_in);
@@ -396,7 +369,6 @@ enum ay2d_status ay2d_motion_play(struct ay2d_model *m, uint32_t i, int32_t loop
  Fade every playing motion out over `fade_out` seconds (below zero: the
  motion's own fade or the spec's second; zero: at once).
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_motion_stop(struct ay2d_model *m, float fade_out);
@@ -404,7 +376,6 @@ enum ay2d_status ay2d_motion_stop(struct ay2d_model *m, float fade_out);
 /*
  The motion in front (the last one started and not stopped), or -1.
 
- # Safety
  `m` is a live handle.
  */
 int32_t ay2d_motion_playing(const struct ay2d_model *m);
@@ -413,7 +384,6 @@ int32_t ay2d_motion_playing(const struct ay2d_model *m);
  1 when the motion in front played once through and now holds its last
  frame; 0 while it runs, loops, or when nothing plays.
 
- # Safety
  `m` is a live handle.
  */
 int32_t ay2d_motion_finished(const struct ay2d_model *m);
@@ -422,7 +392,6 @@ int32_t ay2d_motion_finished(const struct ay2d_model *m);
  Where the motion in front is on its clock, in seconds; -1 when nothing
  plays.
 
- # Safety
  `m` is a live handle.
  */
 float ay2d_motion_time(const struct ay2d_model *m);
@@ -430,7 +399,6 @@ float ay2d_motion_time(const struct ay2d_model *m);
 /*
  Put the motion in front at `t` seconds on its clock.
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_motion_seek(struct ay2d_model *m, float t);
@@ -438,7 +406,6 @@ enum ay2d_status ay2d_motion_seek(struct ay2d_model *m, float t);
 /*
  Play the motion in front at `speed` times its rate (1 is as authored).
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_motion_set_speed(struct ay2d_model *m, float speed);
@@ -448,7 +415,6 @@ enum ay2d_status ay2d_motion_set_speed(struct ay2d_model *m, float speed);
  Returns how many there were; with `n` smaller only the first `n` are
  written. Poll after each update; the list is replaced by the next one.
 
- # Safety
  `m` is a live handle; `out` holds `n` writable events, or `n` is zero.
  */
 uint32_t ay2d_motion_events(const struct ay2d_model *m, struct ay2d_event *out, size_t n);
@@ -457,7 +423,6 @@ uint32_t ay2d_motion_events(const struct ay2d_model *m, struct ay2d_event *out, 
  Every parameter's minimum, maximum and default, by index. Each array
  holds `ay2d_parameter_count` floats; any may be null to skip it.
 
- # Safety
  `m` is a live handle; each non-null array holds `n` writable floats.
  */
 enum ay2d_status ay2d_parameter_ranges(const struct ay2d_model *m,
@@ -470,7 +435,6 @@ enum ay2d_status ay2d_parameter_ranges(const struct ay2d_model *m,
  Every parameter's current value, by index, into `values`
  (`ay2d_parameter_count` floats).
 
- # Safety
  `m` is a live handle; `values` holds `n` writable floats.
  */
 enum ay2d_status ay2d_get_parameters(const struct ay2d_model *m, float *values, size_t n);
@@ -481,7 +445,6 @@ enum ay2d_status ay2d_get_parameters(const struct ay2d_model *m, float *values, 
  whole call before anything changes. Nothing is evaluated until
  `ay2d_update`.
 
- # Safety
  `m` is a live handle; `indices` and `values` hold `n` readable items.
  */
 enum ay2d_status ay2d_set_parameters(struct ay2d_model *m,
@@ -493,7 +456,6 @@ enum ay2d_status ay2d_set_parameters(struct ay2d_model *m,
  Set every parameter from one array of `ay2d_parameter_count` values,
  by index. The usual frame call for a host that keeps the whole pose.
 
- # Safety
  `m` is a live handle; `values` holds `n` readable floats.
  */
 enum ay2d_status ay2d_set_all_parameters(struct ay2d_model *m, const float *values, size_t n);
@@ -502,7 +464,6 @@ enum ay2d_status ay2d_set_all_parameters(struct ay2d_model *m, const float *valu
  Every part's host opacity, by index, into `values`
  (`ay2d_part_count` floats, 0 to 1; 1 when never set).
 
- # Safety
  `m` is a live handle; `values` holds `n` writable floats.
  */
 enum ay2d_status ay2d_get_part_opacities(const struct ay2d_model *m, float *values, size_t n);
@@ -512,7 +473,6 @@ enum ay2d_status ay2d_get_part_opacities(const struct ay2d_model *m, float *valu
  clamped to 0 to 1. An index past the model fails the whole call before
  anything changes. Nothing is evaluated until `ay2d_update`.
 
- # Safety
  `m` is a live handle; `indices` and `values` hold `n` readable items.
  */
 enum ay2d_status ay2d_set_part_opacities(struct ay2d_model *m,
@@ -528,7 +488,6 @@ enum ay2d_status ay2d_set_part_opacities(struct ay2d_model *m,
  `ay2d_drawables` and `ay2d_motion_events` are current. `dt` of zero
  evaluates without moving motions or physics.
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_update(struct ay2d_model *m, float dt);
@@ -536,7 +495,6 @@ enum ay2d_status ay2d_update(struct ay2d_model *m, float dt);
 /*
  1 when the model carries a pendulum rig, else 0.
 
- # Safety
  `m` is a live handle.
  */
 int32_t ay2d_has_physics(const struct ay2d_model *m);
@@ -545,7 +503,6 @@ int32_t ay2d_has_physics(const struct ay2d_model *m);
  Run (1) or hold (0) the rig on update. On by default when the model
  has one; off, the physics-driven parameters keep their set values.
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_set_physics(struct ay2d_model *m, int32_t on);
@@ -553,7 +510,6 @@ enum ay2d_status ay2d_set_physics(struct ay2d_model *m, int32_t on);
 /*
  Wind on the rig, in the same units gravity has (down is 0, -1).
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_set_wind(struct ay2d_model *m, float x, float y);
@@ -561,7 +517,6 @@ enum ay2d_status ay2d_set_wind(struct ay2d_model *m, float x, float y);
 /*
  Put every pendulum back at rest, as after a scene cut.
 
- # Safety
  `m` is a live handle.
  */
 enum ay2d_status ay2d_reset_physics(struct ay2d_model *m);
@@ -570,7 +525,6 @@ enum ay2d_status ay2d_reset_physics(struct ay2d_model *m);
  Texture page `i` as encoded bytes (PNG), alive as long as the model.
  A drawable's `texture` is an index into these.
 
- # Safety
  `m` is a live handle; `bytes` and `len` each point at one writable slot.
  */
 enum ay2d_status ay2d_texture(const struct ay2d_model *m,
