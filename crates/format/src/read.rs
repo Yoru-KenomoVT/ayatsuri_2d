@@ -77,6 +77,7 @@ mod tests {
             textures: vec![serde_bytes::ByteBuf::from(vec![1u8, 2, 3])],
             display: None,
             animations: Vec::new(),
+            compositions: Vec::new(),
             expressions: vec![crate::Expression {
                 name: "smile".into(),
                 fade_in: Some(0.5),
@@ -123,6 +124,31 @@ mod tests {
         assert_eq!(c.keys.len(), 2);
         assert_eq!(c.keys[1].value, 5.0);
         assert!(c.keys.iter().all(|k| k.interp == Interp::Linear));
+    }
+
+    #[test]
+    fn compositions_ride_along_and_old_files_have_none() {
+        use crate::payload::{Composition, Layer, LayerSource};
+        let with = AomPayload {
+            compositions: vec![Composition {
+                name: "intro".into(),
+                fps: 30.0,
+                duration: 4.0,
+                layers: vec![Layer {
+                    source: LayerSource::Scene("idle".into()),
+                    out_point: 3.0,
+                    fade_in: 0.5,
+                    ..Layer::default()
+                }],
+                ..Composition::default()
+            }],
+            ..AomPayload::default()
+        };
+        let back = crate::read::read(&crate::writer::write(&with).unwrap()).unwrap();
+        assert_eq!(back.compositions, with.compositions);
+        let old =
+            crate::read::read(&crate::writer::write(&AomPayload::default()).unwrap()).unwrap();
+        assert!(old.compositions.is_empty());
     }
 
     #[test]

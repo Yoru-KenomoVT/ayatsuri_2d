@@ -33,6 +33,9 @@ pub struct AomPayload {
     /// Animations ride inside the container, per docs/aom-format.md; the
     /// embedded export writes each one out as `<name>.motion3.json`.
     pub animations: Vec<Animation>,
+    /// Compositions: scenes and other compositions laid out as layers over
+    /// one clock. Empty in files from before 0.5.6; older readers skip them.
+    pub compositions: Vec<Composition>,
     /// Expressions (exp3.json): parameter targets layered over the pose.
     /// Empty in older files.
     pub expressions: Vec<Expression>,
@@ -112,6 +115,82 @@ pub enum SceneKind {
     Expression,
 }
 
+/// A composition: scenes and other compositions laid out as layers over
+/// one clock, the way After Effects nests comps, so one timeline can run
+/// a whole animation. Layers list top first; each mixes over everything
+/// beneath it by its weight, faded in and out at its ends. A composition
+/// exports by baking into a motion.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Composition {
+    pub name: String,
+    pub fps: f32,
+    /// Seconds.
+    pub duration: f32,
+    pub looped: bool,
+    /// The play range in seconds; None is the whole composition.
+    pub work_area: Option<(f32, f32)>,
+    pub layers: Vec<Layer>,
+}
+
+/// One layer of a composition: a stretch of a source played from a time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Layer {
+    pub source: LayerSource,
+    /// Where the layer starts on the composition's clock, seconds.
+    pub start: f32,
+    /// The stretch of the source it plays, in the source's own seconds.
+    /// An out point past a looping source's end plays it round again.
+    pub in_point: f32,
+    pub out_point: f32,
+    /// Source seconds per composition second.
+    pub speed: f32,
+    /// How much of the layer shows over what is beneath, 0 to 1.
+    pub weight: f32,
+    /// Seconds at each end over which the weight ramps.
+    pub fade_in: f32,
+    pub fade_out: f32,
+    pub enabled: bool,
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Self {
+            source: LayerSource::default(),
+            start: 0.0,
+            in_point: 0.0,
+            out_point: 0.0,
+            speed: 1.0,
+            weight: 1.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            enabled: true,
+        }
+    }
+}
+
+/// What a layer plays, by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LayerSource {
+    Scene(String),
+    Composition(String),
+}
+
+impl Default for LayerSource {
+    fn default() -> Self {
+        Self::Scene(String::new())
+    }
+}
+
+impl LayerSource {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Scene(n) | Self::Composition(n) => n,
+        }
+    }
+}
+
 /// Pre-0.5 straight-line track.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -135,7 +214,7 @@ pub struct Curve {
 }
 
 /// motion3.json's curve targets.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CurveTarget {
     #[default]
     Parameter,

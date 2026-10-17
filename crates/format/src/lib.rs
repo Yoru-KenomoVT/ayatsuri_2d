@@ -12,8 +12,9 @@ pub mod writer;
 
 pub use model::Model;
 pub use payload::{
-    Animation, AomPayload, Curve, CurveTarget, DisplayInfo, Event, Expression, ExpressionBlend,
-    ExpressionParam, GuideLine, Interp, Key, Meta, SceneKind, Track,
+    Animation, AomPayload, Composition, Curve, CurveTarget, DisplayInfo, Event, Expression,
+    ExpressionBlend, ExpressionParam, GuideLine, Interp, Key, Layer, LayerSource, Meta, SceneKind,
+    Track,
 };
 pub use read::read;
 pub use writer::write;
