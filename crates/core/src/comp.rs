@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use ayatsuri_format::{
-    Animation, Composition, Curve, CurveTarget, Interp, Key, Layer, LayerSource,
+    Animation, Composition, Curve, CurveTarget, Interp, Key, Layer, LayerSource, Playlist,
 };
 
 /// How deep compositions may nest before sampling gives up, so a layer
@@ -99,6 +99,11 @@ impl Blend {
         self.keep = self.keep * (1.0 - w) + b.keep * w;
         self.add = self.add * (1.0 - w) + b.add * w;
     }
+
+    /// A value added on top, scaled by `w`; what was beneath stays.
+    fn add_over(&mut self, v: f32, w: f32) {
+        self.add += v * w;
+    }
 }
 
 /// Where a layer ends on the composition's clock.
@@ -160,7 +165,12 @@ fn sample_into(
                 let Some(a) = scope.scene(n) else { continue };
                 for c in &a.curves {
                     let Some(v) = crate::anim::sample(a, c, st) else { continue };
-                    out.entry((c.target, c.id.clone())).or_default().mix(v, w);
+                    let slot = out.entry((c.target, c.id.clone())).or_default();
+                    if l.additive {
+                        slot.add_over(v, w);
+                    } else {
+                        slot.mix(v, w);
+                    }
                 }
             }
             LayerSource::Composition(n) => {
@@ -168,11 +178,59 @@ fn sample_into(
                 let mut got = BTreeMap::new();
                 sample_into(scope, inner, st, depth + 1, &mut got);
                 for (k, b) in got {
-                    out.entry(k).or_default().mix_blend(b, w);
+                    let slot = out.entry(k).or_default();
+                    if l.additive {
+                        slot.add_over(b.add, w);
+                    } else {
+                        slot.mix_blend(b, w);
+                    }
                 }
             }
         }
     }
+}
+
+/// A physics playlist as a composition: each group's scenes start
+/// together, the next group follows when the longest is done, and groups
+/// cross over the playlist's fade. A scene missing from the project is
+/// skipped.
+pub fn playlist_comp(scope: &Scope, pl: &Playlist, fps: f32) -> Composition {
+    let mut layers = Vec::new();
+    let mut t = 0.0f32;
+    let n = pl.groups.len();
+    for (gi, g) in pl.groups.iter().enumerate() {
+        let lens: Vec<(f32, &ayatsuri_format::PlaylistScene)> = g
+            .scenes
+            .iter()
+            .filter_map(|ps| scope.scene(&ps.scene).map(|a| (a.duration.max(0.0), ps)))
+            .collect();
+        let Some(len) = lens.iter().map(|(d, _)| *d).reduce(f32::max) else { continue };
+        let fade_in = if gi == 0 { 0.0 } else { pl.fade.max(0.0).min(len) };
+        let fade_out = if gi + 1 == n { 0.0 } else { pl.fade.max(0.0).min(len) };
+        for (d, ps) in lens {
+            layers.push(Layer {
+                source: LayerSource::Scene(ps.scene.clone()),
+                start: t,
+                in_point: 0.0,
+                // a shorter scene in the group plays round again if it loops
+                out_point: if scope.source_looped(&LayerSource::Scene(ps.scene.clone())) {
+                    len
+                } else {
+                    d
+                },
+                weight: ps.weight.clamp(0.0, 1.0),
+                fade_in,
+                fade_out,
+                additive: ps.additive,
+                ..Layer::default()
+            });
+        }
+        t += len - fade_out;
+    }
+    // the last group plays out whole
+    let duration = layers.iter().map(layer_end).fold(0.0f32, f32::max);
+    layers.reverse();
+    Composition { name: pl.name.clone(), fps, duration, looped: true, work_area: None, layers }
 }
 
 /// The composition flattened into one scene: a key on every frame of each
@@ -359,6 +417,41 @@ mod tests {
         let scope = Scope { scenes: &[], comps: &comps };
         assert!(sample(&scope, &comp, 0.5).is_empty());
         assert!(scope.reaches(&comp, "c"));
+    }
+
+    #[test]
+    fn an_additive_layer_adds_and_a_playlist_lines_its_groups_up() {
+        let scenes = vec![scene("lo", 1.0, 2.0, 2.0, false), scene("hi", 2.0, 3.0, 3.0, false)];
+        let scope = Scope { scenes: &scenes, comps: &[] };
+        let pl = Playlist {
+            name: "p".into(),
+            fade: 0.5,
+            groups: vec![
+                ayatsuri_format::PlaylistGroup {
+                    scenes: vec![ayatsuri_format::PlaylistScene {
+                        scene: "lo".into(),
+                        ..Default::default()
+                    }],
+                },
+                ayatsuri_format::PlaylistGroup {
+                    scenes: vec![ayatsuri_format::PlaylistScene {
+                        scene: "hi".into(),
+                        weight: 0.5,
+                        additive: true,
+                    }],
+                },
+            ],
+        };
+        let comp = playlist_comp(&scope, &pl, 30.0);
+        assert_eq!(comp.layers.len(), 2);
+        // the second group starts half a second before the first ends
+        let hi = comp.layers.iter().find(|l| l.source.name() == "hi").unwrap();
+        assert!((hi.start - 0.5).abs() < 1e-6);
+        assert!((comp.duration - 2.5).abs() < 1e-6);
+        // past the fade only "hi" plays, added at half weight over the base
+        assert!((value(&scope, &comp, 1.5) - 101.5).abs() < 1e-4);
+        // the empty A of a layerless time is the base
+        assert_eq!(value(&scope, &comp, 3.0), 100.0);
     }
 
     #[test]
