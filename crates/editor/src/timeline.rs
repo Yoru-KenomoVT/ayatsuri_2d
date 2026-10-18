@@ -1,12 +1,12 @@
 //! The Timeline palette: a dope sheet in the After Effects layout over the
-//! current scene's curves. Names on the left (the scene, parameter folders,
+//! current scene's curves, or the layer bars of a composition. Names on the left (the scene, parameter folders,
 //! parameters, parts), lanes of keys on the right under a frame ruler, a
 //! work area bar that bounds playback, the playhead, and the palette's own
 //! undo of key edits.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ayatsuri_format::{Animation, CurveTarget, Interp, Key};
+use ayatsuri_format::{Animation, Composition, CurveTarget, Interp, Key, Layer, LayerSource};
 use egui::{
     Align, Align2, Color32, CursorIcon, FontId, Id, Layout, Modifiers, Painter, Pos2, Rect, Sense,
     Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
@@ -39,6 +39,27 @@ pub struct Transport<'a> {
 /// What the palette asks the editor to do outside its own state.
 pub enum Request {
     NewScene,
+    NewComp,
+}
+
+/// What the palette is showing: a scene's curves or a composition's layers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum View {
+    Scene(usize),
+    Comp(usize),
+}
+
+/// A scene or composition as it was before an edit, for the palette's undo.
+enum Snap {
+    Scene(usize, Animation),
+    Comp(usize, Composition),
+}
+
+/// The fold key of the top row, which hides everything under it.
+const TOP_FOLD: &str = "\u{0}top";
+
+fn layer_fold(li: usize) -> String {
+    format!("\u{1}layer{li}")
 }
 
 /// Seconds to pixels for one frame of the palette.
@@ -65,6 +86,10 @@ enum RowKind {
     Folder(String),
     Param(usize),
     Part(usize),
+    /// A composition's layer, by index.
+    Layer(usize),
+    /// One curve of a layer's scene, shown read-only under it.
+    LayerCurve(usize),
 }
 
 #[derive(Clone)]
@@ -82,16 +107,16 @@ struct Row {
 /// moves, the way After Effects draws them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Half {
-    Auto,
     Linear,
     Hold,
     Bezier,
 }
 
+/// Auto smooth and linear both draw the diamond, as Live2D does; a hold
+/// is a square and a free bezier an hourglass.
 fn half_of(i: Interp) -> Half {
     match i {
-        Interp::Auto => Half::Auto,
-        Interp::Linear => Half::Linear,
+        Interp::Auto | Interp::Linear => Half::Linear,
         Interp::Stepped | Interp::InverseStepped => Half::Hold,
         Interp::Bezier { .. } => Half::Bezier,
     }
@@ -123,6 +148,59 @@ struct KeyDrag {
     applied: i64,
 }
 
+/// A drag of a layer bar: its body, or one of its ends, from where the
+/// layer sat when the pointer went down.
+struct LayerDrag {
+    li: usize,
+    part: LayerPart,
+    origin_x: f32,
+    start: f32,
+    in_point: f32,
+    out_point: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LayerPart {
+    Body,
+    Left,
+    Right,
+}
+
+/// Where a layer's span lands after a drag of `dx` seconds: the body
+/// slides it, the left end trims the in point and moves the start with it
+/// so the content stays put, the right end trims the out point (past the
+/// source's end only when it loops).
+fn layer_span_after(
+    d: &LayerDrag,
+    dx: f32,
+    speed: f32,
+    len: f32,
+    looped: bool,
+    frame_s: f32,
+) -> (f32, f32, f32) {
+    let snap = |t: f32| (t / frame_s).round() * frame_s;
+    let speed = speed.max(1e-3);
+    match d.part {
+        LayerPart::Body => (snap(d.start + dx).max(0.0), d.in_point, d.out_point),
+        LayerPart::Left => {
+            let end = d.start + (d.out_point - d.in_point) / speed;
+            let ns = snap(d.start + dx).clamp(0.0, (end - frame_s).max(0.0));
+            let nin = (d.in_point + (ns - d.start) * speed).max(0.0);
+            let ns = d.start + (nin - d.in_point) / speed;
+            (ns, nin, d.out_point)
+        }
+        LayerPart::Right => {
+            let end = d.start + (d.out_point - d.in_point) / speed;
+            let ne = snap(end + dx).max(d.start + frame_s);
+            let mut nout = d.in_point + (ne - d.start) * speed;
+            if !looped {
+                nout = nout.min(len.max(d.in_point + frame_s));
+            }
+            (d.start, d.in_point, nout.max(d.in_point + frame_s * speed))
+        }
+    }
+}
+
 pub struct Timeline {
     /// Pixels per second; None fits the whole scene.
     pps: Option<f32>,
@@ -139,12 +217,17 @@ pub struct Timeline {
     selected: BTreeSet<KeyRef>,
     drag: Option<KeyDrag>,
     box_from: Option<Pos2>,
+    /// The layer picked in a composition.
+    sel_layer: Option<usize>,
+    layer_drag: Option<LayerDrag>,
+    /// The composition to go back to after opening one of its layers.
+    back: Option<usize>,
     /// The last click landed in the palette, so Delete and Escape are its.
     focused: bool,
-    /// Scenes as they were before each key edit, with the scene's index;
-    /// one drag folds into one step by its merge key.
-    undo: Vec<(usize, Animation)>,
-    redo: Vec<(usize, Animation)>,
+    /// Scenes and compositions as they were before each edit; one drag
+    /// folds into one step by its merge key.
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
     merge: Option<&'static str>,
     /// The graph editor in place of the key lanes.
     pub graph: bool,
@@ -202,6 +285,9 @@ impl Default for Timeline {
             selected: BTreeSet::new(),
             drag: None,
             box_from: None,
+            sel_layer: None,
+            layer_drag: None,
+            back: None,
             focused: false,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -286,16 +372,6 @@ fn key_glyph(p: &Painter, c: Pos2, size: f32, left: Half, right: Half, fill: Col
                 c + vec2(0.0, 0.35 * r),
                 c + vec2(sign * 0.75 * r, r),
             ],
-            Half::Auto => {
-                let h = 0.8 * r;
-                (0..=10)
-                    .map(|i| {
-                        let a =
-                            -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 10.0;
-                        c + vec2(sign * a.cos() * h, a.sin() * h)
-                    })
-                    .collect()
-            }
         };
         let pts = if sign < 0.0 { pts.into_iter().rev().collect() } else { pts };
         p.add(Shape::convex_polygon(pts, fill, outline));
@@ -409,6 +485,28 @@ enum Edit {
     /// Take frames out at the playhead: keys on them go, later keys move
     /// back and the scene shrinks by as much.
     RemoveFrames(i64),
+    /// A layer's start, in point and out point.
+    LayerSpan(usize, f32, f32, f32),
+    /// A layer as a whole (weight, fades, speed, on or off).
+    LayerSet(usize, Layer),
+    /// A new layer of this source on top, at the playhead.
+    LayerAdd(LayerSource),
+    LayerRemove(usize),
+    /// Move a layer up (true) or down the stack.
+    LayerOrder(usize, bool),
+    LayerDup(usize),
+    /// Cut a layer in two at the playhead.
+    LayerSplit(usize),
+    /// Put a layer's start or end at the playhead (slide), or trim it there.
+    LayerSnap(usize, LayerSnap),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LayerSnap {
+    StartHere,
+    EndHere,
+    TrimStart,
+    TrimEnd,
 }
 
 const INTERPS: [(&str, Interp); 5] = [
@@ -444,23 +542,48 @@ impl Timeline {
     /// Keep the scene as it is before an edit. Edits that share a merge key
     /// while the pointer stays down fold into the step already kept.
     pub fn remember(&mut self, ai: usize, anim: &Animation, merge: Option<&'static str>) {
+        self.keep(Snap::Scene(ai, anim.clone()), merge);
+    }
+
+    /// The same for a composition before a layer edit.
+    fn remember_comp(&mut self, ci: usize, comp: &Composition, merge: Option<&'static str>) {
+        self.keep(Snap::Comp(ci, comp.clone()), merge);
+    }
+
+    fn keep(&mut self, snap: Snap, merge: Option<&'static str>) {
         if merge.is_some() && merge == self.merge {
             return;
         }
         self.merge = merge;
         self.redo.clear();
-        self.undo.push((ai, anim.clone()));
+        self.undo.push(snap);
         if self.undo.len() > UNDO_STEPS {
             self.undo.remove(0);
         }
     }
 
-    /// Take the last key edit back. True when there was one.
+    /// Put a kept scene or composition back, handing out what it replaced.
+    fn swap(s: &mut Session, snap: Snap) -> Option<Snap> {
+        match snap {
+            Snap::Scene(ai, before) => {
+                let a = s.animations.get_mut(ai)?;
+                s.current_anim = Some(ai);
+                s.current_comp = None;
+                Some(Snap::Scene(ai, std::mem::replace(a, before)))
+            }
+            Snap::Comp(ci, before) => {
+                let c = s.compositions.get_mut(ci)?;
+                s.current_comp = Some(ci);
+                Some(Snap::Comp(ci, std::mem::replace(c, before)))
+            }
+        }
+    }
+
+    /// Take the last key or layer edit back. True when there was one.
     pub fn undo(&mut self, s: &mut Session) -> bool {
-        let Some((ai, before)) = self.undo.pop() else { return false };
-        let Some(a) = s.animations.get_mut(ai) else { return false };
-        self.redo.push((ai, std::mem::replace(a, before)));
-        s.current_anim = Some(ai);
+        let Some(snap) = self.undo.pop() else { return false };
+        let Some(was) = Self::swap(s, snap) else { return false };
+        self.redo.push(was);
         s.modified = true;
         self.merge = None;
         self.selected.clear();
@@ -468,14 +591,75 @@ impl Timeline {
     }
 
     pub fn redo(&mut self, s: &mut Session) -> bool {
-        let Some((ai, after)) = self.redo.pop() else { return false };
-        let Some(a) = s.animations.get_mut(ai) else { return false };
-        self.undo.push((ai, std::mem::replace(a, after)));
-        s.current_anim = Some(ai);
+        let Some(snap) = self.redo.pop() else { return false };
+        let Some(was) = Self::swap(s, snap) else { return false };
+        self.undo.push(was);
         s.modified = true;
         self.merge = None;
         self.selected.clear();
         true
+    }
+
+    /// The rows for a composition: the composition, then each layer with
+    /// the curves of its scene under it when opened.
+    fn comp_rows(&self, s: &Session, comp: &Composition) -> Vec<Row> {
+        let model = s.puppet.model();
+        let mut rows = vec![Row {
+            kind: RowKind::Scene,
+            depth: 0,
+            label: comp.name.clone(),
+            curve: None,
+            color: None,
+            children: Vec::new(),
+        }];
+        if self.folded.get(TOP_FOLD).copied().unwrap_or(false) {
+            return rows;
+        }
+        for (li, l) in comp.layers.iter().enumerate() {
+            rows.push(Row {
+                kind: RowKind::Layer(li),
+                depth: 1,
+                label: l.source.name().to_string(),
+                curve: None,
+                color: GRAPH_COLORS.get(li % GRAPH_COLORS.len()).copied(),
+                children: Vec::new(),
+            });
+            let open = self.folded.get(&layer_fold(li)).map(|f| !f).unwrap_or(false);
+            if !open {
+                continue;
+            }
+            let LayerSource::Scene(name) = &l.source else { continue };
+            let Some(a) = s.animations.iter().find(|a| &a.name == name) else { continue };
+            for c in &a.curves {
+                if c.keys.is_empty() {
+                    continue;
+                }
+                let label = match c.target {
+                    CurveTarget::Parameter => model
+                        .parameters
+                        .iter()
+                        .position(|p| p.id == c.id)
+                        .and_then(|pi| s.param_names.get(pi).cloned())
+                        .unwrap_or_else(|| c.id.clone()),
+                    CurveTarget::PartOpacity => model
+                        .parts
+                        .iter()
+                        .position(|p| p.id == c.id)
+                        .and_then(|i| s.part_names.get(i).cloned())
+                        .unwrap_or_else(|| c.id.clone()),
+                    CurveTarget::Model => c.id.clone(),
+                };
+                rows.push(Row {
+                    kind: RowKind::LayerCurve(li),
+                    depth: 2,
+                    label,
+                    curve: Some((c.target, c.id.clone())),
+                    color: None,
+                    children: Vec::new(),
+                });
+            }
+        }
+        rows
     }
 
     fn set_zoom(&mut self, pps: f32, fit: f32, duration: f32, at_t: f32, at_px: f32) {
@@ -525,6 +709,9 @@ impl Timeline {
             color: None,
             children: Vec::new(),
         }];
+        if self.folded.get(TOP_FOLD).copied().unwrap_or(false) {
+            return rows;
+        }
         let mut grouped = vec![false; model.parameters.len()];
         for g in &s.groups {
             let members: Vec<usize> = g
@@ -624,7 +811,7 @@ impl Timeline {
         ui.set_clip_rect(rect.intersect(outer_clip));
         let mut request = None;
 
-        if s.animations.is_empty() {
+        if s.animations.is_empty() && s.compositions.is_empty() {
             let mut h = ui.new_child(
                 UiBuilder::new()
                     .max_rect(rect.shrink(8.0))
@@ -634,13 +821,46 @@ impl Timeline {
             if h.button(tr("New Animation…")).clicked() {
                 request = Some(Request::NewScene);
             }
+            if h.button(tr("New Composition…")).clicked() {
+                request = Some(Request::NewComp);
+            }
             return request;
         }
-        if s.current_anim.is_none_or(|i| i >= s.animations.len()) {
-            s.current_anim = Some(0);
+        // a composition when one is picked, else a scene
+        if s.current_comp.is_some_and(|ci| ci >= s.compositions.len()) {
+            s.current_comp = None;
         }
-        let ai = s.current_anim.unwrap_or(0);
-        let anim = s.animations.get(ai).cloned()?;
+        if s.current_comp.is_none() && s.animations.is_empty() {
+            s.current_comp = Some(0);
+        }
+        if s.current_anim.is_none_or(|i| i >= s.animations.len()) {
+            s.current_anim = if s.animations.is_empty() { None } else { Some(0) };
+        }
+        let view = match s.current_comp {
+            Some(ci) => View::Comp(ci),
+            None => View::Scene(s.current_anim?),
+        };
+        let comp: Option<Composition> = match view {
+            View::Comp(ci) => s.compositions.get(ci).cloned(),
+            View::Scene(_) => None,
+        };
+        // the clock the header runs on: the scene, or a stand-in carrying
+        // the composition's name, rate, length, loop and work area
+        let anim: Animation = match (&comp, view) {
+            (Some(c), _) => Animation {
+                name: c.name.clone(),
+                fps: c.fps,
+                duration: c.duration,
+                looped: c.looped,
+                work_area: c.work_area,
+                ..Animation::default()
+            },
+            (None, View::Scene(ai)) => s.animations.get(ai).cloned()?,
+            (None, View::Comp(_)) => return None,
+        };
+        if comp.is_some() {
+            self.graph = false;
+        }
         let fps = anim.fps.max(1.0);
         let frame_s = 1.0 / fps;
         let duration = anim.duration.max(frame_s);
@@ -727,17 +947,26 @@ impl Timeline {
             UiBuilder::new().max_rect(pick).layout(Layout::right_to_left(Align::Center)),
         );
         h.spacing_mut().item_spacing.x = 2.0;
-        if h.add(egui::Button::new(egui_phosphor::regular::PLUS).frame(false))
-            .on_hover_text(tr("New Animation…"))
-            .clicked()
-        {
-            request = Some(Request::NewScene);
-        }
+        h.menu_button(egui_phosphor::regular::PLUS, |ui| {
+            if ui.button(tr("New Animation…")).clicked() {
+                request = Some(Request::NewScene);
+                ui.close();
+            }
+            if ui.button(tr("New Composition…")).clicked() {
+                request = Some(Request::NewComp);
+                ui.close();
+            }
+        });
         let w = (pick.width() - 26.0).clamp(40.0, 140.0);
+        let shown_name = match view {
+            View::Comp(_) => format!("{} {}", egui_phosphor::regular::STACK, anim.name),
+            View::Scene(_) => anim.name.clone(),
+        };
+        let mut go: Option<View> = None;
         egui::ComboBox::from_id_salt("tl-scene")
             .selected_text(fit_text(
                 &p,
-                &anim.name,
+                &shown_name,
                 &FontId::proportional(12.0),
                 pal.text,
                 w - 24.0,
@@ -745,12 +974,33 @@ impl Timeline {
             .width(w)
             .show_ui(&mut h, |ui| {
                 for (i, a) in s.animations.iter().enumerate() {
-                    if ui.selectable_label(i == ai, &a.name).clicked() {
-                        s.current_anim = Some(i);
-                        *tp.applied = f32::NAN;
+                    if ui.selectable_label(view == View::Scene(i), &a.name).clicked() {
+                        go = Some(View::Scene(i));
+                    }
+                }
+                if !s.compositions.is_empty() && !s.animations.is_empty() {
+                    ui.separator();
+                }
+                for (i, c) in s.compositions.iter().enumerate() {
+                    let label = format!("{} {}", egui_phosphor::regular::STACK, c.name);
+                    if ui.selectable_label(view == View::Comp(i), label).clicked() {
+                        go = Some(View::Comp(i));
                     }
                 }
             });
+        if let Some(v) = go {
+            match v {
+                View::Scene(i) => {
+                    s.current_anim = Some(i);
+                    s.current_comp = None;
+                }
+                View::Comp(i) => s.current_comp = Some(i),
+            }
+            self.back = None;
+            self.sel_layer = None;
+            self.selected.clear();
+            *tp.applied = f32::NAN;
+        }
 
         let row2 = Rect::from_min_max(
             pos2(hdr.min.x + 6.0, hdr.min.y + 26.0),
@@ -788,26 +1038,95 @@ impl Timeline {
             edits.push(Edit::Seek(t));
         }
         h.add_space(6.0);
-        if icon_button(&mut h, egui_phosphor::regular::RECORD, tr("Auto key"), *tp.autokey) {
+        if comp.is_none()
+            && icon_button(&mut h, egui_phosphor::regular::RECORD, tr("Auto key"), *tp.autokey)
+        {
             *tp.autokey = !*tp.autokey;
         }
         let looped = anim.looped;
-        if icon_button(&mut h, egui_phosphor::regular::REPEAT, tr("Loop"), looped)
-            && let Some(a) = s.animations.get_mut(ai)
-        {
-            a.looped = !looped;
+        if icon_button(&mut h, egui_phosphor::regular::REPEAT, tr("Loop"), looped) {
+            match view {
+                View::Scene(ai) => {
+                    if let Some(a) = s.animations.get_mut(ai) {
+                        a.looped = !looped;
+                    }
+                }
+                View::Comp(ci) => {
+                    if let Some(c) = s.compositions.get_mut(ci) {
+                        c.looped = !looped;
+                    }
+                }
+            }
             s.modified = true;
         }
         h.add_space(6.0);
-        if icon_button(
-            &mut h,
-            egui_phosphor::regular::ROWS,
-            tr("Show every parameter"),
-            self.show_all,
-        ) {
+        if let Some(c) = &comp {
+            // a layer of any scene, or of a composition that does not lead
+            // back here
+            let scope = s.comp_scope();
+            let sources: Vec<(String, LayerSource)> = s
+                .animations
+                .iter()
+                .map(|a| (a.name.clone(), LayerSource::Scene(a.name.clone())))
+                .chain(
+                    s.compositions
+                        .iter()
+                        .filter(|o| o.name != c.name && !scope.reaches(o, &c.name))
+                        .map(|o| {
+                            (
+                                format!("{} {}", egui_phosphor::regular::STACK, o.name),
+                                LayerSource::Composition(o.name.clone()),
+                            )
+                        }),
+                )
+                .collect();
+            let add =
+                egui::RichText::new(egui_phosphor::regular::STACK_PLUS).size(14.0).color(pal.text);
+            h.menu_button(add, |ui| {
+                ui.label(tr("Add layer"));
+                for (label, src) in sources {
+                    if ui.button(label).clicked() {
+                        edits.push(Edit::LayerAdd(src));
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tr("Add layer"));
+        }
+        if comp.is_none()
+            && icon_button(
+                &mut h,
+                egui_phosphor::regular::ROWS,
+                tr("Show every parameter"),
+                self.show_all,
+            )
+        {
             self.show_all = !self.show_all;
         }
-        if icon_button(&mut h, egui_phosphor::regular::CHART_LINE, tr("Graph editor"), self.graph) {
+        if let (Some(ci), View::Scene(_)) = (self.back, view)
+            && let Some(name) = s.compositions.get(ci).map(|c| c.name.clone())
+        {
+            // the way back up to the composition this scene was opened from
+            let text = format!("{} {}", egui_phosphor::regular::ARROW_ELBOW_LEFT_UP, name);
+            if h.add(egui::Button::new(egui::RichText::new(text).size(11.0)).frame(false))
+                .on_hover_text(crate::i18n::trf("Back to {name}", &[("name", &name)]))
+                .clicked()
+            {
+                s.current_comp = Some(ci);
+                self.back = None;
+                self.selected.clear();
+                *tp.applied = f32::NAN;
+            }
+        }
+        if comp.is_none()
+            && icon_button(
+                &mut h,
+                egui_phosphor::regular::CHART_LINE,
+                tr("Graph editor"),
+                self.graph,
+            )
+        {
             self.graph = !self.graph;
             self.grab = None;
             self.graph_range = None;
@@ -972,7 +1291,10 @@ impl Timeline {
         );
 
         // ---- rows ----
-        let rows = self.rows(s, &anim);
+        let rows = match &comp {
+            Some(c) => self.comp_rows(s, c),
+            None => self.rows(s, &anim),
+        };
         let total_h = rows.len() as f32 * ROW_H;
         let max_scroll = (total_h - rows_left.height()).max(0.0);
         let rows_all = Rect::from_min_max(rows_left.min, rows_right.max);
@@ -1054,8 +1376,8 @@ impl Timeline {
             let rl = Rect::from_min_size(pos2(left.min.x, y), vec2(left.width(), ROW_H));
             let rr = Rect::from_min_size(pos2(lanes.min.x, y), vec2(lanes.width(), ROW_H));
             let cy = y + ROW_H / 2.0;
-            let selected_param =
-                matches!(row.kind, RowKind::Param(pi) if *tp.sel_param == Some(pi));
+            let selected_param = matches!(row.kind, RowKind::Param(pi) if *tp.sel_param == Some(pi))
+                || matches!(row.kind, RowKind::Layer(li) if self.sel_layer == Some(li));
             let left_bg = if selected_param {
                 pal.select
             } else if matches!(row.kind, RowKind::Scene | RowKind::Folder(_)) {
@@ -1078,10 +1400,20 @@ impl Timeline {
             ui.set_clip_rect(rows_left.intersect(outer_clip));
             match &row.kind {
                 RowKind::Scene => {
+                    let open = !self.folded.get(TOP_FOLD).copied().unwrap_or(false);
+                    twirl(&lp, pos2(indent + 5.0, cy), open, pal.text_faint);
+                    let r_fold = ui.interact(
+                        Rect::from_min_size(pos2(indent - 2.0, y), vec2(16.0, ROW_H)),
+                        ui.id().with("tl-fold-top"),
+                        Sense::click(),
+                    );
+                    if r_fold.clicked() {
+                        toggles.push((TOP_FOLD.to_string(), open));
+                    }
                     lp.text(
-                        pos2(indent + 2.0, cy),
+                        pos2(indent + 16.0, cy),
                         Align2::LEFT_CENTER,
-                        fit_text(&lp, &row.label, &name_font, pal.text, value_x - indent - 8.0),
+                        fit_text(&lp, &row.label, &name_font, pal.text, value_x - indent - 22.0),
                         name_font.clone(),
                         pal.text,
                     );
@@ -1218,6 +1550,348 @@ impl Timeline {
                             }
                         }
                     }
+                }
+                RowKind::Layer(li) => {
+                    let li = *li;
+                    let Some(c) = &comp else { continue };
+                    let Some(l) = c.layers.get(li) else { continue };
+                    let scope = s.comp_scope();
+                    let len = scope.source_len(&l.source).unwrap_or(0.0);
+                    let looped = scope.source_looped(&l.source);
+                    let speed = l.speed.max(1e-3);
+                    let end = ayatsuri_core::comp::layer_end(l);
+                    let col = row.color.unwrap_or(pal.accent);
+                    let is_scene = matches!(l.source, LayerSource::Scene(_));
+                    let open = rows.get(i + 1).is_some_and(|n| n.depth > row.depth);
+                    if is_scene {
+                        twirl(&lp, pos2(indent + 5.0, cy), open, pal.text_faint);
+                        let r_fold = ui.interact(
+                            Rect::from_min_size(pos2(indent - 2.0, y), vec2(16.0, ROW_H)),
+                            ui.id().with(("tl-fold-layer", li)),
+                            Sense::click(),
+                        );
+                        if r_fold.clicked() {
+                            toggles.push((layer_fold(li), open));
+                        }
+                    }
+                    let mut x = indent + 14.0;
+                    // the eye: the layer plays or sits out
+                    let eye_rect = Rect::from_center_size(pos2(x + 6.0, cy), vec2(14.0, ROW_H));
+                    lp.text(
+                        eye_rect.center(),
+                        Align2::CENTER_CENTER,
+                        if l.enabled {
+                            egui_phosphor::regular::EYE
+                        } else {
+                            egui_phosphor::regular::EYE_SLASH
+                        },
+                        FontId::proportional(12.0),
+                        if l.enabled { pal.text } else { pal.text_faint },
+                    );
+                    let r_eye = ui
+                        .interact(eye_rect, ui.id().with(("tl-layer-eye", li)), Sense::click())
+                        .on_hover_text(tr("Enabled"));
+                    if r_eye.clicked() {
+                        let mut nl = l.clone();
+                        nl.enabled = !nl.enabled;
+                        edits.push(Edit::LayerSet(li, nl));
+                    }
+                    x += 16.0;
+                    lp.rect_filled(
+                        Rect::from_center_size(pos2(x + 4.0, cy), vec2(8.0, 8.0)),
+                        2.0,
+                        col,
+                    );
+                    x += 13.0;
+                    let name_rect = Rect::from_min_max(pos2(x, y), pos2(value_x - 4.0, y + ROW_H));
+                    let label = if is_scene {
+                        row.label.clone()
+                    } else {
+                        format!("{} {}", egui_phosphor::regular::STACK, row.label)
+                    };
+                    lp.text(
+                        pos2(x, cy),
+                        Align2::LEFT_CENTER,
+                        fit_text(&lp, &label, &name_font, pal.text, name_rect.width() - 2.0),
+                        name_font.clone(),
+                        if l.enabled { pal.text } else { pal.text_faint },
+                    );
+                    let r_name =
+                        ui.interact(name_rect, ui.id().with(("tl-layer-name", li)), Sense::click());
+                    // the weight, as a percentage
+                    let vr =
+                        Rect::from_min_size(pos2(value_x, y + 1.0), vec2(VALUE_W, ROW_H - 2.0));
+                    if let Some(v) = hot_number(
+                        ui,
+                        &mut self.editing,
+                        vr,
+                        ui.id().with(("tl-layer-weight", li)),
+                        l.weight * 100.0,
+                        0.5,
+                        (0.0, 100.0),
+                        0,
+                        " %",
+                    ) {
+                        let mut nl = l.clone();
+                        nl.weight = v / 100.0;
+                        edits.push(Edit::LayerSet(li, nl));
+                    }
+                    lp.text(
+                        pos2(keys_x + 4.0, cy),
+                        Align2::LEFT_CENTER,
+                        timecode(end - l.start, fps),
+                        small.clone(),
+                        pal.text_faint,
+                    );
+
+                    // the bar in the lane
+                    ui.set_clip_rect(rows_right.intersect(outer_clip));
+                    let (x0, x1) = (tm.x(l.start), tm.x(end));
+                    let bar = Rect::from_min_max(pos2(x0, y + 3.0), pos2(x1, y + ROW_H - 3.0));
+                    let is_sel = self.sel_layer == Some(li);
+                    let fill = if l.enabled {
+                        mix(col, pal.chrome, 0.55)
+                    } else {
+                        mix(col, pal.chrome, 0.8)
+                    };
+                    gp.rect_filled(bar, 3.0, fill);
+                    // fades drawn as ramps inside the bar
+                    let ramp = Color32::from_white_alpha(28);
+                    if l.fade_in > 0.0 {
+                        let fx = tm.x(l.start + l.fade_in).min(x1);
+                        gp.add(Shape::convex_polygon(
+                            vec![pos2(x0, bar.max.y), pos2(fx, bar.min.y), pos2(fx, bar.max.y)],
+                            ramp,
+                            Stroke::NONE,
+                        ));
+                    }
+                    if l.fade_out > 0.0 {
+                        let fx = tm.x(end - l.fade_out).max(x0);
+                        gp.add(Shape::convex_polygon(
+                            vec![pos2(fx, bar.min.y), pos2(x1, bar.max.y), pos2(fx, bar.max.y)],
+                            ramp,
+                            Stroke::NONE,
+                        ));
+                    }
+                    gp.rect_stroke(
+                        bar,
+                        3.0,
+                        Stroke::new(1.0, if is_sel { pal.accent } else { col }),
+                        StrokeKind::Inside,
+                    );
+                    let bp = gp.with_clip_rect(bar.intersect(rows_right));
+                    bp.text(
+                        pos2(x0 + 6.0, cy),
+                        Align2::LEFT_CENTER,
+                        &label,
+                        FontId::proportional(10.5),
+                        if l.enabled { pal.text } else { pal.text_faint },
+                    );
+                    if self.layer_drag.as_ref().is_none_or(|d| d.li != li) {
+                        snap_times.extend([l.start, end]);
+                    }
+                    let r_body =
+                        ui.interact(bar, ui.id().with(("tl-layer", li)), Sense::click_and_drag());
+                    let lh =
+                        Rect::from_min_max(pos2(x0 - 2.0, bar.min.y), pos2(x0 + 6.0, bar.max.y));
+                    let rh =
+                        Rect::from_min_max(pos2(x1 - 6.0, bar.min.y), pos2(x1 + 2.0, bar.max.y));
+                    let r_l = ui
+                        .interact(lh, ui.id().with(("tl-layer-l", li)), Sense::drag())
+                        .on_hover_cursor(CursorIcon::ResizeHorizontal);
+                    let r_r = ui
+                        .interact(rh, ui.id().with(("tl-layer-r", li)), Sense::drag())
+                        .on_hover_cursor(CursorIcon::ResizeHorizontal);
+                    ui.set_clip_rect(rect.intersect(outer_clip));
+                    if r_body.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::Grab);
+                    }
+                    for (resp, part) in [
+                        (&r_body, LayerPart::Body),
+                        (&r_l, LayerPart::Left),
+                        (&r_r, LayerPart::Right),
+                    ] {
+                        if resp.drag_started()
+                            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                        {
+                            self.focused = true;
+                            self.sel_layer = Some(li);
+                            self.layer_drag = Some(LayerDrag {
+                                li,
+                                part,
+                                origin_x: origin.x,
+                                start: l.start,
+                                in_point: l.in_point,
+                                out_point: l.out_point,
+                            });
+                        }
+                    }
+                    if r_body.clicked() || r_name.clicked() {
+                        self.focused = true;
+                        self.sel_layer = Some(li);
+                    }
+                    if r_body.secondary_clicked() || r_name.secondary_clicked() {
+                        self.sel_layer = Some(li);
+                    }
+                    let mut open_source = r_body.double_clicked() || r_name.double_clicked();
+                    let menu = |ui: &mut Ui, edits: &mut Vec<Edit>, open_source: &mut bool| {
+                        let mut nl = l.clone();
+                        let mut changed = false;
+                        egui::Grid::new(("tl-layer-menu", li)).num_columns(2).show(ui, |ui| {
+                            ui.label(tr("Fade in"));
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut nl.fade_in)
+                                        .range(0.0..=60.0)
+                                        .speed(0.02)
+                                        .suffix(" s"),
+                                )
+                                .changed();
+                            ui.end_row();
+                            ui.label(tr("Fade out"));
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut nl.fade_out)
+                                        .range(0.0..=60.0)
+                                        .speed(0.02)
+                                        .suffix(" s"),
+                                )
+                                .changed();
+                            ui.end_row();
+                            ui.label(tr("Speed"));
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut nl.speed)
+                                        .range(0.1..=10.0)
+                                        .speed(0.02)
+                                        .suffix("x"),
+                                )
+                                .changed();
+                            ui.end_row();
+                        });
+                        if changed {
+                            edits.push(Edit::LayerSet(li, nl));
+                        }
+                        ui.separator();
+                        if ui.button(tr("Start at playhead")).clicked() {
+                            edits.push(Edit::LayerSnap(li, LayerSnap::StartHere));
+                            ui.close();
+                        }
+                        if ui.button(tr("End at playhead")).clicked() {
+                            edits.push(Edit::LayerSnap(li, LayerSnap::EndHere));
+                            ui.close();
+                        }
+                        if ui.button(tr("Trim start to playhead")).clicked() {
+                            edits.push(Edit::LayerSnap(li, LayerSnap::TrimStart));
+                            ui.close();
+                        }
+                        if ui.button(tr("Trim end to playhead")).clicked() {
+                            edits.push(Edit::LayerSnap(li, LayerSnap::TrimEnd));
+                            ui.close();
+                        }
+                        if ui.button(tr("Split at playhead")).clicked() {
+                            edits.push(Edit::LayerSplit(li));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(tr("Move up")).clicked() {
+                            edits.push(Edit::LayerOrder(li, true));
+                            ui.close();
+                        }
+                        if ui.button(tr("Move down")).clicked() {
+                            edits.push(Edit::LayerOrder(li, false));
+                            ui.close();
+                        }
+                        if ui.button(tr("Duplicate layer")).clicked() {
+                            edits.push(Edit::LayerDup(li));
+                            ui.close();
+                        }
+                        if ui.button(tr("Open the source")).clicked() {
+                            *open_source = true;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(tr("Delete layer")).clicked() {
+                            edits.push(Edit::LayerRemove(li));
+                            ui.close();
+                        }
+                    };
+                    r_body.context_menu(|ui| menu(ui, &mut edits, &mut open_source));
+                    r_name.context_menu(|ui| menu(ui, &mut edits, &mut open_source));
+                    if open_source {
+                        match &l.source {
+                            LayerSource::Scene(n) => {
+                                if let Some(i) = s.animations.iter().position(|a| &a.name == n) {
+                                    s.current_anim = Some(i);
+                                    s.current_comp = None;
+                                    if let View::Comp(ci) = view {
+                                        self.back = Some(ci);
+                                    }
+                                }
+                            }
+                            LayerSource::Composition(n) => {
+                                if let Some(i) = s.compositions.iter().position(|c| &c.name == n) {
+                                    s.current_comp = Some(i);
+                                }
+                            }
+                        }
+                        self.sel_layer = None;
+                        self.selected.clear();
+                        *tp.applied = f32::NAN;
+                    }
+                    let _ = (len, looped, speed);
+                }
+                RowKind::LayerCurve(li) => {
+                    let li = *li;
+                    let Some(c) = &comp else { continue };
+                    let Some(l) = c.layers.get(li) else { continue };
+                    let LayerSource::Scene(name) = &l.source else { continue };
+                    let Some(a) = s.animations.iter().find(|a| &a.name == name) else { continue };
+                    lp.text(
+                        pos2(indent, cy),
+                        Align2::LEFT_CENTER,
+                        fit_text(
+                            &lp,
+                            &row.label,
+                            &name_font,
+                            pal.text_faint,
+                            value_x - indent - 6.0,
+                        ),
+                        name_font.clone(),
+                        pal.text_faint,
+                    );
+                    // the scene's keys where they land on this clock; the
+                    // scene itself is where they are edited
+                    let Some((target, id)) = row.curve.as_ref() else { continue };
+                    let Some(curve) = a.curves.iter().find(|c| c.target == *target && &c.id == id)
+                    else {
+                        continue;
+                    };
+                    ui.set_clip_rect(rows_right.intersect(outer_clip));
+                    let speed = l.speed.max(1e-3);
+                    for (ki, k) in curve.keys.iter().enumerate() {
+                        if k.time < l.in_point || k.time > l.out_point {
+                            continue;
+                        }
+                        let x = tm.x(l.start + (k.time - l.in_point) / speed);
+                        if x < rr.min.x - 8.0 || x > rr.max.x + 8.0 {
+                            continue;
+                        }
+                        let left_half = curve
+                            .keys
+                            .get(ki.wrapping_sub(1))
+                            .map(|prev| half_of(prev.interp))
+                            .unwrap_or(half_of(k.interp));
+                        key_glyph(
+                            &gp,
+                            pos2(x, cy),
+                            KEY_PX - 2.0,
+                            left_half,
+                            half_of(k.interp),
+                            pal.text_faint,
+                        );
+                    }
+                    ui.set_clip_rect(rect.intersect(outer_clip));
                 }
                 RowKind::Param(_) | RowKind::Part(_) => {
                     let mut x = indent;
@@ -1761,11 +2435,81 @@ impl Timeline {
             self.drag = None;
         }
 
+        // ---- a drag of a layer bar, polled the same way ----
+        let mut layer_done = false;
+        if let (Some(d), Some(c)) = (&self.layer_drag, &comp) {
+            let (down, ptr) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
+            match (ptr, c.layers.get(d.li)) {
+                (Some(ptr), Some(l)) if down => {
+                    let mut dx = (ptr.x - d.origin_x) / pps;
+                    if mods.shift {
+                        // the moving edge snaps to other layers' ends and the playhead
+                        let edge = match d.part {
+                            LayerPart::Right => {
+                                d.start + (d.out_point - d.in_point) / l.speed.max(1e-3)
+                            }
+                            _ => d.start,
+                        };
+                        let tol = 8.0 / pps;
+                        if let Some(t) = snap_times
+                            .iter()
+                            .copied()
+                            .filter(|t| (t - (edge + dx)).abs() <= tol)
+                            .min_by(|a, b| {
+                                (a - (edge + dx)).abs().total_cmp(&(b - (edge + dx)).abs())
+                            })
+                        {
+                            dx = t - edge;
+                        }
+                    }
+                    let scope = s.comp_scope();
+                    let len = scope.source_len(&l.source).unwrap_or(0.0);
+                    let looped = scope.source_looped(&l.source);
+                    let (ns, nin, nout) = layer_span_after(d, dx, l.speed, len, looped, frame_s);
+                    if (ns - l.start).abs() > 1e-6
+                        || (nin - l.in_point).abs() > 1e-6
+                        || (nout - l.out_point).abs() > 1e-6
+                    {
+                        edits.push(Edit::LayerSpan(d.li, ns, nin, nout));
+                    }
+                    ui.ctx().set_cursor_icon(match d.part {
+                        LayerPart::Body => CursorIcon::Grabbing,
+                        _ => CursorIcon::ResizeHorizontal,
+                    });
+                    let text = match d.part {
+                        LayerPart::Body => timecode(ns, fps),
+                        LayerPart::Left => {
+                            format!("{}  in {}", timecode(ns, fps), timecode(nin, fps))
+                        }
+                        LayerPart::Right => format!(
+                            "{}  out {}",
+                            timecode(ns + (nout - nin) / l.speed.max(1e-3), fps),
+                            timecode(nout, fps)
+                        ),
+                    };
+                    let font = FontId::proportional(11.0);
+                    let size = p.layout_no_wrap(text.clone(), font.clone(), pal.text).size();
+                    let tip = Rect::from_min_size(ptr + vec2(14.0, 14.0), size + vec2(10.0, 6.0));
+                    p.rect_filled(tip, 3.0, pal.panel_bg);
+                    p.rect_stroke(tip, 3.0, Stroke::new(1.0, pal.border), StrokeKind::Middle);
+                    p.text(tip.min + vec2(5.0, 3.0), Align2::LEFT_TOP, text, font, pal.text);
+                }
+                _ => layer_done = true,
+            }
+        }
+        if layer_done {
+            self.layer_drag = None;
+            self.merge = None;
+        }
+
         // ---- box select on the empty lane ----
         if bg.clicked() {
             self.focused = true;
             if !mods.shift {
                 self.selected.clear();
+            }
+            if comp.is_some() {
+                self.sel_layer = None;
             }
         }
         if bg.drag_started() {
@@ -1799,6 +2543,29 @@ impl Timeline {
             self.focused = false;
         }
         if self.focused && !ui.ctx().egui_wants_keyboard_input() {
+            if let (Some(li), Some(_)) = (self.sel_layer, &comp) {
+                // [ and ] slide the layer's start or end to the playhead,
+                // Ctrl+D doubles it, Ctrl+Shift+D cuts it there
+                let (open_b, close_b, dup, split) = ui.input_mut(|i| {
+                    (
+                        i.consume_key(Modifiers::NONE, egui::Key::OpenBracket),
+                        i.consume_key(Modifiers::NONE, egui::Key::CloseBracket),
+                        i.consume_key(Modifiers::COMMAND, egui::Key::D),
+                        i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::D),
+                    )
+                });
+                if open_b {
+                    edits.push(Edit::LayerSnap(li, LayerSnap::StartHere));
+                }
+                if close_b {
+                    edits.push(Edit::LayerSnap(li, LayerSnap::EndHere));
+                }
+                if split {
+                    edits.push(Edit::LayerSplit(li));
+                } else if dup {
+                    edits.push(Edit::LayerDup(li));
+                }
+            }
             let (del, esc, all, nudge, wa_start, wa_end) = ui.input_mut(|i| {
                 // Alt with an arrow nudges the selected keys a frame, ten with Shift
                 let step = |i: &mut egui::InputState, key: egui::Key| {
@@ -1839,11 +2606,16 @@ impl Timeline {
                 self.merge = None;
                 edits.push(Edit::Move(nudge));
             }
-            if del && !self.selected.is_empty() {
-                edits.push(Edit::Delete);
+            if del {
+                if let (Some(li), Some(_)) = (self.sel_layer, &comp) {
+                    edits.push(Edit::LayerRemove(li));
+                } else if !self.selected.is_empty() {
+                    edits.push(Edit::Delete);
+                }
             }
             if esc {
                 self.selected.clear();
+                self.sel_layer = None;
             }
             if all {
                 self.selected = anim
@@ -2032,9 +2804,157 @@ impl Timeline {
         }
 
         for e in edits {
-            self.apply(s, ai, e, tp, fps);
+            match view {
+                View::Scene(ai) => self.apply(s, ai, e, tp, fps),
+                View::Comp(ci) => self.apply_comp(s, ci, e, tp, fps),
+            }
         }
         request
+    }
+
+    /// Edits of a composition: its clock and its layers.
+    fn apply_comp(&mut self, s: &mut Session, ci: usize, e: Edit, tp: &mut Transport, fps: f32) {
+        let frame_s = 1.0 / fps.max(1.0);
+        let at = (*tp.time * fps).round() / fps;
+        let Some(c) = s.compositions.get(ci).cloned() else { return };
+        let scope = ayatsuri_core::comp::Scope { scenes: &s.animations, comps: &s.compositions };
+        // the edit as a changed copy, then kept and swapped in as one step
+        let mut next = c.clone();
+        let mut merge: Option<&'static str> = None;
+        match e {
+            Edit::Seek(t) => {
+                *tp.time = t.max(0.0);
+                return;
+            }
+            Edit::Duration(d) => {
+                merge = Some("duration");
+                next.duration = d.max(frame_s);
+                if let Some((w0, w1)) = next.work_area {
+                    next.work_area = Some((w0.min(next.duration), w1.min(next.duration)));
+                }
+            }
+            Edit::WorkArea(w) => {
+                merge = Some("work-area");
+                next.work_area = w;
+            }
+            Edit::InsertFrames(n) => {
+                let dt = n as f32 / fps;
+                for l in &mut next.layers {
+                    if l.start >= at - frame_s * 0.5 {
+                        l.start += dt;
+                    }
+                }
+                next.duration += dt;
+            }
+            Edit::RemoveFrames(n) => {
+                let dt = (n as f32 / fps).min((next.duration - frame_s).max(0.0));
+                for l in &mut next.layers {
+                    if l.start >= at - frame_s * 0.5 {
+                        l.start = (l.start - dt).max(at);
+                    }
+                }
+                next.duration = (next.duration - dt).max(frame_s);
+            }
+            Edit::LayerSpan(li, start, in_point, out_point) => {
+                merge = Some("layer-span");
+                let Some(l) = next.layers.get_mut(li) else { return };
+                l.start = start.max(0.0);
+                l.in_point = in_point.max(0.0);
+                l.out_point = out_point.max(l.in_point + frame_s * l.speed.max(1e-3));
+            }
+            Edit::LayerSet(li, layer) => {
+                merge = Some("layer-set");
+                let Some(l) = next.layers.get_mut(li) else { return };
+                *l = layer;
+                l.speed = l.speed.clamp(0.1, 10.0);
+                l.weight = l.weight.clamp(0.0, 1.0);
+                l.fade_in = l.fade_in.max(0.0);
+                l.fade_out = l.fade_out.max(0.0);
+            }
+            Edit::LayerAdd(source) => {
+                let len = scope.source_len(&source).unwrap_or(1.0).max(frame_s);
+                next.layers.insert(
+                    0,
+                    Layer {
+                        source,
+                        start: at.min(next.duration),
+                        out_point: len,
+                        ..Layer::default()
+                    },
+                );
+                self.sel_layer = Some(0);
+            }
+            Edit::LayerRemove(li) => {
+                if li >= next.layers.len() {
+                    return;
+                }
+                next.layers.remove(li);
+                self.sel_layer = None;
+            }
+            Edit::LayerOrder(li, up) => {
+                let to = if up { li.checked_sub(1) } else { Some(li + 1) };
+                let Some(to) = to.filter(|t| *t < next.layers.len() && li < next.layers.len())
+                else {
+                    return;
+                };
+                next.layers.swap(li, to);
+                self.sel_layer = Some(to);
+            }
+            Edit::LayerDup(li) => {
+                let Some(l) = next.layers.get(li).cloned() else { return };
+                next.layers.insert(li, l);
+                self.sel_layer = Some(li);
+            }
+            Edit::LayerSplit(li) => {
+                let Some(l) = next.layers.get(li).cloned() else { return };
+                let end = ayatsuri_core::comp::layer_end(&l);
+                if at <= l.start + frame_s * 0.5 || at >= end - frame_s * 0.5 {
+                    return;
+                }
+                let cut = l.in_point + (at - l.start) * l.speed.max(1e-3);
+                let mut tail = l.clone();
+                tail.start = at;
+                tail.in_point = cut;
+                tail.fade_in = 0.0;
+                if let Some(head) = next.layers.get_mut(li) {
+                    head.out_point = cut;
+                    head.fade_out = 0.0;
+                }
+                next.layers.insert(li, tail);
+                self.sel_layer = Some(li);
+            }
+            Edit::LayerSnap(li, how) => {
+                let Some(l) = next.layers.get_mut(li) else { return };
+                let speed = l.speed.max(1e-3);
+                let span = (l.out_point - l.in_point) / speed;
+                match how {
+                    LayerSnap::StartHere => l.start = at,
+                    LayerSnap::EndHere => l.start = (at - span).max(0.0),
+                    LayerSnap::TrimStart => {
+                        let end = l.start + span;
+                        if at < end - frame_s * 0.5 {
+                            l.in_point = (l.in_point + (at - l.start) * speed).max(0.0);
+                            l.start = at.max(0.0);
+                        }
+                    }
+                    LayerSnap::TrimEnd => {
+                        if at > l.start + frame_s * 0.5 {
+                            l.out_point = l.in_point + (at - l.start) * speed;
+                        }
+                    }
+                }
+            }
+            _ => return,
+        }
+        if next == c {
+            return;
+        }
+        self.remember_comp(ci, &c, merge);
+        if let Some(slot) = s.compositions.get_mut(ci) {
+            *slot = next;
+        }
+        s.modified = true;
+        *tp.applied = f32::NAN;
     }
 
     /// What a click on a key does, in the lanes or the graph: plain selects
@@ -2423,6 +3343,15 @@ impl Timeline {
                 s.modified = true;
                 *tp.applied = f32::NAN;
             }
+            // layer edits only mean something to a composition
+            Edit::LayerSpan(..)
+            | Edit::LayerSet(..)
+            | Edit::LayerAdd(_)
+            | Edit::LayerRemove(_)
+            | Edit::LayerOrder(..)
+            | Edit::LayerDup(_)
+            | Edit::LayerSplit(_)
+            | Edit::LayerSnap(..) => {}
         }
     }
 }
@@ -2474,9 +3403,33 @@ mod tests {
     }
 
     #[test]
+    fn a_layer_drag_keeps_its_content_put_when_trimmed_from_the_left() {
+        let d = LayerDrag {
+            li: 0,
+            part: LayerPart::Left,
+            origin_x: 0.0,
+            start: 1.0,
+            in_point: 0.5,
+            out_point: 2.5,
+        };
+        // half a second later: the start and the in point both move on
+        let (s, i, o) = layer_span_after(&d, 0.5, 1.0, 3.0, false, 0.1);
+        assert!((s - 1.5).abs() < 1e-6 && (i - 1.0).abs() < 1e-6 && (o - 2.5).abs() < 1e-6);
+        // dragged back past the source's start, the in point stops at zero
+        let (s, i, _) = layer_span_after(&d, -2.0, 1.0, 3.0, false, 0.1);
+        assert!((i - 0.0).abs() < 1e-6 && (s - 0.5).abs() < 1e-6);
+        // the right end cannot pass the source's end unless it loops
+        let r = LayerDrag { part: LayerPart::Right, ..d };
+        let (_, _, o) = layer_span_after(&r, 5.0, 1.0, 3.0, false, 0.1);
+        assert!((o - 3.0).abs() < 1e-6);
+        let (_, _, o) = layer_span_after(&r, 5.0, 1.0, 3.0, true, 0.1);
+        assert!((o - 7.5).abs() < 1e-6);
+    }
+
+    #[test]
     fn stepped_keys_draw_as_squares() {
         assert_eq!(half_of(Interp::Stepped), Half::Hold);
         assert_eq!(half_of(Interp::InverseStepped), Half::Hold);
-        assert_eq!(half_of(Interp::Auto), Half::Auto);
+        assert_eq!(half_of(Interp::Auto), Half::Linear);
     }
 }

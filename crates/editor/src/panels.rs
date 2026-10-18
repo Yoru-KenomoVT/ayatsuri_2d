@@ -4091,14 +4091,26 @@ impl EditorUi {
             applied: &mut self.anim_applied,
             sel_param: &mut self.sel_param,
         };
-        if let Some(crate::timeline::Request::NewScene) = self.timeline.show(ui, s, &mut tp) {
-            self.new_anim = Some(AnimNew {
-                name: "idle".into(),
-                fps: 30.0,
-                duration: 3.0,
-                looped: true,
-                comp: false,
-            });
+        match self.timeline.show(ui, s, &mut tp) {
+            Some(crate::timeline::Request::NewScene) => {
+                self.new_anim = Some(AnimNew {
+                    name: "idle".into(),
+                    fps: 30.0,
+                    duration: 3.0,
+                    looped: true,
+                    comp: false,
+                });
+            }
+            Some(crate::timeline::Request::NewComp) => {
+                self.new_anim = Some(AnimNew {
+                    name: "comp".into(),
+                    fps: 30.0,
+                    duration: 5.0,
+                    looped: false,
+                    comp: true,
+                });
+            }
+            None => {}
         }
         // K keys the selected parameter row by hand
         if ui.ctx().input(|i| i.key_pressed(egui::Key::K))
