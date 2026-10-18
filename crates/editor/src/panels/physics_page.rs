@@ -35,6 +35,15 @@ pub(super) struct PhysPage {
     sized: bool,
     /// Outputs to move into new groups, from the output right-click menu.
     split: Option<Vec<Vec<usize>>>,
+    /// Physics (0) or Playlist (1) page.
+    pub(super) tab: usize,
+    /// The playlist picked, the group picked in it, the scene to add.
+    pub(super) pl_sel: usize,
+    pl_group: Option<usize>,
+    pl_add: usize,
+    pub(super) pl_playing: bool,
+    pub(super) pl_loop: bool,
+    pub(super) pl_time: f32,
 }
 
 impl Default for PhysPage {
@@ -52,6 +61,13 @@ impl Default for PhysPage {
             h_tabs: 300.0,
             w_model: 470.0,
             sized: false,
+            tab: 0,
+            pl_sel: 0,
+            pl_group: None,
+            pl_add: 0,
+            pl_playing: false,
+            pl_loop: true,
+            pl_time: 0.0,
         }
     }
 }
@@ -253,43 +269,114 @@ impl EditorUi {
             Rect::from_min_size(pos2(content.min.x, menus.max.y), vec2(content.width(), 30.0));
         let mut tui = ui.new_child(UiBuilder::new().max_rect(tools.shrink2(vec2(8.0, 3.0))));
         tui.horizontal_centered(|ui| {
-            ui.add_enabled_ui(false, |ui| {
-                ui.label(crate::i18n::tr("Playlist:"));
-                egui::ComboBox::from_id_salt("phys-playlist")
-                    .selected_text("")
-                    .width(120.0)
-                    .show_ui(ui, |_| {});
-                egui::ComboBox::from_id_salt("phys-pattern")
-                    .selected_text(crate::i18n::tr("[Pattern A]"))
-                    .width(90.0)
-                    .show_ui(ui, |_| {});
-                for g in [
-                    egui_phosphor::regular::PLAY,
-                    egui_phosphor::regular::STOP,
-                    egui_phosphor::regular::REPEAT,
-                ] {
-                    let _ = ui.button(g);
-                }
+            ui.label(crate::i18n::tr("Playlist:"));
+            let (names, picked): (Vec<String>, String) = match &self.session {
+                Some(s) => (
+                    s.playlists.iter().map(|p| p.name.clone()).collect(),
+                    s.playlists
+                        .get(self.phys_page.pl_sel)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default(),
+                ),
+                None => (Vec::new(), String::new()),
+            };
+            egui::ComboBox::from_id_salt("phys-playlist")
+                .selected_text(picked)
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for (i, n) in names.iter().enumerate() {
+                        if ui.selectable_label(self.phys_page.pl_sel == i, n).clicked() {
+                            self.phys_page.pl_sel = i;
+                            self.phys_page.pl_group = None;
+                            self.phys_page.pl_time = 0.0;
+                        }
+                    }
+                });
+            let has = !names.is_empty();
+            let play = if self.phys_page.pl_playing {
+                egui_phosphor::regular::PAUSE
+            } else {
+                egui_phosphor::regular::PLAY
+            };
+            if ui
+                .add_enabled(has, egui::Button::new(play))
+                .on_hover_text(crate::i18n::tr("Play the playlist"))
+                .clicked()
+            {
+                self.phys_page.pl_playing = !self.phys_page.pl_playing;
+            }
+            if ui
+                .add_enabled(has, egui::Button::new(egui_phosphor::regular::STOP))
+                .on_hover_text(crate::i18n::tr("Stop"))
+                .clicked()
+            {
+                self.phys_page.pl_playing = false;
+                self.phys_page.pl_time = 0.0;
+            }
+            let lp = egui::RichText::new(egui_phosphor::regular::REPEAT).color(
+                if self.phys_page.pl_loop { theme::pal().accent } else { theme::pal().text },
+            );
+            if ui
+                .add_enabled(has, egui::Button::new(lp))
+                .on_hover_text(crate::i18n::tr("Loop"))
+                .clicked()
+            {
+                self.phys_page.pl_loop = !self.phys_page.pl_loop;
+            }
+            let fade0 = self
+                .session
+                .as_ref()
+                .and_then(|s| s.playlists.get(self.phys_page.pl_sel))
+                .map(|p| p.fade);
+            let mut new_fade: Option<f32> = None;
+            ui.add_enabled_ui(fade0.is_some(), |ui| {
+                let mut fade = fade0.unwrap_or(0.0);
+                let mut changed = false;
                 ui.label(crate::i18n::tr("Fading:"));
-                egui::ComboBox::from_id_salt("phys-fade")
-                    .selected_text(crate::i18n::tr("None"))
-                    .width(70.0)
-                    .show_ui(ui, |_| {});
+                let shown =
+                    if fade > 0.0 { crate::i18n::tr("Crossfade") } else { crate::i18n::tr("None") };
+                egui::ComboBox::from_id_salt("phys-fade").selected_text(shown).width(90.0).show_ui(
+                    ui,
+                    |ui| {
+                        if ui.selectable_label(fade <= 0.0, crate::i18n::tr("None")).clicked() {
+                            fade = 0.0;
+                            changed = true;
+                        }
+                        if ui.selectable_label(fade > 0.0, crate::i18n::tr("Crossfade")).clicked()
+                            && fade <= 0.0
+                        {
+                            fade = 1.0;
+                            changed = true;
+                        }
+                    },
+                );
                 ui.label(crate::i18n::tr("Fading Time(ms):"));
-                ui.add(egui::DragValue::new(&mut 1000.0f32));
-            })
-            .response
-            .on_disabled_hover_text(crate::i18n::tr("Playlists are not built yet"));
+                let mut ms = fade * 1000.0;
+                if ui.add(egui::DragValue::new(&mut ms).range(0.0..=10000.0).speed(10.0)).changed()
+                {
+                    fade = ms / 1000.0;
+                    changed = true;
+                }
+                if changed {
+                    new_fade = Some(fade);
+                }
+            });
+            if let Some(f) = new_fade
+                && let Some(s) = &mut self.session
+                && let Some(p) = s.playlists.get_mut(self.phys_page.pl_sel)
+            {
+                p.fade = f;
+                s.modified = true;
+            }
         });
         let tabs =
             Rect::from_min_size(pos2(content.min.x, tools.max.y), vec2(content.width(), 24.0));
         let mut tabui = ui.new_child(UiBuilder::new().max_rect(tabs.shrink2(vec2(8.0, 2.0))));
-        let mut page_tab = 0usize;
         tab_strip(
             &mut tabui,
             &[crate::i18n::tr("Physics"), crate::i18n::tr("Playlist")],
-            &mut page_tab,
-            &[true, false],
+            &mut self.phys_page.tab,
+            &[true, true],
         );
         ui.painter().line_segment(
             [pos2(content.min.x, tabs.max.y), pos2(content.max.x, tabs.max.y)],
@@ -355,7 +442,11 @@ impl EditorUi {
         // each column draws only inside itself
         let mut editor_ui = ui.new_child(UiBuilder::new().max_rect(editor_rect.shrink(8.0)));
         editor_ui.set_clip_rect(editor_rect);
-        self.physics_settings_column(&mut editor_ui);
+        if self.phys_page.tab == 1 {
+            self.playlist_column(&mut editor_ui);
+        } else {
+            self.physics_settings_column(&mut editor_ui);
+        }
         let mut rail_ui = ui.new_child(UiBuilder::new().max_rect(rail_rect.shrink(6.0)));
         rail_ui.set_clip_rect(rail_rect);
         self.physics_param_rail(&mut rail_ui);
@@ -375,6 +466,215 @@ impl EditorUi {
         self.multi_sel = saved.2;
         self.mesh_edit = saved.3;
         self.physics_group_dialog(ui);
+    }
+
+    fn new_playlist(&mut self) {
+        let Some(s) = &mut self.session else { return };
+        let n = s.playlists.len() + 1;
+        s.playlists.push(ayatsuri_format::Playlist {
+            name: format!("playlist{n}"),
+            fade: 0.0,
+            groups: Vec::new(),
+        });
+        self.phys_page.pl_sel = s.playlists.len() - 1;
+        self.phys_page.pl_group = None;
+        self.phys_page.tab = 1;
+        s.modified = true;
+    }
+
+    fn delete_playlist(&mut self) {
+        let Some(s) = &mut self.session else { return };
+        if self.phys_page.pl_sel < s.playlists.len() {
+            s.playlists.remove(self.phys_page.pl_sel);
+            self.phys_page.pl_sel = self.phys_page.pl_sel.min(s.playlists.len().saturating_sub(1));
+            self.phys_page.pl_group = None;
+            self.phys_page.pl_playing = false;
+            s.modified = true;
+        }
+    }
+
+    /// The Playlist page: the playlists, and the picked one's groups of
+    /// scenes with their weights and modes.
+    fn playlist_column(&mut self, ui: &mut Ui) {
+        let Some(s) = &mut self.session else { return };
+        let scene_names: Vec<String> = s.animations.iter().map(|a| a.name.clone()).collect();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("Playlists")).size(11.5));
+            if ui
+                .button(egui::RichText::new(egui_phosphor::regular::PLUS).size(13.0))
+                .on_hover_text(crate::i18n::tr("New playlist"))
+                .clicked()
+            {
+                let n = s.playlists.len() + 1;
+                s.playlists.push(ayatsuri_format::Playlist {
+                    name: format!("playlist{n}"),
+                    fade: 0.0,
+                    groups: Vec::new(),
+                });
+                self.phys_page.pl_sel = s.playlists.len() - 1;
+                self.phys_page.pl_group = None;
+                s.modified = true;
+            }
+            let has = !s.playlists.is_empty();
+            if ui
+                .add_enabled(
+                    has,
+                    egui::Button::new(
+                        egui::RichText::new(egui_phosphor::regular::TRASH).size(13.0),
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr("Delete playlist"))
+                .clicked()
+                && self.phys_page.pl_sel < s.playlists.len()
+            {
+                s.playlists.remove(self.phys_page.pl_sel);
+                self.phys_page.pl_sel =
+                    self.phys_page.pl_sel.min(s.playlists.len().saturating_sub(1));
+                self.phys_page.pl_group = None;
+                self.phys_page.pl_playing = false;
+                s.modified = true;
+            }
+        });
+        for (i, p) in s.playlists.iter().enumerate() {
+            if ui.selectable_label(self.phys_page.pl_sel == i, &p.name).clicked() {
+                self.phys_page.pl_sel = i;
+                self.phys_page.pl_group = None;
+                self.phys_page.pl_time = 0.0;
+            }
+        }
+        if s.playlists.is_empty() {
+            ui.weak(crate::i18n::tr("No playlist yet. Press + and add scenes: each one is a group; a group's scenes play together."));
+            return;
+        }
+        ui.separator();
+        let Some(pl) = s.playlists.get_mut(self.phys_page.pl_sel) else { return };
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(crate::i18n::tr("Name"));
+            changed |= ui.text_edit_singleline(&mut pl.name).changed();
+        });
+        if scene_names.is_empty() {
+            ui.weak(crate::i18n::tr("No animation yet."));
+            return;
+        }
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - 200.0).clamp(80.0, 200.0);
+            egui::ComboBox::from_id_salt("pl-add")
+                .selected_text(scene_names.get(self.phys_page.pl_add).cloned().unwrap_or_default())
+                .width(w)
+                .show_ui(ui, |ui| {
+                    for (i, n) in scene_names.iter().enumerate() {
+                        ui.selectable_value(&mut self.phys_page.pl_add, i, n);
+                    }
+                });
+            let pick = scene_names.get(self.phys_page.pl_add).cloned();
+            if ui
+                .button(crate::i18n::tr("Add as group"))
+                .on_hover_text(crate::i18n::tr("A new group at the end, played after the others"))
+                .clicked()
+                && let Some(name) = pick.clone()
+            {
+                pl.groups.push(ayatsuri_format::PlaylistGroup {
+                    scenes: vec![ayatsuri_format::PlaylistScene {
+                        scene: name,
+                        ..Default::default()
+                    }],
+                });
+                self.phys_page.pl_group = Some(pl.groups.len() - 1);
+                changed = true;
+            }
+            let in_group = self.phys_page.pl_group.is_some_and(|g| g < pl.groups.len());
+            if ui
+                .add_enabled(in_group, egui::Button::new(crate::i18n::tr("Add to group")))
+                .on_hover_text(crate::i18n::tr(
+                    "Played at the same time as the group's other scenes",
+                ))
+                .clicked()
+                && let (Some(name), Some(g)) = (pick, self.phys_page.pl_group)
+                && let Some(group) = pl.groups.get_mut(g)
+            {
+                group
+                    .scenes
+                    .push(ayatsuri_format::PlaylistScene { scene: name, ..Default::default() });
+                changed = true;
+            }
+        });
+        ui.add_space(4.0);
+        let mut remove_group: Option<usize> = None;
+        let mut move_group: Option<(usize, bool)> = None;
+        let mut remove_scene: Option<(usize, usize)> = None;
+        egui::ScrollArea::vertical().id_salt("pl-groups").show(ui, |ui| {
+            for (gi, g) in pl.groups.iter_mut().enumerate() {
+                let picked = self.phys_page.pl_group == Some(gi);
+                let fill = if picked { theme::pal().select } else { theme::pal().panel_bg };
+                egui::Frame::new().fill(fill).inner_margin(6.0).corner_radius(4.0).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        let title = crate::i18n::trf("Group {n}", &[("n", &(gi + 1))]);
+                        if ui.selectable_label(picked, egui::RichText::new(title).size(11.5)).clicked() {
+                            self.phys_page.pl_group = Some(gi);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(egui::RichText::new(egui_phosphor::regular::X).size(12.0)).on_hover_text(crate::i18n::tr("Remove group")).clicked() {
+                                remove_group = Some(gi);
+                            }
+                            if ui.button(egui::RichText::new(egui_phosphor::regular::CARET_DOWN).size(12.0)).on_hover_text(crate::i18n::tr("Move down")).clicked() {
+                                move_group = Some((gi, false));
+                            }
+                            if ui.button(egui::RichText::new(egui_phosphor::regular::CARET_UP).size(12.0)).on_hover_text(crate::i18n::tr("Move up")).clicked() {
+                                move_group = Some((gi, true));
+                            }
+                        });
+                    });
+                    egui::Grid::new(("pl-group", gi)).num_columns(4).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
+                        for (si, ps) in g.scenes.iter_mut().enumerate() {
+                            ui.label(&ps.scene);
+                            let mut pct = ps.weight * 100.0;
+                            if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%").fixed_decimals(0)).changed() {
+                                ps.weight = pct / 100.0;
+                                changed = true;
+                            }
+                            let mode = if ps.additive { crate::i18n::tr("Add") } else { crate::i18n::tr("Overwrite") };
+                            if ui.button(mode).on_hover_text(crate::i18n::tr("Overwrite sets the parameters; Add puts the scene's values on top")).clicked() {
+                                ps.additive = !ps.additive;
+                                changed = true;
+                            }
+                            if ui.button(egui::RichText::new(egui_phosphor::regular::X).size(12.0)).on_hover_text(crate::i18n::tr("Remove")).clicked() {
+                                remove_scene = Some((gi, si));
+                            }
+                            ui.end_row();
+                        }
+                    });
+                });
+                ui.add_space(3.0);
+            }
+        });
+        if let Some((gi, si)) = remove_scene
+            && let Some(g) = pl.groups.get_mut(gi)
+            && si < g.scenes.len()
+        {
+            g.scenes.remove(si);
+            changed = true;
+        }
+        if let Some(gi) = remove_group
+            && gi < pl.groups.len()
+        {
+            pl.groups.remove(gi);
+            self.phys_page.pl_group = None;
+            changed = true;
+        }
+        if let Some((gi, up)) = move_group {
+            let to = if up { gi.checked_sub(1) } else { Some(gi + 1) };
+            if let Some(to) = to.filter(|t| *t < pl.groups.len() && gi < pl.groups.len()) {
+                pl.groups.swap(gi, to);
+                self.phys_page.pl_group = Some(to);
+                changed = true;
+            }
+        }
+        pl.groups.retain(|g| !g.scenes.is_empty());
+        if changed {
+            s.modified = true;
+        }
     }
 
     fn physics_menus(&mut self, ui: &mut Ui) {
@@ -448,10 +748,20 @@ impl EditorUi {
             }
         });
         ui.menu_button(crate::i18n::tr("Playlist"), |ui| {
-            ui.add_enabled(
-                false,
-                egui::Button::new(crate::i18n::tr("Playlists are not built yet")),
-            );
+            if ui.button(crate::i18n::tr("New playlist")).clicked() {
+                self.new_playlist();
+                ui.close();
+            }
+            let has = self.session.as_ref().is_some_and(|s| !s.playlists.is_empty());
+            if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Delete playlist"))).clicked()
+            {
+                self.delete_playlist();
+                ui.close();
+            }
+            if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Play / stop"))).clicked() {
+                self.phys_page.pl_playing = !self.phys_page.pl_playing;
+                ui.close();
+            }
         });
         ui.menu_button(crate::i18n::tr("Preview"), |ui| {
             if ui.checkbox(&mut self.physics_on, crate::i18n::tr("Run physics")).changed() {

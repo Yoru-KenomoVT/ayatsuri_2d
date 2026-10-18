@@ -140,6 +140,8 @@ pub struct Session {
     /// Compositions: layers of scenes over one clock; they ride in the
     /// .aom too.
     pub compositions: Vec<ayatsuri_format::Composition>,
+    /// Physics playlists, played in Physics Settings.
+    pub playlists: Vec<ayatsuri_format::Playlist>,
     pub current_anim: Option<usize>,
     /// The composition the Timeline shows instead of a scene, when it
     /// shows one.
@@ -791,6 +793,7 @@ impl Session {
         self.animations = old.animations;
         self.expressions = old.expressions;
         self.compositions = old.compositions;
+        self.playlists = old.playlists;
         self.current_anim = old.current_anim;
         self.current_comp = old.current_comp;
         self.param_names = old.param_names;
@@ -872,6 +875,7 @@ impl Session {
         self.animations = old.animations;
         self.expressions = old.expressions;
         self.compositions = old.compositions;
+        self.playlists = old.playlists;
         self.current_anim = old.current_anim;
         self.current_comp = old.current_comp;
         self.param_names = old.param_names;
@@ -934,6 +938,7 @@ impl Session {
         s.animations = payload.animations;
         s.expressions = payload.expressions;
         s.compositions = payload.compositions;
+        s.playlists = payload.playlists;
         if let Some(d) = payload.display {
             s.model_groups = d.model_groups.clone();
             s.guides = d.guides.clone();
@@ -1272,6 +1277,7 @@ impl Session {
             animations: Vec::new(),
             expressions: Vec::new(),
             compositions: Vec::new(),
+            playlists: Vec::new(),
             current_comp: None,
             current_anim: None,
             part_shown: vec![true; n_parts],
@@ -1674,6 +1680,7 @@ impl Session {
                 .collect(),
             animations: self.animations.clone(),
             compositions: self.compositions.clone(),
+            playlists: self.playlists.clone(),
             expressions: self.expressions.clone(),
             display: Some(ayatsuri_format::DisplayInfo {
                 param_names: self.param_names.clone(),

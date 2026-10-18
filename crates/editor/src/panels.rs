@@ -3222,6 +3222,48 @@ impl EditorUi {
             }
         }
 
+        // a physics playlist plays while Physics Settings is up: the scenes
+        // drive the parameters over the rest pose, the rig runs on top
+        if self.show_physics
+            && self.phys_page.pl_playing
+            && let Some(s) = &mut self.session
+            && let Some(pl) = s.playlists.get(self.phys_page.pl_sel).cloned()
+        {
+            let fps = s.animations.first().map_or(30.0, |a| a.fps).max(1.0);
+            let scope =
+                ayatsuri_core::comp::Scope { scenes: &s.animations, comps: &s.compositions };
+            let comp = ayatsuri_core::comp::playlist_comp(&scope, &pl, fps);
+            let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+            self.phys_page.pl_time += dt;
+            if self.phys_page.pl_time > comp.duration {
+                if self.phys_page.pl_loop && comp.duration > 0.0 {
+                    self.phys_page.pl_time %= comp.duration;
+                } else {
+                    self.phys_page.pl_time = 0.0;
+                    self.phys_page.pl_playing = false;
+                }
+            }
+            let blends = ayatsuri_core::comp::sample(&scope, &comp, self.phys_page.pl_time);
+            for ((target, id), b) in blends {
+                if target != ayatsuri_format::CurveTarget::Parameter {
+                    continue;
+                }
+                if let Some((pi, d)) = s
+                    .puppet
+                    .model()
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(_, p)| p.id == id)
+                    .map(|(pi, p)| (pi, p.default))
+                {
+                    s.puppet.set_value(pi, b.over(d));
+                }
+            }
+            s.dirty = true;
+            ui.ctx().request_repaint();
+        }
+
         // cursor following and the pendulum rig both drive parameters, so
         // they run just ahead of the per-frame evaluate
         if let Some(s) = &mut self.session {

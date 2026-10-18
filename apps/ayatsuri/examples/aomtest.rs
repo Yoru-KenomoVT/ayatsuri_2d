@@ -34,6 +34,7 @@ fn main() -> Result<(), String> {
         display: None,
         animations: Vec::new(),
         compositions: Vec::new(),
+        playlists: Vec::new(),
         expressions: Vec::new(),
     };
     let aom = ayatsuri_format::write(&payload).map_err(|e| e.to_string())?;
