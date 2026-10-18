@@ -78,6 +78,7 @@ mod tests {
             display: None,
             animations: Vec::new(),
             compositions: Vec::new(),
+            playlists: Vec::new(),
             expressions: vec![crate::Expression {
                 name: "smile".into(),
                 fade_in: Some(0.5),

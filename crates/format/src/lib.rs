@@ -13,8 +13,8 @@ pub mod writer;
 pub use model::Model;
 pub use payload::{
     Animation, AomPayload, Composition, Curve, CurveTarget, DisplayInfo, Event, Expression,
-    ExpressionBlend, ExpressionParam, GuideLine, Interp, Key, Layer, LayerSource, Meta, SceneKind,
-    Track,
+    ExpressionBlend, ExpressionParam, GuideLine, Interp, Key, Layer, LayerSource, Meta, Playlist,
+    PlaylistGroup, PlaylistScene, SceneKind, Track,
 };
 pub use read::read;
 pub use writer::write;

@@ -36,6 +36,9 @@ pub struct AomPayload {
     /// Compositions: scenes and other compositions laid out as layers over
     /// one clock. Empty in files from before 0.5.6; older readers skip them.
     pub compositions: Vec<Composition>,
+    /// Physics playlists: scenes played in order inside Physics Settings
+    /// to watch the physics react. Empty before 0.5.6.
+    pub playlists: Vec<Playlist>,
     /// Expressions (exp3.json): parameter targets layered over the pose.
     /// Empty in older files.
     pub expressions: Vec<Expression>,
@@ -152,6 +155,8 @@ pub struct Layer {
     pub fade_in: f32,
     pub fade_out: f32,
     pub enabled: bool,
+    /// Add the layer's values to what is beneath instead of mixing over it.
+    pub additive: bool,
 }
 
 impl Default for Layer {
@@ -166,7 +171,42 @@ impl Default for Layer {
             fade_in: 0.0,
             fade_out: 0.0,
             enabled: true,
+            additive: false,
         }
+    }
+}
+
+/// A physics playlist, as Cubism's Physics Settings has them: groups of
+/// scenes played top to bottom with a fade between, a group playing its
+/// scenes at once, each overwriting or adding at a weight.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Playlist {
+    pub name: String,
+    /// Seconds of crossfade from one group to the next.
+    pub fade: f32,
+    pub groups: Vec<PlaylistGroup>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaylistGroup {
+    pub scenes: Vec<PlaylistScene>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaylistScene {
+    pub scene: String,
+    /// 0 to 1.
+    pub weight: f32,
+    /// Add the scene's values instead of overwriting with them.
+    pub additive: bool,
+}
+
+impl Default for PlaylistScene {
+    fn default() -> Self {
+        Self { scene: String::new(), weight: 1.0, additive: false }
     }
 }
 
