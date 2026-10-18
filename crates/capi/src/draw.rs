@@ -1,9 +1,9 @@
 //! What to draw after an update: every visible mesh in draw order, as
-//! views into the model's own buffers. Nothing is copied; the pointers
-//! are good until the next `ay2d_update` or `ay2d_free`.
+//! views into the front frame and the model's fixed mesh data. Nothing is
+//! copied. Any thread may read while another updates.
 
 use crate::error::{Status, guard, set_error};
-use crate::handle::{Model, model, output, put};
+use crate::handle::{MeshStatic, Model, model, output, put};
 
 /// Drawn with additive blending.
 pub const AY2D_FLAG_ADDITIVE: u32 = 1;
@@ -35,46 +35,48 @@ pub struct Drawable {
     pub masks: *const u32,
 }
 
+fn drawable(mesh: u32, s: &MeshStatic, positions: &[f32], opacity: f32) -> Drawable {
+    Drawable {
+        mesh,
+        texture: s.texture,
+        flags: s.flags,
+        opacity,
+        vertex_count: (positions.len() / 2) as u32,
+        index_count: s.indices.len() as u32,
+        mask_count: s.masks.len() as u32,
+        positions: positions.as_ptr(),
+        uvs: s.uvs.as_ptr(),
+        indices: s.indices.as_ptr(),
+        masks: s.masks.as_ptr(),
+    }
+}
+
 /// The visible meshes after the last update, back to front, into `out`.
 /// Returns how many there are; with `n` smaller than that (zero and a
-/// null `out` to just ask) only the first `n` are written. Masks are not
-/// among the drawables unless drawn in their own right; use
-/// `ay2d_mesh_geometry` to render a mask.
-///
-/// `m` is a live handle; `out` holds `n` writable drawables, or `n` is zero.
+/// null `out` to just ask) only the first `n` are written. The views stay
+/// valid while the next update runs, until the one after it starts. Masks
+/// are not among the drawables unless drawn in their own right; use
+/// `ay2d_mesh_geometry` to render a mask. Any thread.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_drawables(m: *const Model, out: *mut Drawable, n: usize) -> u32 {
     guard(0, || {
         let Ok(model) = model(m) else { return 0 };
         let Ok(out) = output(out, n) else { return 0 };
-        let mut written = 0;
-        for (slot, d) in out.iter_mut().zip(model.puppet.drawables()) {
-            *slot = Drawable {
-                mesh: d.mesh as u32,
-                texture: d.texture,
-                flags: u32::from(d.flags),
-                opacity: d.opacity,
-                vertex_count: (d.positions.len() / 2) as u32,
-                index_count: d.indices.len() as u32,
-                mask_count: d.masks.len() as u32,
-                positions: d.positions.as_ptr(),
-                uvs: d.uvs.as_ptr(),
-                indices: d.indices.as_ptr(),
-                masks: d.masks.as_ptr(),
-            };
-            written += 1;
+        let frame = model.front();
+        for (slot, &(mesh, opacity)) in out.iter_mut().zip(&frame.drawn) {
+            if let Some(s) = model.facts.meshes.get(mesh as usize) {
+                *slot = drawable(mesh, s, frame.mesh(s.offset, s.len), opacity);
+            }
         }
-        let _ = written;
-        model.order.len() as u32
+        frame.drawn.len() as u32
     })
 }
 
-/// A mesh's geometry right now, visible or not: for rendering a mask, or
-/// for a host that keeps everything on the GPU and only streams positions.
-/// `uvs` and `indices` never change for a mesh; upload them once and read
-/// `positions` after each update. Fails with range past the mesh count.
-///
-/// `m` is a live handle; `out` points at one writable drawable.
+/// A mesh's geometry after the last update, visible or not: for rendering
+/// a mask, or for a host that keeps everything on the GPU and only streams
+/// positions. `uvs` and `indices` never change for a mesh; upload them
+/// once and read `positions` after each update. Fails with range past the
+/// mesh count. Any thread.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_mesh_geometry(m: *const Model, mesh: u32, out: *mut Drawable) -> Status {
     guard(Status::Internal, || {
@@ -82,26 +84,11 @@ pub extern "C" fn ay2d_mesh_geometry(m: *const Model, mesh: u32, out: *mut Drawa
             Ok(m) => m,
             Err(s) => return s,
         };
-        let Some(g) = model.puppet.mesh_geometry(mesh as usize) else {
-            set_error(format!("mesh {mesh} is past the model's {}", model.mesh_ids.len()));
+        let Some(s) = model.facts.meshes.get(mesh as usize) else {
+            set_error(format!("mesh {mesh} is past the model's {}", model.facts.meshes.len()));
             return Status::Range;
         };
-        let am = model.puppet.model().art_meshes.get(mesh as usize);
-        put(
-            out,
-            Drawable {
-                mesh,
-                texture: g.texture,
-                flags: am.map_or(0, |a| u32::from(a.flags)),
-                opacity: 1.0,
-                vertex_count: (g.positions.len() / 2) as u32,
-                index_count: g.indices.len() as u32,
-                mask_count: am.map_or(0, |a| a.masks.len() as u32),
-                positions: g.positions.as_ptr(),
-                uvs: g.uvs.as_ptr(),
-                indices: g.indices.as_ptr(),
-                masks: am.map_or(std::ptr::null(), |a| a.masks.as_ptr()),
-            },
-        )
+        let frame = model.front();
+        put(out, drawable(mesh, s, frame.mesh(s.offset, s.len), 1.0))
     })
 }

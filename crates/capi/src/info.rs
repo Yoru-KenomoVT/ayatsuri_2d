@@ -121,7 +121,7 @@ fn name_at(list: &[CString], i: u32, what: &str) -> *const c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_parameter_name(m: *const Model, i: u32) -> *const c_char {
     guard(std::ptr::null(), || {
-        model(m).map_or(std::ptr::null(), |m| name_at(&m.info.param_names, i, "parameter"))
+        model(m).map_or(std::ptr::null(), |m| name_at(&m.facts.info.param_names, i, "parameter"))
     })
 }
 
@@ -129,7 +129,7 @@ pub extern "C" fn ay2d_parameter_name(m: *const Model, i: u32) -> *const c_char 
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_part_name(m: *const Model, i: u32) -> *const c_char {
     guard(std::ptr::null(), || {
-        model(m).map_or(std::ptr::null(), |m| name_at(&m.info.part_names, i, "part"))
+        model(m).map_or(std::ptr::null(), |m| name_at(&m.facts.info.part_names, i, "part"))
     })
 }
 
@@ -137,7 +137,7 @@ pub extern "C" fn ay2d_part_name(m: *const Model, i: u32) -> *const c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_mesh_name(m: *const Model, i: u32) -> *const c_char {
     guard(std::ptr::null(), || {
-        model(m).map_or(std::ptr::null(), |m| name_at(&m.info.mesh_names, i, "mesh"))
+        model(m).map_or(std::ptr::null(), |m| name_at(&m.facts.info.mesh_names, i, "mesh"))
     })
 }
 
@@ -145,11 +145,7 @@ pub extern "C" fn ay2d_mesh_name(m: *const Model, i: u32) -> *const c_char {
 /// (turn-around heads).
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_parameter_repeat(m: *const Model, i: u32) -> i32 {
-    guard(0, || {
-        model(m).map_or(0, |m| {
-            m.puppet.model().parameters.get(i as usize).map_or(0, |p| i32::from(p.repeat))
-        })
-    })
+    guard(0, || model(m).map_or(0, |m| m.facts.repeat.get(i as usize).map_or(0, |r| i32::from(*r))))
 }
 
 /// The values parameter `i` was rigged at (the keyform positions), sorted,
@@ -159,8 +155,8 @@ pub extern "C" fn ay2d_parameter_repeat(m: *const Model, i: u32) -> i32 {
 pub extern "C" fn ay2d_parameter_keys(m: *const Model, i: u32, out: *mut f32, n: usize) -> u32 {
     guard(0, || {
         let Ok(model) = model(m) else { return 0 };
-        let Some(keys) = model.info.keys.get(i as usize) else {
-            set_error(format!("parameter {i} is past the model's {}", model.info.keys.len()));
+        let Some(keys) = model.facts.info.keys.get(i as usize) else {
+            set_error(format!("parameter {i} is past the model's {}", model.facts.info.keys.len()));
             return 0;
         };
         let Ok(out) = output(out, n) else { return 0 };
@@ -175,34 +171,20 @@ pub extern "C" fn ay2d_parameter_keys(m: *const Model, i: u32, out: *mut f32, n:
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_part_parent(m: *const Model, i: u32) -> i32 {
     guard(-1, || {
-        model(m).map_or(-1, |m| {
-            m.puppet
-                .model()
-                .parts
-                .get(i as usize)
-                .map_or(-1, |p| p.parent_part.map_or(-1, |x| x as i32))
-        })
+        model(m).map_or(-1, |m| m.facts.part_parents.get(i as usize).copied().unwrap_or(-1))
     })
 }
 
 /// The part that holds mesh `i`, or -1 when it sits at the top.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_mesh_part(m: *const Model, i: u32) -> i32 {
-    guard(-1, || {
-        model(m).map_or(-1, |m| {
-            m.puppet
-                .model()
-                .art_meshes
-                .get(i as usize)
-                .map_or(-1, |a| a.parent_part.map_or(-1, |x| x as i32))
-        })
-    })
+    guard(-1, || model(m).map_or(-1, |m| m.facts.mesh_parts.get(i as usize).copied().unwrap_or(-1)))
 }
 
 /// How many parameter folders the file's palette has.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_parameter_group_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.info.groups.len() as u32))
+    guard(0, || model(m).map_or(0, |m| m.facts.info.groups.len() as u32))
 }
 
 /// A folder's name, NUL-terminated, alive as long as the model.
@@ -210,10 +192,13 @@ pub extern "C" fn ay2d_parameter_group_count(m: *const Model) -> u32 {
 pub extern "C" fn ay2d_parameter_group_name(m: *const Model, g: u32) -> *const c_char {
     guard(std::ptr::null(), || {
         let Ok(model) = model(m) else { return std::ptr::null() };
-        match model.info.groups.get(g as usize) {
+        match model.facts.info.groups.get(g as usize) {
             Some((name, _)) => name.as_ptr(),
             None => {
-                set_error(format!("group {g} is past the model's {}", model.info.groups.len()));
+                set_error(format!(
+                    "group {g} is past the model's {}",
+                    model.facts.info.groups.len()
+                ));
                 std::ptr::null()
             }
         }
@@ -226,8 +211,8 @@ pub extern "C" fn ay2d_parameter_group_name(m: *const Model, g: u32) -> *const c
 pub extern "C" fn ay2d_parameter_group(m: *const Model, g: u32, out: *mut u32, n: usize) -> u32 {
     guard(0, || {
         let Ok(model) = model(m) else { return 0 };
-        let Some((_, members)) = model.info.groups.get(g as usize) else {
-            set_error(format!("group {g} is past the model's {}", model.info.groups.len()));
+        let Some((_, members)) = model.facts.info.groups.get(g as usize) else {
+            set_error(format!("group {g} is past the model's {}", model.facts.info.groups.len()));
             return 0;
         };
         let Ok(out) = output(out, n) else { return 0 };
@@ -241,7 +226,7 @@ pub extern "C" fn ay2d_parameter_group(m: *const Model, g: u32, out: *mut u32, n
 /// How many standard groups (EyeBlink, LipSync...) the model names.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_model_group_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.info.model_groups.len() as u32))
+    guard(0, || model(m).map_or(0, |m| m.facts.info.model_groups.len() as u32))
 }
 
 /// A standard group's name ("EyeBlink", "LipSync"), NUL-terminated, alive
@@ -250,12 +235,12 @@ pub extern "C" fn ay2d_model_group_count(m: *const Model) -> u32 {
 pub extern "C" fn ay2d_model_group_name(m: *const Model, g: u32) -> *const c_char {
     guard(std::ptr::null(), || {
         let Ok(model) = model(m) else { return std::ptr::null() };
-        match model.info.model_groups.get(g as usize) {
+        match model.facts.info.model_groups.get(g as usize) {
             Some((name, _)) => name.as_ptr(),
             None => {
                 set_error(format!(
                     "group {g} is past the model's {}",
-                    model.info.model_groups.len()
+                    model.facts.info.model_groups.len()
                 ));
                 std::ptr::null()
             }
@@ -269,8 +254,11 @@ pub extern "C" fn ay2d_model_group_name(m: *const Model, g: u32) -> *const c_cha
 pub extern "C" fn ay2d_model_group(m: *const Model, g: u32, out: *mut u32, n: usize) -> u32 {
     guard(0, || {
         let Ok(model) = model(m) else { return 0 };
-        let Some((_, members)) = model.info.model_groups.get(g as usize) else {
-            set_error(format!("group {g} is past the model's {}", model.info.model_groups.len()));
+        let Some((_, members)) = model.facts.info.model_groups.get(g as usize) else {
+            set_error(format!(
+                "group {g} is past the model's {}",
+                model.facts.info.model_groups.len()
+            ));
             return 0;
         };
         let Ok(out) = output(out, n) else { return 0 };

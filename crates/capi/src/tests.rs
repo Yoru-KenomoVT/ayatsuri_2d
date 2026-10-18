@@ -119,20 +119,26 @@ fn parameters_go_in_and_out_as_arrays() {
         assert_eq!(ay2d_set_parameters(m, idx.as_ptr(), val.as_ptr(), 1), Status::Ok);
         let mut out = [0.0f32; 2];
         assert_eq!(ay2d_get_parameters(m, out.as_mut_ptr(), 2), Status::Ok);
+        assert_eq!(out[0], 0.0, "a set value shows after the next update");
+        ay2d_update(m, 0.0);
+        ay2d_get_parameters(m, out.as_mut_ptr(), 2);
         assert_eq!(out[0], 0.75);
         // clamped to the range
         let big = [5.0f32];
         assert_eq!(ay2d_set_parameters(m, idx.as_ptr(), big.as_ptr(), 1), Status::Ok);
+        ay2d_update(m, 0.0);
         ay2d_get_parameters(m, out.as_mut_ptr(), 2);
         assert_eq!(out[0], 1.0);
         // a bad index fails before anything changes
         let bad = [0u32, 7];
         let vals = [-1.0f32, 3.0];
         assert_eq!(ay2d_set_parameters(m, bad.as_ptr(), vals.as_ptr(), 2), Status::Range);
+        ay2d_update(m, 0.0);
         ay2d_get_parameters(m, out.as_mut_ptr(), 2);
         assert_eq!(out[0], 1.0, "nothing moved on a failed call");
         let all = [-0.5f32, 2.0];
         assert_eq!(ay2d_set_all_parameters(m, all.as_ptr(), 2), Status::Ok);
+        ay2d_update(m, 0.0);
         ay2d_get_parameters(m, out.as_mut_ptr(), 2);
         assert_eq!(out, [-0.5, 2.0]);
         assert_eq!(ay2d_set_all_parameters(m, all.as_ptr(), 1), Status::TooSmall);
@@ -254,7 +260,7 @@ fn the_header_names_every_entry_point() {
         include_str!("expressions.rs"),
         include_str!("bundle.rs"),
         include_str!("info.rs"),
-        include_str!("changes.rs"),
+        include_str!("frame.rs"),
     ];
     let mut missing = Vec::new();
     for src in sources {
@@ -391,7 +397,7 @@ fn unsafe_stays_in_one_file() {
         ("expressions.rs", include_str!("expressions.rs")),
         ("bundle.rs", include_str!("bundle.rs")),
         ("info.rs", include_str!("info.rs")),
-        ("changes.rs", include_str!("changes.rs")),
+        ("frame.rs", include_str!("frame.rs")),
         ("fixture.rs", include_str!("fixture.rs")),
         ("tests.rs", include_str!("tests.rs")),
     ];
@@ -532,5 +538,105 @@ fn after_a_motion_the_host_moves_the_mesh_again() {
     ay2d_mesh_changes(m, flags.as_mut_ptr(), 1);
     assert_eq!(flags[0] & AY2D_CHANGED_VISIBILITY, AY2D_CHANGED_VISIBILITY);
     assert_eq!(ay2d_drawables(m, std::ptr::null_mut(), 0), 0, "hidden below its keys");
+    ay2d_free(m);
+}
+
+/// A tracking thread sets parameters while the frame thread updates and a
+/// render thread reads drawables: nobody waits on anybody, nobody gets an
+/// error, and the frame thread sees the tracked values arrive.
+#[test]
+fn set_update_and_draw_on_three_threads() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+    let m = load();
+    let addr = m as usize;
+    let stop = Arc::new(AtomicBool::new(false));
+    let (sets, reads) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0)));
+    let tracking = {
+        let (stop, sets) = (stop.clone(), sets.clone());
+        std::thread::spawn(move || {
+            let m = addr as *mut Model;
+            while !stop.load(Relaxed) {
+                let k = sets.fetch_add(1, Relaxed);
+                let v = [(k % 100) as f32 / 100.0 + 0.01];
+                assert_eq!(ay2d_set_parameters(m, [0u32].as_ptr(), v.as_ptr(), 1), Status::Ok);
+            }
+        })
+    };
+    let render = {
+        let (stop, reads) = (stop.clone(), reads.clone());
+        std::thread::spawn(move || {
+            let m = addr as *const Model;
+            while !stop.load(Relaxed) {
+                let mut d = [blank()];
+                assert_eq!(ay2d_drawables(m, d.as_mut_ptr(), 1), 1);
+                assert!(floats(d[0].positions, 8).iter().all(|x| x.is_finite()));
+                let mut p = [0.0f32; 2];
+                assert_eq!(ay2d_get_parameters(m, p.as_mut_ptr(), 2), Status::Ok);
+                reads.fetch_add(1, Relaxed);
+            }
+        })
+    };
+    let mut moved = false;
+    let mut updates = 0;
+    while updates < 200 || sets.load(Relaxed) < 200 || reads.load(Relaxed) < 200 {
+        assert_eq!(ay2d_update(m, 1.0 / 60.0), Status::Ok);
+        let mut p = [0.0f32; 2];
+        ay2d_get_parameters(m, p.as_mut_ptr(), 2);
+        moved |= p[0] > 0.0;
+        updates += 1;
+        assert!(updates < 2_000_000, "the other threads never ran");
+    }
+    stop.store(true, Relaxed);
+    tracking.join().unwrap();
+    render.join().unwrap();
+    assert!(moved, "tracked values reached the model");
+    ay2d_free(m);
+}
+
+/// While one thread drives the model, a second thread's driving calls get
+/// BUSY and change nothing; setting and reading still work.
+#[test]
+fn a_second_driver_gets_busy() {
+    let m = load();
+    let model = crate::handle::model(m).unwrap();
+    let held = model.core.lock().unwrap();
+    let addr = m as usize;
+    std::thread::spawn(move || {
+        let m = addr as *mut Model;
+        assert_eq!(ay2d_update(m, 0.016), Status::Busy);
+        assert!(last_error().contains("busy"));
+        assert_eq!(ay2d_motion_play(m, 0, 0, 0.0), Status::Busy);
+        assert_eq!(
+            ay2d_motion_playing(m),
+            -1,
+            "a reading call on the player answers with its none value while busy"
+        );
+        assert_eq!(ay2d_set_parameters(m, [0u32].as_ptr(), [0.5f32].as_ptr(), 1), Status::Ok);
+        assert_eq!(ay2d_drawables(m, std::ptr::null_mut(), 0), 1);
+        let mut p = [0.0f32; 2];
+        assert_eq!(ay2d_get_parameters(m, p.as_mut_ptr(), 2), Status::Ok);
+    })
+    .join()
+    .unwrap();
+    drop(held);
+    assert_eq!(ay2d_update(m, 0.0), Status::Ok, "free again once the driver lets go");
+    ay2d_free(m);
+}
+
+/// A drawable view from frame N still reads frame N while the next update
+/// writes N + 1: the render thread never sees a half-written mesh.
+#[test]
+fn views_outlive_the_next_update() {
+    let m = load();
+    let mut d = [blank()];
+    ay2d_drawables(m, d.as_mut_ptr(), 1);
+    let before = floats(d[0].positions, 8);
+    ay2d_set_parameters(m, [0u32].as_ptr(), [1.0f32].as_ptr(), 1);
+    ay2d_update(m, 0.0);
+    assert_eq!(floats(d[0].positions, 8), before, "the old view still shows frame N");
+    let mut now = [blank()];
+    ay2d_drawables(m, now.as_mut_ptr(), 1);
+    assert_ne!(floats(now[0].positions, 8), before, "the new view shows frame N + 1");
     ay2d_free(m);
 }

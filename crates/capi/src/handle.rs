@@ -1,38 +1,90 @@
 //! The opaque model handle: load, free, and what a host asks about a model
 //! before it drives it. Ids are handed out as NUL-terminated strings that
 //! live as long as the model, so a binding reads them once.
+//!
+//! A model is four pieces, each with its own rule for threads:
+//!
+//! ```text
+//! facts    read-only after load: ids, names, ranges, textures, the
+//!          meshes' uvs and triangles                         any thread
+//! inbox    parameter and part values a host sets             any thread
+//! frames   two published results of update; update writes
+//!          one while hosts read the other                    any thread
+//! core     the puppet, motions, expressions, physics         one caller;
+//!                                                            BUSY otherwise
+//! ```
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 use ayatsuri_core::Puppet;
 use ayatsuri_format::{Animation, Composition};
 
 use crate::error::{Status, guard, set_error};
+use crate::frame::Frame;
 
-/// A loaded model: the puppet and what the ABI keeps beside it.
+/// A loaded model.
 pub struct Model {
-    pub(crate) puppet: Puppet,
+    pub(crate) facts: Facts,
+    pub(crate) core: Mutex<Core>,
+    pub(crate) inbox: Mutex<Inbox>,
+    pub(crate) frames: [Mutex<Frame>; 2],
+    /// Which of `frames` hosts read; update writes the other and flips it.
+    pub(crate) front: AtomicUsize,
+    /// Mirrors the core's rig, so asking never waits on an update.
+    pub(crate) has_physics: AtomicBool,
+}
+
+/// What a mesh draws with that never changes after load.
+pub(crate) struct MeshStatic {
+    pub uvs: Vec<f32>,
+    pub indices: Vec<u16>,
+    pub masks: Vec<u32>,
+    pub texture: u32,
+    pub flags: u32,
+    /// Where its positions sit in a frame, and how many floats.
+    pub offset: usize,
+    pub len: usize,
+}
+
+/// Everything fixed at load.
+pub(crate) struct Facts {
     /// The texture pages as stored in the file, PNG, by texture index.
-    pub(crate) textures: Vec<Vec<u8>>,
-    pub(crate) param_ids: Vec<CString>,
-    pub(crate) part_ids: Vec<CString>,
-    pub(crate) mesh_ids: Vec<CString>,
+    pub textures: Vec<Vec<u8>>,
+    pub param_ids: Vec<CString>,
+    pub part_ids: Vec<CString>,
+    pub mesh_ids: Vec<CString>,
+    pub info: crate::info::Info,
+    pub canvas: Canvas,
+    /// Minimum, maximum and default, by parameter.
+    pub ranges: Vec<(f32, f32, f32)>,
+    pub repeat: Vec<bool>,
+    pub part_parents: Vec<i32>,
+    pub mesh_parts: Vec<i32>,
+    pub meshes: Vec<MeshStatic>,
+}
+
+/// What an update drives; one caller at a time.
+pub(crate) struct Core {
+    pub puppet: Puppet,
     /// Physics runs on update while this is set; on by default when the
     /// model has a rig.
-    pub(crate) physics_on: bool,
+    pub physics_on: bool,
     /// The file's scenes and compositions, for the motion player.
-    pub(crate) scenes: Vec<Animation>,
-    pub(crate) comps: Vec<Composition>,
-    pub(crate) param_index: HashMap<String, usize>,
-    pub(crate) part_index: HashMap<String, usize>,
-    pub(crate) player: crate::motions::Player,
-    pub(crate) exprs: crate::expressions::Expressions,
-    pub(crate) info: crate::info::Info,
-    pub(crate) changes: crate::changes::Changes,
-    /// Where each visible drawable's data sits after the last update, in
-    /// draw order, so `ay2d_drawables` hands out views without a sort.
-    pub(crate) order: Vec<usize>,
+    pub scenes: Vec<Animation>,
+    pub comps: Vec<Composition>,
+    pub param_index: HashMap<String, usize>,
+    pub part_index: HashMap<String, usize>,
+    pub player: crate::motions::Player,
+    pub exprs: crate::expressions::Expressions,
+}
+
+/// Values a host set since the last update, newest wins.
+pub(crate) struct Inbox {
+    pub params: Vec<Option<f32>>,
+    pub parts: Vec<Option<f32>>,
 }
 
 /// The canvas the model is drawn on: pixels, and how model units map
@@ -47,6 +99,33 @@ pub struct Canvas {
     pub origin_y: f32,
 }
 
+/// A mutex taken whatever a panic elsewhere left in it: every call runs
+/// under the panic guard, so a poisoned lock only means an earlier call
+/// failed with `INTERNAL`.
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The core, or `Busy` when another thread is in a call that drives it.
+pub(crate) fn core(model: &Model) -> Result<MutexGuard<'_, Core>, Status> {
+    match model.core.try_lock() {
+        Ok(g) => Ok(g),
+        Err(TryLockError::Poisoned(p)) => Ok(p.into_inner()),
+        Err(TryLockError::WouldBlock) => {
+            set_error("busy: another thread is in a call that drives this model");
+            Err(Status::Busy)
+        }
+    }
+}
+
+impl Model {
+    /// The frame hosts read: the last one an update published.
+    pub(crate) fn front(&self) -> MutexGuard<'_, Frame> {
+        let [a, b] = &self.frames;
+        lock(if self.front.load(Ordering::Acquire) == 0 { a } else { b })
+    }
+}
+
 fn cstrings<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<CString> {
     ids.map(|id| CString::new(id.replace('\0', "")).unwrap_or_default()).collect()
 }
@@ -55,7 +134,7 @@ fn cstrings<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<CString> {
 //
 // Every raw pointer the host hands over is turned into a reference, a slice
 // or a string here and nowhere else; the other modules are safe Rust over
-// these six helpers. The contracts are the ABI's (ayatsuri.h): a handle is
+// these five helpers. The contracts are the ABI's (ayatsuri.h): a handle is
 // one `ay2d_load` returned and `ay2d_free` has not taken back, an array
 // pointer covers its stated length, a string ends in NUL. A test keeps the
 // `unsafe` keyword out of every other file.
@@ -70,17 +149,6 @@ pub(crate) fn model<'a>(m: *const Model) -> Result<&'a Model, Status> {
     // SAFETY: the ABI's contract; a non-null handle from ay2d_load is a
     // live Box<Model> until ay2d_free
     Ok(unsafe { &*m })
-}
-
-/// As [`model`]; the host promises no other reference is alive, which the
-/// one-thread-per-model rule gives.
-pub(crate) fn model_mut<'a>(m: *mut Model) -> Result<&'a mut Model, Status> {
-    if m.is_null() {
-        set_error("model handle is null");
-        return Err(Status::Null);
-    }
-    // SAFETY: the ABI's contract, as for `model`
-    Ok(unsafe { &mut *m })
 }
 
 /// A slice over a host array; the host promises `ptr` covers `n` readable
@@ -175,13 +243,53 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
             }
         };
         let m = &payload.model;
-        let param_ids = cstrings(m.parameters.iter().map(|p| p.id.as_str()));
-        let part_ids = cstrings(m.parts.iter().map(|p| p.id.as_str()));
-        let mesh_ids = cstrings(m.art_meshes.iter().map(|a| a.id.as_str()));
         let param_index: HashMap<String, usize> =
             m.parameters.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect();
         let part_index: HashMap<String, usize> =
             m.parts.iter().enumerate().map(|(i, p)| (p.id.clone(), i)).collect();
+        let mut offset = 0;
+        let meshes: Vec<MeshStatic> = m
+            .art_meshes
+            .iter()
+            .map(|a| {
+                let len = (a.vertex_count as usize).saturating_mul(2);
+                let s = MeshStatic {
+                    uvs: a.uvs.clone(),
+                    indices: a.indices.clone(),
+                    masks: a.masks.clone(),
+                    texture: a.texture,
+                    flags: u32::from(a.flags),
+                    offset,
+                    len,
+                };
+                offset += len;
+                s
+            })
+            .collect();
+        let c = m.canvas;
+        let facts = Facts {
+            textures: Vec::new(),
+            param_ids: cstrings(m.parameters.iter().map(|p| p.id.as_str())),
+            part_ids: cstrings(m.parts.iter().map(|p| p.id.as_str())),
+            mesh_ids: cstrings(m.art_meshes.iter().map(|a| a.id.as_str())),
+            info: crate::info::Info::new(m, payload.display.as_ref(), &param_index),
+            canvas: Canvas {
+                width: c.width,
+                height: c.height,
+                pixels_per_unit: c.pixels_per_unit,
+                origin_x: c.origin_x,
+                origin_y: c.origin_y,
+            },
+            ranges: m.parameters.iter().map(|p| (p.min, p.max, p.default)).collect(),
+            repeat: m.parameters.iter().map(|p| p.repeat).collect(),
+            part_parents: m.parts.iter().map(|p| p.parent_part.map_or(-1, |x| x as i32)).collect(),
+            mesh_parts: m
+                .art_meshes
+                .iter()
+                .map(|a| a.parent_part.map_or(-1, |x| x as i32))
+                .collect(),
+            meshes,
+        };
         let player = crate::motions::Player::new(
             &payload.animations,
             &payload.compositions,
@@ -189,45 +297,37 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
             &part_index,
         );
         let exprs = crate::expressions::Expressions::new(&payload.expressions, &param_index);
-        let info = crate::info::Info::new(m, payload.display.as_ref(), &param_index);
+        let inbox =
+            Inbox { params: vec![None; m.parameters.len()], parts: vec![None; m.parts.len()] };
         let mut puppet = Puppet::new(payload.model);
         puppet.update();
         let physics_on = puppet.has_physics();
-        let mut model = Model {
-            puppet,
-            textures: payload.textures.into_iter().map(|b| b.into_vec()).collect(),
-            param_ids,
-            part_ids,
-            mesh_ids,
-            physics_on,
-            scenes: payload.animations,
-            comps: payload.compositions,
-            param_index,
-            part_index,
-            player,
-            exprs,
-            info,
-            changes: crate::changes::Changes::default(),
-            order: Vec::new(),
+        let model = Model {
+            facts: Facts {
+                textures: payload.textures.into_iter().map(|b| b.into_vec()).collect(),
+                ..facts
+            },
+            has_physics: AtomicBool::new(physics_on),
+            core: Mutex::new(Core {
+                puppet,
+                physics_on,
+                scenes: payload.animations,
+                comps: payload.compositions,
+                param_index,
+                part_index,
+                player,
+                exprs,
+            }),
+            inbox: Mutex::new(inbox),
+            frames: [Mutex::new(Frame::new(offset)), Mutex::new(Frame::new(offset))],
+            front: AtomicUsize::new(0),
         };
-        model.after_update();
+        {
+            let c = lock(&model.core);
+            crate::frame::publish(&model, &c);
+        }
         Box::into_raw(Box::new(model))
     })
-}
-
-impl Model {
-    /// What follows every evaluation: the draw order, and later the
-    /// change flags.
-    pub(crate) fn after_update(&mut self) {
-        self.refresh_order();
-        self.changes.after_update(&self.puppet, &self.order);
-    }
-
-    /// The drawables' mesh indices after an update, in draw order.
-    pub(crate) fn refresh_order(&mut self) {
-        self.order.clear();
-        self.order.extend(self.puppet.drawables().map(|d| d.mesh));
-    }
 }
 
 /// Free a model, once. Null is fine. Every pointer the model handed out
@@ -248,7 +348,7 @@ pub extern "C" fn ay2d_free(m: *mut Model) {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_parameter_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.param_ids.len() as u32))
+    guard(0, || model(m).map_or(0, |m| m.facts.param_ids.len() as u32))
 }
 
 /// How many parts the model has.
@@ -256,7 +356,7 @@ pub extern "C" fn ay2d_parameter_count(m: *const Model) -> u32 {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_part_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.part_ids.len() as u32))
+    guard(0, || model(m).map_or(0, |m| m.facts.part_ids.len() as u32))
 }
 
 /// How many meshes the model has; a drawable's `mesh` is an index into
@@ -265,7 +365,7 @@ pub extern "C" fn ay2d_part_count(m: *const Model) -> u32 {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_mesh_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.mesh_ids.len() as u32))
+    guard(0, || model(m).map_or(0, |m| m.facts.mesh_ids.len() as u32))
 }
 
 /// How many texture pages the model carries.
@@ -273,7 +373,7 @@ pub extern "C" fn ay2d_mesh_count(m: *const Model) -> u32 {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_texture_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.textures.len() as u32))
+    guard(0, || model(m).map_or(0, |m| m.facts.textures.len() as u32))
 }
 
 /// The canvas: size in pixels and the model-unit to pixel mapping.
@@ -286,17 +386,7 @@ pub extern "C" fn ay2d_canvas(m: *const Model, out: *mut Canvas) -> Status {
             Ok(m) => m,
             Err(s) => return s,
         };
-        let c = model.puppet.model().canvas;
-        put(
-            out,
-            Canvas {
-                width: c.width,
-                height: c.height,
-                pixels_per_unit: c.pixels_per_unit,
-                origin_x: c.origin_x,
-                origin_y: c.origin_y,
-            },
-        )
+        put(out, model.facts.canvas)
     })
 }
 
@@ -316,7 +406,7 @@ fn id_at(ids: &[CString], i: u32) -> *const c_char {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_parameter_id(m: *const Model, i: u32) -> *const c_char {
-    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.param_ids, i)))
+    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.facts.param_ids, i)))
 }
 
 /// A part's id, as [`ay2d_parameter_id`].
@@ -324,7 +414,7 @@ pub extern "C" fn ay2d_parameter_id(m: *const Model, i: u32) -> *const c_char {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_part_id(m: *const Model, i: u32) -> *const c_char {
-    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.part_ids, i)))
+    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.facts.part_ids, i)))
 }
 
 /// A mesh's id, as [`ay2d_parameter_id`].
@@ -332,7 +422,7 @@ pub extern "C" fn ay2d_part_id(m: *const Model, i: u32) -> *const c_char {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_mesh_id(m: *const Model, i: u32) -> *const c_char {
-    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.mesh_ids, i)))
+    guard(std::ptr::null(), || model(m).map_or(std::ptr::null(), |m| id_at(&m.facts.mesh_ids, i)))
 }
 
 /// The index of the parameter with this id, or -1 when the model has none.
@@ -344,6 +434,6 @@ pub extern "C" fn ay2d_parameter_index(m: *const Model, id: *const c_char) -> i3
     guard(-1, || {
         let Ok(model) = model(m) else { return -1 };
         let Ok(want) = cstr_in(id) else { return -1 };
-        model.param_ids.iter().position(|p| p.as_c_str() == want).map_or(-1, |i| i as i32)
+        model.facts.param_ids.iter().position(|p| p.as_c_str() == want).map_or(-1, |i| i as i32)
     })
 }

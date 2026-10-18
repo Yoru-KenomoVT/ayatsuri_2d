@@ -7,7 +7,9 @@ use std::ffi::c_char;
 use ayatsuri_core::Puppet;
 
 use crate::error::{Status, guard, set_error};
-use crate::handle::{Model, cstr_in, input, model_mut};
+use std::sync::atomic::Ordering;
+
+use crate::handle::{Model, core, cstr_in, input, model};
 
 /// Give the model a pendulum rig from a `physics3.json` (`len` bytes at
 /// `json`), replacing any it has. Parameter and part values stay as they
@@ -15,7 +17,7 @@ use crate::handle::{Model, cstr_in, input, model_mut};
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_add_physics3(m: *mut Model, json: *const u8, len: usize) -> Status {
     guard(Status::Internal, || {
-        let model = match model_mut(m) {
+        let model = match model(m) {
             Ok(m) => m,
             Err(s) => return s,
         };
@@ -30,13 +32,18 @@ pub extern "C" fn ay2d_add_physics3(m: *mut Model, json: *const u8, len: usize) 
                 return Status::BadModel;
             }
         };
+        let mut g = match core(model) {
+            Ok(c) => c,
+            Err(s) => return s,
+        };
+        let c = &mut *g;
         // the rig lives inside the puppet from construction: rebuild it
         // around the same model and carry the pose across
-        let n = model.param_ids.len();
-        let values: Vec<f32> = (0..n).map(|i| model.puppet.value(i)).collect();
+        let values: Vec<f32> =
+            (0..model.facts.param_ids.len()).map(|i| c.puppet.value(i)).collect();
         let parts: Vec<f32> =
-            (0..model.part_ids.len()).map(|i| model.puppet.part_user_opacity(i)).collect();
-        let mut rigged = model.puppet.model().clone();
+            (0..model.facts.part_ids.len()).map(|i| c.puppet.part_user_opacity(i)).collect();
+        let mut rigged = c.puppet.model().clone();
         rigged.physics = Some(rig);
         let mut puppet = Puppet::new(rigged);
         for (i, v) in values.into_iter().enumerate() {
@@ -46,9 +53,10 @@ pub extern "C" fn ay2d_add_physics3(m: *mut Model, json: *const u8, len: usize) 
             puppet.set_part_opacity(i, v);
         }
         puppet.update();
-        model.puppet = puppet;
-        model.physics_on = true;
-        model.after_update();
+        c.puppet = puppet;
+        c.physics_on = true;
+        model.has_physics.store(true, Ordering::Release);
+        crate::frame::publish(model, c);
         Status::Ok
     })
 }
@@ -64,7 +72,8 @@ pub extern "C" fn ay2d_add_motion3(
     len: usize,
 ) -> i32 {
     guard(-1, || {
-        let Ok(model) = model_mut(m) else { return -1 };
+        let Ok(model) = model(m) else { return -1 };
+        let Ok(mut model) = core(model) else { return -1 };
         let Ok(name) = cstr_in(name) else { return -1 };
         let Ok(bytes) = input(json, len) else { return -1 };
         let anim = match ayatsuri_import::from_motion3(bytes, &name.to_string_lossy()) {
@@ -75,7 +84,8 @@ pub extern "C" fn ay2d_add_motion3(
             }
         };
         let index = model.scenes.len();
-        let clip = model.player.add_scene(index, &anim, &model.param_index, &model.part_index);
+        let c = &mut *model;
+        let clip = c.player.add_scene(index, &anim, &c.param_index, &c.part_index);
         model.scenes.push(anim);
         clip as i32
     })
@@ -91,7 +101,8 @@ pub extern "C" fn ay2d_add_expression3(
     len: usize,
 ) -> i32 {
     guard(-1, || {
-        let Ok(model) = model_mut(m) else { return -1 };
+        let Ok(model) = model(m) else { return -1 };
+        let Ok(mut model) = core(model) else { return -1 };
         let Ok(name) = cstr_in(name) else { return -1 };
         let Ok(bytes) = input(json, len) else { return -1 };
         let e = match ayatsuri_import::from_exp3(bytes, &name.to_string_lossy()) {
@@ -101,6 +112,7 @@ pub extern "C" fn ay2d_add_expression3(
                 return -1;
             }
         };
-        model.exprs.add(&e, &model.param_index) as i32
+        let c = &mut *model;
+        c.exprs.add(&e, &c.param_index) as i32
     })
 }

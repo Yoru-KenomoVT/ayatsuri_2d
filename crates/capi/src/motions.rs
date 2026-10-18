@@ -13,7 +13,7 @@ use ayatsuri_core::comp::{self, Scope};
 use ayatsuri_format::{Animation, Composition, CurveTarget};
 
 use crate::error::{Status, guard, set_error};
-use crate::handle::{Model, cstr_in, model, model_mut, output, put};
+use crate::handle::{Model, core, cstr_in, model, output, put};
 
 /// The spec's fade when a motion names none.
 const DEFAULT_FADE: f32 = 1.0;
@@ -161,6 +161,11 @@ impl Player {
     }
 
     /// A scene added after load (a motion3 file): its clip goes on the end.
+    /// The events fired by the last advance.
+    pub(crate) fn fired(&self) -> &[Event] {
+        &self.fired
+    }
+
     pub(crate) fn add_scene(
         &mut self,
         index: usize,
@@ -320,7 +325,7 @@ impl Player {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.player.clips.len() as u32))
+    guard(0, || model(m).and_then(core).map_or(0, |m| m.player.clips.len() as u32))
 }
 
 /// A motion's name, NUL-terminated, alive as long as the model. Null past
@@ -331,6 +336,7 @@ pub extern "C" fn ay2d_motion_count(m: *const Model) -> u32 {
 pub extern "C" fn ay2d_motion_id(m: *const Model, i: u32) -> *const c_char {
     guard(std::ptr::null(), || {
         let Ok(model) = model(m) else { return std::ptr::null() };
+        let Ok(model) = core(model) else { return std::ptr::null() };
         match model.player.clips.get(i as usize) {
             Some(c) => c.id.as_ptr(),
             None => {
@@ -348,6 +354,7 @@ pub extern "C" fn ay2d_motion_id(m: *const Model, i: u32) -> *const c_char {
 pub extern "C" fn ay2d_motion_index(m: *const Model, name: *const c_char) -> i32 {
     guard(-1, || {
         let Ok(model) = model(m) else { return -1 };
+        let Ok(model) = core(model) else { return -1 };
         let Ok(want) = cstr_in(name) else { return -1 };
         model.player.clips.iter().position(|c| c.id.as_c_str() == want).map_or(-1, |i| i as i32)
     })
@@ -361,6 +368,10 @@ pub extern "C" fn ay2d_motion_info(m: *const Model, i: u32, out: *mut MotionInfo
     guard(Status::Internal, || {
         let model = match model(m) {
             Ok(m) => m,
+            Err(s) => return s,
+        };
+        let model = match core(model) {
+            Ok(c) => c,
             Err(s) => return s,
         };
         let Some(c) = model.player.clips.get(i as usize) else {
@@ -392,8 +403,12 @@ pub extern "C" fn ay2d_motion_info(m: *const Model, i: u32, out: *mut MotionInfo
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_play(m: *mut Model, i: u32, looping: i32, fade_in: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match model_mut(m) {
+        let model = match model(m) {
             Ok(m) => m,
+            Err(s) => return s,
+        };
+        let mut model = match core(model) {
+            Ok(c) => c,
             Err(s) => return s,
         };
         if i as usize >= model.player.clips.len() {
@@ -416,8 +431,12 @@ pub extern "C" fn ay2d_motion_play(m: *mut Model, i: u32, looping: i32, fade_in:
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_stop(m: *mut Model, fade_out: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match model_mut(m) {
+        let model = match model(m) {
             Ok(m) => m,
+            Err(s) => return s,
+        };
+        let mut model = match core(model) {
+            Ok(c) => c,
             Err(s) => return s,
         };
         if !fade_out.is_finite() {
@@ -434,7 +453,9 @@ pub extern "C" fn ay2d_motion_stop(m: *mut Model, fade_out: f32) -> Status {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_playing(m: *const Model) -> i32 {
-    guard(-1, || model(m).map_or(-1, |m| m.player.current().map_or(-1, |p| p.clip as i32)))
+    guard(-1, || {
+        model(m).and_then(core).map_or(-1, |m| m.player.current().map_or(-1, |p| p.clip as i32))
+    })
 }
 
 /// 1 when the motion in front played once through and now holds its last
@@ -443,7 +464,11 @@ pub extern "C" fn ay2d_motion_playing(m: *const Model) -> i32 {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_finished(m: *const Model) -> i32 {
-    guard(0, || model(m).map_or(0, |m| m.player.current().map_or(0, |p| i32::from(p.finished))))
+    guard(0, || {
+        model(m)
+            .and_then(core)
+            .map_or(0, |m| m.player.current().map_or(0, |p| i32::from(p.finished)))
+    })
 }
 
 /// Where the motion in front is on its clock, in seconds; -1 when nothing
@@ -452,7 +477,9 @@ pub extern "C" fn ay2d_motion_finished(m: *const Model) -> i32 {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_time(m: *const Model) -> f32 {
-    guard(-1.0, || model(m).map_or(-1.0, |m| m.player.current().map_or(-1.0, |p| p.time)))
+    guard(-1.0, || {
+        model(m).and_then(core).map_or(-1.0, |m| m.player.current().map_or(-1.0, |p| p.time))
+    })
 }
 
 /// Put the motion in front at `t` seconds on its clock.
@@ -461,8 +488,12 @@ pub extern "C" fn ay2d_motion_time(m: *const Model) -> f32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_seek(m: *mut Model, t: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match model_mut(m) {
+        let model = match model(m) {
             Ok(m) => m,
+            Err(s) => return s,
+        };
+        let mut model = match core(model) {
+            Ok(c) => c,
             Err(s) => return s,
         };
         if !t.is_finite() || t < 0.0 {
@@ -487,8 +518,12 @@ pub extern "C" fn ay2d_motion_seek(m: *mut Model, t: f32) -> Status {
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_set_speed(m: *mut Model, speed: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match model_mut(m) {
+        let model = match model(m) {
             Ok(m) => m,
+            Err(s) => return s,
+        };
+        let mut model = match core(model) {
+            Ok(c) => c,
             Err(s) => return s,
         };
         if !speed.is_finite() || speed < 0.0 {
@@ -510,17 +545,17 @@ pub extern "C" fn ay2d_motion_set_speed(m: *mut Model, speed: f32) -> Status {
 
 /// The events motions fired during the last `ay2d_update`, into `out`.
 /// Returns how many there were; with `n` smaller only the first `n` are
-/// written. Poll after each update; the list is replaced by the next one.
-///
-/// `m` is a live handle; `out` holds `n` writable events, or `n` is zero.
+/// written. Poll after each update; the next update replaces the list.
+/// Any thread.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_motion_events(m: *const Model, out: *mut Event, n: usize) -> u32 {
     guard(0, || {
         let Ok(model) = model(m) else { return 0 };
         let Ok(out) = output(out, n) else { return 0 };
-        for (slot, e) in out.iter_mut().zip(&model.player.fired) {
-            *slot = *e;
+        let frame = model.front();
+        for (slot, e) in out.iter_mut().zip(&frame.events) {
+            *slot = Event { motion: e.motion, time: e.time, name: e.name as *const c_char };
         }
-        model.player.fired.len() as u32
+        frame.events.len() as u32
     })
 }

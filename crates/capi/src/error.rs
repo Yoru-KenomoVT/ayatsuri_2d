@@ -19,6 +19,10 @@ pub enum Status {
     TooSmall = 4,
     /// Something inside went wrong; `ay2d_last_error` says what.
     Internal = 5,
+    /// Another thread is in a call that drives this model (an update, a
+    /// motion or expression call, a physics setting). Nothing changed; try
+    /// again from the thread that owns the frame.
+    Busy = 6,
 }
 
 thread_local! {

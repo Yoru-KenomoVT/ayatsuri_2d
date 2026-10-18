@@ -7,12 +7,12 @@
 //! reports through `ay2d_last_error` and returns a status or a null.
 
 mod bundle;
-mod changes;
 mod draw;
 mod error;
 mod expressions;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+mod frame;
 mod handle;
 mod info;
 mod motions;
@@ -24,10 +24,6 @@ mod textures;
 use std::ffi::c_char;
 
 pub use bundle::{ay2d_add_expression3, ay2d_add_motion3, ay2d_add_physics3};
-pub use changes::{
-    AY2D_CHANGED_OPACITY, AY2D_CHANGED_ORDER, AY2D_CHANGED_POSITIONS, AY2D_CHANGED_VISIBILITY,
-    ay2d_mesh_changes,
-};
 pub use draw::{
     AY2D_FLAG_ADDITIVE, AY2D_FLAG_DOUBLE_SIDED, AY2D_FLAG_INVERTED_MASK, AY2D_FLAG_MULTIPLICATIVE,
     Drawable, ay2d_drawables, ay2d_mesh_geometry,
@@ -36,6 +32,10 @@ pub use error::{Status, ay2d_last_error};
 pub use expressions::{
     ay2d_expression_clear, ay2d_expression_count, ay2d_expression_id, ay2d_expression_index,
     ay2d_expression_set, ay2d_expression_shown,
+};
+pub use frame::{
+    AY2D_CHANGED_OPACITY, AY2D_CHANGED_ORDER, AY2D_CHANGED_POSITIONS, AY2D_CHANGED_VISIBILITY,
+    ay2d_mesh_changes,
 };
 pub use handle::{
     Canvas, Model, ay2d_canvas, ay2d_free, ay2d_load, ay2d_mesh_count, ay2d_mesh_id,

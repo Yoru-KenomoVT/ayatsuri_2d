@@ -23,26 +23,6 @@
 #define AY2D_ABI_VERSION 1
 
 /*
- The mesh's vertex positions moved.
- */
-#define AY2D_CHANGED_POSITIONS 1
-
-/*
- The mesh came into or went out of the drawables.
- */
-#define AY2D_CHANGED_VISIBILITY 2
-
-/*
- The mesh's opacity changed.
- */
-#define AY2D_CHANGED_OPACITY 4
-
-/*
- The mesh's place in the draw order changed.
- */
-#define AY2D_CHANGED_ORDER 8
-
-/*
  Drawn with additive blending.
  */
 #define AY2D_FLAG_ADDITIVE 1
@@ -61,6 +41,26 @@
  The masks cut the mesh out where they are drawn, not where they are not.
  */
 #define AY2D_FLAG_INVERTED_MASK 8
+
+/*
+ The mesh's vertex positions moved.
+ */
+#define AY2D_CHANGED_POSITIONS 1
+
+/*
+ The mesh came into or went out of the drawables.
+ */
+#define AY2D_CHANGED_VISIBILITY 2
+
+/*
+ The mesh's opacity changed.
+ */
+#define AY2D_CHANGED_OPACITY 4
+
+/*
+ The mesh's place in the draw order changed.
+ */
+#define AY2D_CHANGED_ORDER 8
 
 /*
  What a call reports. Zero is success, as C expects.
@@ -87,10 +87,16 @@ typedef enum ay2d_status {
    Something inside went wrong; `ay2d_last_error` says what.
    */
   AY2D_STATUS_INTERNAL = 5,
+  /*
+   Another thread is in a call that drives this model (an update, a
+   motion or expression call, a physics setting). Nothing changed; try
+   again from the thread that owns the frame.
+   */
+  AY2D_STATUS_BUSY = 6,
 } ay2d_status;
 
 /*
- A loaded model: the puppet and what the ABI keeps beside it.
+ A loaded model.
  */
 typedef struct ay2d_model ay2d_model;
 
@@ -212,31 +218,21 @@ int32_t ay2d_add_expression3(struct ay2d_model *m,
                              size_t len);
 
 /*
- What changed for every mesh in the last update, as `AY2D_CHANGED_*`
- bits by mesh index, into `out` (`ay2d_mesh_count` entries). A host
- streaming positions to the GPU uploads the meshes with the positions
- bit and leaves the rest. After load every bit is set.
- */
-enum ay2d_status ay2d_mesh_changes(const struct ay2d_model *m, uint32_t *out, size_t n);
-
-/*
  The visible meshes after the last update, back to front, into `out`.
  Returns how many there are; with `n` smaller than that (zero and a
- null `out` to just ask) only the first `n` are written. Masks are not
- among the drawables unless drawn in their own right; use
- `ay2d_mesh_geometry` to render a mask.
-
- `m` is a live handle; `out` holds `n` writable drawables, or `n` is zero.
+ null `out` to just ask) only the first `n` are written. The views stay
+ valid while the next update runs, until the one after it starts. Masks
+ are not among the drawables unless drawn in their own right; use
+ `ay2d_mesh_geometry` to render a mask. Any thread.
  */
 uint32_t ay2d_drawables(const struct ay2d_model *m, struct ay2d_drawable *out, size_t n);
 
 /*
- A mesh's geometry right now, visible or not: for rendering a mask, or
- for a host that keeps everything on the GPU and only streams positions.
- `uvs` and `indices` never change for a mesh; upload them once and read
- `positions` after each update. Fails with range past the mesh count.
-
- `m` is a live handle; `out` points at one writable drawable.
+ A mesh's geometry after the last update, visible or not: for rendering
+ a mask, or for a host that keeps everything on the GPU and only streams
+ positions. `uvs` and `indices` never change for a mesh; upload them
+ once and read `positions` after each update. Fails with range past the
+ mesh count. Any thread.
  */
 enum ay2d_status ay2d_mesh_geometry(const struct ay2d_model *m,
                                     uint32_t mesh,
@@ -292,6 +288,14 @@ enum ay2d_status ay2d_expression_clear(struct ay2d_model *m, float fade_out);
  `m` is a live handle.
  */
 int32_t ay2d_expression_shown(const struct ay2d_model *m);
+
+/*
+ What changed for every mesh in the last update, as `AY2D_CHANGED_*`
+ bits by mesh index, into `out` (`ay2d_mesh_count` entries). A host
+ streaming positions to the GPU uploads the meshes with the positions
+ bit and leaves the rest. After load every bit is set. Any thread.
+ */
+enum ay2d_status ay2d_mesh_changes(const struct ay2d_model *m, uint32_t *out, size_t n);
 
 /*
  Load a model from the bytes (`len` of them at `bytes`) of an `.aom`
@@ -542,17 +546,14 @@ enum ay2d_status ay2d_motion_set_speed(struct ay2d_model *m, float speed);
 /*
  The events motions fired during the last `ay2d_update`, into `out`.
  Returns how many there were; with `n` smaller only the first `n` are
- written. Poll after each update; the list is replaced by the next one.
-
- `m` is a live handle; `out` holds `n` writable events, or `n` is zero.
+ written. Poll after each update; the next update replaces the list.
+ Any thread.
  */
 uint32_t ay2d_motion_events(const struct ay2d_model *m, struct ay2d_event *out, size_t n);
 
 /*
  Every parameter's minimum, maximum and default, by index. Each array
  holds `ay2d_parameter_count` floats; any may be null to skip it.
-
- `m` is a live handle; each non-null array holds `n` writable floats.
  */
 enum ay2d_status ay2d_parameter_ranges(const struct ay2d_model *m,
                                        float *min,
@@ -561,20 +562,17 @@ enum ay2d_status ay2d_parameter_ranges(const struct ay2d_model *m,
                                        size_t n);
 
 /*
- Every parameter's current value, by index, into `values`
- (`ay2d_parameter_count` floats).
-
- `m` is a live handle; `values` holds `n` writable floats.
+ Every parameter's value after the last update, by index, into `values`
+ (`ay2d_parameter_count` floats): what motions, expressions and physics
+ made of the pose. A value set since then shows after the next update.
  */
 enum ay2d_status ay2d_get_parameters(const struct ay2d_model *m, float *values, size_t n);
 
 /*
  Set `n` parameters at once: `indices[i]` takes `values[i]`. Values are
  clamped to the parameter's range. An index past the model fails the
- whole call before anything changes. Nothing is evaluated until
- `ay2d_update`.
-
- `m` is a live handle; `indices` and `values` hold `n` readable items.
+ whole call before anything changes. The values take effect at the next
+ `ay2d_update`. Any thread, while an update runs on another.
  */
 enum ay2d_status ay2d_set_parameters(struct ay2d_model *m,
                                      const uint32_t *indices,
@@ -584,25 +582,20 @@ enum ay2d_status ay2d_set_parameters(struct ay2d_model *m,
 /*
  Set every parameter from one array of `ay2d_parameter_count` values,
  by index. The usual frame call for a host that keeps the whole pose.
-
- `m` is a live handle; `values` holds `n` readable floats.
+ Takes effect at the next update; any thread.
  */
 enum ay2d_status ay2d_set_all_parameters(struct ay2d_model *m, const float *values, size_t n);
 
 /*
- Every part's host opacity, by index, into `values`
- (`ay2d_part_count` floats, 0 to 1; 1 when never set).
-
- `m` is a live handle; `values` holds `n` writable floats.
+ Every part's host opacity after the last update, by index, into
+ `values` (`ay2d_part_count` floats, 0 to 1; 1 when never set).
  */
 enum ay2d_status ay2d_get_part_opacities(const struct ay2d_model *m, float *values, size_t n);
 
 /*
  Set `n` parts' host opacities at once: `indices[i]` takes `values[i]`,
  clamped to 0 to 1. An index past the model fails the whole call before
- anything changes. Nothing is evaluated until `ay2d_update`.
-
- `m` is a live handle; `indices` and `values` hold `n` readable items.
+ anything changes. Takes effect at the next `ay2d_update`.
  */
 enum ay2d_status ay2d_set_part_opacities(struct ay2d_model *m,
                                          const uint32_t *indices,
@@ -610,43 +603,34 @@ enum ay2d_status ay2d_set_part_opacities(struct ay2d_model *m,
                                          size_t n);
 
 /*
- Advance the model by `dt` seconds and evaluate it: playing motions and
- the shown expression write their parameters over the pose, physics
- steps (when the model has a rig and it is on), parameters resolve,
- deformers and meshes move, draw order sorts. After this
- `ay2d_drawables` and `ay2d_motion_events` are current. `dt` of zero
- evaluates without moving motions or physics.
-
- `m` is a live handle.
+ Advance the model by `dt` seconds and evaluate it: values set since the
+ last update come in, playing motions and the shown expression write
+ over the pose, physics steps (when the model has a rig and it is on),
+ deformers and meshes move, draw order sorts, and the result is
+ published for every reader. `dt` of zero evaluates without moving
+ motions or physics. One thread at a time drives a model: a second
+ thread calling while this runs gets `BUSY`.
  */
 enum ay2d_status ay2d_update(struct ay2d_model *m, float dt);
 
 /*
- 1 when the model carries a pendulum rig, else 0.
-
- `m` is a live handle.
+ 1 when the model carries a pendulum rig, else 0. Any thread.
  */
 int32_t ay2d_has_physics(const struct ay2d_model *m);
 
 /*
  Run (1) or hold (0) the rig on update. On by default when the model
  has one; off, the physics-driven parameters keep their set values.
-
- `m` is a live handle.
  */
 enum ay2d_status ay2d_set_physics(struct ay2d_model *m, int32_t on);
 
 /*
  Wind on the rig, in the same units gravity has (down is 0, -1).
-
- `m` is a live handle.
  */
 enum ay2d_status ay2d_set_wind(struct ay2d_model *m, float x, float y);
 
 /*
  Put every pendulum back at rest, as after a scene cut.
-
- `m` is a live handle.
  */
 enum ay2d_status ay2d_reset_physics(struct ay2d_model *m);
 

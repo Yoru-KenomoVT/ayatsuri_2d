@@ -7,7 +7,7 @@ use ayatsuri_core::Puppet;
 use ayatsuri_format::{Expression, ExpressionBlend};
 
 use crate::error::{Status, guard, set_error};
-use crate::handle::{Model, cstr_in, model, model_mut};
+use crate::handle::{Model, core, cstr_in, model};
 use crate::motions::cstring;
 
 const DEFAULT_FADE: f32 = 1.0;
@@ -137,7 +137,7 @@ impl Expressions {
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_expression_count(m: *const Model) -> u32 {
-    guard(0, || model(m).map_or(0, |m| m.exprs.sets.len() as u32))
+    guard(0, || model(m).and_then(core).map_or(0, |m| m.exprs.sets.len() as u32))
 }
 
 /// An expression's name, NUL-terminated, alive as long as the model.
@@ -147,6 +147,7 @@ pub extern "C" fn ay2d_expression_count(m: *const Model) -> u32 {
 pub extern "C" fn ay2d_expression_id(m: *const Model, i: u32) -> *const c_char {
     guard(std::ptr::null(), || {
         let Ok(model) = model(m) else { return std::ptr::null() };
+        let Ok(model) = core(model) else { return std::ptr::null() };
         match model.exprs.sets.get(i as usize) {
             Some(s) => s.id.as_ptr(),
             None => {
@@ -164,6 +165,7 @@ pub extern "C" fn ay2d_expression_id(m: *const Model, i: u32) -> *const c_char {
 pub extern "C" fn ay2d_expression_index(m: *const Model, name: *const c_char) -> i32 {
     guard(-1, || {
         let Ok(model) = model(m) else { return -1 };
+        let Ok(model) = core(model) else { return -1 };
         let Ok(want) = cstr_in(name) else { return -1 };
         model.exprs.sets.iter().position(|s| s.id.as_c_str() == want).map_or(-1, |i| i as i32)
     })
@@ -177,8 +179,12 @@ pub extern "C" fn ay2d_expression_index(m: *const Model, name: *const c_char) ->
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_expression_set(m: *mut Model, i: u32, fade_in: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match model_mut(m) {
+        let model = match model(m) {
             Ok(m) => m,
+            Err(s) => return s,
+        };
+        let mut model = match core(model) {
+            Ok(c) => c,
             Err(s) => return s,
         };
         if i as usize >= model.exprs.sets.len() {
@@ -201,8 +207,12 @@ pub extern "C" fn ay2d_expression_set(m: *mut Model, i: u32, fade_in: f32) -> St
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_expression_clear(m: *mut Model, fade_out: f32) -> Status {
     guard(Status::Internal, || {
-        let model = match model_mut(m) {
+        let model = match model(m) {
             Ok(m) => m,
+            Err(s) => return s,
+        };
+        let mut model = match core(model) {
+            Ok(c) => c,
             Err(s) => return s,
         };
         if !fade_out.is_finite() {
@@ -219,5 +229,5 @@ pub extern "C" fn ay2d_expression_clear(m: *mut Model, fade_out: f32) -> Status 
 /// `m` is a live handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_expression_shown(m: *const Model) -> i32 {
-    guard(-1, || model(m).map_or(-1, |m| m.exprs.current().map_or(-1, |i| i as i32)))
+    guard(-1, || model(m).and_then(core).map_or(-1, |m| m.exprs.current().map_or(-1, |i| i as i32)))
 }

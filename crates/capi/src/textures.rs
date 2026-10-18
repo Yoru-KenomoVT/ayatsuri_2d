@@ -21,8 +21,8 @@ pub extern "C" fn ay2d_texture(
             Ok(m) => m,
             Err(s) => return s,
         };
-        let Some(png) = model.textures.get(i as usize) else {
-            set_error(format!("texture {i} is past the model's {}", model.textures.len()));
+        let Some(png) = model.facts.textures.get(i as usize) else {
+            set_error(format!("texture {i} is past the model's {}", model.facts.textures.len()));
             return Status::Range;
         };
         match put(bytes, png.as_ptr()) {
