@@ -96,6 +96,57 @@ int main(int argc, char **argv) {
         ay2d_reset_physics(m);
         ay2d_set_physics(m, 0);
     }
+    /* names a UI would show, and the folders */
+    for (uint32_t i = 0; i < np; i++)
+        printf("  %s is shown as \"%s\"\n", ay2d_parameter_id(m, i), ay2d_parameter_name(m, i));
+    uint32_t ngroups = ay2d_parameter_group_count(m);
+    for (uint32_t g2 = 0; g2 < ngroups; g2++)
+        printf("  folder %s: %u parameters\n", ay2d_parameter_group_name(m, g2),
+               ay2d_parameter_group(m, g2, NULL, 0));
+
+    /* motions and expressions, if the file has any */
+    uint32_t nmotion = ay2d_motion_count(m);
+    for (uint32_t i = 0; i < nmotion; i++) {
+        ay2d_motion_facts info;
+        if (ay2d_motion_info(m, i, &info) != AY2D_STATUS_OK) return fail("motion info");
+        printf("  motion %u %s: %.2f s, %u events%s\n", i, ay2d_motion_id(m, i), info.duration,
+               info.event_count, info.composition ? ", a composition" : "");
+    }
+    if (nmotion) {
+        if (ay2d_motion_play(m, 0, 0, 0.0f) != AY2D_STATUS_OK) return fail("motion play");
+        uint32_t fired = 0;
+        for (int f = 0; f < 60; f++) {
+            if (ay2d_update(m, 1.0f / 60.0f) != AY2D_STATUS_OK) return fail("motion update");
+            ay2d_event ev[8];
+            uint32_t ne = ay2d_motion_events(m, ev, 8);
+            for (uint32_t e = 0; e < ne && e < 8; e++) {
+                printf("  event \"%s\" at %.2f s\n", ev[e].name, ev[e].time);
+                fired++;
+            }
+        }
+        printf("  motion ran to %.2f s, finished %d, %u events\n", ay2d_motion_time(m),
+               ay2d_motion_finished(m), fired);
+        ay2d_motion_stop(m, 0.0f);
+    }
+    uint32_t nexpr = ay2d_expression_count(m);
+    if (nexpr) {
+        if (ay2d_expression_set(m, 0, 0.0f) != AY2D_STATUS_OK) return fail("expression");
+        ay2d_update(m, 0.0f);
+        printf("  expression %s shown\n", ay2d_expression_id(m, 0));
+        ay2d_expression_clear(m, 0.0f);
+    }
+
+    /* what moved: a GPU host reads this instead of uploading everything */
+    uint32_t *changed = calloc(nmesh ? nmesh : 1, sizeof(uint32_t));
+    val[0] = def[a];
+    ay2d_set_parameters(m, idx, val, 1);
+    ay2d_update(m, 0.0f);
+    if (ay2d_mesh_changes(m, changed, nmesh) != AY2D_STATUS_OK) return fail("changes");
+    uint32_t moved = 0;
+    for (uint32_t i = 0; i < nmesh; i++) if (changed[i] & AY2D_CHANGED_POSITIONS) moved++;
+    printf("  %u of %u meshes moved\n", moved, nmesh);
+    free(changed);
+
     /* out of range is a status, never a crash */
     if (ay2d_mesh_geometry(m, nmesh + 5, &g) != AY2D_STATUS_RANGE) return fail("range check");
     if (ay2d_set_all_parameters(m, pose, 0) != AY2D_STATUS_TOO_SMALL && np > 0) return fail("size check");

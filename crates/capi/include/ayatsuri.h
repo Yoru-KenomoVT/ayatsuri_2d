@@ -132,7 +132,7 @@ typedef struct ay2d_canvas_info {
 /*
  Facts about a clip, for a host's motion list.
  */
-typedef struct ay2d_motion_info {
+typedef struct ay2d_motion_facts {
   /*
    Seconds.
    */
@@ -152,7 +152,7 @@ typedef struct ay2d_motion_info {
   float fade_in;
   float fade_out;
   uint32_t event_count;
-} ay2d_motion_info;
+} ay2d_motion_facts;
 
 /*
  An event a motion fired since the last update.
@@ -481,7 +481,7 @@ int32_t ay2d_motion_index(const struct ay2d_model *m, const char *name);
  */
 enum ay2d_status ay2d_motion_info(const struct ay2d_model *m,
                                   uint32_t i,
-                                  struct ay2d_motion_info *out);
+                                  struct ay2d_motion_facts *out);
 
 /*
  Start motion `i` from its beginning. Whatever was playing fades out

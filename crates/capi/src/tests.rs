@@ -504,3 +504,33 @@ fn change_flags_say_what_moved() {
     assert_eq!(ay2d_mesh_changes(m, flags.as_mut_ptr(), 0), Status::TooSmall);
     ay2d_free(m);
 }
+
+#[test]
+fn after_a_motion_the_host_moves_the_mesh_again() {
+    let m = load();
+    ay2d_motion_play(m, 0, 0, 0.0);
+    for _ in 0..60 {
+        ay2d_update(m, 1.0 / 60.0);
+    }
+    ay2d_motion_stop(m, 0.0);
+    ay2d_expression_set(m, 0, 0.0);
+    ay2d_update(m, 0.0);
+    ay2d_expression_clear(m, 0.0);
+    let idx = [0u32];
+    let mut flags = [0u32; 1];
+    // back to the first key: the vertices move
+    let v = [0.0f32];
+    ay2d_set_parameters(m, idx.as_ptr(), v.as_ptr(), 1);
+    ay2d_update(m, 0.0);
+    ay2d_mesh_changes(m, flags.as_mut_ptr(), 1);
+    assert_eq!(flags[0] & AY2D_CHANGED_POSITIONS, AY2D_CHANGED_POSITIONS);
+    // below the first key the runtime hides a mesh bound only above it,
+    // as moc3 does: visibility changes, positions do not
+    let v = [-1.0f32];
+    ay2d_set_parameters(m, idx.as_ptr(), v.as_ptr(), 1);
+    ay2d_update(m, 0.0);
+    ay2d_mesh_changes(m, flags.as_mut_ptr(), 1);
+    assert_eq!(flags[0] & AY2D_CHANGED_VISIBILITY, AY2D_CHANGED_VISIBILITY);
+    assert_eq!(ay2d_drawables(m, std::ptr::null_mut(), 0), 0, "hidden below its keys");
+    ay2d_free(m);
+}
