@@ -541,6 +541,44 @@ fn seg_handles(k0: &Key, k1: &Key) -> Option<((f32, f32), (f32, f32))> {
     }
 }
 
+/// Drop the curves left without keys, naming what they drove.
+fn drop_empty(a: &mut Animation) -> Vec<(CurveTarget, String)> {
+    let gone =
+        a.curves.iter().filter(|c| c.keys.is_empty()).map(|c| (c.target, c.id.clone())).collect();
+    a.curves.retain(|c| !c.keys.is_empty());
+    gone
+}
+
+/// A curve that lost its last key no longer drives anything, so what it
+/// drove goes back to rest; otherwise the old value would sit there and
+/// auto key would write the key straight back.
+fn reset_emptied(s: &mut Session, gone: &[(CurveTarget, String)]) {
+    for (target, id) in gone {
+        match target {
+            CurveTarget::Parameter => {
+                if let Some((pi, d)) = s
+                    .puppet
+                    .model()
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(_, p)| &p.id == id)
+                    .map(|(pi, p)| (pi, p.default))
+                {
+                    s.puppet.set_value(pi, d);
+                }
+            }
+            CurveTarget::PartOpacity => {
+                if let Some(i) = s.puppet.model().parts.iter().position(|p| &p.id == id) {
+                    let shown = s.part_shown.get(i).copied().unwrap_or(true);
+                    s.puppet.set_part_opacity(i, if shown { 1.0 } else { 0.0 });
+                }
+            }
+            CurveTarget::Model => {}
+        }
+    }
+}
+
 fn same_kind(a: Interp, b: Interp) -> bool {
     std::mem::discriminant(&a) == std::mem::discriminant(&b)
 }
@@ -3102,7 +3140,8 @@ impl Timeline {
                 {
                     ayatsuri_core::anim::set_key(c, t, value, fps, Interp::Auto);
                 }
-                a.curves.retain(|c| !c.keys.is_empty());
+                let emptied = drop_empty(a);
+                reset_emptied(s, &emptied);
                 s.modified = true;
                 *tp.applied = f32::NAN;
             }
@@ -3323,11 +3362,12 @@ impl Timeline {
                         }
                     }
                 }
-                a.curves.retain(|c| !c.keys.is_empty());
+                let emptied = drop_empty(a);
                 a.duration = (a.duration - dt).max(1.0 / fps);
                 if let Some((w0, w1)) = a.work_area {
                     a.work_area = Some((w0.min(a.duration), w1.min(a.duration)));
                 }
+                reset_emptied(s, &emptied);
                 self.selected.clear();
                 s.modified = true;
                 *tp.applied = f32::NAN;
@@ -3347,7 +3387,8 @@ impl Timeline {
                         c.keys.retain(|k| !picked.contains(&((k.time * fps).round() as i64)));
                     }
                 }
-                a.curves.retain(|c| !c.keys.is_empty());
+                let emptied = drop_empty(a);
+                reset_emptied(s, &emptied);
                 self.selected.clear();
                 s.modified = true;
                 *tp.applied = f32::NAN;
