@@ -222,6 +222,8 @@ pub struct Timeline {
     box_from: Option<Pos2>,
     /// The layer picked in a composition.
     sel_layer: Option<usize>,
+    /// A layer row being dragged up or down the stack by its name.
+    layer_reorder: Option<usize>,
     layer_drag: Option<LayerDrag>,
     /// The composition to go back to after opening one of its layers.
     back: Option<usize>,
@@ -300,6 +302,7 @@ impl Default for Timeline {
             drag: None,
             box_from: None,
             sel_layer: None,
+            layer_reorder: None,
             layer_drag: None,
             back: None,
             edit_layer: None,
@@ -528,6 +531,8 @@ enum Edit {
     LayerSplit(usize),
     /// Put a layer's start or end at the playhead (slide), or trim it there.
     LayerSnap(usize, LayerSnap),
+    /// Move a layer to sit at this place in the stack.
+    LayerMoveTo(usize, usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1773,8 +1778,18 @@ impl Timeline {
                         name_font.clone(),
                         if l.enabled { pal.text } else { pal.text_faint },
                     );
-                    let r_name =
-                        ui.interact(name_rect, ui.id().with(("tl-layer-name", li)), Sense::click());
+                    let r_name = ui.interact(
+                        name_rect,
+                        ui.id().with(("tl-layer-name", li)),
+                        Sense::click_and_drag(),
+                    );
+                    if r_name.drag_started() {
+                        self.layer_reorder = Some(li);
+                        self.sel_layer = Some(li);
+                    }
+                    if r_name.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::Grab);
+                    }
                     // the weight, as a percentage
                     let vr =
                         Rect::from_min_size(pos2(value_x, y + 1.0), vec2(VALUE_W, ROW_H - 2.0));
@@ -2400,6 +2415,47 @@ impl Timeline {
             }
         }
         ui.set_clip_rect(rect.intersect(outer_clip));
+        // ---- a layer dragged up or down the stack by its name ----
+        if let (Some(from), Some(_)) = (self.layer_reorder, &comp) {
+            let (down, ptr) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
+            // every layer row's top, on screen or not, in stack order
+            let tops: Vec<(usize, f32)> = rows
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| match r.kind {
+                    RowKind::Layer(li) => Some((li, rows_top - self.scroll_y + i as f32 * ROW_H)),
+                    _ => None,
+                })
+                .collect();
+            if let Some(ptr) = ptr
+                && !tops.is_empty()
+            {
+                // the slot the pointer is over: before the first row whose
+                // middle lies below it
+                let to =
+                    tops.iter().position(|(_, y)| ptr.y < y + ROW_H / 2.0).unwrap_or(tops.len());
+                let line_y = match tops.get(to) {
+                    Some((_, y)) => *y,
+                    None => tops.last().map_or(rows_top, |(_, y)| y + ROW_H),
+                };
+                let lp2 = p.with_clip_rect(rows_left.intersect(outer_clip));
+                lp2.line_segment(
+                    [pos2(left.min.x + 4.0, line_y), pos2(left.max.x - 4.0, line_y)],
+                    Stroke::new(2.0, pal.accent),
+                );
+                ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+                if !down {
+                    if to != from && to != from + 1 {
+                        edits.push(Edit::LayerMoveTo(from, to));
+                    }
+                    self.layer_reorder = None;
+                }
+            } else if !down {
+                self.layer_reorder = None;
+            }
+        } else {
+            self.layer_reorder = None;
+        }
         for (name, was_open) in toggles {
             self.folded.insert(name, was_open);
         }
@@ -3325,6 +3381,17 @@ impl Timeline {
                 next.layers.insert(li, tail);
                 self.sel_layer = Some(li);
             }
+            Edit::LayerMoveTo(from, to) => {
+                if from >= next.layers.len() || to > next.layers.len() {
+                    return;
+                }
+                let l = next.layers.remove(from);
+                let to = if to > from { to - 1 } else { to };
+                next.layers.insert(to, l);
+                self.sel_layer = Some(to);
+                self.edit_layer = None;
+                self.selected.clear();
+            }
             Edit::LayerSnap(li, how) => {
                 let Some(l) = next.layers.get_mut(li) else { return };
                 let speed = l.speed.max(1e-3);
@@ -3770,7 +3837,8 @@ impl Timeline {
             | Edit::LayerOrder(..)
             | Edit::LayerDup(_)
             | Edit::LayerSplit(_)
-            | Edit::LayerSnap(..) => {}
+            | Edit::LayerSnap(..)
+            | Edit::LayerMoveTo(..) => {}
         }
     }
 }

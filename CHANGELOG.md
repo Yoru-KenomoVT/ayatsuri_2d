@@ -80,7 +80,8 @@
   The Timeline shows a composition as bars: slide one, trim either end
   (Shift snaps to other layers and the playhead), right-click it for
   fades, speed, split at the playhead, order, duplicate or delete, and
-  double-click it to open its scene (a button leads back). `[` and `]`
+  double-click it to open its scene (a button leads back), and drag its
+  name up or down the list to reorder the stack. `[` and `]`
   put a layer's start or end at the playhead, `Ctrl+D` doubles it,
   `Ctrl+Shift+D` cuts it there. A layer twirls open to show its scene's
   keys where they land. Play, the Render window and the model export
