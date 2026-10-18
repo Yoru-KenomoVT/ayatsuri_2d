@@ -11,6 +11,7 @@ mod atlas;
 mod discord;
 pub mod dock;
 mod export;
+mod expressions;
 mod ffmpeg;
 mod gpu_frames;
 mod gpu_view;

@@ -225,6 +225,11 @@ pub struct EditorUi {
     anim_autokey: bool,
     /// Space went down with a drag, so letting it go is not a play tap.
     space_dragged: bool,
+    /// The Expression palette, and the pose under its preview: each
+    /// parameter the expression touches with the value it had before.
+    expressions: crate::expressions::Expressions,
+    expr_base: Vec<(usize, f32)>,
+    expr_shown: Option<usize>,
     anim_applied: f32,
     timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
@@ -996,6 +1001,9 @@ impl Default for EditorUi {
             anim_time: 0.0,
             anim_playing: false,
             space_dragged: false,
+            expressions: crate::expressions::Expressions::default(),
+            expr_base: Vec::new(),
+            expr_shown: None,
             anim_autokey: true,
             anim_applied: f32::NAN,
             timeline: crate::timeline::Timeline::default(),
@@ -3005,6 +3013,7 @@ impl EditorUi {
         // composition drives them through its layers' blends over the rest
         // pose instead
         if let Some(s) = &mut self.session {
+            let mut posed = false;
             let comp = s.current_comp.and_then(|ci| s.compositions.get(ci).cloned());
             let scene = match comp {
                 Some(_) => None,
@@ -3108,6 +3117,7 @@ impl EditorUi {
                     }
                     self.anim_applied = self.anim_time;
                     s.dirty = true;
+                    posed = true;
                 } else if self.anim_autokey
                     && !self.follow_cursor
                     && let Some((ai, anim)) = &scene
@@ -3174,6 +3184,41 @@ impl EditorUi {
                         );
                     }
                 }
+            }
+
+            // the Expression palette's preview lies over the pose: the base
+            // is what the scene (or the hand) set, kept while nothing moves
+            // so an Add does not pile up frame after frame
+            let shown = if self.expressions.preview { self.expressions.sel } else { None };
+            if shown != self.expr_shown {
+                for (pi, v) in self.expr_base.drain(..) {
+                    s.puppet.set_value(pi, v);
+                }
+                self.expr_shown = shown;
+                s.dirty = true;
+            }
+            if let Some(e) = shown.and_then(|i| s.expressions.get(i)).cloned() {
+                let model = s.puppet.model();
+                let ids: Vec<usize> = e
+                    .params
+                    .iter()
+                    .filter_map(|ep| model.parameters.iter().position(|p| p.id == ep.id))
+                    .collect();
+                let fresh =
+                    posed || ids.iter().any(|pi| !self.expr_base.iter().any(|(b, _)| b == pi));
+                if fresh {
+                    self.expr_base = ids.iter().map(|&pi| (pi, s.puppet.value(pi))).collect();
+                }
+                for ep in &e.params {
+                    let Some(pi) = s.puppet.model().parameters.iter().position(|p| p.id == ep.id)
+                    else {
+                        continue;
+                    };
+                    let base =
+                        self.expr_base.iter().find(|(b, _)| *b == pi).map_or(0.0, |(_, v)| *v);
+                    s.puppet.set_value(pi, crate::expressions::blend(base, ep));
+                }
+                s.dirty = true;
             }
         }
 
@@ -4128,6 +4173,13 @@ impl EditorUi {
             PanelKind::Inspector => self.inspector_panel(ui),
             PanelKind::ToolDetails => self.tool_details_panel(ui),
             PanelKind::Timeline => self.timeline_panel(ui),
+            PanelKind::Expressions => {
+                if let Some(s) = &mut self.session {
+                    self.expressions.show(ui, s);
+                } else {
+                    ui.weak(crate::i18n::tr("No model loaded."));
+                }
+            }
             PanelKind::Log => {
                 ui.horizontal(|ui| {
                     ui.weak(crate::i18n::tr("Show:"));
