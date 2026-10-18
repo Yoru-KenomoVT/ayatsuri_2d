@@ -1,8 +1,8 @@
 //! The Timeline palette: a dope sheet in the After Effects layout over the
 //! current scene's curves, or the layer bars of a composition. Names on the left (the scene, parameter folders,
 //! parameters, parts), lanes of keys on the right under a frame ruler, a
-//! work area bar that bounds playback, the playhead, and the palette's own
-//! undo of key edits.
+//! navigator for zoom and scroll, a work area bar that bounds playback, the
+//! playhead, and the palette's own undo of key edits.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,6 +20,8 @@ const HEADER_H: f32 = 48.0;
 const COLHDR_H: f32 = 20.0;
 const FOOTER_H: f32 = 22.0;
 const ROW_H: f32 = 19.0;
+const RULER_H: f32 = 24.0;
+const NAV_H: f32 = 8.0;
 const MAX_PPS: f32 = 4000.0;
 const KEY_PX: f32 = 11.0;
 const MIN_SPLIT: f32 = 190.0;
@@ -222,8 +224,13 @@ pub struct Timeline {
     layer_drag: Option<LayerDrag>,
     /// The composition to go back to after opening one of its layers.
     back: Option<usize>,
-    /// The last click landed in the palette, so Delete and Escape are its.
-    focused: bool,
+    /// The last click landed in the palette, so Delete and Escape are its
+    /// and its shortcuts go before the editor's.
+    pub focused: bool,
+    /// Shortcut actions and frame edits asked for since the last frame.
+    pending: Vec<String>,
+    /// Frames to open up (positive) or take out at the playhead.
+    frames: i64,
     /// Scenes and compositions as they were before each edit; one drag
     /// folds into one step by its merge key.
     undo: Vec<Snap>,
@@ -289,6 +296,8 @@ impl Default for Timeline {
             layer_drag: None,
             back: None,
             focused: false,
+            pending: Vec::new(),
+            frames: 0,
             undo: Vec::new(),
             redo: Vec::new(),
             merge: None,
@@ -476,6 +485,8 @@ enum Edit {
     WorkArea(Option<(f32, f32)>),
     /// Add a key at the playhead on this curve, or remove the one there.
     ToggleKey(CurveTarget, String),
+    /// Key the live value at the playhead, replacing a key on the frame.
+    AddKey(CurveTarget, String),
     /// Jump to the previous (false) or next (true) key of a curve.
     JumpKey(CurveTarget, String, bool),
     /// Move the selected keys by whole frames.
@@ -586,6 +597,17 @@ fn same_kind(a: Interp, b: Interp) -> bool {
 const UNDO_STEPS: usize = 64;
 
 impl Timeline {
+    /// An action from the shortcut table, run on the next frame.
+    pub fn act(&mut self, id: &str) {
+        self.pending.push(id.to_string());
+    }
+
+    /// Open up `n` frames at the playhead on the next frame, or take them
+    /// out when `n` is negative.
+    pub fn ripple(&mut self, n: i64) {
+        self.frames += n;
+    }
+
     /// Keep the scene as it is before an edit. Edits that share a merge key
     /// while the pointer stays down fold into the step already kept.
     pub fn remember(&mut self, ai: usize, anim: &Animation, merge: Option<&'static str>) {
@@ -593,7 +615,7 @@ impl Timeline {
     }
 
     /// The same for a composition before a layer edit.
-    fn remember_comp(&mut self, ci: usize, comp: &Composition, merge: Option<&'static str>) {
+    pub fn remember_comp(&mut self, ci: usize, comp: &Composition, merge: Option<&'static str>) {
         self.keep(Snap::Comp(ci, comp.clone()), merge);
     }
 
@@ -1179,9 +1201,50 @@ impl Timeline {
             self.graph_range = None;
         }
 
-        // ---- header, right: the ruler ----
+        // ---- header, right: navigator and ruler ----
+        let nav = Rect::from_min_max(
+            pos2(lanes.min.x + 6.0, rect.min.y + 5.0),
+            pos2(lanes.max.x - 6.0, rect.min.y + 5.0 + NAV_H),
+        );
+        p.rect_filled(nav, 3.0, pal.border);
+        let nav_w = nav.width().max(1.0);
+        let vis0 = nav.min.x + (self.start / duration) * nav_w;
+        let vis1 = nav.min.x + ((self.start + span).min(duration) / duration) * nav_w;
+        let bar = Rect::from_min_max(pos2(vis0, nav.min.y), pos2(vis1, nav.max.y));
+        p.rect_filled(bar, 3.0, pal.track);
+        let handle =
+            |x: f32| Rect::from_center_size(pos2(x, nav.center().y), vec2(6.0, NAV_H + 2.0));
+        p.rect_filled(handle(vis0 + 3.0), 3.0, pal.accent);
+        p.rect_filled(handle(vis1 - 3.0), 3.0, pal.accent);
+        let id = ui.id().with("tl-nav");
+        let r_mid = ui
+            .interact(bar.shrink2(vec2(6.0, 0.0)), id.with("mid"), Sense::drag())
+            .on_hover_cursor(CursorIcon::Grab);
+        let r_l = ui
+            .interact(handle(vis0 + 3.0).expand2(vec2(2.0, 3.0)), id.with("l"), Sense::drag())
+            .on_hover_cursor(CursorIcon::ResizeHorizontal);
+        let r_r = ui
+            .interact(handle(vis1 - 3.0).expand2(vec2(2.0, 3.0)), id.with("r"), Sense::drag())
+            .on_hover_cursor(CursorIcon::ResizeHorizontal);
+        let per_px = duration / nav_w;
+        if r_mid.dragged() {
+            self.start =
+                (self.start + r_mid.drag_delta().x * per_px).clamp(0.0, (duration - span).max(0.0));
+        }
+        if r_l.dragged() {
+            let end = self.start + span;
+            let s0 = (self.start + r_l.drag_delta().x * per_px).clamp(0.0, end - 8.0 / MAX_PPS);
+            let lane_w = (lanes.width() - 12.0).max(1.0);
+            self.set_zoom(lane_w / (end - s0), fit, duration, end, lane_w);
+        }
+        if r_r.dragged() {
+            let new_span = (span + r_r.drag_delta().x * per_px).max(8.0 / MAX_PPS);
+            let npps = (lanes.width() - 12.0).max(1.0) / new_span;
+            self.set_zoom(npps, fit, duration, self.start, 0.0);
+        }
+
         let ruler = Rect::from_min_max(
-            pos2(lanes.min.x, rect.min.y),
+            pos2(lanes.min.x, rect.min.y + HEADER_H - RULER_H),
             pos2(lanes.max.x, rect.min.y + HEADER_H),
         );
         p.rect_filled(ruler, 0.0, pal.header);
@@ -1269,8 +1332,9 @@ impl Timeline {
                 pos2(bar.max.x - 3.0, bar.center().y),
                 vec2(6.0, bar.height() + 2.0),
             );
-            p.rect_filled(h0, 2.0, pal.accent);
-            p.rect_filled(h1, 2.0, pal.accent);
+            let hp = p.with_clip_rect(colhdr_r);
+            hp.rect_filled(h0, 2.0, pal.accent);
+            hp.rect_filled(h1, 2.0, pal.accent);
             ui.set_clip_rect(colhdr_r.intersect(outer_clip));
             let wid = ui.id().with("tl-work");
             let r_mid = ui
@@ -2590,69 +2654,13 @@ impl Timeline {
             self.focused = false;
         }
         if self.focused && !ui.ctx().egui_wants_keyboard_input() {
-            if let (Some(li), Some(_)) = (self.sel_layer, &comp) {
-                // [ and ] slide the layer's start or end to the playhead,
-                // Ctrl+D doubles it, Ctrl+Shift+D cuts it there
-                let (open_b, close_b, dup, split) = ui.input_mut(|i| {
-                    (
-                        i.consume_key(Modifiers::NONE, egui::Key::OpenBracket),
-                        i.consume_key(Modifiers::NONE, egui::Key::CloseBracket),
-                        i.consume_key(Modifiers::COMMAND, egui::Key::D),
-                        i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::D),
-                    )
-                });
-                if open_b {
-                    edits.push(Edit::LayerSnap(li, LayerSnap::StartHere));
-                }
-                if close_b {
-                    edits.push(Edit::LayerSnap(li, LayerSnap::EndHere));
-                }
-                if split {
-                    edits.push(Edit::LayerSplit(li));
-                } else if dup {
-                    edits.push(Edit::LayerDup(li));
-                }
-            }
-            let (del, esc, all, nudge, wa_start, wa_end) = ui.input_mut(|i| {
-                // Alt with an arrow nudges the selected keys a frame, ten with Shift
-                let step = |i: &mut egui::InputState, key: egui::Key| {
-                    if i.consume_key(Modifiers::ALT | Modifiers::SHIFT, key) {
-                        10
-                    } else if i.consume_key(Modifiers::ALT, key) {
-                        1
-                    } else {
-                        0
-                    }
-                };
-                let nudge = step(i, egui::Key::ArrowRight) - step(i, egui::Key::ArrowLeft);
+            let (del, esc) = ui.input_mut(|i| {
                 (
                     i.consume_key(Modifiers::NONE, egui::Key::Delete)
                         || i.consume_key(Modifiers::NONE, egui::Key::Backspace),
                     i.consume_key(Modifiers::NONE, egui::Key::Escape),
-                    i.consume_key(Modifiers::COMMAND, egui::Key::A),
-                    nudge,
-                    i.consume_key(Modifiers::NONE, egui::Key::B),
-                    i.consume_key(Modifiers::NONE, egui::Key::N),
                 )
             });
-            // B and N put the work area's start or end at the playhead, as
-            // in After Effects; the whole scene again when they meet its ends
-            if wa_start || wa_end {
-                let (w0, w1) = anim.work_area.unwrap_or((0.0, duration));
-                let at = (*tp.time * fps).round() / fps;
-                let (a, b) = if wa_start {
-                    (at.min(duration - frame_s), w1.max(at + frame_s).min(duration))
-                } else {
-                    (w0.min(at - frame_s).max(0.0), at.max(frame_s))
-                };
-                let whole = a <= 0.0 && b >= duration - frame_s * 0.5;
-                self.merge = None;
-                edits.push(Edit::WorkArea(if whole { None } else { Some((a, b)) }));
-            }
-            if nudge != 0 && !self.selected.is_empty() {
-                self.merge = None;
-                edits.push(Edit::Move(nudge));
-            }
             if del {
                 if let (Some(li), Some(_)) = (self.sel_layer, &comp) {
                     edits.push(Edit::LayerRemove(li));
@@ -2664,19 +2672,82 @@ impl Timeline {
                 self.selected.clear();
                 self.sel_layer = None;
             }
-            if all {
-                self.selected = anim
-                    .curves
-                    .iter()
-                    .flat_map(|c| {
-                        c.keys.iter().map(move |k| KeyRef {
-                            target: tgt(c.target),
-                            id: c.id.clone(),
-                            frame: (k.time * fps).round() as i64,
-                        })
-                    })
-                    .collect();
+        }
+
+        // ---- actions from the shortcut table (Settings > Shortcuts) ----
+        let (mut wa_start, mut wa_end) = (false, false);
+        for id in std::mem::take(&mut self.pending) {
+            let nudge = match id.as_str() {
+                "anim-nudge-left" => -1,
+                "anim-nudge-right" => 1,
+                "anim-nudge-left-10" => -10,
+                "anim-nudge-right-10" => 10,
+                _ => 0,
+            };
+            if nudge != 0 {
+                if !self.selected.is_empty() {
+                    self.merge = None;
+                    edits.push(Edit::Move(nudge));
+                }
+                continue;
             }
+            match id.as_str() {
+                "anim-add-key" => {
+                    if comp.is_none()
+                        && let Some(pi) = *tp.sel_param
+                        && let Some(p) = s.puppet.model().parameters.get(pi)
+                    {
+                        edits.push(Edit::AddKey(CurveTarget::Parameter, p.id.clone()));
+                    }
+                }
+                "anim-work-start" => wa_start = true,
+                "anim-work-end" => wa_end = true,
+                "anim-select-all" => {
+                    self.selected = anim
+                        .curves
+                        .iter()
+                        .flat_map(|c| {
+                            c.keys.iter().map(move |k| KeyRef {
+                                target: tgt(c.target),
+                                id: c.id.clone(),
+                                frame: (k.time * fps).round() as i64,
+                            })
+                        })
+                        .collect();
+                }
+                "anim-layer-start" | "anim-layer-end" | "anim-layer-dup" | "anim-layer-split" => {
+                    if let (Some(li), Some(_)) = (self.sel_layer, &comp) {
+                        edits.push(match id.as_str() {
+                            "anim-layer-start" => Edit::LayerSnap(li, LayerSnap::StartHere),
+                            "anim-layer-end" => Edit::LayerSnap(li, LayerSnap::EndHere),
+                            "anim-layer-dup" => Edit::LayerDup(li),
+                            _ => Edit::LayerSplit(li),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        // the work area's start or end at the playhead, as in After Effects;
+        // the whole scene again when they meet its ends
+        if wa_start || wa_end {
+            let (w0, w1) = anim.work_area.unwrap_or((0.0, duration));
+            let at = (*tp.time * fps).round() / fps;
+            let (a, b) = if wa_start {
+                (at.min(duration - frame_s), w1.max(at + frame_s).min(duration))
+            } else {
+                (w0.min(at - frame_s).max(0.0), at.max(frame_s))
+            };
+            let whole = a <= 0.0 && b >= duration - frame_s * 0.5;
+            self.merge = None;
+            edits.push(Edit::WorkArea(if whole { None } else { Some((a, b)) }));
+        }
+        // frames asked for by the Animation details dialog
+        let frames = std::mem::take(&mut self.frames);
+        if frames > 0 {
+            edits.push(Edit::InsertFrames(frames));
+        } else if frames < 0 {
+            edits.push(Edit::RemoveFrames(-frames));
         }
 
         // a slim scrollbar on the right when the rows overflow
@@ -2811,33 +2882,6 @@ impl Timeline {
             small,
             pal.text_faint,
         );
-        // frames go in and out at the playhead, ten at a time with Shift
-        let fr = Rect::from_min_max(
-            pos2(lanes.min.x + 6.0, rows_bottom + 1.0),
-            pos2((lanes.max.x - 110.0).max(lanes.min.x + 6.0), rect.max.y - 1.0),
-        );
-        let mut h = ui
-            .new_child(UiBuilder::new().max_rect(fr).layout(Layout::left_to_right(Align::Center)));
-        h.set_clip_rect(fr.intersect(outer_clip));
-        h.spacing_mut().item_spacing.x = 4.0;
-        let count = if mods.shift { 10 } else { 1 };
-        if h.small_button(tr("Insert frame"))
-            .on_hover_text(tr(
-                "Open up a frame at the playhead; later keys move on. Shift inserts ten.",
-            ))
-            .clicked()
-        {
-            edits.push(Edit::InsertFrames(count));
-        }
-        if h.small_button(tr("Remove frame"))
-            .on_hover_text(tr(
-                "Take the frame at the playhead out; later keys move back. Shift removes ten.",
-            ))
-            .clicked()
-        {
-            edits.push(Edit::RemoveFrames(count));
-        }
-
         // ---- the split between names and lanes ----
         let grip = Rect::from_min_max(
             pos2(left.max.x - 2.0, rect.min.y),
@@ -3142,6 +3186,21 @@ impl Timeline {
                 }
                 let emptied = drop_empty(a);
                 reset_emptied(s, &emptied);
+                s.modified = true;
+                *tp.applied = f32::NAN;
+            }
+            Edit::AddKey(target, id) => {
+                let CurveTarget::Parameter = target else { return };
+                let Some(pi) = s.puppet.model().parameters.iter().position(|p| p.id == id) else {
+                    return;
+                };
+                let value = s.puppet.value(pi);
+                let Some(a) = s.animations.get_mut(ai) else { return };
+                self.remember(ai, a, None);
+                let t = (*tp.time * fps).round() / fps;
+                if let Some(c) = ayatsuri_core::anim::curve_mut(a, target, &id) {
+                    ayatsuri_core::anim::set_key(c, t, value, fps, Interp::Auto);
+                }
                 s.modified = true;
                 *tp.applied = f32::NAN;
             }

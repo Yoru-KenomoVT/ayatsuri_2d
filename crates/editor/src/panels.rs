@@ -72,7 +72,7 @@ impl Tool {
     }
     fn label(self) -> &'static str {
         match self {
-            Tool::Arrow => "Select",
+            Tool::Arrow => "Arrow",
             Tool::Lasso => "Lasso",
             Tool::BrushSelect => "Brush Selection",
             Tool::MeshManual => "Edit Mesh",
@@ -228,6 +228,8 @@ pub struct EditorUi {
     anim_applied: f32,
     timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
+    /// The Animation details dialog's working copy.
+    anim_details: Option<AnimDetails>,
     pub(crate) export_dlg: Option<ExportDlg>,
     /// Collapsed rows in the Deformer palette, and canvas-locked deformers.
     def_collapsed: std::collections::HashSet<usize>,
@@ -827,6 +829,36 @@ struct AnimNew {
     comp: bool,
 }
 
+/// Layers that played `old` play `new` from now on, so a renamed scene
+/// or composition keeps its place in every composition.
+fn rename_source(s: &mut crate::session::Session, old: &str, new: &str, comp: bool) {
+    for c in &mut s.compositions {
+        for l in &mut c.layers {
+            let hit = match &l.source {
+                ayatsuri_format::LayerSource::Scene(n) => !comp && n == old,
+                ayatsuri_format::LayerSource::Composition(n) => comp && n == old,
+            };
+            if hit {
+                l.source = if comp {
+                    ayatsuri_format::LayerSource::Composition(new.to_string())
+                } else {
+                    ayatsuri_format::LayerSource::Scene(new.to_string())
+                };
+            }
+        }
+    }
+}
+
+/// The Animation details dialog: the current scene's or composition's
+/// name, rate, length and loop, and frames to open up or take out.
+struct AnimDetails {
+    name: String,
+    fps: f32,
+    duration: f32,
+    looped: bool,
+    frames: i64,
+}
+
 /// The Export as moc3 dialog's working copy.
 #[derive(Clone)]
 pub(crate) struct ExportDlg {
@@ -968,6 +1000,7 @@ impl Default for EditorUi {
             anim_applied: f32::NAN,
             timeline: crate::timeline::Timeline::default(),
             new_anim: None,
+            anim_details: None,
             export_dlg: None,
             def_collapsed: std::collections::HashSet::new(),
             def_locked: std::collections::HashSet::new(),
@@ -1843,7 +1876,12 @@ impl EditorUi {
             let mut fired: Vec<&'static str> = Vec::new();
             let mut bound: Vec<(&'static str, egui::KeyboardShortcut)> =
                 KEY_ACTIONS.iter().map(|a| (a.1, self.bound(a.1))).collect();
-            bound.sort_by_key(|(_, sc)| std::cmp::Reverse(weight(sc.modifiers)));
+            // with the Timeline focused its actions go first, so B keys the
+            // work area there and picks the brush tool anywhere else
+            let anim_first = self.workspace == Workspace::Animation && self.timeline.focused;
+            bound.sort_by_key(|(id, sc)| {
+                (std::cmp::Reverse(weight(sc.modifiers)), !(anim_first && id.starts_with("anim-")))
+            });
             for (id, sc) in bound {
                 if typing && weight(sc.modifiers) == 0 {
                     continue;
@@ -1875,8 +1913,10 @@ impl EditorUi {
         if self.update.checking() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
+        let timeline_has_keys = self.workspace == Workspace::Animation && self.timeline.focused;
         if let Some(gi) = self.selected_glue
             && self.mesh_edit.is_none()
+            && !timeline_has_keys
             && !ui.ctx().egui_wants_keyboard_input()
             && ui
                 .ctx()
@@ -1888,6 +1928,7 @@ impl EditorUi {
             self.selected_glue = None;
         } else if self.selected_glue.is_none()
             && self.mesh_edit.is_none()
+            && !timeline_has_keys
             && self.tool == Tool::Arrow
             && self.pts.picked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
@@ -1899,7 +1940,7 @@ impl EditorUi {
         }
         // Cut, Copy and Paste for whole art meshes; Mesh Edit has its own,
         // for points. Ctrl+Shift+C stays Copy Form.
-        if self.mesh_edit.is_none() && !ui.ctx().egui_wants_keyboard_input() {
+        if self.mesh_edit.is_none() && !timeline_has_keys && !ui.ctx().egui_wants_keyboard_input() {
             let keys = ui.ctx().input(|i| {
                 let plain = i.modifiers.command && !i.modifiers.shift && !i.modifiers.alt;
                 let ev = |f: fn(&egui::Event) -> bool| plain && i.events.iter().any(f);
@@ -2679,6 +2720,31 @@ impl EditorUi {
                         });
                     }
                     let has_anim = self.session.as_ref().is_some_and(|s| s.current_anim.is_some());
+                    let current = self.session.as_ref().and_then(|s| {
+                        if let Some(c) = s.current_comp.and_then(|i| s.compositions.get(i)) {
+                            Some((c.name.clone(), c.fps, c.duration, c.looped))
+                        } else {
+                            s.current_anim
+                                .and_then(|i| s.animations.get(i))
+                                .map(|a| (a.name.clone(), a.fps, a.duration, a.looped))
+                        }
+                    });
+                    if ui
+                        .add_enabled(
+                            current.is_some(),
+                            egui::Button::new(crate::i18n::tr("Edit Animation Details…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            "Name, frame rate, length in seconds and loop; insert or remove frames at the playhead.",
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        if let Some((name, fps, duration, looped)) = current {
+                            self.anim_details =
+                                Some(AnimDetails { name, fps, duration, looped, frames: 1 });
+                        }
+                    }
                     if ui
                         .add_enabled(
                             has_anim,
@@ -3261,6 +3327,7 @@ impl EditorUi {
         self.model_new_window(ui);
         self.model_info_window(ui);
         self.new_anim_window(ui);
+        self.anim_details_window(ui);
         self.export_window(ui);
         self.render_window(ui);
         self.atlas_window(ui);
@@ -4129,30 +4196,122 @@ impl EditorUi {
             }
             None => {}
         }
-        // K keys the selected parameter row by hand
-        if ui.ctx().input(|i| i.key_pressed(egui::Key::K))
-            && !ui.ctx().egui_wants_keyboard_input()
-            && let Some(pi) = self.sel_param
-            && let Some(ai) = s.current_anim
-            && let Some(id) = s.puppet.model().parameters.get(pi).map(|p| p.id.clone())
-        {
-            let v = s.puppet.value(pi);
-            if let Some(a) = s.animations.get_mut(ai) {
-                self.timeline.remember(ai, a, None);
-                let fps_a = a.fps;
-                if let Some(c) =
-                    ayatsuri_core::anim::curve_mut(a, ayatsuri_format::CurveTarget::Parameter, &id)
-                {
-                    ayatsuri_core::anim::set_key(
-                        c,
-                        self.anim_time,
-                        v,
-                        fps_a,
-                        ayatsuri_format::Interp::Auto,
+    }
+
+    /// Animation > Edit Animation Details: the current scene's or
+    /// composition's name, rate, length and loop, applied as one undo step
+    /// of the Timeline; frames open up or come out at the playhead.
+    fn anim_details_window(&mut self, ui: &mut Ui) {
+        let Some(d) = &mut self.anim_details else { return };
+        let mut open = true;
+        let mut apply = false;
+        let mut ripple = 0i64;
+        crate::windows::Dialog::new(crate::i18n::tr("Animation details")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                crate::windows::form(ui, "adetails", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut d.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("FPS"));
+                    ui.add(egui::DragValue::new(&mut d.fps).range(1.0..=120.0));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Length"));
+                    ui.add(
+                        egui::DragValue::new(&mut d.duration)
+                            .range(0.1..=600.0)
+                            .speed(0.05)
+                            .suffix(" s"),
                     );
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Loop"));
+                    ui.checkbox(&mut d.looped, "");
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Frames at the playhead"));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut d.frames).range(1..=600));
+                        if ui
+                            .button(crate::i18n::tr("Insert"))
+                            .on_hover_text(crate::i18n::tr(
+                                "Open up frames at the playhead; later keys move on.",
+                            ))
+                            .clicked()
+                        {
+                            ripple = d.frames;
+                        }
+                        if ui
+                            .button(crate::i18n::tr("Remove"))
+                            .on_hover_text(crate::i18n::tr(
+                                "Take frames out at the playhead; later keys move back.",
+                            ))
+                            .clicked()
+                        {
+                            ripple = -d.frames;
+                        }
+                    });
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(crate::i18n::tr("Apply")).clicked() {
+                        apply = true;
+                    }
+                });
+            },
+        );
+        if ripple != 0 {
+            self.timeline.ripple(ripple);
+            if let Some(s) = &self.session {
+                // the dialog's length follows the ripple
+                let fps = s
+                    .current_comp
+                    .and_then(|i| s.compositions.get(i))
+                    .map(|c| c.fps)
+                    .or_else(|| s.current_anim.and_then(|i| s.animations.get(i)).map(|a| a.fps))
+                    .unwrap_or(30.0)
+                    .max(1.0);
+                if let Some(d) = &mut self.anim_details {
+                    d.duration = (d.duration + ripple as f32 / fps).max(1.0 / fps);
                 }
-                s.modified = true;
             }
+        }
+        if apply && let (Some(d), Some(s)) = (self.anim_details.take(), &mut self.session) {
+            let name = if d.name.trim().is_empty() { "motion".to_string() } else { d.name.clone() };
+            if let Some(ci) = s.current_comp {
+                if let Some(c) = s.compositions.get(ci).cloned() {
+                    self.timeline.remember_comp(ci, &c, None);
+                    let old = c.name.clone();
+                    if let Some(c) = s.compositions.get_mut(ci) {
+                        c.name = name.clone();
+                        c.fps = d.fps.max(1.0);
+                        c.duration = d.duration.max(1.0 / c.fps);
+                        c.looped = d.looped;
+                    }
+                    if old != name {
+                        rename_source(s, &old, &name, true);
+                    }
+                }
+            } else if let Some(ai) = s.current_anim
+                && let Some(a) = s.animations.get(ai).cloned()
+            {
+                self.timeline.remember(ai, &a, None);
+                let old = a.name.clone();
+                if let Some(a) = s.animations.get_mut(ai) {
+                    a.name = name.clone();
+                    a.fps = d.fps.max(1.0);
+                    a.duration = d.duration.max(1.0 / a.fps);
+                    a.looped = d.looped;
+                    if let Some((w0, w1)) = a.work_area {
+                        a.work_area = Some((w0.min(a.duration), w1.min(a.duration)));
+                    }
+                }
+                if old != name {
+                    rename_source(s, &old, &name, false);
+                }
+            }
+            s.modified = true;
+            self.anim_applied = f32::NAN;
+        } else if !open {
+            self.anim_details = None;
         }
     }
 
@@ -5156,6 +5315,9 @@ impl EditorUi {
                 if self.workspace == Workspace::Animation =>
             {
                 self.timeline_key(id);
+            }
+            id if id.starts_with("anim-") && self.workspace == Workspace::Animation => {
+                self.timeline.act(id);
             }
             _ => {}
         }
@@ -11539,6 +11701,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
     const CS: M = M::COMMAND.plus(M::SHIFT);
     const CA: M = M::COMMAND.plus(M::ALT);
     const CAS: M = M::COMMAND.plus(M::ALT).plus(M::SHIFT);
+    const AS: M = M::ALT.plus(M::SHIFT);
     const N: M = M::NONE;
     &[
         ("File", "new-model", "New model", C, K::N),
@@ -11595,6 +11758,42 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Animation", "anim-prev-key", "Previous keyframe", N, K::J),
         ("Animation", "anim-next-key", "Next keyframe", N, K::K),
         ("Animation", "anim-play", "Playback", N, K::Enter),
+        ("Animation", "anim-add-key", "Key the selected parameter", N, K::S),
+        ("Animation", "anim-select-all", "Select every key", C, K::A),
+        (
+            "Animation",
+            "anim-nudge-left",
+            "Nudge the selected keys a frame back",
+            M::ALT,
+            K::ArrowLeft,
+        ),
+        (
+            "Animation",
+            "anim-nudge-right",
+            "Nudge the selected keys a frame on",
+            M::ALT,
+            K::ArrowRight,
+        ),
+        (
+            "Animation",
+            "anim-nudge-left-10",
+            "Nudge the selected keys ten frames back",
+            AS,
+            K::ArrowLeft,
+        ),
+        (
+            "Animation",
+            "anim-nudge-right-10",
+            "Nudge the selected keys ten frames on",
+            AS,
+            K::ArrowRight,
+        ),
+        ("Animation", "anim-work-start", "Work area start at the playhead", N, K::B),
+        ("Animation", "anim-work-end", "Work area end at the playhead", N, K::N),
+        ("Animation", "anim-layer-start", "Layer start at the playhead", N, K::OpenBracket),
+        ("Animation", "anim-layer-end", "Layer end at the playhead", N, K::CloseBracket),
+        ("Animation", "anim-layer-dup", "Duplicate the layer", C, K::D),
+        ("Animation", "anim-layer-split", "Split the layer at the playhead", CS, K::D),
     ]
 };
 
