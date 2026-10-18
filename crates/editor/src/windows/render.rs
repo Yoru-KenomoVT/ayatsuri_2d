@@ -129,8 +129,13 @@ struct Spec {
     anim: Option<Animation>,
     expression: Option<Expression>,
     timelapse: Option<PathBuf>,
+    /// The composition's sound mixed to a WAV, handed to ffmpeg beside the
+    /// frames and removed once it has been read.
+    audio: Option<PathBuf>,
     /// The ffmpeg to run for MP4, WebM and MOV.
     ffmpeg: PathBuf,
+    /// Sound bitrate for MP4 and WebM (MOV keeps it uncompressed).
+    audio_kbps: u32,
 }
 
 enum State {
@@ -185,6 +190,9 @@ pub struct RenderWin {
     ffmpeg: Option<PathBuf>,
     ffmpeg_get: Option<crate::ffmpeg::Download>,
     ffmpeg_failed: Option<String>,
+    /// A composition's sound in the video, and its bitrate.
+    sound_on: bool,
+    audio_kbps: u32,
     preview: Option<egui::TextureHandle>,
     /// The preview player: a puppet posed per frame for a scene, the
     /// timelapse steps for a timelapse.
@@ -240,6 +248,11 @@ impl RenderWin {
             .or_else(|| self.baked.get(self.scene.wrapping_sub(s.animations.len())))
     }
 
+    /// The composition picked, when it is one.
+    fn comp<'a>(&self, s: &'a crate::session::Session) -> Option<&'a ayatsuri_format::Composition> {
+        self.scene.checked_sub(s.animations.len()).and_then(|ci| s.compositions.get(ci))
+    }
+
     /// Bake every composition again, so the picker and the export see the
     /// layers as they are now.
     fn rebake(&mut self, s: &crate::session::Session) {
@@ -262,6 +275,8 @@ impl RenderWin {
             transparent: self.transparent,
             gpu: Some(self.gpu),
             aa: Some(self.aa),
+            sound_off: !self.sound_on,
+            audio_kbps: self.audio_kbps,
         }
     }
 
@@ -304,6 +319,8 @@ impl RenderWin {
             ffmpeg,
             ffmpeg_get: None,
             ffmpeg_failed: None,
+            sound_on: !p.sound_off,
+            audio_kbps: if p.audio_kbps > 0 { p.audio_kbps } else { 192 },
             preview: None,
             playing: false,
             time: 0.0,
@@ -956,6 +973,9 @@ impl Sink {
                     .arg("-r")
                     .arg(spec.fps.to_string())
                     .args(["-i", "-"]);
+                if let Some(a) = &spec.audio {
+                    cmd.arg("-i").arg(a);
+                }
                 match spec.preset {
                     Preset::Mp4 => {
                         cmd.args([
@@ -991,6 +1011,17 @@ impl Sink {
                     _ => {
                         cmd.args(["-c:v", "png"]);
                     }
+                }
+                if spec.audio.is_some() {
+                    // the sound stops with the last frame; MOV keeps it
+                    // uncompressed, as it does the picture
+                    let kbps = format!("{}k", spec.audio_kbps.clamp(64, 320));
+                    match spec.preset {
+                        Preset::Webm => cmd.args(["-c:a", "libopus", "-b:a", &kbps]),
+                        Preset::Mov => cmd.args(["-c:a", "pcm_s16le"]),
+                        _ => cmd.args(["-c:a", "aac", "-b:a", &kbps]),
+                    };
+                    cmd.arg("-shortest");
                 }
                 cmd.arg("-threads")
                     .arg(threads.to_string())
@@ -1209,7 +1240,12 @@ fn run(
     let width = spec.width.clamp(16, 8192) as usize;
     let mut out = Out { spec: &spec, tx, stop, sink: None, path: PathBuf::new(), written: 0 };
     let mut draw = Drawer::new(&spec, width);
-    match frames(&spec, &mut draw, &mut out) {
+    let result = frames(&spec, &mut draw, &mut out);
+    // the mix was only ever for ffmpeg
+    if let Some(a) = &spec.audio {
+        let _ = std::fs::remove_file(a);
+    }
+    match result {
         Ok(()) => {
             match out.sink.take() {
                 Some(s) => s.finish()?,
@@ -1616,6 +1652,35 @@ impl EditorUi {
                         ui.label(tr("Background"));
                         ui.add_enabled(win.preset.alpha(), egui::Checkbox::new(&mut win.transparent, tr("Transparent")));
                         ui.end_row();
+                        // a composition with sound layers: whether its mix goes
+                        // into the video, and how finely it is compressed
+                        let has_sound = win.source == Source::Animation
+                            && win.comp(s).is_some_and(|c| {
+                                c.layers.iter().any(|l| matches!(l.source, ayatsuri_format::LayerSource::Audio(_)))
+                            });
+                        if has_sound && win.preset.ffmpeg() {
+                            ui.label(tr("Sound"));
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut win.sound_on, tr("Include"))
+                                    .on_hover_text(tr("The composition's sound layers, mixed as the Audio Mixer plays them"));
+                                ui.add_enabled_ui(win.sound_on, |ui| {
+                                    if win.preset == Preset::Mov {
+                                        ui.weak(tr("Uncompressed (PCM)"));
+                                    } else {
+                                        let codec = if win.preset == Preset::Webm { "Opus" } else { "AAC" };
+                                        egui::ComboBox::from_id_salt("render-kbps")
+                                            .selected_text(format!("{codec} {} kbps", win.audio_kbps))
+                                            .icon(no_icon)
+                                            .show_ui(ui, |ui| {
+                                                for k in [96, 128, 192, 256, 320] {
+                                                    ui.selectable_value(&mut win.audio_kbps, k, format!("{k} kbps"));
+                                                }
+                                            });
+                                    }
+                                });
+                            });
+                            ui.end_row();
+                        }
                         ui.label(tr("Draw with"));
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut win.gpu, true, tr("GPU"))
@@ -1680,6 +1745,43 @@ impl EditorUi {
         if enqueue && let Some(folder) = win.folder.clone() {
             win.rebake(s);
             let anim = win.anim(s).cloned();
+            // a composition's sound layers, mixed over the exported range,
+            // unless Sound is off
+            let audio_mix = match (win.source, win.scene.checked_sub(s.animations.len())) {
+                (Source::Animation, Some(ci))
+                    if win.sound_on
+                        && matches!(win.preset, Preset::Mp4 | Preset::Webm | Preset::Mov) =>
+                {
+                    s.compositions.get(ci).and_then(|c| {
+                        let (start, end) = match (win.work_area, c.work_area) {
+                            (true, Some((a, b))) if b > a => (a, b),
+                            _ => (0.0, c.duration),
+                        };
+                        let layers: Vec<_> = c
+                            .layers
+                            .iter()
+                            .filter(|l| l.enabled)
+                            .filter_map(|l| match &l.source {
+                                ayatsuri_format::LayerSource::Audio(p) => {
+                                    s.audio.get(p).cloned().map(|clip| (clip, l.clone()))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let pcm = crate::audio::mix(&layers, start, end)?;
+                        let path =
+                            folder.join(format!(".{}-audio-{}.wav", c.name, std::process::id()));
+                        match crate::audio::write_wav(&path, &pcm) {
+                            Ok(()) => Some(path),
+                            Err(e) => {
+                                log::error!("audio mix: {e}");
+                                None
+                            }
+                        }
+                    })
+                }
+                _ => None,
+            };
             let stem = match (win.source, &anim) {
                 (Source::Timelapse, _) => format!("{}-timelapse", s.name),
                 (_, Some(a)) => format!("{}-{}", s.name, a.name),
@@ -1705,7 +1807,9 @@ impl EditorUi {
                 anim,
                 expression: win.expression.and_then(|i| s.expressions.get(i).cloned()),
                 timelapse: s.aom_path.as_ref().map(|p| crate::timelapse::Recorder::sidecar(p)),
+                audio: audio_mix,
                 ffmpeg: win.ffmpeg.clone().unwrap_or_else(|| PathBuf::from("ffmpeg")),
+                audio_kbps: win.audio_kbps,
             };
             win.queue.push(Job {
                 name: stem,
@@ -2784,7 +2888,9 @@ mod tests {
             anim: None,
             expression: None,
             timelapse: Some(crate::timelapse::Recorder::sidecar(&aom)),
+            audio: None,
             ffmpeg: ayatsuri_update::ffmpeg::program().unwrap_or_else(|| PathBuf::from("ffmpeg")),
+            audio_kbps: 192,
         };
         let (tx, rx) = channel();
         let t = std::time::Instant::now();

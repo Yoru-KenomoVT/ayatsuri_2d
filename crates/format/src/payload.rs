@@ -215,6 +215,10 @@ impl Default for PlaylistScene {
 pub enum LayerSource {
     Scene(String),
     Composition(String),
+    /// A sound file, by path: relative to the .aom when it sits beside or
+    /// under it, else absolute. It plays with the composition and goes
+    /// into exported video; it drives no curve.
+    Audio(String),
 }
 
 impl Default for LayerSource {
@@ -226,7 +230,7 @@ impl Default for LayerSource {
 impl LayerSource {
     pub fn name(&self) -> &str {
         match self {
-            Self::Scene(n) | Self::Composition(n) => n,
+            Self::Scene(n) | Self::Composition(n) | Self::Audio(n) => n,
         }
     }
 }

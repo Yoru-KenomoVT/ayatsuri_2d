@@ -1164,6 +1164,7 @@ impl Timeline {
                 .collect();
             let add =
                 egui::RichText::new(egui_phosphor::regular::STACK_PLUS).size(14.0).color(pal.text);
+            let mut pick_audio = false;
             h.menu_button(add, |ui| {
                 ui.label(tr("Add layer"));
                 for (label, src) in sources {
@@ -1172,9 +1173,28 @@ impl Timeline {
                         ui.close();
                     }
                 }
+                ui.separator();
+                if ui.button(format!("{} {}", egui_phosphor::regular::SPEAKER_HIGH, tr("Audio file…")))
+                    .on_hover_text(tr("WAV, MP3, FLAC or Ogg: plays with the composition and goes into exported video"))
+                    .clicked()
+                {
+                    pick_audio = true;
+                    ui.close();
+                }
             })
             .response
             .on_hover_text(tr("Add layer"));
+            if pick_audio
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Audio", &["wav", "mp3", "flac", "ogg", "oga"])
+                    .pick_file()
+            {
+                let rel = s.audio_rel(&path);
+                match s.load_audio(&rel) {
+                    Ok(()) => edits.push(Edit::LayerAdd(LayerSource::Audio(rel))),
+                    Err(e) => log::error!("audio: {e}"),
+                }
+            }
         }
         if comp.is_none()
             && icon_button(
@@ -1686,6 +1706,11 @@ impl Timeline {
                     let end = ayatsuri_core::comp::layer_end(l);
                     let col = row.color.unwrap_or(pal.accent);
                     let is_scene = matches!(l.source, LayerSource::Scene(_));
+                    let clip = match &l.source {
+                        LayerSource::Audio(p) => s.audio.get(p).cloned(),
+                        _ => None,
+                    };
+                    let is_audio = matches!(l.source, LayerSource::Audio(_));
                     let open = rows.get(i + 1).is_some_and(|n| n.depth > row.depth);
                     if is_scene {
                         twirl(&lp, pos2(indent + 5.0, cy), open, pal.text_faint);
@@ -1728,10 +1753,18 @@ impl Timeline {
                     );
                     x += 13.0;
                     let name_rect = Rect::from_min_max(pos2(x, y), pos2(value_x - 4.0, y + ROW_H));
-                    let label = if is_scene {
-                        row.label.clone()
-                    } else {
-                        format!("{} {}", egui_phosphor::regular::STACK, row.label)
+                    let label = match &l.source {
+                        LayerSource::Scene(_) => row.label.clone(),
+                        LayerSource::Composition(_) => {
+                            format!("{} {}", egui_phosphor::regular::STACK, row.label)
+                        }
+                        LayerSource::Audio(p) => {
+                            let file = std::path::Path::new(p)
+                                .file_name()
+                                .map(|f| f.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| p.clone());
+                            format!("{} {}", egui_phosphor::regular::SPEAKER_HIGH, file)
+                        }
                     };
                     lp.text(
                         pos2(x, cy),
@@ -1779,6 +1812,34 @@ impl Timeline {
                         mix(col, pal.chrome, 0.8)
                     };
                     gp.rect_filled(bar, 3.0, fill);
+                    // a sound's waveform across its bar; red when the file
+                    // is missing
+                    if is_audio {
+                        match &clip {
+                            Some(clip) => {
+                                let wave = mix(col, Color32::WHITE, 0.35);
+                                let x0v = bar.min.x.max(rr.min.x);
+                                let x1v = bar.max.x.min(rr.max.x);
+                                let mut x = x0v;
+                                while x < x1v {
+                                    let st = l.in_point + (tm.t(x) - l.start) * speed;
+                                    let idx = (st * crate::audio::PEAKS_PER_S) as usize;
+                                    let pk = clip.peaks.get(idx).copied().unwrap_or(0.0);
+                                    let hh = pk * (bar.height() / 2.0 - 1.0);
+                                    if hh > 0.3 {
+                                        gp.line_segment(
+                                            [pos2(x, cy - hh), pos2(x, cy + hh)],
+                                            Stroke::new(1.0, wave),
+                                        );
+                                    }
+                                    x += 1.0;
+                                }
+                            }
+                            None => {
+                                gp.rect_filled(bar, 3.0, pal.rotation_red.gamma_multiply(0.5));
+                            }
+                        }
+                    }
                     // fades drawn as ramps inside the bar
                     let ramp = Color32::from_white_alpha(28);
                     if l.fade_in > 0.0 {
@@ -1959,6 +2020,7 @@ impl Timeline {
                                     s.current_comp = Some(i);
                                 }
                             }
+                            LayerSource::Audio(_) => {}
                         }
                         self.sel_layer = None;
                         self.selected.clear();
@@ -3201,7 +3263,12 @@ impl Timeline {
                 l.fade_out = l.fade_out.max(0.0);
             }
             Edit::LayerAdd(source) => {
-                let len = scope.source_len(&source).unwrap_or(1.0).max(frame_s);
+                let len = match &source {
+                    LayerSource::Audio(p) => s.audio.get(p).map(|c| c.len()),
+                    _ => scope.source_len(&source),
+                }
+                .unwrap_or(1.0)
+                .max(frame_s);
                 next.layers.insert(
                     0,
                     Layer {

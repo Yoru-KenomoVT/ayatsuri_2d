@@ -142,6 +142,9 @@ pub struct Session {
     pub compositions: Vec<ayatsuri_format::Composition>,
     /// Physics playlists, played in Physics Settings.
     pub playlists: Vec<ayatsuri_format::Playlist>,
+    /// Sound files the compositions use, decoded once, by the path the
+    /// layer carries.
+    pub audio: HashMap<String, std::sync::Arc<crate::audio::Clip>>,
     pub current_anim: Option<usize>,
     /// The composition the Timeline shows instead of a scene, when it
     /// shows one.
@@ -794,6 +797,7 @@ impl Session {
         self.expressions = old.expressions;
         self.compositions = old.compositions;
         self.playlists = old.playlists;
+        self.audio = old.audio;
         self.current_anim = old.current_anim;
         self.current_comp = old.current_comp;
         self.param_names = old.param_names;
@@ -876,6 +880,7 @@ impl Session {
         self.expressions = old.expressions;
         self.compositions = old.compositions;
         self.playlists = old.playlists;
+        self.audio = old.audio;
         self.current_anim = old.current_anim;
         self.current_comp = old.current_comp;
         self.param_names = old.param_names;
@@ -939,6 +944,7 @@ impl Session {
         s.expressions = payload.expressions;
         s.compositions = payload.compositions;
         s.playlists = payload.playlists;
+        s.load_all_audio();
         if let Some(d) = payload.display {
             s.model_groups = d.model_groups.clone();
             s.guides = d.guides.clone();
@@ -1278,6 +1284,7 @@ impl Session {
             expressions: Vec::new(),
             compositions: Vec::new(),
             playlists: Vec::new(),
+            audio: HashMap::new(),
             current_comp: None,
             current_anim: None,
             part_shown: vec![true; n_parts],
@@ -1641,6 +1648,58 @@ impl Session {
     }
 
     /// Save this session as `.aom`, atomically, and remember the path.
+    /// A sound file's path as a layer carries it: relative to the .aom's
+    /// folder when it sits beside or under it, else as given.
+    pub fn audio_rel(&self, path: &Path) -> String {
+        let base = self.aom_path.as_ref().and_then(|p| p.parent());
+        match base.and_then(|b| path.strip_prefix(b).ok()) {
+            Some(rel) => rel.to_string_lossy().replace('\\', "/"),
+            None => path.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Where a layer's sound file is on disk.
+    pub fn audio_abs(&self, rel: &str) -> PathBuf {
+        let p = Path::new(rel);
+        if p.is_absolute() {
+            return p.to_path_buf();
+        }
+        match self.aom_path.as_ref().and_then(|a| a.parent()) {
+            Some(base) => base.join(p),
+            None => p.to_path_buf(),
+        }
+    }
+
+    /// Decode a layer's sound file into the cache, once.
+    pub fn load_audio(&mut self, rel: &str) -> Result<(), String> {
+        if self.audio.contains_key(rel) {
+            return Ok(());
+        }
+        let clip = crate::audio::decode(&self.audio_abs(rel))?;
+        info!("audio {rel}: {:.2} s, {} Hz, {} channel(s)", clip.len(), clip.rate, clip.channels);
+        self.audio.insert(rel.to_string(), std::sync::Arc::new(clip));
+        Ok(())
+    }
+
+    /// Every sound the compositions refer to, decoded; a missing file is
+    /// logged and its layer stays silent.
+    pub fn load_all_audio(&mut self) {
+        let rels: Vec<String> = self
+            .compositions
+            .iter()
+            .flat_map(|c| c.layers.iter())
+            .filter_map(|l| match &l.source {
+                ayatsuri_format::LayerSource::Audio(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        for rel in rels {
+            if let Err(e) = self.load_audio(&rel) {
+                warn!("audio {rel}: {e}");
+            }
+        }
+    }
+
     /// What compositions can reach: every scene and composition here.
     pub fn comp_scope(&self) -> ayatsuri_core::comp::Scope<'_> {
         ayatsuri_core::comp::Scope { scenes: &self.animations, comps: &self.compositions }

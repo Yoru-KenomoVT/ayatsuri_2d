@@ -230,6 +230,10 @@ pub struct EditorUi {
     expressions: crate::expressions::Expressions,
     expr_base: Vec<(usize, f32)>,
     expr_shown: Option<usize>,
+    /// The sound output, opened when a composition first plays, and the
+    /// composition time its players were started for last frame.
+    audio_out: Option<crate::audio::Out>,
+    audio_at: Option<f32>,
     anim_applied: f32,
     timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
@@ -842,6 +846,7 @@ fn rename_source(s: &mut crate::session::Session, old: &str, new: &str, comp: bo
             let hit = match &l.source {
                 ayatsuri_format::LayerSource::Scene(n) => !comp && n == old,
                 ayatsuri_format::LayerSource::Composition(n) => comp && n == old,
+                ayatsuri_format::LayerSource::Audio(_) => false,
             };
             if hit {
                 l.source = if comp {
@@ -1004,6 +1009,8 @@ impl Default for EditorUi {
             expressions: crate::expressions::Expressions::default(),
             expr_base: Vec::new(),
             expr_shown: None,
+            audio_out: None,
+            audio_at: None,
             anim_autokey: true,
             anim_applied: f32::NAN,
             timeline: crate::timeline::Timeline::default(),
@@ -2682,8 +2689,6 @@ impl EditorUi {
                         ui.close();
                     }
                     ui.separator();
-                    let _ =
-                        ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Texture Atlas…")));
                     let _ = ui
                         .add_enabled(false, egui::Button::new(crate::i18n::tr("Model Template…")));
                 });
@@ -3182,6 +3187,63 @@ impl EditorUi {
                             keyed.len(),
                             self.anim_time
                         );
+                    }
+                }
+            }
+
+            // a composition's sound layers play along: started at the
+            // playhead when play begins or jumps, stopped with it
+            let want = comp.as_ref().filter(|_| self.anim_playing).map(|c| {
+                c.layers
+                    .iter()
+                    .filter(|l| l.enabled && l.weight > 0.0)
+                    .filter_map(|l| match &l.source {
+                        ayatsuri_format::LayerSource::Audio(p) => {
+                            s.audio.get(p).cloned().map(|clip| (clip, l.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            });
+            match want {
+                Some(cues) => {
+                    let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+                    let jumped =
+                        self.audio_at.is_none_or(|at| (self.anim_time - (at + dt)).abs() > 0.12);
+                    if jumped {
+                        if self.audio_out.is_none() {
+                            self.audio_out = crate::audio::Out::open();
+                        }
+                        let t = self.anim_time;
+                        let list: Vec<crate::audio::Cue> = cues
+                            .into_iter()
+                            .filter_map(|(clip, l)| {
+                                let end = ayatsuri_core::comp::layer_end(&l);
+                                if t < l.start || t >= end {
+                                    return None;
+                                }
+                                let speed = l.speed.max(0.05);
+                                let offset = l.in_point + (t - l.start) * speed;
+                                Some(crate::audio::Cue {
+                                    clip,
+                                    offset,
+                                    len: (l.out_point - offset).max(0.0),
+                                    speed,
+                                    volume: ayatsuri_core::comp::layer_weight(&l, t),
+                                })
+                            })
+                            .collect();
+                        if let Some(out) = &mut self.audio_out {
+                            out.start(list);
+                        }
+                    }
+                    self.audio_at = Some(self.anim_time);
+                }
+                None => {
+                    if self.audio_at.take().is_some()
+                        && let Some(out) = &mut self.audio_out
+                    {
+                        out.stop();
                     }
                 }
             }

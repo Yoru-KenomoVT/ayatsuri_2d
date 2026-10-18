@@ -36,6 +36,8 @@ impl<'a> Scope<'a> {
         match src {
             LayerSource::Scene(n) => self.scene(n).map(|a| a.duration),
             LayerSource::Composition(n) => self.comp(n).map(|c| c.duration),
+            // sound has no length the core can know; its layer carries it
+            LayerSource::Audio(_) => None,
         }
     }
 
@@ -43,6 +45,7 @@ impl<'a> Scope<'a> {
         match src {
             LayerSource::Scene(n) => self.scene(n).is_some_and(|a| a.looped),
             LayerSource::Composition(n) => self.comp(n).is_some_and(|c| c.looped),
+            LayerSource::Audio(_) => false,
         }
     }
 
@@ -63,7 +66,7 @@ impl<'a> Scope<'a> {
             LayerSource::Composition(n) => {
                 self.comp(n).is_some_and(|c| self.reaches_at(c, name, depth + 1))
             }
-            LayerSource::Scene(_) => false,
+            LayerSource::Scene(_) | LayerSource::Audio(_) => false,
         })
     }
 }
@@ -186,6 +189,7 @@ fn sample_into(
                     }
                 }
             }
+            LayerSource::Audio(_) => {}
         }
     }
 }

@@ -8,6 +8,7 @@
 
 mod api;
 mod atlas;
+mod audio;
 mod discord;
 pub mod dock;
 mod export;

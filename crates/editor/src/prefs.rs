@@ -22,6 +22,10 @@ pub struct RenderPrefs {
     pub transparent: bool,
     pub gpu: Option<bool>,
     pub aa: Option<bool>,
+    /// A composition's sound left out of the video.
+    pub sound_off: bool,
+    /// Sound bitrate for MP4 and WebM, in kbit/s.
+    pub audio_kbps: u32,
 }
 
 #[derive(Default, Serialize, Deserialize)]
