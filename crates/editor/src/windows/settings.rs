@@ -13,7 +13,7 @@ use crate::theme;
 const W: f32 = 760.0;
 const H: f32 = 520.0;
 const RAIL: f32 = 170.0;
-const PAGES: [&str; 5] = ["General", "Appearance", "Performance", "Keyboard", "API"];
+const PAGES: [&str; 6] = ["General", "Appearance", "Performance", "Audio", "Keyboard", "API"];
 
 /// Primary colour presets: the logo orange first.
 const SWATCHES: [(&str, [u8; 3]); 7] = [
@@ -169,7 +169,8 @@ impl EditorUi {
                             0 => self.settings_general(ui),
                             1 => self.settings_appearance(ui),
                             2 => self.settings_performance(ui),
-                            3 => self.settings_keyboard(ui),
+                            3 => self.settings_audio(ui),
+                            4 => self.settings_keyboard(ui),
                             _ => self.settings_api(ui),
                         }
                     });
@@ -399,10 +400,19 @@ impl EditorUi {
             },
         );
         if let Some(p) = logging::log_path() {
-            row(ui, crate::i18n::tr("Log file"), &p.display().to_string(), |ui| {
+            let shown = p.display().to_string();
+            row(ui, crate::i18n::tr("Log file"), "", |ui| {
                 if ui.button(crate::i18n::tr("Copy path")).clicked() {
-                    ui.ctx().copy_text(p.display().to_string());
+                    ui.ctx().copy_text(shown.clone());
                 }
+                // one line, cut short from the left so the file name stays
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&shown).size(10.5).color(theme::pal().text_faint),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&shown);
             });
         }
         if save {
@@ -753,6 +763,124 @@ impl EditorUi {
         );
         section(ui, crate::i18n::tr("ALLOWED APPS"));
         self.api_clients_ui(ui);
+    }
+
+    /// Settings > Audio: where the sound goes, how loud, and the buffer.
+    fn settings_audio(&mut self, ui: &mut Ui) {
+        let mut save = false;
+        let mut reopen = false;
+        section(ui, crate::i18n::tr("Sound output"));
+        if self.audio_devices.is_none() {
+            self.audio_devices = Some(crate::audio::devices());
+        }
+        let devices = self.audio_devices.clone().unwrap_or_default();
+        let picked = self
+            .prefs
+            .audio_device
+            .as_ref()
+            .and_then(|d| devices.iter().find(|x| &x.name == d))
+            .map(|x| x.description.clone())
+            .unwrap_or_else(|| crate::i18n::tr("System default").to_string());
+        row(
+            ui,
+            crate::i18n::tr("Output device"),
+            crate::i18n::tr("Where the sound plays; the system default follows your desktop"),
+            |ui| {
+                if ui.button(crate::i18n::tr("Refresh")).clicked() {
+                    self.audio_devices = None;
+                }
+                egui::ComboBox::from_id_salt("audio-device")
+                    .selected_text(picked)
+                    .width(220.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                self.prefs.audio_device.is_none(),
+                                crate::i18n::tr("System default"),
+                            )
+                            .clicked()
+                        {
+                            self.prefs.audio_device = None;
+                            save = true;
+                            reopen = true;
+                        }
+                        for d in &devices {
+                            if ui
+                                .selectable_label(
+                                    self.prefs.audio_device.as_deref() == Some(d.name.as_str()),
+                                    &d.description,
+                                )
+                                .clicked()
+                            {
+                                self.prefs.audio_device = Some(d.name.clone());
+                                save = true;
+                                reopen = true;
+                            }
+                        }
+                        if devices.is_empty() {
+                            ui.weak(crate::i18n::tr("No output found"));
+                        }
+                    });
+            },
+        );
+        let mut vol = self.prefs.audio_volume.unwrap_or(100).min(100);
+        row(
+            ui,
+            crate::i18n::tr("Volume"),
+            crate::i18n::tr("The editor's own level; playback and the test tone use it"),
+            |ui| {
+                if ui.add(egui::Slider::new(&mut vol, 0..=100).suffix("%")).changed() {
+                    self.prefs.audio_volume = Some(vol);
+                    save = true;
+                    if let Some(out) = &self.audio_out {
+                        out.set_volume(vol as f32 / 100.0);
+                    }
+                }
+            },
+        );
+        let mut buf = match self.prefs.audio_buffer {
+            256 | 512 | 1024 | 2048 => self.prefs.audio_buffer,
+            _ => 1024,
+        };
+        row(
+            ui,
+            crate::i18n::tr("Buffer size"),
+            crate::i18n::tr("Frames per request; smaller answers sooner, larger never stutters"),
+            |ui| {
+                if segmented(
+                    ui,
+                    &mut buf,
+                    &[("256", 256u32), ("512", 512), ("1024", 1024), ("2048", 2048)],
+                ) {
+                    self.prefs.audio_buffer = buf;
+                    save = true;
+                    reopen = true;
+                }
+            },
+        );
+        let backend = self
+            .audio_out
+            .as_ref()
+            .map(|o| o.describe.clone())
+            .unwrap_or_else(|| crate::i18n::tr("Not open yet").to_string());
+        row(ui, crate::i18n::tr("Backend"), &backend, |ui| {
+            if ui.button(crate::i18n::tr("Test sound")).clicked() {
+                if self.audio_out.is_none() {
+                    self.audio_out = crate::audio::Out::open(&self.prefs.audio());
+                }
+                if let Some(out) = &mut self.audio_out {
+                    out.test_tone();
+                }
+            }
+        });
+        if reopen {
+            // the next sound opens the output again with the new choice
+            self.audio_out = None;
+            self.audio_at = None;
+        }
+        if save {
+            self.prefs.save();
+        }
     }
 
     fn settings_keyboard(&mut self, ui: &mut Ui) {

@@ -23,6 +23,8 @@ mod model_diff;
 mod panels;
 mod point_edit;
 mod prefs;
+#[cfg(target_os = "linux")]
+mod pulse;
 mod recovery;
 mod residency;
 mod session;

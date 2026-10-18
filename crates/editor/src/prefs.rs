@@ -54,6 +54,12 @@ pub struct Prefs {
     pub texture_budget_mb: u32,
     /// Model MSAA samples (1 disables); needs a restart. 0 means default.
     pub msaa: u32,
+    /// Sound output: a device by name (None follows the system default),
+    /// the master volume in percent (None is 100) and the buffer size in
+    /// frames (0 is the default, 1024).
+    pub audio_device: Option<String>,
+    pub audio_volume: Option<u32>,
+    pub audio_buffer: u32,
     /// Canvas overlay colours; None follows the theme (mesh lines follow
     /// the primary colour).
     pub overlay: Overlay,
@@ -147,6 +153,18 @@ impl Prefs {
             density: self.density.unwrap_or(d.density),
             corners: self.corners.unwrap_or(d.corners),
             reduce_motion: self.reduce_motion,
+        }
+    }
+
+    /// The sound output as the audio module wants it.
+    pub fn audio(&self) -> crate::audio::Prefs {
+        crate::audio::Prefs {
+            device: self.audio_device.clone(),
+            volume: self.audio_volume.unwrap_or(100).min(100) as f32 / 100.0,
+            buffer_frames: match self.audio_buffer {
+                0 => 1024,
+                n => n,
+            },
         }
     }
 

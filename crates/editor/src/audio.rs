@@ -2,10 +2,16 @@
 //! once into samples (for the waveform, playback and the export mix), plays
 //! through the system's output while the composition plays, and is mixed
 //! down to a WAV that the Render window hands ffmpeg beside the frames.
+//!
+//! Playback is a pull: the output asks the mixer for frames and the mixer
+//! sums the voices playing. On Linux the output speaks the PulseAudio
+//! protocol straight to PipeWire (see `pulse.rs`); elsewhere, and when no
+//! sound server answers, cpal drives the device.
 
-use std::num::NonZero;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use ayatsuri_format::Layer;
@@ -69,54 +75,258 @@ pub struct Cue {
     /// Seconds of the clip to play from there.
     pub len: f32,
     pub speed: f32,
-    pub volume: f32,
+    /// The layer, for its weight and fades, and the composition time the
+    /// cue starts at, so the fades move while it plays.
+    pub layer: Layer,
+    pub at: f32,
 }
 
-/// The system output, and the players started for the cues now playing.
+/// A sound playing: where it is in its clip, in the clip's own frames, and
+/// where the composition's clock is, for the layer's fades.
+struct Voice {
+    clip: Arc<Clip>,
+    pos: f64,
+    end: f64,
+    speed: f64,
+    layer: Layer,
+    t: f64,
+}
+
+/// What both outputs pull from: the voices playing, and the master volume
+/// as f32 bits.
+#[derive(Clone, Default)]
+struct Mixer {
+    voices: Arc<Mutex<Vec<Voice>>>,
+    volume: Arc<AtomicU32>,
+}
+
+impl Mixer {
+    fn volume(&self) -> f32 {
+        f32::from_bits(self.volume.load(Ordering::Relaxed))
+    }
+
+    /// Fill `buf` (interleaved, `channels` wide) at `rate` from the voices,
+    /// dropping the ones that have played out.
+    fn fill(&self, buf: &mut [f32], channels: usize, rate: u32) {
+        buf.fill(0.0);
+        let master = self.volume();
+        let channels = channels.max(1);
+        let frames = buf.len() / channels;
+        let mut voices = self.voices.lock().unwrap_or_else(PoisonError::into_inner);
+        let dt = 1.0 / rate.max(1) as f64;
+        for v in voices.iter_mut() {
+            let step = v.speed * v.clip.rate as f64 / rate.max(1) as f64;
+            let ch = v.clip.channels.max(1) as usize;
+            for f in 0..frames {
+                if v.pos >= v.end {
+                    break;
+                }
+                // the layer's weight and fades at this moment of the composition
+                let gain = ayatsuri_core::comp::layer_weight(&v.layer, v.t as f32) * master;
+                v.t += dt;
+                let i0 = v.pos as usize;
+                let t = (v.pos - i0 as f64) as f32;
+                for c in 0..channels.min(2) {
+                    let cc = c.min(ch - 1);
+                    let a = v.clip.samples.get(i0 * ch + cc).copied().unwrap_or(0.0);
+                    let b = v.clip.samples.get((i0 + 1) * ch + cc).copied().unwrap_or(a);
+                    if let Some(slot) = buf.get_mut(f * channels + c) {
+                        *slot += (a + (b - a) * t) * gain;
+                    }
+                }
+                v.pos += step;
+            }
+        }
+        voices.retain(|v| v.pos < v.end);
+        for s in buf.iter_mut() {
+            *s = s.clamp(-1.0, 1.0);
+        }
+    }
+}
+
+/// How the sound reaches the system; held so the stream stays open, and
+/// dropped to close it.
+enum Backend {
+    #[cfg(target_os = "linux")]
+    Pulse(#[allow(dead_code)] crate::pulse::Playback),
+    Cpal(#[allow(dead_code)] cpal::Stream),
+}
+
+/// The system output, fed from the mixer.
 pub struct Out {
-    sink: rodio::MixerDeviceSink,
-    players: Vec<rodio::Player>,
+    backend: Backend,
+    mixer: Mixer,
+    /// What opened, for Settings.
+    pub describe: String,
+}
+
+/// How the user wants sound out: a device by name (None for the default),
+/// the master volume and the buffer size in frames.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Prefs {
+    pub device: Option<String>,
+    pub volume: f32,
+    pub buffer_frames: u32,
+}
+
+/// An output device the user can pick.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Device {
+    pub name: String,
+    pub description: String,
+}
+
+/// The output devices: the sound server's sinks on Linux, else cpal's.
+pub fn devices() -> Vec<Device> {
+    #[cfg(target_os = "linux")]
+    if crate::pulse::available()
+        && let Ok(sinks) = crate::pulse::list_sinks(Duration::from_secs(1))
+    {
+        return sinks
+            .into_iter()
+            .map(|s| Device { name: s.name, description: s.description })
+            .collect();
+    }
+    use cpal::traits::{DeviceTrait, HostTrait};
+    cpal::default_host()
+        .output_devices()
+        .map(|it| {
+            it.filter_map(|d| d.description().ok().map(|n| n.to_string()))
+                .map(|n| Device { name: n.clone(), description: n })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl Out {
-    /// The default output device, or none when there is no sound to be had.
-    pub fn open() -> Option<Self> {
-        let mut sink = rodio::DeviceSinkBuilder::from_default_device()
-            .and_then(|b| b.open_stream())
-            .map_err(|e| log::warn!("audio: no output: {e}"))
-            .ok()?;
-        sink.log_on_drop(false);
-        Some(Self { sink, players: Vec::new() })
+    /// Open the output the preferences ask for, or none when there is no
+    /// sound to be had.
+    pub fn open(prefs: &Prefs) -> Option<Self> {
+        let mixer = Mixer::default();
+        mixer.volume.store(prefs.volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        let frames = prefs.buffer_frames.clamp(128, 8192);
+        #[cfg(target_os = "linux")]
+        if crate::pulse::available() {
+            let m = mixer.clone();
+            match crate::pulse::Playback::start(
+                MIX_RATE,
+                2,
+                prefs.device.clone(),
+                frames,
+                Box::new(move |buf, ch| m.fill(buf, ch, MIX_RATE)),
+            ) {
+                Ok(pb) => {
+                    return Some(Self {
+                        backend: Backend::Pulse(pb),
+                        mixer,
+                        describe: "PipeWire / PulseAudio".into(),
+                    });
+                }
+                Err(e) => log::warn!("audio: pulse: {e}; trying cpal"),
+            }
+        }
+        Self::open_cpal(prefs, mixer, frames)
+    }
+
+    fn open_cpal(prefs: &Prefs, mixer: Mixer, frames: u32) -> Option<Self> {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        let host = cpal::default_host();
+        let device = match &prefs.device {
+            Some(want) => host
+                .output_devices()
+                .ok()
+                .and_then(|mut it| {
+                    it.find(|d| d.description().map(|n| n.to_string() == *want).unwrap_or(false))
+                })
+                .or_else(|| host.default_output_device()),
+            None => host.default_output_device(),
+        }?;
+        let supported =
+            device.default_output_config().map_err(|e| log::warn!("audio: cpal: {e}")).ok()?;
+        let rate = supported.sample_rate();
+        let channels = supported.channels() as usize;
+        let mut config: cpal::StreamConfig = supported.into();
+        config.buffer_size = cpal::BufferSize::Fixed(frames);
+        let m = mixer.clone();
+        let build = |cfg: &cpal::StreamConfig| {
+            let m = m.clone();
+            device.build_output_stream(
+                *cfg,
+                move |buf: &mut [f32], _| m.fill(buf, channels, rate),
+                |e| log::warn!("audio: cpal: {e}"),
+                None,
+            )
+        };
+        let stream = match build(&config) {
+            Ok(s) => s,
+            Err(_) => {
+                // not every device takes a fixed buffer; let it choose
+                config.buffer_size = cpal::BufferSize::Default;
+                build(&config).map_err(|e| log::warn!("audio: cpal: {e}")).ok()?
+            }
+        };
+        stream.play().map_err(|e| log::warn!("audio: cpal: {e}")).ok()?;
+        let name = device.description().map(|n| n.to_string()).unwrap_or_default();
+        Some(Self {
+            backend: Backend::Cpal(stream),
+            mixer,
+            describe: format!("{} ({name})", host.id().name()),
+        })
+    }
+
+    /// True while the stream is alive; a dead sound server shows here.
+    pub fn alive(&self) -> bool {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            Backend::Pulse(pb) => !pb.failed(),
+            Backend::Cpal(_) => true,
+        }
+    }
+
+    pub fn set_volume(&self, v: f32) {
+        self.mixer.volume.store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     pub fn stop(&mut self) {
-        for p in self.players.drain(..) {
-            p.stop();
-        }
+        self.mixer.voices.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
     /// Stop whatever plays and start these.
     pub fn start(&mut self, cues: Vec<Cue>) {
-        self.stop();
+        let mut voices = self.mixer.voices.lock().unwrap_or_else(PoisonError::into_inner);
+        voices.clear();
         for cue in cues {
-            if cue.offset >= cue.clip.len() || cue.len <= 0.0 || cue.volume <= 0.0 {
+            if cue.offset >= cue.clip.len() || cue.len <= 0.0 || cue.layer.weight <= 0.0 {
                 continue;
             }
-            let (Some(ch), Some(rate)) =
-                (NonZero::new(cue.clip.channels.max(1)), NonZero::new(cue.clip.rate.max(1)))
-            else {
-                continue;
-            };
-            let skip = (cue.offset * cue.clip.rate as f32) as usize * cue.clip.channels as usize;
-            let data: Vec<f32> = cue.clip.samples.get(skip..).unwrap_or(&[]).to_vec();
-            let source = rodio::buffer::SamplesBuffer::new(ch, rate, data)
-                .take_duration(Duration::from_secs_f32(cue.len.max(0.0)))
-                .speed(cue.speed.max(0.05))
-                .amplify(cue.volume.clamp(0.0, 1.0));
-            let player = rodio::Player::connect_new(self.sink.mixer());
-            player.append(source);
-            self.players.push(player);
+            let rate = cue.clip.rate as f64;
+            let pos = cue.offset as f64 * rate;
+            let frames = cue.clip.samples.len() / cue.clip.channels.max(1) as usize;
+            voices.push(Voice {
+                clip: cue.clip,
+                pos,
+                end: (pos + cue.len as f64 * rate).min(frames as f64),
+                speed: cue.speed.max(0.05) as f64,
+                layer: cue.layer,
+                t: cue.at as f64,
+            });
         }
+    }
+
+    /// A short tone, so Settings can prove the output works.
+    pub fn test_tone(&mut self) {
+        let rate = 48_000u32;
+        let n = rate as usize / 3;
+        let samples: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                let env = (1.0 - i as f32 / n as f32).min(t * 40.0).clamp(0.0, 1.0);
+                (t * 440.0 * std::f32::consts::TAU).sin() * 0.3 * env
+            })
+            .collect();
+        let clip = Arc::new(Clip { rate, channels: 1, samples, peaks: Vec::new() });
+        let layer = Layer { out_point: 1.0, ..Layer::default() };
+        self.start(vec![Cue { clip, offset: 0.0, len: 1.0, speed: 1.0, layer, at: 0.0 }]);
     }
 }
 

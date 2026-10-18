@@ -232,8 +232,10 @@ pub struct EditorUi {
     expr_shown: Option<usize>,
     /// The sound output, opened when a composition first plays, and the
     /// composition time its players were started for last frame.
-    audio_out: Option<crate::audio::Out>,
-    audio_at: Option<f32>,
+    pub(crate) audio_out: Option<crate::audio::Out>,
+    pub(crate) audio_at: Option<f32>,
+    /// Output devices as Settings last listed them.
+    pub(crate) audio_devices: Option<Vec<crate::audio::Device>>,
     anim_applied: f32,
     timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
@@ -1013,6 +1015,7 @@ impl Default for EditorUi {
             expr_shown: None,
             audio_out: None,
             audio_at: None,
+            audio_devices: None,
             anim_autokey: true,
             anim_applied: f32::NAN,
             timeline: crate::timeline::Timeline::default(),
@@ -3287,8 +3290,8 @@ impl EditorUi {
                     let jumped =
                         self.audio_at.is_none_or(|at| (self.anim_time - (at + dt)).abs() > 0.12);
                     if jumped {
-                        if self.audio_out.is_none() {
-                            self.audio_out = crate::audio::Out::open();
+                        if self.audio_out.as_ref().is_none_or(|o| !o.alive()) {
+                            self.audio_out = crate::audio::Out::open(&self.prefs.audio());
                         }
                         let t = self.anim_time;
                         let list: Vec<crate::audio::Cue> = cues
@@ -3305,7 +3308,8 @@ impl EditorUi {
                                     offset,
                                     len: (l.out_point - offset).max(0.0),
                                     speed,
-                                    volume: ayatsuri_core::comp::layer_weight(&l, t),
+                                    layer: l,
+                                    at: t,
                                 })
                             })
                             .collect();
@@ -11991,7 +11995,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Animation", "anim-next-key", "Next keyframe", N, K::K),
         ("Animation", "anim-play", "Playback", N, K::Enter),
         ("Animation", "anim-add-key", "Key the selected parameter", N, K::S),
-        ("Animation", "anim-select-all", "Select every key", C, K::A),
+        ("Animation", "anim-select-all", "Select every key", CA, K::A),
         (
             "Animation",
             "anim-nudge-left",
@@ -12020,11 +12024,11 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
             AS,
             K::ArrowRight,
         ),
-        ("Animation", "anim-work-start", "Work area start at the playhead", N, K::B),
-        ("Animation", "anim-work-end", "Work area end at the playhead", N, K::N),
+        ("Animation", "anim-work-start", "Work area start at the playhead", M::SHIFT, K::B),
+        ("Animation", "anim-work-end", "Work area end at the playhead", M::SHIFT, K::N),
         ("Animation", "anim-layer-start", "Layer start at the playhead", N, K::OpenBracket),
         ("Animation", "anim-layer-end", "Layer end at the playhead", N, K::CloseBracket),
-        ("Animation", "anim-layer-dup", "Duplicate the layer", C, K::D),
+        ("Animation", "anim-layer-dup", "Duplicate the layer", M::SHIFT, K::D),
         ("Animation", "anim-layer-split", "Split the layer at the playhead", CS, K::D),
     ]
 };

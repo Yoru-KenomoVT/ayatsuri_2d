@@ -1819,7 +1819,7 @@ impl Timeline {
                     // the bar in the lane
                     ui.set_clip_rect(rows_right.intersect(outer_clip));
                     let (x0, x1) = (tm.x(l.start), tm.x(end));
-                    let bar = Rect::from_min_max(pos2(x0, y + 3.0), pos2(x1, y + ROW_H - 3.0));
+                    let bar = Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + ROW_H - 1.0));
                     let is_sel = self.sel_layer == Some(li);
                     let fill = if l.enabled {
                         mix(col, pal.chrome, 0.55)
@@ -1902,6 +1902,59 @@ impl Timeline {
                     let r_r = ui
                         .interact(rh, ui.id().with(("tl-layer-r", li)), Sense::drag())
                         .on_hover_cursor(CursorIcon::ResizeHorizontal);
+                    // fade handles: a square at each top corner that drags
+                    // inward to set the fade, as in a video editor
+                    let span = (end - l.start).max(0.0);
+                    let fade_px = |f: f32| (f / span.max(1e-6)) * bar.width();
+                    let fi_x = (x0 + 8.0 + fade_px(l.fade_in)).min(x1 - 8.0);
+                    let fo_x = (x1 - 8.0 - fade_px(l.fade_out)).max(x0 + 8.0);
+                    let fi = Rect::from_center_size(pos2(fi_x, bar.min.y + 4.0), vec2(8.0, 8.0));
+                    let fo = Rect::from_center_size(pos2(fo_x, bar.min.y + 4.0), vec2(8.0, 8.0));
+                    let r_fi = ui
+                        .interact(fi, ui.id().with(("tl-layer-fi", li)), Sense::drag())
+                        .on_hover_cursor(CursorIcon::ResizeHorizontal)
+                        .on_hover_text(tr("Fade in"));
+                    let r_fo = ui
+                        .interact(fo, ui.id().with(("tl-layer-fo", li)), Sense::drag())
+                        .on_hover_cursor(CursorIcon::ResizeHorizontal)
+                        .on_hover_text(tr("Fade out"));
+                    let show_fades = r_body.hovered()
+                        || r_fi.hovered()
+                        || r_fo.hovered()
+                        || r_fi.dragged()
+                        || r_fo.dragged()
+                        || is_sel;
+                    if show_fades && bar.width() > 30.0 {
+                        for (r, on) in [
+                            (fi, l.fade_in > 0.0 || r_fi.hovered()),
+                            (fo, l.fade_out > 0.0 || r_fo.hovered()),
+                        ] {
+                            gp.rect_filled(
+                                r.shrink(1.5),
+                                1.0,
+                                if on { pal.accent } else { mix(col, Color32::WHITE, 0.5) },
+                            );
+                        }
+                    }
+                    for (resp, is_in) in [(&r_fi, true), (&r_fo, false)] {
+                        if resp.dragged()
+                            && let Some(ptr) = resp.interact_pointer_pos()
+                        {
+                            let t = tm.t(ptr.x);
+                            let mut nl = l.clone();
+                            let v = if is_in { t - l.start } else { end - t };
+                            let v = ((v * fps).round() / fps).clamp(0.0, span);
+                            if is_in {
+                                nl.fade_in = v;
+                            } else {
+                                nl.fade_out = v;
+                            }
+                            edits.push(Edit::LayerSet(li, nl));
+                        }
+                        if resp.drag_stopped() {
+                            self.merge = None;
+                        }
+                    }
                     ui.set_clip_rect(rect.intersect(outer_clip));
                     if r_body.hovered() {
                         ui.ctx().set_cursor_icon(CursorIcon::Grab);
