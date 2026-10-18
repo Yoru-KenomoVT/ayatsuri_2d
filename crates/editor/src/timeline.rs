@@ -354,6 +354,7 @@ fn twirl(p: &Painter, c: Pos2, open: bool, color: Color32) {
 fn key_glyph(p: &Painter, c: Pos2, size: f32, left: Half, right: Half, fill: Color32) {
     let r = size / 2.0;
     let outline = Stroke::new(1.0, Color32::from_black_alpha(200));
+    let mut rim: Vec<Pos2> = Vec::with_capacity(8);
     for (half, sign) in [(left, -1.0f32), (right, 1.0f32)] {
         let pts: Vec<Pos2> = match half {
             Half::Linear => vec![c + vec2(0.0, -r), c + vec2(sign * r, 0.0), c + vec2(0.0, r)],
@@ -374,8 +375,16 @@ fn key_glyph(p: &Painter, c: Pos2, size: f32, left: Half, right: Half, fill: Col
             ],
         };
         let pts = if sign < 0.0 { pts.into_iter().rev().collect() } else { pts };
-        p.add(Shape::convex_polygon(pts, fill, outline));
+        p.add(Shape::convex_polygon(pts.clone(), fill, Stroke::NONE));
+        if sign < 0.0 {
+            rim.extend(pts);
+        } else {
+            rim.splice(0..0, pts);
+        }
     }
+    // one outline round both halves, so a key whose sides agree reads as
+    // one whole diamond rather than two halves with a seam
+    p.add(Shape::closed_line(rim, outline));
 }
 
 /// A number in the accent colour that drags to change and clicks to type.

@@ -223,6 +223,8 @@ pub struct EditorUi {
     anim_time: f32,
     anim_playing: bool,
     anim_autokey: bool,
+    /// Space went down with a drag, so letting it go is not a play tap.
+    space_dragged: bool,
     anim_applied: f32,
     timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
@@ -961,6 +963,7 @@ impl Default for EditorUi {
             heartbeat: 0.0,
             anim_time: 0.0,
             anim_playing: false,
+            space_dragged: false,
             anim_autokey: true,
             anim_applied: f32::NAN,
             timeline: crate::timeline::Timeline::default(),
@@ -1848,6 +1851,20 @@ impl EditorUi {
                 if ui.ctx().input_mut(|i| i.consume_shortcut(&sc)) {
                     fired.push(id);
                 }
+            }
+            // a tap on Space plays or pauses, as in After Effects; held with
+            // a drag it pans the view instead, so the tap counts on release
+            let (space_up, any_down) =
+                ui.ctx().input(|i| (i.key_released(egui::Key::Space), i.pointer.any_down()));
+            if space_up {
+                if !self.space_dragged
+                    && !any_down
+                    && !typing
+                    && self.workspace == Workspace::Animation
+                {
+                    fired.push("anim-play");
+                }
+                self.space_dragged = false;
             }
             for id in fired {
                 log::debug!("shortcut: {id}");
@@ -7653,6 +7670,9 @@ impl EditorUi {
             } else {
                 egui::CursorIcon::Grab
             });
+        }
+        if space && resp.dragged() {
+            self.space_dragged = true;
         }
         let middle = ui.ctx().input(|i| i.pointer.middle_down());
         if resp.dragged() && (space || middle) {
