@@ -86,6 +86,28 @@
   keys where they land. Play, the Render window and the model export
   all take compositions: export bakes one into a motion with a key on
   every frame. Compositions ride in the `.aom`; older builds ignore them.
+  An opened layer's keys edit in place: select, drag, key and jump on
+  them as in a scene, and the edit lands in the scene through the
+  layer's start, in point and speed. Insert and Remove frame cut a layer
+  that spans the playhead and move its tail, as a ripple should.
+- **Sound in compositions.** Add layer takes a WAV, MP3, FLAC or Ogg
+  file. It draws its waveform across its bar, plays through the system
+  output while the composition plays (from the playhead, stopped with
+  it), and the Render window mixes every sound layer down and hands it to
+  ffmpeg beside the frames, so MP4, WebM and MOV come out with sound. The
+  file rides by path, relative to the `.aom`.
+- **Expression palette** (Window > Expression; a tab beside the Timeline
+  in the Animation workspace): the model's exp3 expressions, listed. The
+  + makes one from the pose (every parameter moved off its default,
+  added), Set from pose does the same to an existing one, and each
+  parameter row drags its value with Add, Multiply or Overwrite. Fades
+  are optional. The eye lays the picked expression over the pose as a
+  preview; its own undo and redo sit in the header.
+- **Physics playlists** (Physics Settings > Playlist): groups of scenes
+  played top to bottom with a crossfade, a group's scenes at once, each
+  overwriting or adding at a weight, so the physics can be watched
+  against real motion. The bar picks, plays, loops and sets the fade, the
+  Playlist menu makes and deletes them, and they ride in the `.aom`.
 - **Export Animation** and **Export Timelapse** open the new **Render**
   window: formats down the left (GIF, PNG sequence, MP4, WebM, MOV),
   settings in the middle (scene, an expression on top, work area, frame

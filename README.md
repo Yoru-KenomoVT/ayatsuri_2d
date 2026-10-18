@@ -189,7 +189,8 @@ Save often, keep backups of models you care about, and please
 Not built yet:
 
 - skinning, model templates and the temporary deform tool;
-- an expression editor;
+- cmo3 export (import works; writing Cubism's project graph needs
+  Cubism Editor in the loop to check);
 - the embeddable runtime's C ABI (below).
 
 See the [changelog](CHANGELOG.md) for what each release added.
