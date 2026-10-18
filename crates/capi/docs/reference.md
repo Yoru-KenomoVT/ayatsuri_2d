@@ -17,10 +17,12 @@ Contents
 7. [Types and constants](#7-types-and-constants)
 8. [Rendering guide](#8-rendering-guide)
 9. [Physics](#9-physics)
-10. [Performance](#10-performance)
-11. [Binding from other languages](#11-binding-from-other-languages)
-12. [Versioning and stability](#12-versioning-and-stability)
-13. [Building and linking](#13-building-and-linking)
+10. [Motions, expressions and events](#10-motions-expressions-and-events)
+11. [Loading a Cubism bundle](#11-loading-a-cubism-bundle)
+12. [Performance](#12-performance)
+13. [Binding from other languages](#13-binding-from-other-languages)
+14. [Versioning and stability](#14-versioning-and-stability)
+15. [Building and linking](#15-building-and-linking)
 
 ## 1. Model
 
@@ -43,9 +45,10 @@ mapping to the authored canvas, `px = unit * pixels_per_unit + origin`, with
 pixel y running down as in the texture. UVs are 0 to 1 over the texture
 page, `v = 0` at the top row of the image.
 
-Models are `.aom` files, Ayatsuri's own container, written by the editor.
-The ABI reads nothing else on purpose: the moc3 parser is hostile-input
-code the runtime never compiles ([integration.md](../../../docs/integration.md)).
+Models are `.aom` files, Ayatsuri's own container, written by the editor,
+which carry textures, motions, expressions, physics and names in one file.
+A `.moc3` loads as well, as the rig alone; the rest of a Cubism bundle
+comes in file by file ([section 11](#11-loading-a-cubism-bundle)).
 
 ## 2. Lifecycle
 
@@ -150,9 +153,9 @@ See [Errors](#3-errors).
 ### Model
 
 `ay2d_model *ay2d_load(const uint8_t *bytes, size_t len)`
-Load an `.aom`. Validates, evaluates once at defaults. `NULL` with a
-reason when the bytes are not a model. Physics is on after load when the
-model has a rig.
+Load an `.aom` or a `.moc3` (told apart by their first bytes). Validates,
+evaluates once at defaults. `NULL` with a reason when the bytes are not a
+model. Physics is on after load when the model has a rig.
 
 `void ay2d_free(ay2d_model *m)`
 Free a model. `NULL` is fine.
@@ -169,8 +172,30 @@ The id of the object at index `i` (`ParamAngleX`, `PartArmL`, ...).
 `NULL` past the count. These are the ids the model was rigged with and
 the ones motion and expression files refer to.
 
+`const char *ay2d_parameter_name / ay2d_part_name / ay2d_mesh_name(const ay2d_model *m, uint32_t i)`
+The display name ("Angle X", the layer name of a mesh); the id when the
+file names none. For a UI, never for lookups.
+
 `int32_t ay2d_parameter_index(const ay2d_model *m, const char *id)`
 The index of a parameter by id, or `-1`. Resolve once; drive by index.
+
+`int ay2d_parameter_repeat(const ay2d_model *m, uint32_t i)`
+`1` when the parameter wraps around its range instead of clamping.
+
+`uint32_t ay2d_parameter_keys(const ay2d_model *m, uint32_t i, float *out, size_t n)`
+The values the parameter is rigged at, sorted; the dots a slider shows.
+Returns the count and writes the first `n`.
+
+`int32_t ay2d_part_parent(const ay2d_model *m, uint32_t i)` and
+`int32_t ay2d_mesh_part(const ay2d_model *m, uint32_t i)`
+Who holds what, `-1` at the top.
+
+`uint32_t ay2d_parameter_group_count`, `const char *ay2d_parameter_group_name(m, g)`, `uint32_t ay2d_parameter_group(m, g, uint32_t *out, size_t n)`
+The palette's folders and their members, by index.
+
+`uint32_t ay2d_model_group_count`, `const char *ay2d_model_group_name(m, g)`, `uint32_t ay2d_model_group(m, g, uint32_t *out, size_t n)`
+The standard groups the file names, `EyeBlink` and `LipSync`: the
+parameters a blink or a lip sync should drive.
 
 ### Parameters
 
@@ -187,7 +212,9 @@ on, physics-driven parameters show what the rig set.
 Set `n` parameters: `indices[i]` takes `values[i]`. Values are held to
 the parameter's range; a NaN lands on the default. Any index past the
 count fails the call with `RANGE` before anything changes. Nothing is
-evaluated until `ay2d_update`.
+evaluated until `ay2d_update`. As in moc3, an object rigged only on part
+of a parameter's range is hidden while the value is outside its keys
+(`ay2d_parameter_keys` says where they are).
 
 `ay2d_status ay2d_set_all_parameters(ay2d_model *m, const float *values, size_t n)`
 Set every parameter from one array of at least `parameter_count` values,
@@ -206,11 +233,19 @@ part at 0 hides every mesh under it. Not evaluated until `ay2d_update`.
 ### Frame
 
 `ay2d_status ay2d_update(ay2d_model *m, float dt)`
-Advance by `dt` seconds and evaluate: the physics rig steps (when the
-model has one and it is on), parameters resolve, deformers and meshes
-move, the draw order sorts. `dt` of `0` evaluates without moving physics;
-negative or non-finite `dt` is `RANGE`. After this call the drawables
-are current. Call once per frame, after every set call of that frame.
+Advance by `dt` seconds and evaluate, in this order: playing motions and
+the shown expression write their parameters over the pose, the physics
+rig steps (when the model has one and it is on), parameters resolve,
+deformers and meshes move, the draw order sorts, the change flags are
+worked out. `dt` of `0` evaluates without moving motions or physics;
+negative or non-finite `dt` is `RANGE`. After this call the drawables,
+events and change flags are current. Call once per frame, after every
+set call of that frame.
+
+`ay2d_status ay2d_mesh_changes(const ay2d_model *m, uint32_t *out, size_t n)`
+Per mesh, `AY2D_CHANGED_*` bits saying what the last update moved:
+positions, visibility, opacity, place in the draw order. After load every
+bit is set. A GPU host uploads the meshes with the positions bit.
 
 ### Physics
 
@@ -245,6 +280,49 @@ streams `positions` per frame.
 `ay2d_status ay2d_texture(const ay2d_model *m, uint32_t i, const uint8_t **bytes, size_t *len)`
 Texture page `i` as the file stores it: PNG bytes, straight (not
 premultiplied) alpha. Decode with the host's image loader once at load.
+A model loaded from a `.moc3` has pages of zero length: the host owns
+the bundle's textures.
+
+### Motions and expressions
+
+`uint32_t ay2d_motion_count`, `const char *ay2d_motion_id(m, i)`, `int32_t ay2d_motion_index(m, name)`, `ay2d_status ay2d_motion_info(m, i, ay2d_motion_facts *out)`
+The file's scenes, then its compositions, with duration, frame rate,
+loop, authored fades (`-1` when left to the player) and event count.
+
+`ay2d_status ay2d_motion_play(ay2d_model *m, uint32_t i, int looping, float fade_in)`
+Start motion `i` from its beginning. Whatever plays fades out over its
+own fade while this one fades in over `fade_in` seconds (`< 0` takes the
+authored fade or one second; `0` starts at full weight). Looping repeats
+it; otherwise it plays once and holds its last frame.
+
+`ay2d_status ay2d_motion_stop(ay2d_model *m, float fade_out)`
+Fade everything out (`< 0`: authored or one second; `0`: at once).
+
+`int32_t ay2d_motion_playing(m)`, `int ay2d_motion_finished(m)`, `float ay2d_motion_time(m)`, `ay2d_status ay2d_motion_seek(m, t)`, `ay2d_status ay2d_motion_set_speed(m, speed)`
+The motion in front: which, whether a one-shot reached its end, where it
+is, and moving or pacing it.
+
+`uint32_t ay2d_motion_events(const ay2d_model *m, ay2d_event *out, size_t n)`
+The events motions crossed during the last update, with the motion, the
+time and the text. Poll after each update; nothing calls back.
+
+`uint32_t ay2d_expression_count`, `const char *ay2d_expression_id(m, i)`, `int32_t ay2d_expression_index(m, name)`
+The file's expressions.
+
+`ay2d_status ay2d_expression_set(ay2d_model *m, uint32_t i, float fade_in)`, `ay2d_status ay2d_expression_clear(ay2d_model *m, float fade_out)`, `int32_t ay2d_expression_shown(m)`
+Show one expression at a time, with the same fade rules as motions; the
+one shown before fades out as the new one fades in.
+
+### A Cubism bundle
+
+`ay2d_status ay2d_add_physics3(ay2d_model *m, const uint8_t *json, size_t len)`
+Give a model its rig from a `physics3.json`, replacing any it has; the
+pose stays and physics comes on.
+
+`int32_t ay2d_add_motion3(ay2d_model *m, const char *name, const uint8_t *json, size_t len)`,
+`int32_t ay2d_add_expression3(ay2d_model *m, const char *name, const uint8_t *json, size_t len)`
+Add a motion or an expression from its JSON under `name`; returns the new
+index, or `-1` with a reason.
 
 ## 7. Types and constants
 
@@ -277,6 +355,24 @@ typedef struct ay2d_drawable {
 #define AY2D_FLAG_MULTIPLICATIVE  2u   /* multiply blend */
 #define AY2D_FLAG_DOUBLE_SIDED    4u   /* draw both faces; no culling */
 #define AY2D_FLAG_INVERTED_MASK   8u   /* masks cut where they are drawn */
+
+#define AY2D_CHANGED_POSITIONS    1u   /* ay2d_mesh_changes bits */
+#define AY2D_CHANGED_VISIBILITY   2u
+#define AY2D_CHANGED_OPACITY      4u
+#define AY2D_CHANGED_ORDER        8u
+
+typedef struct ay2d_motion_facts {
+    float duration, fps;          /* seconds; authored rate */
+    int32_t looped, composition;  /* authored to loop; a composition, not a scene */
+    float fade_in, fade_out;      /* seconds, -1 when left to the player */
+    uint32_t event_count;
+} ay2d_motion_facts;
+
+typedef struct ay2d_event {
+    uint32_t motion;              /* which motion fired it */
+    float time;                   /* on the motion's clock */
+    const char *name;             /* NUL-terminated, lives with the model */
+} ay2d_event;
 ```
 
 Blend flags are exclusive: neither set means normal (source-over) blending.
@@ -345,20 +441,66 @@ gives the rig's values; setting them while physics is on is overridden
 on the next step. Hold the rig (`ay2d_set_physics(m, 0)`) to drive those
 parameters by hand.
 
-## 10. Performance
+## 10. Motions, expressions and events
+
+The player holds the clips the file carries (scenes first, then
+compositions) and the ones added with `ay2d_add_motion3`. One motion is
+"in front" at a time: `ay2d_motion_play` starts it fading in and sends
+whatever played before into its fade out, so a switch is a crossfade. A
+one-shot motion holds its last frame when it ends (`ay2d_motion_finished`
+says so) until the host starts the next; a looping one wraps.
+
+Each update, every playing clip writes its curves over the pose by its
+weight: `value = pose + (curve - pose) * weight`. Parameters the motion
+has no curve for keep what the host set, so tracking and a motion mix
+naturally: drive the face from the camera, let the idle motion sway the
+body. A composition samples its layers the way the editor does and writes
+the result the same way.
+
+Expressions follow the same rules with their own fades, written after
+motions and before physics. Add adds to the pose, Multiply scales it
+(the right choice for eye open, so a blink still closes), Overwrite
+replaces it.
+
+Events (`UserData` in a motion3) are queued when the motion's clock
+crosses their time during an update, loop wraps included, and read with
+`ay2d_motion_events` right after. The list is replaced by the next
+update's.
+
+## 11. Loading a Cubism bundle
+
+A `model3.json` bundle holds a `.moc3`, textures, and optional
+`physics3.json`, `*.motion3.json`, `*.exp3.json`, `cdi3.json`. The host
+reads the bundle (it is a small JSON file) and hands the pieces over:
+
+```c
+ay2d_model *m = ay2d_load(moc3_bytes, moc3_len);           /* the rig */
+ay2d_add_physics3(m, physics_json, physics_len);           /* optional */
+int32_t idle = ay2d_add_motion3(m, "idle", idle_json, idle_len);
+int32_t smile = ay2d_add_expression3(m, "smile", smile_json, smile_len);
+/* textures: decode the bundle's PNGs yourself; ay2d_texture_count(m)
+   says how many pages the rig draws from, in order */
+```
+
+Display names (`cdi3.json`) are not read from a bundle yet; the name
+calls return the ids. An `.aom` exported by the editor carries all of
+this in one file and needs none of the add calls.
+
+## 12. Performance
 
 - Frame cost is one `set` (or `set_all`), one `update`, one `drawables`:
   three calls for any model size. Never resolve ids per frame.
 - `ay2d_drawables` copies `n` small structs; the geometry behind the
   pointers is not copied.
-- No allocation after load in any call; the library is safe to drive from
-  a real-time thread as far as memory goes.
+- No allocation after load in the frame calls, with one exception: a
+  playing composition samples its layer stack into a small map each
+  update. Scenes do not.
 - Upload `uvs` and `indices` once per mesh (they never change); stream only
   `positions`. A model with 100 meshes of 50 vertices moves 40 KB a frame.
 - `update` work scales with keyforms and deformers, typically well under a
   millisecond for a streaming model on one core.
 
-## 11. Binding from other languages
+## 13. Binding from other languages
 
 The surface uses only `uint8_t`, `uint16_t`, `uint32_t`, `int32_t`,
 `float`, `size_t`, `char *`, two plain structs and one opaque pointer. No
@@ -388,7 +530,7 @@ archive into a native addon.
 In every binding keep the three-call frame; the cost of a binding is per
 call, not per byte.
 
-## 12. Versioning and stability
+## 14. Versioning and stability
 
 - `AY2D_ABI_VERSION` changes only on a breaking change to an existing
   signature, struct or behaviour. Adding functions, flags or struct fields
@@ -400,7 +542,7 @@ call, not per byte.
 - Status codes are only ever added.
 - The library version (`ay2d_version`) follows Ayatsuri2D's release.
 
-## 13. Building and linking
+## 15. Building and linking
 
 `cargo xtask capi` builds `target/capi/`:
 
