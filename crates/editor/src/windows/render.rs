@@ -169,8 +169,12 @@ const STOPPED: &str = "stopped";
 pub struct RenderWin {
     pub source: Source,
     preset: Preset,
+    /// Index into the scenes, then the compositions after them.
     scene: usize,
     expression: Option<usize>,
+    /// The compositions flattened into scenes, in order, so a pick past
+    /// the scenes plays and exports like one.
+    baked: Vec<Animation>,
     fps: u32,
     width: u32,
     work_area: bool,
@@ -229,6 +233,19 @@ pub struct RenderWin {
 }
 
 impl RenderWin {
+    /// The scene picked, or the baked composition past the scenes.
+    fn anim<'a>(&'a self, s: &'a crate::session::Session) -> Option<&'a Animation> {
+        s.animations
+            .get(self.scene)
+            .or_else(|| self.baked.get(self.scene.wrapping_sub(s.animations.len())))
+    }
+
+    /// Bake every composition again, so the picker and the export see the
+    /// layers as they are now.
+    fn rebake(&mut self, s: &crate::session::Session) {
+        self.baked = s.baked_comps();
+    }
+
     pub fn set_folder(&mut self, dir: PathBuf) {
         self.folder = Some(dir);
     }
@@ -277,6 +294,7 @@ impl RenderWin {
             preset,
             scene: 0,
             expression: None,
+            baked: Vec::new(),
             fps,
             width: if p.width > 0 { p.width } else { (canvas_width.max(1.0) as u32).min(1920) },
             work_area: true,
@@ -445,7 +463,8 @@ impl Worker {
         let mut art = s.preview_tex.clone();
         let pngs = s.texture_pngs.clone();
         let model = s.puppet.model().clone();
-        let anims = s.animations.clone();
+        let mut anims = s.animations.clone();
+        anims.extend(s.baked_comps());
         let exprs = s.expressions.clone();
         let sidecar = match source {
             Source::Timelapse => {
@@ -1321,14 +1340,22 @@ impl EditorUi {
     /// Open the Render window on a source, keeping the last settings.
     pub(crate) fn open_render(&mut self, ctx: &egui::Context, source: Source) {
         let Some(s) = &self.session else { return };
-        let fps = s.current_anim.and_then(|i| s.animations.get(i)).map_or(30.0, |a| a.fps);
+        let fps = s
+            .current_comp
+            .and_then(|i| s.compositions.get(i))
+            .map(|c| c.fps)
+            .or_else(|| s.current_anim.and_then(|i| s.animations.get(i)).map(|a| a.fps))
+            .unwrap_or(30.0);
         let folder = s.aom_path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf()));
         let p = &self.prefs.render;
         let mut win = self.render_win.take().unwrap_or_else(|| {
             RenderWin::new(source, fps, s.puppet.model().canvas.width, folder, p)
         });
         win.source = source;
-        if let Some(i) = s.current_anim {
+        win.rebake(s);
+        if let Some(ci) = s.current_comp {
+            win.scene = s.animations.len() + ci;
+        } else if let Some(i) = s.current_anim {
             win.scene = i;
         }
         let _ = ctx;
@@ -1417,13 +1444,13 @@ impl EditorUi {
         if win.playing {
             match win.source {
                 Source::Animation => {
-                    if let Some(a) = s.animations.get(win.scene) {
+                    if let Some(dur) = win.anim(s).map(|a| a.duration) {
                         win.time += dt;
-                        if win.time > a.duration {
-                            if win.loop_on && a.duration > 0.0 {
-                                win.time %= a.duration;
+                        if win.time > dur {
+                            if win.loop_on && dur > 0.0 {
+                                win.time %= dur;
                             } else {
-                                win.time = a.duration.max(0.0);
+                                win.time = dur.max(0.0);
                                 win.playing = false;
                             }
                         }
@@ -1523,12 +1550,30 @@ impl EditorUi {
                         match win.source {
                             Source::Animation => {
                                 ui.label(tr("Scene"));
-                                let name = s.animations.get(win.scene).map(|a| a.name.clone()).unwrap_or_default();
+                                let name = win.anim(s).map(|a| a.name.clone()).unwrap_or_default();
+                                let n_scenes = s.animations.len();
+                                let mut pick = None;
                                 egui::ComboBox::from_id_salt("render-scene").selected_text(name).icon(no_icon).show_ui(ui, |ui| {
                                     for (i, a) in s.animations.iter().enumerate() {
-                                        ui.selectable_value(&mut win.scene, i, &a.name);
+                                        if ui.selectable_label(win.scene == i, &a.name).clicked() {
+                                            pick = Some(i);
+                                        }
+                                    }
+                                    if !s.compositions.is_empty() {
+                                        ui.separator();
+                                    }
+                                    for (i, c) in s.compositions.iter().enumerate() {
+                                        let label = format!("{} {}", egui_phosphor::regular::STACK, c.name);
+                                        if ui.selectable_label(win.scene == n_scenes + i, label).clicked() {
+                                            pick = Some(n_scenes + i);
+                                        }
                                     }
                                 });
+                                if let Some(i) = pick {
+                                    win.scene = i;
+                                    win.rebake(s);
+                                    win.worker = None;
+                                }
                                 ui.end_row();
                                 ui.label(tr("Expression"));
                                 let ename = win.expression.and_then(|i| s.expressions.get(i)).map_or_else(|| tr("None").to_string(), |e| e.name.clone());
@@ -1540,7 +1585,7 @@ impl EditorUi {
                                 });
                                 ui.end_row();
                                 ui.label(tr("Range"));
-                                let has_work = s.animations.get(win.scene).is_some_and(|a| a.work_area.is_some());
+                                let has_work = win.anim(s).is_some_and(|a| a.work_area.is_some());
                                 ui.add_enabled(has_work, egui::Checkbox::new(&mut win.work_area, tr("Work area only")));
                                 ui.end_row();
                             }
@@ -1633,7 +1678,8 @@ impl EditorUi {
             self.prefs.save();
         }
         if enqueue && let Some(folder) = win.folder.clone() {
-            let anim = s.animations.get(win.scene).cloned();
+            win.rebake(s);
+            let anim = win.anim(s).cloned();
             let stem = match (win.source, &anim) {
                 (Source::Timelapse, _) => format!("{}-timelapse", s.name),
                 (_, Some(a)) => format!("{}-{}", s.name, a.name),
@@ -1830,9 +1876,7 @@ impl RenderWin {
         // title strip: what plays, at what size and rate
         let strip = Rect::from_min_size(panel.min, vec2(pw, STRIP_H));
         let name = match self.source {
-            Source::Animation => {
-                s.animations.get(self.scene).map(|a| a.name.clone()).unwrap_or_default()
-            }
+            Source::Animation => self.anim(s).map(|a| a.name.clone()).unwrap_or_default(),
             Source::Timelapse => tr("Timelapse").to_string(),
         };
         let c = s.puppet.model().canvas;
@@ -1910,7 +1954,7 @@ impl RenderWin {
         b.spacing_mut().item_spacing.x = 2.0;
         let n = self.stamps.len();
         let last = n.saturating_sub(1);
-        let anim = s.animations.get(self.scene);
+        let anim = self.anim(s);
         let (dur, fps) = anim.map_or((0.0, 30.0), |a| (a.duration.max(0.0), a.fps));
         if icon_button(&mut b, egui_phosphor::regular::SKIP_BACK, false, tr("Start")).clicked() {
             self.time = 0.0;
@@ -2117,7 +2161,7 @@ impl RenderWin {
     }
 
     fn params_panel(&self, ui: &mut Ui, s: &crate::session::Session, h: f32, w: f32) {
-        let anim = s.animations.get(self.scene);
+        let anim = self.anim(s);
         let model = s.puppet.model();
         let live: Vec<&str> = anim
             .map(|a| {

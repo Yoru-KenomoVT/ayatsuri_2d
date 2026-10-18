@@ -212,13 +212,21 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
         refs.insert("Expressions".into(), json!(list));
     }
 
-    if opt.motions && !s.animations.is_empty() {
+    if opt.motions && (!s.animations.is_empty() || !s.compositions.is_empty()) {
         let mdir = dir.join("motions");
         std::fs::create_dir_all(&mdir).map_err(|e| format!("{}: {e}", mdir.display()))?;
         let mut group = Vec::new();
         for anim in &s.animations {
             let file = format!("{}.motion3.json", safe(&anim.name));
             write(&mdir.join(&file), &ayatsuri_import::to_motion3(anim), &mut written)?;
+            group.push(json!({ "File": format!("motions/{file}") }));
+        }
+        // compositions go out baked: a key every frame, flat like a
+        // rendered precomp
+        for comp in &s.compositions {
+            let baked = s.bake_comp(comp);
+            let file = format!("{}.motion3.json", safe(&comp.name));
+            write(&mdir.join(&file), &ayatsuri_import::to_motion3(&baked), &mut written)?;
             group.push(json!({ "File": format!("motions/{file}") }));
         }
         refs.insert("Motions".into(), json!({ "Idle": group }));

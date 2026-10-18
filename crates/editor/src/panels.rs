@@ -815,12 +815,14 @@ struct CrashShown {
     count: u32,
 }
 
-/// The New Animation dialog's working copy.
+/// The New Animation (or New Composition) dialog's working copy.
 struct AnimNew {
     name: String,
     fps: f32,
     duration: f32,
     looped: bool,
+    /// A composition of layers rather than a scene of curves.
+    comp: bool,
 }
 
 /// The Export as moc3 dialog's working copy.
@@ -1582,6 +1584,7 @@ impl EditorUi {
                 log::info!("imported motion {} ({} curves)", a.name, a.curves.len());
                 s.animations.push(a);
                 s.current_anim = Some(s.animations.len().saturating_sub(1));
+                s.current_comp = None;
                 s.modified = true;
                 self.anim_time = 0.0;
                 self.anim_applied = f32::NAN;
@@ -1950,7 +1953,26 @@ impl EditorUi {
                             name: "idle".into(),
                             fps: 30.0,
                             duration: 3.0,
-                            looped: true,
+                            looped: true, comp: false,
+                        });
+                    }
+                    if ui
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("New Composition…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            "Scenes and other compositions laid out as layers over one clock.",
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.new_anim = Some(AnimNew {
+                            name: "comp".into(),
+                            fps: 30.0,
+                            duration: 5.0,
+                            looped: false,
+                            comp: true,
                         });
                     }
                     if ui
@@ -2617,7 +2639,26 @@ impl EditorUi {
                             name: "idle".into(),
                             fps: 30.0,
                             duration: 3.0,
-                            looped: true,
+                            looped: true, comp: false,
+                        });
+                    }
+                    if ui
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("New Composition…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            "Scenes and other compositions laid out as layers over one clock.",
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.new_anim = Some(AnimNew {
+                            name: "comp".into(),
+                            fps: 30.0,
+                            duration: 5.0,
+                            looped: false,
+                            comp: true,
                         });
                     }
                     let has_anim = self.session.as_ref().is_some_and(|s| s.current_anim.is_some());
@@ -2877,117 +2918,178 @@ impl EditorUi {
         }
 
         // the animation clip drives parameters first, so follow and physics
-        // layer on top of it the way the reference player stacks them
-        if let Some(s) = &mut self.session
-            && let Some(ai) = s.current_anim
-            && let Some(anim) = s.animations.get(ai).cloned()
-        {
-            let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
-            if self.anim_playing {
-                // play runs inside the work area when the scene has one
-                let (w0, w1) = anim.work_area.unwrap_or((0.0, anim.duration));
-                let (w0, w1) = (w0.clamp(0.0, anim.duration), w1.clamp(w0, anim.duration));
-                if self.anim_time < w0 {
-                    self.anim_time = w0;
+        // layer on top of it the way the reference player stacks them; a
+        // composition drives them through its layers' blends over the rest
+        // pose instead
+        if let Some(s) = &mut self.session {
+            let comp = s.current_comp.and_then(|ci| s.compositions.get(ci).cloned());
+            let scene = match comp {
+                Some(_) => None,
+                None => {
+                    s.current_anim.and_then(|ai| s.animations.get(ai).cloned().map(|a| (ai, a)))
                 }
-                self.anim_time += dt;
-                if self.anim_time > w1 {
-                    if anim.looped && w1 > w0 {
-                        self.anim_time = w0 + (self.anim_time - w0) % (w1 - w0);
-                    } else {
-                        self.anim_time = w1;
-                        self.anim_playing = false;
+            };
+            let clock = comp
+                .as_ref()
+                .map(|c| (c.duration, c.looped, c.work_area))
+                .or_else(|| scene.as_ref().map(|(_, a)| (a.duration, a.looped, a.work_area)));
+            if let Some((duration, looped, work_area)) = clock {
+                let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+                if self.anim_playing {
+                    // play runs inside the work area when there is one
+                    let (w0, w1) = work_area.unwrap_or((0.0, duration));
+                    let (w0, w1) = (w0.clamp(0.0, duration), w1.clamp(w0, duration));
+                    if self.anim_time < w0 {
+                        self.anim_time = w0;
                     }
+                    self.anim_time += dt;
+                    if self.anim_time > w1 {
+                        if looped && w1 > w0 {
+                            self.anim_time = w0 + (self.anim_time - w0) % (w1 - w0);
+                        } else {
+                            self.anim_time = w1;
+                            self.anim_playing = false;
+                        }
+                    }
+                    ui.ctx().request_repaint();
                 }
-                ui.ctx().request_repaint();
-            }
-            let moved = self.anim_time != self.anim_applied;
-            if moved || self.anim_playing {
-                for c in &anim.curves {
-                    let Some(v) = ayatsuri_core::anim::sample(&anim, c, self.anim_time) else {
-                        continue;
-                    };
-                    match c.target {
-                        ayatsuri_format::CurveTarget::Parameter => {
-                            if let Some(pi) =
-                                s.puppet.model().parameters.iter().position(|p| p.id == c.id)
-                            {
-                                s.puppet.set_value(pi, v);
+                let moved = self.anim_time != self.anim_applied;
+                if moved || self.anim_playing {
+                    if let Some(c) = &comp {
+                        let scope = ayatsuri_core::comp::Scope {
+                            scenes: &s.animations,
+                            comps: &s.compositions,
+                        };
+                        for ((target, id), b) in
+                            ayatsuri_core::comp::sample(&scope, c, self.anim_time)
+                        {
+                            match target {
+                                ayatsuri_format::CurveTarget::Parameter => {
+                                    if let Some((pi, p)) = s
+                                        .puppet
+                                        .model()
+                                        .parameters
+                                        .iter()
+                                        .enumerate()
+                                        .find(|(_, p)| p.id == id)
+                                    {
+                                        let v = b.over(p.default);
+                                        s.puppet.set_value(pi, v);
+                                    }
+                                }
+                                ayatsuri_format::CurveTarget::PartOpacity => {
+                                    if let Some(i) =
+                                        s.puppet.model().parts.iter().position(|p| p.id == id)
+                                    {
+                                        let shown = s.part_shown.get(i).copied().unwrap_or(true);
+                                        let v = b.over(1.0);
+                                        s.puppet.set_part_opacity(i, if shown { v } else { 0.0 });
+                                    }
+                                }
+                                ayatsuri_format::CurveTarget::Model => {}
                             }
                         }
-                        // animated part opacity sits under the editor's own
-                        // show/hide: a hidden part stays hidden
-                        ayatsuri_format::CurveTarget::PartOpacity => {
-                            if let Some(i) =
-                                s.puppet.model().parts.iter().position(|p| p.id == c.id)
-                            {
-                                let shown = s.part_shown.get(i).copied().unwrap_or(true);
-                                s.puppet.set_part_opacity(i, if shown { v } else { 0.0 });
+                    } else if let Some((_, anim)) = &scene {
+                        for c in &anim.curves {
+                            let Some(v) = ayatsuri_core::anim::sample(anim, c, self.anim_time)
+                            else {
+                                continue;
+                            };
+                            match c.target {
+                                ayatsuri_format::CurveTarget::Parameter => {
+                                    if let Some(pi) = s
+                                        .puppet
+                                        .model()
+                                        .parameters
+                                        .iter()
+                                        .position(|p| p.id == c.id)
+                                    {
+                                        s.puppet.set_value(pi, v);
+                                    }
+                                }
+                                // animated part opacity sits under the editor's own
+                                // show/hide: a hidden part stays hidden
+                                ayatsuri_format::CurveTarget::PartOpacity => {
+                                    if let Some(i) =
+                                        s.puppet.model().parts.iter().position(|p| p.id == c.id)
+                                    {
+                                        let shown = s.part_shown.get(i).copied().unwrap_or(true);
+                                        s.puppet.set_part_opacity(i, if shown { v } else { 0.0 });
+                                    }
+                                }
+                                // model opacity, eye blink and lip sync are player
+                                // effects; the editor plays the parameters they drive
+                                ayatsuri_format::CurveTarget::Model => {}
                             }
                         }
-                        // model opacity, eye blink and lip sync are player
-                        // effects; the editor plays the parameters they drive
-                        ayatsuri_format::CurveTarget::Model => {}
                     }
-                }
-                self.anim_applied = self.anim_time;
-                s.dirty = true;
-            } else if self.anim_autokey && !self.follow_cursor {
-                // auto key: whatever the user moved since the playhead
-                // stopped becomes a key at this time; physics outputs are
-                // left alone while the rig is writing them
-                let physics_out: std::collections::HashSet<String> = if self.physics_on {
-                    s.puppet
-                        .model()
-                        .physics
-                        .as_ref()
-                        .map(|r| {
-                            r.groups
-                                .iter()
-                                .flat_map(|g| g.outputs.iter().map(|o| o.param.clone()))
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                } else {
-                    std::collections::HashSet::new()
-                };
-                let mut keyed = Vec::new();
-                for (pi, p) in s.puppet.model().parameters.iter().enumerate() {
-                    if physics_out.contains(&p.id) {
-                        continue;
-                    }
-                    let reference = ayatsuri_core::anim::param_curve(&anim, &p.id)
-                        .and_then(|c| ayatsuri_core::anim::sample(&anim, c, self.anim_time))
-                        .unwrap_or(p.default);
-                    let v = s.puppet.value(pi);
-                    let eps = 0.1f32.powi(p.decimals.clamp(0, 6)) * 0.5;
-                    if (v - reference).abs() > eps {
-                        keyed.push((p.id.clone(), v));
-                    }
-                }
-                if !keyed.is_empty()
-                    && !ui.ctx().input(|i| i.pointer.any_down())
-                    && let Some(a) = s.animations.get_mut(ai)
+                    self.anim_applied = self.anim_time;
+                    s.dirty = true;
+                } else if self.anim_autokey
+                    && !self.follow_cursor
+                    && let Some((ai, anim)) = &scene
                 {
-                    self.timeline.remember(ai, a, None);
-                    let fps_a = a.fps;
-                    for (id, v) in &keyed {
-                        if let Some(c) = ayatsuri_core::anim::curve_mut(
-                            a,
-                            ayatsuri_format::CurveTarget::Parameter,
-                            id,
-                        ) {
-                            ayatsuri_core::anim::set_key(
-                                c,
-                                self.anim_time,
-                                *v,
-                                fps_a,
-                                ayatsuri_format::Interp::Auto,
-                            );
+                    let ai = *ai;
+                    // auto key: whatever the user moved since the playhead
+                    // stopped becomes a key at this time; physics outputs are
+                    // left alone while the rig is writing them
+                    let physics_out: std::collections::HashSet<String> = if self.physics_on {
+                        s.puppet
+                            .model()
+                            .physics
+                            .as_ref()
+                            .map(|r| {
+                                r.groups
+                                    .iter()
+                                    .flat_map(|g| g.outputs.iter().map(|o| o.param.clone()))
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                    let mut keyed = Vec::new();
+                    for (pi, p) in s.puppet.model().parameters.iter().enumerate() {
+                        if physics_out.contains(&p.id) {
+                            continue;
+                        }
+                        let reference = ayatsuri_core::anim::param_curve(anim, &p.id)
+                            .and_then(|c| ayatsuri_core::anim::sample(anim, c, self.anim_time))
+                            .unwrap_or(p.default);
+                        let v = s.puppet.value(pi);
+                        let eps = 0.1f32.powi(p.decimals.clamp(0, 6)) * 0.5;
+                        if (v - reference).abs() > eps {
+                            keyed.push((p.id.clone(), v));
                         }
                     }
-                    s.modified = true;
-                    log::debug!("auto key: {} parameter(s) at {:.3}s", keyed.len(), self.anim_time);
+                    if !keyed.is_empty()
+                        && !ui.ctx().input(|i| i.pointer.any_down())
+                        && let Some(a) = s.animations.get_mut(ai)
+                    {
+                        self.timeline.remember(ai, a, None);
+                        let fps_a = a.fps;
+                        for (id, v) in &keyed {
+                            if let Some(c) = ayatsuri_core::anim::curve_mut(
+                                a,
+                                ayatsuri_format::CurveTarget::Parameter,
+                                id,
+                            ) {
+                                ayatsuri_core::anim::set_key(
+                                    c,
+                                    self.anim_time,
+                                    *v,
+                                    fps_a,
+                                    ayatsuri_format::Interp::Auto,
+                                );
+                            }
+                        }
+                        s.modified = true;
+                        log::debug!(
+                            "auto key: {} parameter(s) at {:.3}s",
+                            keyed.len(),
+                            self.anim_time
+                        );
+                    }
                 }
             }
         }
@@ -3990,8 +4092,13 @@ impl EditorUi {
             sel_param: &mut self.sel_param,
         };
         if let Some(crate::timeline::Request::NewScene) = self.timeline.show(ui, s, &mut tp) {
-            self.new_anim =
-                Some(AnimNew { name: "idle".into(), fps: 30.0, duration: 3.0, looped: true });
+            self.new_anim = Some(AnimNew {
+                name: "idle".into(),
+                fps: 30.0,
+                duration: 3.0,
+                looped: true,
+                comp: false,
+            });
         }
         // K keys the selected parameter row by hand
         if ui.ctx().input(|i| i.key_pressed(egui::Key::K))
@@ -4024,47 +4131,63 @@ impl EditorUi {
         let Some(new) = &mut self.new_anim else { return };
         let mut open = true;
         let mut create = false;
-        crate::windows::Dialog::new(crate::i18n::tr("New Animation")).open(&mut open).show(
-            ui.ctx(),
-            |ui| {
-                crate::windows::form(ui, "anew", |ui| {
-                    ui.label(crate::i18n::tr("Name"));
-                    ui.text_edit_singleline(&mut new.name);
-                    ui.end_row();
-                    ui.label(crate::i18n::tr("FPS"));
-                    ui.add(egui::DragValue::new(&mut new.fps).range(1.0..=120.0));
-                    ui.end_row();
-                    ui.label(crate::i18n::tr("Length"));
-                    ui.add(
-                        egui::DragValue::new(&mut new.duration)
-                            .range(0.1..=600.0)
-                            .speed(0.05)
-                            .suffix(" s"),
-                    );
-                    ui.end_row();
-                    ui.label(crate::i18n::tr("Loop"));
-                    ui.checkbox(&mut new.looped, "");
-                    ui.end_row();
-                });
-                ui.weak(crate::i18n::tr(
-                    "Saved inside the .aom; exported as motions/<name>.motion3.json.",
-                ));
-                if ui.button(crate::i18n::tr("Create")).clicked() {
-                    create = true;
-                }
-            },
-        );
+        let title = if new.comp { "New Composition" } else { "New Animation" };
+        crate::windows::Dialog::new(crate::i18n::tr(title)).open(&mut open).show(ui.ctx(), |ui| {
+            crate::windows::form(ui, "anew", |ui| {
+                ui.label(crate::i18n::tr("Name"));
+                ui.text_edit_singleline(&mut new.name);
+                ui.end_row();
+                ui.label(crate::i18n::tr("FPS"));
+                ui.add(egui::DragValue::new(&mut new.fps).range(1.0..=120.0));
+                ui.end_row();
+                ui.label(crate::i18n::tr("Length"));
+                ui.add(
+                    egui::DragValue::new(&mut new.duration)
+                        .range(0.1..=600.0)
+                        .speed(0.05)
+                        .suffix(" s"),
+                );
+                ui.end_row();
+                ui.label(crate::i18n::tr("Loop"));
+                ui.checkbox(&mut new.looped, "");
+                ui.end_row();
+            });
+            ui.weak(crate::i18n::tr(if new.comp {
+                "Saved inside the .aom; exported baked as motions/<name>.motion3.json."
+            } else {
+                "Saved inside the .aom; exported as motions/<name>.motion3.json."
+            }));
+            if ui.button(crate::i18n::tr("Create")).clicked() {
+                create = true;
+            }
+        });
         if create {
             if let (Some(n), Some(s)) = (self.new_anim.take(), &mut self.session) {
-                let name = if n.name.trim().is_empty() { "motion".into() } else { n.name };
-                s.animations.push(ayatsuri_format::Animation {
-                    name: name.clone(),
-                    fps: n.fps,
-                    duration: n.duration,
-                    looped: n.looped,
-                    ..ayatsuri_format::Animation::default()
-                });
-                s.current_anim = Some(s.animations.len() - 1);
+                let name = if n.name.trim().is_empty() {
+                    if n.comp { "comp".into() } else { "motion".into() }
+                } else {
+                    n.name
+                };
+                if n.comp {
+                    s.compositions.push(ayatsuri_format::Composition {
+                        name: name.clone(),
+                        fps: n.fps,
+                        duration: n.duration,
+                        looped: n.looped,
+                        ..ayatsuri_format::Composition::default()
+                    });
+                    s.current_comp = Some(s.compositions.len() - 1);
+                } else {
+                    s.animations.push(ayatsuri_format::Animation {
+                        name: name.clone(),
+                        fps: n.fps,
+                        duration: n.duration,
+                        looped: n.looped,
+                        ..ayatsuri_format::Animation::default()
+                    });
+                    s.current_anim = Some(s.animations.len() - 1);
+                    s.current_comp = None;
+                }
                 s.modified = true;
                 self.anim_time = 0.0;
                 self.anim_applied = f32::NAN;
@@ -5249,17 +5372,29 @@ impl EditorUi {
     /// next key of any curve, play/pause.
     fn timeline_key(&mut self, id: &str) {
         let Some(s) = &self.session else { return };
-        let Some(anim) = s.current_anim.and_then(|i| s.animations.get(i)) else { return };
-        let frame = 1.0 / anim.fps.max(1.0);
+        // in a composition the layers' ends stand in for keys
+        let (fps, duration, mut keys): (f32, f32, Vec<f32>) =
+            if let Some(c) = s.current_comp.and_then(|i| s.compositions.get(i)) {
+                let ends = c
+                    .layers
+                    .iter()
+                    .flat_map(|l| [l.start, ayatsuri_core::comp::layer_end(l)])
+                    .collect();
+                (c.fps, c.duration, ends)
+            } else if let Some(anim) = s.current_anim.and_then(|i| s.animations.get(i)) {
+                let ks = anim.curves.iter().flat_map(|c| c.keys.iter().map(|k| k.time)).collect();
+                (anim.fps, anim.duration, ks)
+            } else {
+                return;
+            };
+        let frame = 1.0 / fps.max(1.0);
         let t = self.anim_time;
-        let mut keys: Vec<f32> =
-            anim.curves.iter().flat_map(|c| c.keys.iter().map(|k| k.time)).collect();
         keys.sort_by(f32::total_cmp);
         self.anim_time = match id {
             "anim-first" => 0.0,
-            "anim-last" => anim.duration,
+            "anim-last" => duration,
             "anim-prev-frame" => (t - frame).max(0.0),
-            "anim-next-frame" => (t + frame).min(anim.duration),
+            "anim-next-frame" => (t + frame).min(duration),
             "anim-prev-key" => keys.iter().rev().copied().find(|k| *k < t - 1e-4).unwrap_or(t),
             "anim-next-key" => keys.iter().copied().find(|k| *k > t + 1e-4).unwrap_or(t),
             _ => t,

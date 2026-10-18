@@ -1635,6 +1635,28 @@ impl Session {
     }
 
     /// Save this session as `.aom`, atomically, and remember the path.
+    /// What compositions can reach: every scene and composition here.
+    pub fn comp_scope(&self) -> ayatsuri_core::comp::Scope<'_> {
+        ayatsuri_core::comp::Scope { scenes: &self.animations, comps: &self.compositions }
+    }
+
+    /// A composition flattened into a scene over the model's rest pose,
+    /// for everything that plays or writes scenes.
+    pub fn bake_comp(&self, comp: &ayatsuri_format::Composition) -> ayatsuri_format::Animation {
+        let model = self.puppet.model();
+        ayatsuri_core::comp::bake(&self.comp_scope(), comp, |target, id| match target {
+            ayatsuri_format::CurveTarget::Parameter => {
+                model.parameters.iter().find(|p| p.id == id).map_or(0.0, |p| p.default)
+            }
+            _ => 1.0,
+        })
+    }
+
+    /// Every composition baked, in order.
+    pub fn baked_comps(&self) -> Vec<ayatsuri_format::Animation> {
+        self.compositions.iter().map(|c| self.bake_comp(c)).collect()
+    }
+
     /// The model, textures, animations and display info as one payload.
     fn payload(&self) -> AomPayload {
         AomPayload {
