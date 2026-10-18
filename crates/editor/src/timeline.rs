@@ -53,7 +53,8 @@ enum View {
 
 /// A scene or composition as it was before an edit, for the palette's undo.
 enum Snap {
-    Scene(usize, Animation),
+    /// A scene, and the composition it was being edited through, if any.
+    Scene(usize, Animation, Option<usize>),
     Comp(usize, Composition),
 }
 
@@ -224,6 +225,12 @@ pub struct Timeline {
     layer_drag: Option<LayerDrag>,
     /// The composition to go back to after opening one of its layers.
     back: Option<usize>,
+    /// In a composition, the layer whose scene keys are selected and
+    /// edited in place; its keys are named in the scene's own frames.
+    edit_layer: Option<usize>,
+    /// The composition on show while a scene snapshot is kept, so undo
+    /// comes back to it.
+    in_comp: Option<usize>,
     /// The last click landed in the palette, so Delete and Escape are its
     /// and its shortcuts go before the editor's.
     pub focused: bool,
@@ -295,6 +302,8 @@ impl Default for Timeline {
             sel_layer: None,
             layer_drag: None,
             back: None,
+            edit_layer: None,
+            in_comp: None,
             focused: false,
             pending: Vec::new(),
             frames: 0,
@@ -611,7 +620,7 @@ impl Timeline {
     /// Keep the scene as it is before an edit. Edits that share a merge key
     /// while the pointer stays down fold into the step already kept.
     pub fn remember(&mut self, ai: usize, anim: &Animation, merge: Option<&'static str>) {
-        self.keep(Snap::Scene(ai, anim.clone()), merge);
+        self.keep(Snap::Scene(ai, anim.clone(), self.in_comp), merge);
     }
 
     /// The same for a composition before a layer edit.
@@ -634,11 +643,11 @@ impl Timeline {
     /// Put a kept scene or composition back, handing out what it replaced.
     fn swap(s: &mut Session, snap: Snap) -> Option<Snap> {
         match snap {
-            Snap::Scene(ai, before) => {
+            Snap::Scene(ai, before, via) => {
                 let a = s.animations.get_mut(ai)?;
                 s.current_anim = Some(ai);
-                s.current_comp = None;
-                Some(Snap::Scene(ai, std::mem::replace(a, before)))
+                s.current_comp = via.filter(|ci| *ci < s.compositions.len());
+                Some(Snap::Scene(ai, std::mem::replace(a, before), via))
             }
             Snap::Comp(ci, before) => {
                 let c = s.compositions.get_mut(ci)?;
@@ -929,7 +938,10 @@ impl Timeline {
         };
         if comp.is_some() {
             self.graph = false;
+        } else {
+            self.edit_layer = None;
         }
+        self.in_comp = s.current_comp;
         let fps = anim.fps.max(1.0);
         let frame_s = 1.0 / fps;
         let duration = anim.duration.max(frame_s);
@@ -1067,6 +1079,7 @@ impl Timeline {
             }
             self.back = None;
             self.sel_layer = None;
+            self.edit_layer = None;
             self.selected.clear();
             *tp.applied = f32::NAN;
         }
@@ -1840,6 +1853,7 @@ impl Timeline {
                     if r_body.clicked() || r_name.clicked() {
                         self.focused = true;
                         self.sel_layer = Some(li);
+                        self.selected.clear();
                     }
                     if r_body.secondary_clicked() || r_name.secondary_clicked() {
                         self.sel_layer = Some(li);
@@ -1958,49 +1972,158 @@ impl Timeline {
                     let Some(l) = c.layers.get(li) else { continue };
                     let LayerSource::Scene(name) = &l.source else { continue };
                     let Some(a) = s.animations.iter().find(|a| &a.name == name) else { continue };
+                    let sfps = a.fps.max(1.0);
+                    let speed = l.speed.max(1e-3);
+                    let to_comp = |t: f32| l.start + (t - l.in_point) / speed;
+                    let in_scene = |t: f32| l.in_point + (t - l.start) * speed;
                     lp.text(
                         pos2(indent, cy),
                         Align2::LEFT_CENTER,
-                        fit_text(
-                            &lp,
-                            &row.label,
-                            &name_font,
-                            pal.text_faint,
-                            value_x - indent - 6.0,
-                        ),
+                        fit_text(&lp, &row.label, &name_font, pal.text, value_x - indent - 6.0),
                         name_font.clone(),
-                        pal.text_faint,
+                        pal.text,
                     );
-                    // the scene's keys where they land on this clock; the
-                    // scene itself is where they are edited
-                    let Some((target, id)) = row.curve.as_ref() else { continue };
-                    let Some(curve) = a.curves.iter().find(|c| c.target == *target && &c.id == id)
-                    else {
-                        continue;
-                    };
+                    let Some((target, id)) = row.curve.clone() else { continue };
+                    let keys: &[Key] = a
+                        .curves
+                        .iter()
+                        .find(|c| c.target == target && c.id == id)
+                        .map(|c| c.keys.as_slice())
+                        .unwrap_or(&[]);
+                    // the playhead in the scene's own frames
+                    let here = (in_scene(*tp.time) * sfps).round() as i64;
+                    let on_key = keys.iter().any(|k| (k.time * sfps).round() as i64 == here);
+                    let nav_c = pos2(keys_x + 25.0, cy);
+                    let has_prev =
+                        keys.first().is_some_and(|k| ((k.time * sfps).round() as i64) < here);
+                    let has_next =
+                        keys.last().is_some_and(|k| (k.time * sfps).round() as i64 > here);
+                    lp.text(
+                        nav_c + vec2(-16.0, 0.0),
+                        Align2::CENTER_CENTER,
+                        egui_phosphor::regular::CARET_LEFT,
+                        FontId::proportional(11.0),
+                        if has_prev { pal.text } else { pal.text_faint.gamma_multiply(0.5) },
+                    );
+                    lp.text(
+                        nav_c + vec2(16.0, 0.0),
+                        Align2::CENTER_CENTER,
+                        egui_phosphor::regular::CARET_RIGHT,
+                        FontId::proportional(11.0),
+                        if has_next { pal.text } else { pal.text_faint.gamma_multiply(0.5) },
+                    );
+                    lp.add(Shape::convex_polygon(
+                        vec![
+                            nav_c + vec2(0.0, -5.0),
+                            nav_c + vec2(5.0, 0.0),
+                            nav_c + vec2(0.0, 5.0),
+                            nav_c + vec2(-5.0, 0.0),
+                        ],
+                        if on_key { pal.accent } else { Color32::TRANSPARENT },
+                        Stroke::new(1.0, if on_key { pal.accent } else { pal.text_faint }),
+                    ));
+                    let nav_id = ui.id().with(("tl-lnav", i));
+                    let r_prev = ui.interact(
+                        Rect::from_center_size(nav_c + vec2(-16.0, 0.0), vec2(14.0, 16.0)),
+                        nav_id.with("prev"),
+                        Sense::click(),
+                    );
+                    let r_key = ui.interact(
+                        Rect::from_center_size(nav_c, vec2(14.0, 16.0)),
+                        nav_id.with("key"),
+                        Sense::click(),
+                    );
+                    let r_next = ui.interact(
+                        Rect::from_center_size(nav_c + vec2(16.0, 0.0), vec2(14.0, 16.0)),
+                        nav_id.with("next"),
+                        Sense::click(),
+                    );
+                    let mut take = false;
+                    if r_prev.on_hover_text(tr("Previous key")).clicked() && has_prev {
+                        edits.push(Edit::JumpKey(target, id.clone(), false));
+                        take = true;
+                    }
+                    if r_next.on_hover_text(tr("Next key")).clicked() && has_next {
+                        edits.push(Edit::JumpKey(target, id.clone(), true));
+                        take = true;
+                    }
+                    if r_key.on_hover_text(tr("Add or remove a key here")).clicked() {
+                        edits.push(Edit::ToggleKey(target, id.clone()));
+                        take = true;
+                    }
+                    if take && self.edit_layer != Some(li) {
+                        self.selected.clear();
+                        self.edit_layer = Some(li);
+                    }
+
+                    // the keys where they land on this clock; a click or
+                    // drag edits them in the scene through the layer
                     ui.set_clip_rect(rows_right.intersect(outer_clip));
-                    let speed = l.speed.max(1e-3);
-                    for (ki, k) in curve.keys.iter().enumerate() {
-                        if k.time < l.in_point || k.time > l.out_point {
+                    let mine = self.edit_layer == Some(li);
+                    for (ki, k) in keys.iter().enumerate() {
+                        if k.time < l.in_point - 1e-6 || k.time > l.out_point + 1e-6 {
                             continue;
                         }
-                        let x = tm.x(l.start + (k.time - l.in_point) / speed);
+                        let frame = (k.time * sfps).round() as i64;
+                        let kref = KeyRef { target: tgt(target), id: id.clone(), frame };
+                        let is_sel = mine && self.selected.contains(&kref);
+                        let ct = to_comp(k.time);
+                        if !is_sel {
+                            snap_times.push(ct);
+                        }
+                        let x = tm.x(ct);
                         if x < rr.min.x - 8.0 || x > rr.max.x + 8.0 {
                             continue;
                         }
-                        let left_half = curve
-                            .keys
+                        let c = pos2(x, cy);
+                        if mine {
+                            key_hits.push((kref.clone(), c));
+                        }
+                        let left_half = keys
                             .get(ki.wrapping_sub(1))
                             .map(|prev| half_of(prev.interp))
                             .unwrap_or(half_of(k.interp));
-                        key_glyph(
-                            &gp,
-                            pos2(x, cy),
-                            KEY_PX - 2.0,
-                            left_half,
-                            half_of(k.interp),
-                            pal.text_faint,
-                        );
+                        let fill = if is_sel { pal.accent } else { pal.text };
+                        key_glyph(&gp, c, KEY_PX, left_half, half_of(k.interp), fill);
+                        let resp = ui
+                            .interact(
+                                Rect::from_center_size(c, vec2(12.0, 14.0)),
+                                ui.id().with(("tl-lkey", li, kref.target, &kref.id, frame)),
+                                Sense::click_and_drag(),
+                            )
+                            .on_hover_text(format!(
+                                "{:.3} {} {}",
+                                k.value,
+                                tr("at"),
+                                timecode(ct, fps)
+                            ));
+                        if (resp.clicked() || resp.secondary_clicked() || resp.drag_started())
+                            && !mine
+                        {
+                            self.selected.clear();
+                            self.edit_layer = Some(li);
+                            self.sel_layer = None;
+                        }
+                        if self
+                            .key_clicks(&resp, &kref, k, keys, target, &id, sfps, mods, &mut edits)
+                        {
+                            edits.push(Edit::Seek(ct));
+                            *tp.playing = false;
+                        }
+                        if resp.drag_started()
+                            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                        {
+                            self.focused = true;
+                            self.sel_layer = None;
+                            if !is_sel {
+                                if !mods.shift {
+                                    self.selected.clear();
+                                }
+                                self.selected.insert(kref.clone());
+                            }
+                            self.drag =
+                                Some(KeyDrag { origin_x: origin.x, anchor: ct, applied: 0 });
+                        }
                     }
                     ui.set_clip_rect(rect.intersect(outer_clip));
                 }
@@ -2662,10 +2785,10 @@ impl Timeline {
                 )
             });
             if del {
-                if let (Some(li), Some(_)) = (self.sel_layer, &comp) {
-                    edits.push(Edit::LayerRemove(li));
-                } else if !self.selected.is_empty() {
+                if !self.selected.is_empty() {
                     edits.push(Edit::Delete);
+                } else if let (Some(li), Some(_)) = (self.sel_layer, &comp) {
+                    edits.push(Edit::LayerRemove(li));
                 }
             }
             if esc {
@@ -2903,6 +3026,48 @@ impl Timeline {
         request
     }
 
+    /// A key edit made through a layer in the composition view: the
+    /// layer's scene takes it, with times mapped through the layer's
+    /// start, in point and speed, and the playhead mapped back.
+    fn apply_in_layer(
+        &mut self,
+        s: &mut Session,
+        ci: usize,
+        li: usize,
+        e: Edit,
+        tp: &mut Transport,
+        fps: f32,
+    ) {
+        let Some(l) = s.compositions.get(ci).and_then(|c| c.layers.get(li)).cloned() else {
+            return;
+        };
+        let LayerSource::Scene(name) = &l.source else { return };
+        let Some(si) = s.animations.iter().position(|a| &a.name == name) else { return };
+        let sfps = s.animations.get(si).map_or(30.0, |a| a.fps).max(1.0);
+        let speed = l.speed.max(1e-3);
+        let e = match e {
+            Edit::Move(n) => Edit::Move((n as f32 / fps.max(1.0) * speed * sfps).round() as i64),
+            Edit::SetHandle(k, out, (dt, dv)) => Edit::SetHandle(k, out, (dt * speed, dv)),
+            other => other,
+        };
+        let mut t = l.in_point + (*tp.time - l.start) * speed;
+        let was = t;
+        {
+            let mut inner = Transport {
+                time: &mut t,
+                playing: &mut *tp.playing,
+                autokey: &mut *tp.autokey,
+                applied: &mut *tp.applied,
+                sel_param: &mut *tp.sel_param,
+            };
+            self.apply(s, si, e, &mut inner, sfps);
+        }
+        if (t - was).abs() > 1e-6 {
+            *tp.time = l.start + (t - l.in_point) / speed;
+        }
+        *tp.applied = f32::NAN;
+    }
+
     /// Edits of a composition: its clock and its layers.
     fn apply_comp(&mut self, s: &mut Session, ci: usize, e: Edit, tp: &mut Transport, fps: f32) {
         let frame_s = 1.0 / fps.max(1.0);
@@ -2917,6 +3082,24 @@ impl Timeline {
                 *tp.time = t.max(0.0);
                 return;
             }
+            Edit::Value(..) | Edit::PartValue(..) => {
+                // the puppet's own, the same in either view
+                self.apply(s, usize::MAX, e, tp, fps);
+                return;
+            }
+            Edit::Move(_)
+            | Edit::SetInterp(_)
+            | Edit::Delete
+            | Edit::Offset(_)
+            | Edit::SetHandle(..)
+            | Edit::ToggleKey(..)
+            | Edit::AddKey(..)
+            | Edit::JumpKey(..) => {
+                if let Some(li) = self.edit_layer {
+                    self.apply_in_layer(s, ci, li, e, tp, fps);
+                }
+                return;
+            }
             Edit::Duration(d) => {
                 merge = Some("duration");
                 next.duration = d.max(frame_s);
@@ -2929,22 +3112,77 @@ impl Timeline {
                 next.work_area = w;
             }
             Edit::InsertFrames(n) => {
+                // later layers move on; a layer across the playhead is cut
+                // there and its tail moves on, so a gap opens inside it
                 let dt = n as f32 / fps;
-                for l in &mut next.layers {
+                let mut out = Vec::with_capacity(next.layers.len() + 1);
+                for mut l in next.layers.drain(..) {
+                    let end = ayatsuri_core::comp::layer_end(&l);
                     if l.start >= at - frame_s * 0.5 {
                         l.start += dt;
+                        out.push(l);
+                    } else if end > at + frame_s * 0.5 {
+                        let cut = l.in_point + (at - l.start) * l.speed.max(1e-3);
+                        let mut tail = l.clone();
+                        tail.start = at + dt;
+                        tail.in_point = cut;
+                        tail.fade_in = 0.0;
+                        l.out_point = cut;
+                        l.fade_out = 0.0;
+                        out.push(tail);
+                        out.push(l);
+                    } else {
+                        out.push(l);
                     }
                 }
+                next.layers = out;
                 next.duration += dt;
+                self.edit_layer = None;
+                self.selected.clear();
             }
             Edit::RemoveFrames(n) => {
+                // the span [at, at + dt) comes out: later layers move back,
+                // a layer starting inside it loses that much of its head,
+                // one across it loses that much of its middle
                 let dt = (n as f32 / fps).min((next.duration - frame_s).max(0.0));
-                for l in &mut next.layers {
-                    if l.start >= at - frame_s * 0.5 {
-                        l.start = (l.start - dt).max(at);
+                let mut out = Vec::with_capacity(next.layers.len() + 1);
+                for mut l in next.layers.drain(..) {
+                    let speed = l.speed.max(1e-3);
+                    let end = ayatsuri_core::comp::layer_end(&l);
+                    let eps = frame_s * 0.5;
+                    if l.start >= at + dt - eps {
+                        l.start -= dt;
+                        out.push(l);
+                    } else if l.start >= at - eps {
+                        let lost = (at + dt - l.start) * speed;
+                        l.in_point += lost;
+                        l.start = at;
+                        if l.out_point - l.in_point > eps * speed {
+                            out.push(l);
+                        }
+                    } else if end > at + eps {
+                        let cut = l.in_point + (at - l.start) * speed;
+                        if end <= at + dt + eps {
+                            l.out_point = cut;
+                            out.push(l);
+                        } else {
+                            let mut tail = l.clone();
+                            tail.start = at;
+                            tail.in_point = cut + dt * speed;
+                            tail.fade_in = 0.0;
+                            l.out_point = cut;
+                            l.fade_out = 0.0;
+                            out.push(tail);
+                            out.push(l);
+                        }
+                    } else {
+                        out.push(l);
                     }
                 }
+                next.layers = out;
                 next.duration = (next.duration - dt).max(frame_s);
+                self.edit_layer = None;
+                self.selected.clear();
             }
             Edit::LayerSpan(li, start, in_point, out_point) => {
                 merge = Some("layer-span");
@@ -2981,6 +3219,8 @@ impl Timeline {
                 }
                 next.layers.remove(li);
                 self.sel_layer = None;
+                self.edit_layer = None;
+                self.selected.clear();
             }
             Edit::LayerOrder(li, up) => {
                 let to = if up { li.checked_sub(1) } else { Some(li + 1) };
@@ -2990,11 +3230,15 @@ impl Timeline {
                 };
                 next.layers.swap(li, to);
                 self.sel_layer = Some(to);
+                self.edit_layer = None;
+                self.selected.clear();
             }
             Edit::LayerDup(li) => {
                 let Some(l) = next.layers.get(li).cloned() else { return };
                 next.layers.insert(li, l);
                 self.sel_layer = Some(li);
+                self.edit_layer = None;
+                self.selected.clear();
             }
             Edit::LayerSplit(li) => {
                 let Some(l) = next.layers.get(li).cloned() else { return };
@@ -3035,7 +3279,6 @@ impl Timeline {
                     }
                 }
             }
-            _ => return,
         }
         if next == c {
             return;
