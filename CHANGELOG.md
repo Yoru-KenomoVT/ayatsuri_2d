@@ -44,7 +44,7 @@
   an opacity curve. Each row has a value that drags or types, and
   previous key, key here, next key buttons; the key button fills when the
   playhead sits on a key and adds or removes one. Keys in the lanes are
-  drawn by interpolation (a half disc for auto smooth, a diamond for
+  drawn by interpolation (a diamond for auto smooth and
   linear, a square for a step, an hourglass for a bezier); they select,
   Shift-select, box select, drag by whole frames with Shift snapping to
   other keys and the playhead, Ctrl-click to flip linear and auto, and
@@ -64,7 +64,22 @@
   value, handles on every selected key (a drag turns the segment into a
   bezier; the other handle swings with it unless Alt is held), and pills
   for the interpolation. The layout and the key
-  glyphs follow EffectCraft's timeline (MIT or Apache-2.0).
+  glyphs follow EffectCraft's timeline (MIT or Apache-2.0). Auto smooth
+  keys draw as diamonds, like Live2D; a hold is a square and a free
+  bezier an hourglass. The top row folds everything under it.
+- **Compositions.** `Animation > New Composition…` makes a timeline of
+  layers, the way After Effects nests comps: each layer plays a stretch
+  of a scene (or another composition) from a start time, at a speed,
+  faded in and out, and mixes over the layers beneath it by its weight.
+  The Timeline shows a composition as bars: slide one, trim either end
+  (Shift snaps to other layers and the playhead), right-click it for
+  fades, speed, split at the playhead, order, duplicate or delete, and
+  double-click it to open its scene (a button leads back). `[` and `]`
+  put a layer's start or end at the playhead, `Ctrl+D` doubles it,
+  `Ctrl+Shift+D` cuts it there. A layer twirls open to show its scene's
+  keys where they land. Play, the Render window and the model export
+  all take compositions: export bakes one into a motion with a key on
+  every frame. Compositions ride in the `.aom`; older builds ignore them.
 - **Export Animation** and **Export Timelapse** open the new **Render**
   window: formats down the left (GIF, PNG sequence, MP4, WebM, MOV),
   settings in the middle (scene, an expression on top, work area, frame
