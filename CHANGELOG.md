@@ -90,8 +90,8 @@
   them as in a scene, and the edit lands in the scene through the
   layer's start, in point and speed. Insert and Remove frame cut a layer
   that spans the playhead and move its tail, as a ripple should.
-- **Sound in compositions.** Add layer takes a WAV, MP3, FLAC or Ogg
-  file. It draws its waveform across its bar, plays through the system
+- **Sound in compositions.** Add layer (or `File > Import Audio…`) takes
+  a WAV, MP3, FLAC or Ogg file. It draws its waveform across its bar, plays through the system
   output while the composition plays (from the playhead, stopped with
   it), and the Render window mixes every sound layer down and hands it to
   ffmpeg beside the frames, so MP4, WebM and MOV come out with sound. The

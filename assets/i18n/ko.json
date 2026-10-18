@@ -1122,5 +1122,7 @@
   "Group {n}": "그룹 {n}",
   "Remove group": "그룹 제거",
   "Overwrite sets the parameters; Add puts the scene's values on top": "덮어쓰기는 매개변수를 설정하고, 더하기는 씬의 값을 위에 얹습니다",
-  "Play / stop": "재생 / 정지"
+  "Play / stop": "재생 / 정지",
+  "Import Audio…": "오디오 가져오기…",
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "WAV, MP3, FLAC, Ogg 파일을 현재 컴포지션의 레이어로 추가합니다 (없으면 새로 만듦)"
 }

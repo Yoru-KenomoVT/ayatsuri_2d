@@ -1122,5 +1122,7 @@
   "Group {n}": "グループ {n}",
   "Remove group": "グループを削除",
   "Overwrite sets the parameters; Add puts the scene's values on top": "上書きはパラメータを設定し、加算はシーンの値を上に足します",
-  "Play / stop": "再生 / 停止"
+  "Play / stop": "再生 / 停止",
+  "Import Audio…": "音声を読み込み…",
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "WAV、MP3、FLAC、Ogg ファイルを現在のコンポジションのレイヤーとして追加します (ない場合は新規作成)"
 }

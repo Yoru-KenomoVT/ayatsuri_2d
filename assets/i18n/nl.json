@@ -1122,5 +1122,7 @@
   "Group {n}": "Groep {n}",
   "Remove group": "Groep verwijderen",
   "Overwrite sets the parameters; Add puts the scene's values on top": "Overschrijven zet de parameters; Optellen legt de waarden van de scène erbovenop",
-  "Play / stop": "Afspelen / stoppen"
+  "Play / stop": "Afspelen / stoppen",
+  "Import Audio…": "Audio importeren…",
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "Een WAV-, MP3-, FLAC- of Ogg-bestand als laag aan de huidige compositie toevoegen (een nieuwe als er geen is)"
 }

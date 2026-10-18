@@ -1122,5 +1122,7 @@
   "Group {n}": "第 {n} 组",
   "Remove group": "移除组",
   "Overwrite sets the parameters; Add puts the scene's values on top": "覆盖直接设置参数；相加把场景的值叠加上去",
-  "Play / stop": "播放 / 停止"
+  "Play / stop": "播放 / 停止",
+  "Import Audio…": "导入音频…",
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "把 WAV、MP3、FLAC 或 Ogg 文件添加为当前合成的图层（没有合成时新建一个）"
 }

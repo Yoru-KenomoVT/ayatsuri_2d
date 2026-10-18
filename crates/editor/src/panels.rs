@@ -774,6 +774,8 @@ pub(crate) enum PickFor {
     WorkspaceExport,
     WorkspaceImport,
     ImportMotion,
+    /// A sound file added to the current composition as a layer.
+    ImportAudio,
     /// A .psd or .kra added to the open model.
     ImportPaint,
     /// An updated .psd or .kra whose art replaces the matching meshes' art.
@@ -1565,6 +1567,7 @@ impl EditorUi {
                 }
             }
             (PickFor::ImportMotion, Some(path)) => self.import_motion(&path),
+            (PickFor::ImportAudio, Some(path)) => self.import_audio(&path),
             (PickFor::ReimportPaint, Some(path)) => {
                 if self.mesh_edit.is_some() {
                     log::warn!("leave Mesh Edit before re-importing artwork");
@@ -1621,6 +1624,61 @@ impl EditorUi {
             }
             _ => {}
         }
+    }
+
+    /// Add a sound file as a layer of the current composition, at the
+    /// playhead; with no composition open, a new one named after the file,
+    /// as long as the sound, takes it.
+    fn import_audio(&mut self, path: &Path) {
+        let Some(s) = &mut self.session else { return };
+        let rel = s.audio_rel(path);
+        if let Err(e) = s.load_audio(&rel) {
+            log::error!("import audio {}: {e}", path.display());
+            return;
+        }
+        let len = s.audio.get(&rel).map_or(1.0, |c| c.len()).max(1.0 / 30.0);
+        let stem = path.file_stem().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let ci = match s.current_comp.filter(|ci| *ci < s.compositions.len()) {
+            Some(ci) => ci,
+            None => {
+                let fps = s.current_anim.and_then(|i| s.animations.get(i)).map_or(30.0, |a| a.fps);
+                s.compositions.push(ayatsuri_format::Composition {
+                    name: if stem.is_empty() { "comp".into() } else { stem.clone() },
+                    fps,
+                    duration: len,
+                    looped: false,
+                    ..ayatsuri_format::Composition::default()
+                });
+                let ci = s.compositions.len() - 1;
+                s.current_comp = Some(ci);
+                self.anim_time = 0.0;
+                ci
+            }
+        };
+        let at = self.anim_time.max(0.0);
+        if let Some(c) = s.compositions.get(ci).cloned() {
+            self.timeline.remember_comp(ci, &c, None);
+        }
+        if let Some(c) = s.compositions.get_mut(ci) {
+            c.layers.insert(
+                0,
+                ayatsuri_format::Layer {
+                    source: ayatsuri_format::LayerSource::Audio(rel.clone()),
+                    start: at.min(c.duration),
+                    out_point: len,
+                    ..ayatsuri_format::Layer::default()
+                },
+            );
+            if c.duration < at + len {
+                c.duration = at + len;
+            }
+        }
+        s.modified = true;
+        self.anim_applied = f32::NAN;
+        if !self.layout.contains(PanelKind::Timeline) {
+            self.layout.open_near(PanelKind::Timeline, PanelKind::Viewport);
+        }
+        log::info!("audio {rel} added to the composition");
     }
 
     /// Add a motion3.json to the open model as a new scene.
@@ -2157,6 +2215,24 @@ impl EditorUi {
                                 .pick_files()
                                 .map(|v| v.into_iter().next())
                                 .unwrap_or_default()
+                        });
+                    }
+                    if ui
+                        .add_enabled(
+                            self.session.is_some(),
+                            egui::Button::new(crate::i18n::tr("Import Audio…")),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)",
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.pick_async(PickFor::ImportAudio, || {
+                            rfd::FileDialog::new()
+                                .add_filter("Audio", &["wav", "mp3", "flac", "ogg", "oga"])
+                                .set_title(crate::i18n::tr("Import Audio…"))
+                                .pick_file()
                         });
                     }
                     if ui
