@@ -55,7 +55,8 @@
   drag its handles, or press B and N to put its ends at the playhead.
   The scene row's bar drags to change the length. Alt with an arrow nudges the selected keys a frame (ten
   with Shift), Delete removes them, Ctrl+A takes them all, and Insert
-  frame / Remove frame ripple the scene at the playhead. Key edits have
+  frame / Remove frame ripple the scene at the playhead. Space (a tap,
+  not a pan) or Enter plays and pauses. Key edits have
   their own undo, one step per drag, ahead of the model's history while
   the Animation workspace is up. The chart button opens a **graph
   editor** in place of the lanes: the value curves of the selected keys'
