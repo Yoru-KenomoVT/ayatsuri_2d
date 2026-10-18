@@ -53,10 +53,15 @@
   ruler scrubs, Alt with the wheel zooms at the pointer (a slider in the
   footer too), and the work area bar under the ruler bounds playback:
   drag its handles, or press B and N to put its ends at the playhead.
-  The scene row's bar drags to change the length. Alt with an arrow nudges the selected keys a frame (ten
-  with Shift), Delete removes them, Ctrl+A takes them all, and Insert
-  frame / Remove frame ripple the scene at the playhead. Space (a tap,
-  not a pan) or Enter plays and pauses. Key edits have
+  The scene row's bar drags to change the length. S keys the selected
+  parameter, Alt with an arrow nudges the selected keys a frame (ten
+  with Shift), Delete removes them and Ctrl+A takes them all; every
+  Timeline key sits in Settings > Shortcuts > Animation and can be
+  rebound, and goes before the editor's own bindings while the Timeline
+  has the focus. `Animation > Edit Animation Details…` edits the name,
+  frame rate, length in seconds and loop, and inserts or removes frames
+  at the playhead. Space (a tap, not a pan) or Enter plays and pauses.
+  Key edits have
   their own undo, one step per drag, ahead of the model's history while
   the Animation workspace is up. The chart button opens a **graph
   editor** in place of the lanes: the value curves of the selected keys'
@@ -163,6 +168,8 @@
 - Every new string of this release is in all six languages.
 
 ### Fixed
+
+- The Select tool is called Arrow, as its shortcut always said.
 
 - Discord Rich Presence shows the app's picture under any Application ID:
   the image is fetched from ayatsuri-2d.org instead of an uploaded asset.
