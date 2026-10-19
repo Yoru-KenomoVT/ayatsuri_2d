@@ -1098,9 +1098,7 @@
   "Split the layer at the playhead": "再生ヘッドでレイヤーを分割",
   "Audio file…": "音声ファイル…",
   "WAV, MP3, FLAC or Ogg: plays with the composition and goes into exported video": "WAV、MP3、FLAC、Ogg: コンポジションと一緒に再生され、書き出した動画に入ります",
-  "New expression from the pose: every parameter moved off its default, added": "ポーズから新規表情: 初期値から動かしたパラメータを加算で",
   "Preview: lay the expression over the pose": "プレビュー: 表情をポーズに重ねる",
-  "No expressions yet. Pose the model, then press + to keep the pose as one.": "表情はまだありません。モデルにポーズを付けて + を押すと、そのポーズが表情になります。",
   "Pick an expression to edit it.": "編集する表情を選んでください。",
   "Off leaves it to the player (1 s)": "オフにするとプレイヤー任せ (1 秒)",
   "Set from pose": "ポーズから設定",
@@ -1155,5 +1153,7 @@
   "Blend": "ブレンド",
   "Added to the pose's value; the pose has {id} at {v}.": "ポーズの値に加算します。ポーズでは {id} は {v} です。",
   "The pose's value times this; the pose has {id} at {v}.": "ポーズの値にこの値を掛けます。ポーズでは {id} は {v} です。",
-  "Replaces the pose's value; the pose has {id} at {v}.": "ポーズの値を置き換えます。ポーズでは {id} は {v} です。"
+  "Replaces the pose's value; the pose has {id} at {v}.": "ポーズの値を置き換えます。ポーズでは {id} は {v} です。",
+  "New empty expression": "新しい空の表情",
+  "No expressions yet. Press + for an empty one, then add parameters or set it from the pose.": "表情はまだありません。+ で空の表情を作り、パラメータを追加するかポーズから設定してください。"
 }

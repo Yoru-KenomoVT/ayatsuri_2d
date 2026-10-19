@@ -1098,9 +1098,7 @@
   "Split the layer at the playhead": "De laag splitsen bij de afspeelkop",
   "Audio file…": "Audiobestand…",
   "WAV, MP3, FLAC or Ogg: plays with the composition and goes into exported video": "WAV, MP3, FLAC of Ogg: speelt met de compositie mee en gaat in de geëxporteerde video",
-  "New expression from the pose: every parameter moved off its default, added": "Nieuwe expressie uit de pose: elke parameter die van zijn standaard af is, opgeteld",
   "Preview: lay the expression over the pose": "Voorbeeld: de expressie over de pose leggen",
-  "No expressions yet. Pose the model, then press + to keep the pose as one.": "Nog geen expressies. Poseer het model en druk op + om de pose als expressie te bewaren.",
   "Pick an expression to edit it.": "Kies een expressie om die te bewerken.",
   "Off leaves it to the player (1 s)": "Uit laat het aan de speler (1 s)",
   "Set from pose": "Uit de pose",
@@ -1155,5 +1153,7 @@
   "Blend": "Mengmodus",
   "Added to the pose's value; the pose has {id} at {v}.": "Opgeteld bij de waarde van de pose; de pose heeft {id} op {v}.",
   "The pose's value times this; the pose has {id} at {v}.": "De waarde van de pose maal dit; de pose heeft {id} op {v}.",
-  "Replaces the pose's value; the pose has {id} at {v}.": "Vervangt de waarde van de pose; de pose heeft {id} op {v}."
+  "Replaces the pose's value; the pose has {id} at {v}.": "Vervangt de waarde van de pose; de pose heeft {id} op {v}.",
+  "New empty expression": "Nieuwe lege expressie",
+  "No expressions yet. Press + for an empty one, then add parameters or set it from the pose.": "Nog geen expressies. Druk op + voor een lege, voeg dan parameters toe of stel hem in vanuit de pose."
 }

@@ -1098,9 +1098,7 @@
   "Split the layer at the playhead": "재생 헤드에서 레이어 분할",
   "Audio file…": "오디오 파일…",
   "WAV, MP3, FLAC or Ogg: plays with the composition and goes into exported video": "WAV, MP3, FLAC, Ogg: 컴포지션과 함께 재생되고 내보낸 영상에 들어갑니다",
-  "New expression from the pose: every parameter moved off its default, added": "포즈에서 새 표정: 기본값에서 움직인 매개변수를 더하기로",
   "Preview: lay the expression over the pose": "미리보기: 표정을 포즈 위에 얹기",
-  "No expressions yet. Pose the model, then press + to keep the pose as one.": "표정이 아직 없습니다. 모델에 포즈를 잡고 +를 누르면 그 포즈가 표정이 됩니다.",
   "Pick an expression to edit it.": "편집할 표정을 선택하세요.",
   "Off leaves it to the player (1 s)": "끄면 플레이어에 맡김 (1초)",
   "Set from pose": "포즈에서 설정",
@@ -1155,5 +1153,7 @@
   "Blend": "블렌드",
   "Added to the pose's value; the pose has {id} at {v}.": "포즈 값에 더합니다. 포즈의 {id}은(는) {v}입니다.",
   "The pose's value times this; the pose has {id} at {v}.": "포즈 값에 이 값을 곱합니다. 포즈의 {id}은(는) {v}입니다.",
-  "Replaces the pose's value; the pose has {id} at {v}.": "포즈 값을 대체합니다. 포즈의 {id}은(는) {v}입니다."
+  "Replaces the pose's value; the pose has {id} at {v}.": "포즈 값을 대체합니다. 포즈의 {id}은(는) {v}입니다.",
+  "New empty expression": "새 빈 표정",
+  "No expressions yet. Press + for an empty one, then add parameters or set it from the pose.": "표정이 아직 없습니다. +로 빈 표정을 만들고 파라미터를 추가하거나 포즈에서 설정하세요."
 }
