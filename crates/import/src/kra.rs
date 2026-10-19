@@ -17,7 +17,7 @@
 use std::io::Read;
 
 use crate::ImportError;
-use crate::layers::{Document, Layer};
+use crate::layers::{Blend, Document, Layer};
 
 fn err(msg: impl Into<String>) -> ImportError {
     ImportError::Export(format!("kra: {}", msg.into()))
@@ -84,6 +84,8 @@ struct Entry {
     paint: bool,
     rgba8: bool,
     inherit_alpha: bool,
+    /// Krita's `compositeop`.
+    composite: String,
 }
 
 /// A tiny tag walk: `<layer ...>` opens (self-closing or not), `</layer>`
@@ -128,6 +130,7 @@ fn parse_layers(xml: &str) -> Vec<Entry> {
             opacity: attr(tag, "opacity").and_then(|v| v.parse::<f32>().ok()).unwrap_or(255.0)
                 / 255.0,
             paint: kind == "paintlayer",
+            composite: attr(tag, "compositeop").unwrap_or_default(),
             rgba8: attr(tag, "colorspacename").is_none_or(|c| c == "RGBA"),
             inherit_alpha: attr(tag, "inheritalpha").is_some_and(|v| v == "1"),
         });
@@ -260,6 +263,18 @@ pub fn read_kra(bytes: &[u8]) -> Result<(Document, usize), ImportError> {
             skipped += 1;
             continue;
         };
+        let blend = match e.composite.as_str() {
+            "multiply" => Blend::Multiplicative,
+            "add" | "linear_dodge" => Blend::Additive,
+            "" | "normal" | "pass through" | "passthrough" => Blend::Normal,
+            other => {
+                log::warn!(
+                    "kra: layer {:?} blends as {other}, which moc3 has no mode for; drawn normal",
+                    e.name
+                );
+                Blend::Normal
+            }
+        };
         layers.push(Layer {
             name: e.name,
             groups: e.groups,
@@ -271,6 +286,7 @@ pub fn read_kra(bytes: &[u8]) -> Result<(Document, usize), ImportError> {
             visible: e.visible,
             opacity: e.opacity,
             clip_to_below: e.inherit_alpha,
+            blend,
         });
     }
     // maindoc lists the topmost layer first

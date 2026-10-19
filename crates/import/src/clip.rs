@@ -16,7 +16,7 @@
 // unless noted.
 
 use crate::ImportError;
-use crate::layers::{Document, Layer};
+use crate::layers::{Blend, Document, Layer};
 use crate::sqlite::{Db, Table, Value};
 
 fn err(msg: impl Into<String>) -> ImportError {
@@ -301,6 +301,8 @@ struct Row {
     visible: bool,
     opacity: f32,
     clip: bool,
+    /// `LayerComposite`: 0 normal, 2 multiply, 11 add, 12 add (glow).
+    composite: i64,
     masking: i64,
     x: i64,
     y: i64,
@@ -325,6 +327,7 @@ fn rows(layers: &Table) -> Vec<Row> {
             visible: int(r, "LayerVisibility") & 1 != 0,
             opacity: (int(r, "LayerOpacity") as f32 / 256.0).clamp(0.0, 1.0),
             clip: int(r, "LayerClip") != 0,
+            composite: int(r, "LayerComposite"),
             masking: int(r, "LayerMasking"),
             x: int(r, "LayerOffsetX") + int(r, "LayerRenderOffscrOffsetX"),
             y: int(r, "LayerOffsetY") + int(r, "LayerRenderOffscrOffsetY"),
@@ -460,6 +463,18 @@ pub fn read_clip(bytes: &[u8]) -> Result<(Document, usize), ImportError> {
             visible: r.visible,
             opacity: r.opacity,
             clip_to_below: r.clip,
+            blend: match r.composite {
+                2 => Blend::Multiplicative,
+                11 | 12 => Blend::Additive,
+                0 | 30 => Blend::Normal,
+                other => {
+                    log::warn!(
+                        "clip: layer {:?} blends as composite {other}, which moc3 has no mode for; drawn normal",
+                        r.name
+                    );
+                    Blend::Normal
+                }
+            },
         });
     }
     Ok((Document { width: cw as u32, height: ch as u32, layers: out }, skipped))

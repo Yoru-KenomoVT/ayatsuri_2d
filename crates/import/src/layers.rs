@@ -24,6 +24,30 @@ pub struct Layer {
     /// Clipped to the nearest unclipped layer below, Photoshop style; it
     /// becomes a mask on the mesh.
     pub clip_to_below: bool,
+    /// How the layer blends; the two modes moc3 has, else normal.
+    pub blend: Blend,
+}
+
+/// A layer's blend mode as moc3 knows them: Cubism has Normal, Additive
+/// (Photoshop's Linear Dodge) and Multiplicative; anything else is drawn
+/// normal, with a note in the log.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Blend {
+    #[default]
+    Normal,
+    Additive,
+    Multiplicative,
+}
+
+impl Blend {
+    /// The drawable flag bits for the mode.
+    pub fn flags(self) -> u8 {
+        match self {
+            Blend::Normal => 0,
+            Blend::Additive => ayatsuri_format::model::flags::BLEND_ADDITIVE,
+            Blend::Multiplicative => ayatsuri_format::model::flags::BLEND_MULTIPLICATIVE,
+        }
+    }
 }
 
 /// A whole document, layers bottom to top.
@@ -258,7 +282,7 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             visible: true,
             enabled: true,
             texture: *page as u32,
-            flags: 0,
+            flags: layer.blend.flags(),
             vertex_count: 4,
             uvs: vec![u0, v0, u1, v0, u1, v1, u0, v1],
             indices: vec![0, 1, 2, 0, 2, 3],

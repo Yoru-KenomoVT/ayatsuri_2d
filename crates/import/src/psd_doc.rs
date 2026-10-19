@@ -13,7 +13,7 @@
 // catch_unwind: a bad PSD is an error message, never a crashed editor.
 
 use crate::ImportError;
-use crate::layers::{Document, Layer};
+use crate::layers::{Blend, Document, Layer};
 
 /// Read a .psd into a layered document, bottom layer first.
 pub fn read_psd(bytes: &[u8]) -> Result<Document, ImportError> {
@@ -77,6 +77,22 @@ fn read_inner(bytes: &[u8]) -> Result<Document, ImportError> {
             visible: !l.visible(),
             opacity: l.opacity() as f32 / 255.0,
             clip_to_below: !l.is_clipping_mask(),
+            // the psd crate keeps its BlendMode type private; its discriminants
+            // are Photoshop's order: 0 pass through, 1 normal, 4 multiply,
+            // 11 linear dodge (add)
+            blend: match l.blend_mode() as u8 {
+                4 => Blend::Multiplicative,
+                11 => Blend::Additive,
+                0 | 1 => Blend::Normal,
+                _ => {
+                    log::warn!(
+                        "psd: layer {:?} blends as {:?}, which moc3 has no mode for; drawn normal",
+                        l.name(),
+                        l.blend_mode()
+                    );
+                    Blend::Normal
+                }
+            },
         });
     }
     Ok(Document { width: cw, height: ch, layers })

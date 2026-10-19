@@ -128,6 +128,7 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
             visible: true,
             opacity: 1.0,
             clip_to_below: false,
+            blend: crate::layers::Blend::Normal,
         });
     }
     let document = Document { width: cw, height: ch, layers: layers_in };
