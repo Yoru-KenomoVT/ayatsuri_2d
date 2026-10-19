@@ -779,6 +779,8 @@ pub(crate) enum PickFor {
     ExportImage(u32, bool, bool),
     RenderFolder,
     ExportMoc3(Box<ExportDlg>),
+    /// Save As for the Cubism Editor project.
+    ExportCmo3(Box<ExportDlg>),
     WorkspaceExport,
     WorkspaceImport,
     ImportMotion,
@@ -1529,7 +1531,7 @@ impl EditorUi {
     ) {
         if self.dialog_pick.is_some() || self.picking.is_some() {
             log::info!("a file dialog is already open");
-            if let PickFor::ExportMoc3(dlg) = why {
+            if let PickFor::ExportMoc3(dlg) | PickFor::ExportCmo3(dlg) = why {
                 self.export_dlg = Some(*dlg);
             }
             return;
@@ -1569,6 +1571,8 @@ impl EditorUi {
             (PickFor::ExportMoc3(dlg), Some(dir)) => self.export_moc3_to(&dlg, &dir),
             // a cancelled folder pick leaves the export dialog as it was
             (PickFor::ExportMoc3(dlg), None) => self.export_dlg = Some(*dlg),
+            (PickFor::ExportCmo3(dlg), Some(path)) => self.export_cmo3_to(&dlg, &path),
+            (PickFor::ExportCmo3(dlg), None) => self.export_dlg = Some(*dlg),
             (PickFor::WorkspaceExport, Some(path)) => {
                 match serde_json::to_vec_pretty(&self.layout) {
                     Ok(bytes) => match std::fs::write(&path, bytes) {

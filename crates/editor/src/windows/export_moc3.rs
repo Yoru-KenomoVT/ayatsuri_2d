@@ -1,5 +1,5 @@
-// File > Export Model: moc3 (version and bundle), cmo3 (in progress) and a
-// still image, on tabs.
+// File > Export Model: moc3 (version and bundle), a Cubism Editor project
+// (cmo3) and a still image, on tabs.
 
 use crate::panels::EditorUi;
 use crate::theme;
@@ -10,6 +10,7 @@ impl EditorUi {
         let Some(dlg) = &mut self.export_dlg else { return };
         let mut open = true;
         let mut go_moc3 = false;
+        let mut go_cmo3 = false;
         let mut go_image: Option<(u32, bool, bool)> = None;
         let canvas = self.session.as_ref().map(|s| s.puppet.model().canvas);
         crate::windows::Dialog::new(crate::i18n::tr("Export Model"))
@@ -26,14 +27,28 @@ impl EditorUi {
                 ui.separator();
                 match dlg.tab {
                     1 => {
-                        ui.label(crate::i18n::tr("Cubism Editor project (.cmo3)"));
+                        crate::windows::form(ui, "export-cmo3", |ui| {
+                            ui.label(crate::i18n::tr("Name"));
+                            ui.text_edit_singleline(&mut dlg.name);
+                            ui.end_row();
+                        });
                         ui.weak(crate::i18n::tr(
-                            "Writing a project Cubism Editor opens is still being built. Until \
-                             it lands, a moc3 export runs in every Cubism-compatible app, and a \
-                             .cmo3 can already be opened here.",
+                            "Writes <name>.cmo3, a Cubism Editor project: the art as layers, \
+                             the meshes, deformers, parameters in their folders, every keyform, \
+                             clipping and physics. Animations and sound are not part of a \
+                             project; the moc3 tab exports those as motions.",
+                        ));
+                        ui.weak(crate::i18n::tr(
+                            "Written from project files alone, without Cubism Editor to check \
+                             against. If the Editor refuses one, please report it.",
                         ));
                         ui.add_space(6.0);
-                        ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Export…")));
+                        if ui
+                            .button(egui::RichText::new(crate::i18n::tr("Export…")).strong())
+                            .clicked()
+                        {
+                            go_cmo3 = true;
+                        }
                     }
                     2 => {
                         crate::windows::form(ui, "export-image", |ui| {
@@ -168,6 +183,19 @@ impl EditorUi {
                 }
                 d.pick_folder()
             });
+        } else if go_cmo3 {
+            let Some(dlg) = self.export_dlg.take() else { return };
+            let start = self.prefs.export_folder.clone().filter(|d| d.is_dir());
+            let file = format!("{}.cmo3", dlg.name);
+            self.pick_async(crate::panels::PickFor::ExportCmo3(Box::new(dlg)), move || {
+                let mut d = rfd::FileDialog::new()
+                    .set_title(crate::i18n::tr("Export as cmo3"))
+                    .add_filter(crate::i18n::tr("Cubism Editor project"), &["cmo3"]);
+                if let Some(s) = start {
+                    d = d.set_directory(s);
+                }
+                d.set_file_name(file).save_file()
+            });
         } else if let Some((w, jpeg, transparent)) = go_image {
             self.export_image(w, jpeg, transparent);
         } else if !open {
@@ -233,6 +261,49 @@ impl EditorUi {
         } else if cancel || !open {
             self.export_overwrite = None;
             log::info!("export cancelled: the folder already had a model");
+        }
+    }
+
+    /// Write the model as a Cubism Editor project at the picked path.
+    pub(crate) fn export_cmo3_to(
+        &mut self,
+        dlg: &crate::panels::ExportDlg,
+        path: &std::path::Path,
+    ) {
+        if let Some(dir) = path.parent() {
+            self.prefs.export_folder = Some(dir.to_path_buf());
+            self.prefs.save();
+        }
+        let Some(s) = &self.session else { return };
+        let name = if dlg.name.trim().is_empty() { s.name.as_str() } else { dlg.name.trim() };
+        let param_groups: Vec<(String, Vec<u32>)> = s
+            .groups
+            .iter()
+            .filter(|g| !g.name.is_empty())
+            .map(|g| (g.name.clone(), g.params.iter().map(|&p| p as u32).collect()))
+            .collect();
+        let started = std::time::Instant::now();
+        let out = ayatsuri_import::to_cmo3(&ayatsuri_import::Cmo3Export {
+            name,
+            model: s.puppet.model(),
+            textures: &s.texture_pngs,
+            param_names: &s.param_names,
+            part_names: &s.part_names,
+            mesh_names: &s.mesh_names,
+            param_groups: &param_groups,
+        });
+        match out.and_then(|bytes| {
+            std::fs::write(path, &bytes).map(|()| bytes.len()).map_err(|e| {
+                ayatsuri_import::ImportError::Export(format!("{}: {e}", path.display()))
+            })
+        }) {
+            Ok(size) => log::info!(
+                "exported {} ({:.1} MB) in {:.1} s",
+                path.display(),
+                size as f64 / 1e6,
+                started.elapsed().as_secs_f32()
+            ),
+            Err(e) => log::error!("cmo3 export failed: {e}"),
         }
     }
 
