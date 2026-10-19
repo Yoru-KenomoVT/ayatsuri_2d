@@ -105,9 +105,12 @@
   size, with a test tone. The **Audio Mixer** palette is laid out like a
   video editor's: per sound layer a dB scale, a fader (to +6 dB), live
   level meters (two bars for stereo, with a held peak), the level read
-  out, mute and solo, and the name in a box; a gutter drags a strip down
-  to just its meters; a main-out bus shows the editor's level and the
-  device it goes to. Layer rows are taller, a bar's name sits on a fade
+  out, mute, solo and a pan knob, and the name in a box; a gutter drags
+  a strip down to just its meters; a main-out bus shows the editor's
+  level and the device it goes to. Level, mute, solo, pan and fade
+  changes reach the sound playing in place, eased over a few
+  milliseconds, so nothing clicks. A stereo file twirls open on the
+  timeline into its left and right channels. Layer rows are taller, a bar's name sits on a fade
   of the layer's colour so it reads over a waveform, and a square at
   either top corner drags inward for a fade in or out.
 - **Expression palette** (Window > Expression; a tab beside the Timeline
