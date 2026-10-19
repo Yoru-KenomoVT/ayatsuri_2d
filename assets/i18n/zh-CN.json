@@ -919,8 +919,6 @@
   "Texture memory": "纹理内存",
   "Video memory for full-size texture pages; pages beyond it draw from small proxies": "用于全尺寸纹理页的显存；超出的页面以小代理图绘制",
   "Export Model": "导出模型",
-  "Cubism Editor project (.cmo3)": "Cubism Editor 工程 (.cmo3)",
-  "Writing a project Cubism Editor opens is still being built. Until it lands, a moc3 export runs in every Cubism-compatible app, and a .cmo3 can already be opened here.": "可供 Cubism Editor 打开的工程写入仍在开发中。在此之前，moc3 导出可在所有 Cubism 兼容应用中使用，.cmo3 已可在此打开。",
   "Canvas size": "画布大小",
   "The model as it stands now: the parameters, parts and physics pose on the canvas. JPEG and opaque PNG sit on white.": "以当前状态导出模型：画布上的参数、部件和物理姿势。JPEG 和不透明 PNG 以白色为底。",
   "Stroke": "描边",
@@ -1146,5 +1144,9 @@
   "Unmute": "取消静音",
   "No sound layers in this composition. Add one with File > Import Audio…": "此合成中没有声音图层。用 文件 > 导入音频… 添加一个。",
   "Main out": "主输出",
-  "Solo": "独奏"
+  "Solo": "独奏",
+  "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "写出 <name>.cmo3，一个 Cubism Editor 项目：美术作为图层，以及网格、变形器、分文件夹的参数、每个关键形状、剪裁和物理。动画和声音不属于项目，请在 moc3 选项卡中导出为动作。",
+  "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "仅根据项目文件编写，没有用 Cubism Editor 核对。如果 Editor 拒绝打开，请报告。",
+  "Export as cmo3": "导出为 cmo3",
+  "Cubism Editor project": "Cubism Editor 项目"
 }

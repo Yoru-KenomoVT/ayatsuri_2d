@@ -919,8 +919,6 @@
   "Texture memory": "テクスチャメモリ",
   "Video memory for full-size texture pages; pages beyond it draw from small proxies": "フルサイズのテクスチャページに使うビデオメモリ。超えた分は小さな代替画像で描画されます",
   "Export Model": "モデルを書き出し",
-  "Cubism Editor project (.cmo3)": "Cubism Editor プロジェクト (.cmo3)",
-  "Writing a project Cubism Editor opens is still being built. Until it lands, a moc3 export runs in every Cubism-compatible app, and a .cmo3 can already be opened here.": "Cubism Editor で開けるプロジェクトの書き出しは開発中です。それまでは moc3 書き出しがすべての Cubism 互換アプリで動き、.cmo3 はここで開けます。",
   "Canvas size": "キャンバスサイズ",
   "The model as it stands now: the parameters, parts and physics pose on the canvas. JPEG and opaque PNG sit on white.": "現在のモデルの姿（パラメータ、パーツ、物理のポーズ）をキャンバスのまま書き出します。JPEG と不透明 PNG は白地になります。",
   "Stroke": "線",
@@ -1146,5 +1144,9 @@
   "Unmute": "ミュート解除",
   "No sound layers in this composition. Add one with File > Import Audio…": "このコンポジションに音声レイヤーはありません。ファイル > 音声を読み込み… で追加できます。",
   "Main out": "メイン出力",
-  "Solo": "ソロ"
+  "Solo": "ソロ",
+  "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "<name>.cmo3 を書き出します。Cubism Editor のプロジェクトとして、アートはレイヤーに、メッシュ、デフォーマ、フォルダ分けされたパラメータ、すべてのキーフォーム、クリッピング、物理演算を含みます。アニメーションと音声はプロジェクトには含まれません。moc3 タブからモーションとして書き出してください。",
+  "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "Cubism Editor で確認せず、プロジェクトファイルだけから作成しています。Editor が開けない場合は報告してください。",
+  "Export as cmo3": "cmo3として書き出し",
+  "Cubism Editor project": "Cubism Editor プロジェクト"
 }

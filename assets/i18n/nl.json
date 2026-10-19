@@ -919,8 +919,6 @@
   "Texture memory": "Textuurgeheugen",
   "Video memory for full-size texture pages; pages beyond it draw from small proxies": "Videogeheugen voor textuurpagina's op volle grootte; pagina's daarbuiten tekenen uit kleine proxy's",
   "Export Model": "Model exporteren",
-  "Cubism Editor project (.cmo3)": "Cubism Editor-project (.cmo3)",
-  "Writing a project Cubism Editor opens is still being built. Until it lands, a moc3 export runs in every Cubism-compatible app, and a .cmo3 can already be opened here.": "Het schrijven van een project dat Cubism Editor opent is nog in de maak. Tot die tijd werkt een moc3-export in elke Cubism-compatibele app, en kan een .cmo3 hier al geopend worden.",
   "Canvas size": "Canvasgrootte",
   "The model as it stands now: the parameters, parts and physics pose on the canvas. JPEG and opaque PNG sit on white.": "Het model zoals het nu staat: de parameters, parts en fysica-pose op het canvas. JPEG en ondoorzichtige PNG staan op wit.",
   "Stroke": "Lijn",
@@ -1146,5 +1144,9 @@
   "Unmute": "Dempen opheffen",
   "No sound layers in this composition. Add one with File > Import Audio…": "Geen geluidslagen in deze compositie. Voeg er een toe met Bestand > Audio importeren…",
   "Main out": "Hoofduitgang",
-  "Solo": "Solo"
+  "Solo": "Solo",
+  "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "Schrijft <name>.cmo3, een Cubism Editor-project: de tekeningen als lagen, de meshes, deformers, parameters in hun mappen, elke keyform, clipping en physics. Animaties en geluid horen niet bij een project; het moc3-tabblad exporteert die als motions.",
+  "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "Geschreven op basis van projectbestanden alleen, zonder Cubism Editor om tegen te controleren. Weigert de Editor er een, meld het dan.",
+  "Export as cmo3": "Exporteren als cmo3",
+  "Cubism Editor project": "Cubism Editor-project"
 }

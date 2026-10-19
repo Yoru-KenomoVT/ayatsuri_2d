@@ -919,8 +919,6 @@
   "Texture memory": "Tekstuurgeheue",
   "Video memory for full-size texture pages; pages beyond it draw from small proxies": "Videogeheue vir volgrootte tekstuurbladsye; bladsye daarbuite teken uit klein plaasvervangers",
   "Export Model": "Voer model uit",
-  "Cubism Editor project (.cmo3)": "Cubism Editor-projek (.cmo3)",
-  "Writing a project Cubism Editor opens is still being built. Until it lands, a moc3 export runs in every Cubism-compatible app, and a .cmo3 can already be opened here.": "Die skryf van 'n projek wat Cubism Editor oopmaak word nog gebou. Tot dan werk 'n moc3-uitvoer in elke Cubism-versoenbare toepassing, en 'n .cmo3 kan reeds hier oopgemaak word.",
   "Canvas size": "Doekgrootte",
   "The model as it stands now: the parameters, parts and physics pose on the canvas. JPEG and opaque PNG sit on white.": "Die model soos dit nou staan: die parameters, dele en fisika-pose op die doek. JPEG en ondeursigtige PNG sit op wit.",
   "Stroke": "Lyn",
@@ -1146,5 +1144,9 @@
   "Unmute": "Ontdemp",
   "No sound layers in this composition. Add one with File > Import Audio…": "Geen klanklae in hierdie komposisie nie. Voeg een by met Lêer > Voer klank in…",
   "Main out": "Hoofuitset",
-  "Solo": "Solo"
+  "Solo": "Solo",
+  "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "Skryf <name>.cmo3, 'n Cubism Editor-projek: die kuns as lae, die meshes, deformers, parameters in hul vouers, elke keyform, clipping en fisika. Animasies en klank is nie deel van 'n projek nie; die moc3-oortjie voer dié as motions uit.",
+  "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "Geskryf uit projeklêers alleen, sonder Cubism Editor om teen te toets. As die Editor een weier, rapporteer dit asseblief.",
+  "Export as cmo3": "Voer uit as cmo3",
+  "Cubism Editor project": "Cubism Editor-projek"
 }

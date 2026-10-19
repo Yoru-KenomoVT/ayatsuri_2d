@@ -919,8 +919,6 @@
   "Texture memory": "텍스처 메모리",
   "Video memory for full-size texture pages; pages beyond it draw from small proxies": "전체 크기 텍스처 페이지에 쓰는 비디오 메모리. 넘는 페이지는 작은 대체 이미지로 그려집니다",
   "Export Model": "모델 내보내기",
-  "Cubism Editor project (.cmo3)": "Cubism Editor 프로젝트 (.cmo3)",
-  "Writing a project Cubism Editor opens is still being built. Until it lands, a moc3 export runs in every Cubism-compatible app, and a .cmo3 can already be opened here.": "Cubism Editor에서 열리는 프로젝트 쓰기는 아직 개발 중입니다. 그때까지 moc3 내보내기는 모든 Cubism 호환 앱에서 동작하고, .cmo3는 여기서 열 수 있습니다.",
   "Canvas size": "캔버스 크기",
   "The model as it stands now: the parameters, parts and physics pose on the canvas. JPEG and opaque PNG sit on white.": "지금 상태의 모델(파라미터, 파츠, 물리 포즈)을 캔버스 그대로 저장합니다. JPEG와 불투명 PNG는 흰 배경입니다.",
   "Stroke": "선",
@@ -1146,5 +1144,9 @@
   "Unmute": "음소거 해제",
   "No sound layers in this composition. Add one with File > Import Audio…": "이 컴포지션에 사운드 레이어가 없습니다. 파일 > 오디오 가져오기… 로 추가하세요.",
   "Main out": "메인 출력",
-  "Solo": "솔로"
+  "Solo": "솔로",
+  "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "<name>.cmo3를 씁니다. Cubism Editor 프로젝트로, 아트는 레이어로, 메시, 디포머, 폴더별 파라미터, 모든 키폼, 클리핑, 물리가 들어갑니다. 애니메이션과 소리는 프로젝트에 포함되지 않으며 moc3 탭에서 모션으로 내보냅니다.",
+  "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "Cubism Editor로 확인하지 않고 프로젝트 파일만으로 만들었습니다. Editor가 열지 못하면 알려 주세요.",
+  "Export as cmo3": "cmo3로 내보내기",
+  "Cubism Editor project": "Cubism Editor 프로젝트"
 }
