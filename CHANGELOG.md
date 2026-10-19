@@ -102,11 +102,14 @@
   Bluetooth and virtual outputs show up and an underrun does not kill the
   stream; cpal is the fallback and the path on Windows and macOS.
   **Settings > Audio** picks the output device, the volume and the buffer
-  size, with a test tone. The **Audio Mixer** palette has a fader and a
-  mute per sound layer and a main-out bus with the editor's level and the
-  device it goes to. Layer rows are taller, their bars carry a dark fade
-  behind the name so it reads over a waveform, and a square at either top
-  corner drags inward for a fade in or out.
+  size, with a test tone. The **Audio Mixer** palette is laid out like a
+  video editor's: per sound layer a dB scale, a fader (to +6 dB), live
+  level meters (two bars for stereo, with a held peak), the level read
+  out, mute and solo, and the name in a box; a gutter drags a strip down
+  to just its meters; a main-out bus shows the editor's level and the
+  device it goes to. Layer rows are taller, a bar's name sits on a fade
+  of the layer's colour so it reads over a waveform, and a square at
+  either top corner drags inward for a fade in or out.
 - **Expression palette** (Window > Expression; a tab beside the Timeline
   in the Animation workspace): the model's exp3 expressions, listed. The
   + makes one from the pose (every parameter moved off its default,
