@@ -71,6 +71,7 @@ pub struct Changed {
 enum Change {
     Weight(usize, f32),
     Mute(usize, bool),
+    Pan(usize, f32),
 }
 
 fn db(gain: f32) -> f32 {
@@ -244,6 +245,8 @@ struct StripIn<'a> {
     name: &'a str,
     stereo: bool,
     gain: f32,
+    /// -1 left to 1 right; None for a bus without a pan.
+    pan: Option<f32>,
     meter: Meter,
     mute: Option<bool>,
     solo: Option<bool>,
@@ -254,9 +257,54 @@ struct StripIn<'a> {
 #[derive(Default)]
 struct StripOut {
     gain: Option<f32>,
+    pan: Option<f32>,
     drag_stopped: bool,
     mute_clicked: bool,
     solo_clicked: bool,
+}
+
+/// A pan knob: a dial whose pointer swings from left to right; drag up or
+/// down (or sideways) to turn it, double-click to centre. Returns the new
+/// pan while it changes.
+fn knob(ui: &mut Ui, id: egui::Id, center: egui::Pos2, pan: f32) -> Option<f32> {
+    let pal = theme::pal();
+    let r = 9.0;
+    let rect = Rect::from_center_size(center, vec2(r * 2.0 + 6.0, r * 2.0 + 6.0));
+    let resp = ui.interact(rect, id, Sense::click_and_drag()).on_hover_cursor(CursorIcon::Grab);
+    let p = ui.painter();
+    p.circle_filled(center, r, pal.chrome);
+    p.circle_stroke(
+        center,
+        r,
+        Stroke::new(1.0, if resp.hovered() { pal.accent } else { pal.border }),
+    );
+    // the pointer: straight up at centre, 135 degrees either way at the ends
+    let a = -std::f32::consts::FRAC_PI_2 + pan.clamp(-1.0, 1.0) * std::f32::consts::FRAC_PI_4 * 3.0;
+    let tip = center + vec2(a.cos(), a.sin()) * (r - 2.0);
+    p.line_segment([center, tip], Stroke::new(2.0, pal.accent));
+    let mut out = None;
+    if resp.dragged() {
+        let d = resp.drag_delta();
+        let np = (pan + (d.x - d.y) / 80.0).clamp(-1.0, 1.0);
+        if np != pan {
+            out = Some(np);
+        }
+    }
+    if resp.double_clicked() {
+        out = Some(0.0);
+    }
+    out
+}
+
+fn pan_text(pan: f32) -> String {
+    let v = (pan * 100.0).round() as i32;
+    if v == 0 {
+        "C".to_string()
+    } else if v < 0 {
+        format!("L{}", -v)
+    } else {
+        format!("R{v}")
+    }
 }
 
 /// One channel strip in `rect`. Narrow strips keep the meters and the
@@ -289,6 +337,21 @@ fn strip_ui(ui: &mut Ui, rect: Rect, s: StripIn) -> StripOut {
             out.solo_clicked = true;
         }
         top += 20.0;
+    }
+    // the pan knob and its reading
+    if let Some(pan) = s.pan {
+        let c = pos2(rect.center().x - 14.0, top + 12.0);
+        if let Some(np) = knob(ui, s.id.with("pan"), c, pan) {
+            out.pan = Some(np);
+        }
+        ui.painter().text(
+            pos2(c.x + 16.0, c.y),
+            Align2::LEFT_CENTER,
+            pan_text(pan),
+            FontId::proportional(10.0),
+            pal.text_faint,
+        );
+        top += 28.0;
     }
     // bottom: the name box, the footer line and the readout
     let name_h = 18.0;
@@ -492,6 +555,7 @@ impl Mixer {
                             name,
                             stereo: *stereo,
                             gain: l.weight,
+                            pan: Some(l.pan),
                             meter,
                             mute: Some(!l.enabled),
                             solo: Some(soloed),
@@ -501,6 +565,9 @@ impl Mixer {
                     );
                     if let Some(g) = out.gain {
                         changes.push(Change::Weight(*li, g));
+                    }
+                    if let Some(pn) = out.pan {
+                        changes.push(Change::Pan(*li, pn));
                     }
                     if out.drag_stopped {
                         tl.unmerge();
@@ -533,6 +600,7 @@ impl Mixer {
                         name: main_name,
                         stereo: true,
                         gain: (*master).min(200) as f32 / 100.0,
+                        pan: None,
                         meter,
                         mute: None,
                         solo: None,
@@ -570,6 +638,11 @@ impl Mixer {
                         Change::Mute(li, on) => {
                             if let Some(l) = c.layers.get_mut(li) {
                                 l.enabled = on;
+                            }
+                        }
+                        Change::Pan(li, pn) => {
+                            if let Some(l) = c.layers.get_mut(li) {
+                                l.pan = pn.clamp(-1.0, 1.0);
                             }
                         }
                     }

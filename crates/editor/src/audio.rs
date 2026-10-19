@@ -8,7 +8,7 @@
 //! protocol straight to PipeWire (see `pulse.rs`); elsewhere, and when no
 //! sound server answers, cpal drives the device.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -30,6 +30,8 @@ pub struct Clip {
     pub samples: Vec<f32>,
     /// The largest absolute sample over each stretch of 1/200 s, mono.
     pub peaks: Vec<f32>,
+    /// The same per channel, for a stereo file opened on the timeline.
+    pub peaks_ch: Vec<Vec<f32>>,
 }
 
 impl Clip {
@@ -65,7 +67,15 @@ pub fn decode(path: &Path) -> Result<Clip, String> {
     let ch = channels.max(1) as usize;
     let peaks =
         samples.chunks(per * ch).map(|c| c.iter().fold(0.0f32, |m, s| m.max(s.abs()))).collect();
-    Ok(Clip { rate, channels, samples, peaks })
+    let peaks_ch = (0..ch)
+        .map(|c| {
+            samples
+                .chunks(per * ch)
+                .map(|blk| blk.iter().skip(c).step_by(ch).fold(0.0f32, |m, s| m.max(s.abs())))
+                .collect()
+        })
+        .collect();
+    Ok(Clip { rate, channels, samples, peaks, peaks_ch })
 }
 
 /// One sound to start: the clip, how far into it, and how to play it.
@@ -82,6 +92,40 @@ pub struct Cue {
     pub at: f32,
     /// The layer's index, so the mixer's meters know whose sound it is.
     pub li: usize,
+}
+
+/// A composition's sound at `t`: cues for the sound layers that play
+/// there, to start from that point, and every sound layer as it is now,
+/// for `Out::sync`. Muted layers are included: the mixer eases their gain,
+/// so a mute, solo or fader change never restarts the sound.
+pub fn comp_cues(
+    comp: &ayatsuri_format::Composition,
+    clips: &HashMap<String, Arc<Clip>>,
+    t: f32,
+) -> (Vec<Cue>, Vec<(usize, Layer)>) {
+    let mut cues = Vec::new();
+    let mut live = Vec::new();
+    for (li, l) in comp.layers.iter().enumerate() {
+        let ayatsuri_format::LayerSource::Audio(p) = &l.source else { continue };
+        let Some(clip) = clips.get(p) else { continue };
+        live.push((li, l.clone()));
+        let end = ayatsuri_core::comp::layer_end(l);
+        if t < l.start || t >= end {
+            continue;
+        }
+        let speed = l.speed.max(0.05);
+        let offset = l.in_point + (t - l.start) * speed;
+        cues.push(Cue {
+            clip: clip.clone(),
+            offset,
+            len: (l.out_point - offset).max(0.0),
+            speed,
+            layer: l.clone(),
+            at: t,
+            li,
+        });
+    }
+    (cues, live)
 }
 
 /// Peak levels since they were last read: per layer and for the main
@@ -102,6 +146,15 @@ struct Voice {
     layer: Layer,
     t: f64,
     li: usize,
+    /// The gain each side is at, eased towards the target so a fader,
+    /// mute or fade never clicks.
+    g: [f32; 2],
+}
+
+/// Constant-power pan: the left and right gains for a pan of -1 to 1.
+pub fn pan_gains(pan: f32) -> [f32; 2] {
+    let a = (pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+    [a.cos(), a.sin()]
 }
 
 /// What both outputs pull from: the voices playing, and the master volume
@@ -112,6 +165,8 @@ struct Mixer {
     volume: Arc<AtomicU32>,
     /// Peaks since the palette last looked.
     levels: Arc<Mutex<Levels>>,
+    /// Layers soloed; the rest go quiet while any is.
+    solo: Arc<Mutex<BTreeSet<usize>>>,
 }
 
 impl Mixer {
@@ -127,23 +182,40 @@ impl Mixer {
         let channels = channels.max(1);
         let frames = buf.len() / channels;
         let mut voices = self.voices.lock().unwrap_or_else(PoisonError::into_inner);
+        let solo = self.solo.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let dt = 1.0 / rate.max(1) as f64;
+        // gains ease over about 5 ms, so a change never steps the signal
+        let ease = 1.0 - (-1.0 / (rate.max(1) as f32 * 0.005)).exp();
         let mut levels = self.levels.lock().unwrap_or_else(PoisonError::into_inner);
         for v in voices.iter_mut() {
             let step = v.speed * v.clip.rate as f64 / rate.max(1) as f64;
             let ch = v.clip.channels.max(1) as usize;
+            let quiet = !solo.is_empty() && !solo.contains(&v.li);
+            let pan = pan_gains(v.layer.pan);
             let mut peak = [0.0f32; 2];
             for f in 0..frames {
                 if v.pos >= v.end {
                     break;
                 }
                 // the layer's weight and fades at this moment of the composition
-                let gain = ayatsuri_core::comp::layer_weight(&v.layer, v.t as f32) * master;
+                let want = if quiet {
+                    0.0
+                } else {
+                    ayatsuri_core::comp::layer_weight(&v.layer, v.t as f32) * master
+                };
                 v.t += dt;
                 let i0 = v.pos as usize;
                 let t = (v.pos - i0 as f64) as f32;
                 for c in 0..channels.min(2) {
                     let cc = c.min(ch - 1);
+                    let target = want * pan.get(c).copied().unwrap_or(1.0);
+                    let gain = match v.g.get_mut(c) {
+                        Some(g) => {
+                            *g += (target - *g) * ease;
+                            *g
+                        }
+                        None => target,
+                    };
                     let a = v.clip.samples.get(i0 * ch + cc).copied().unwrap_or(0.0);
                     let b = v.clip.samples.get((i0 + 1) * ch + cc).copied().unwrap_or(a);
                     let s = (a + (b - a) * t) * gain;
@@ -155,10 +227,6 @@ impl Mixer {
                     }
                 }
                 v.pos += step;
-            }
-            // a mono source meters the same on both sides
-            if ch == 1 {
-                peak[1] = peak[0];
             }
             let slot = levels.layers.entry(v.li).or_default();
             slot[0] = slot[0].max(peak[0]);
@@ -325,6 +393,19 @@ impl Out {
         std::mem::take(&mut *self.mixer.levels.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
+    /// The layers as they are now and the solo picks: the voices playing
+    /// take them in place, so a fader, mute, pan or fade changes the sound
+    /// without a restart.
+    pub fn sync(&self, layers: &[(usize, Layer)], solo: &BTreeSet<usize>) {
+        *self.mixer.solo.lock().unwrap_or_else(PoisonError::into_inner) = solo.clone();
+        let mut voices = self.mixer.voices.lock().unwrap_or_else(PoisonError::into_inner);
+        for v in voices.iter_mut() {
+            if let Some((_, l)) = layers.iter().find(|(li, _)| *li == v.li) {
+                v.layer = l.clone();
+            }
+        }
+    }
+
     pub fn stop(&mut self) {
         self.mixer.voices.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
@@ -348,6 +429,7 @@ impl Out {
                 layer: cue.layer,
                 t: cue.at as f64,
                 li: cue.li,
+                g: [0.0, 0.0],
             });
         }
     }
@@ -363,7 +445,8 @@ impl Out {
                 (t * 440.0 * std::f32::consts::TAU).sin() * 0.3 * env
             })
             .collect();
-        let clip = Arc::new(Clip { rate, channels: 1, samples, peaks: Vec::new() });
+        let clip =
+            Arc::new(Clip { rate, channels: 1, samples, peaks: Vec::new(), peaks_ch: Vec::new() });
         let layer = Layer { out_point: 1.0, ..Layer::default() };
         self.start(vec![Cue {
             clip,
@@ -399,9 +482,10 @@ pub fn mix(layers: &[(Arc<Clip>, Layer)], start: f32, end: f32) -> Option<Vec<i1
                 continue;
             }
             any = true;
+            let pan = pan_gains(l.pan);
             if let Some([left, right]) = out.get_mut(k * 2..k * 2 + 2) {
-                *left += clip.at(st, 0) * w;
-                *right += clip.at(st, 1) * w;
+                *left += clip.at(st, 0) * w * pan.first().copied().unwrap_or(1.0);
+                *right += clip.at(st, 1) * w * pan.get(1).copied().unwrap_or(1.0);
             }
         }
     }
@@ -439,7 +523,7 @@ mod tests {
         let n = (rate as f32 * secs) as usize;
         let samples: Vec<f32> = (0..n).map(|i| if i % 2 == 0 { 0.5 } else { -0.5 }).collect();
         let peaks = vec![0.5; (secs * PEAKS_PER_S) as usize];
-        Arc::new(Clip { rate, channels: 1, samples, peaks })
+        Arc::new(Clip { rate, channels: 1, samples, peaks, peaks_ch: Vec::new() })
     }
 
     #[test]
@@ -455,10 +539,12 @@ mod tests {
         };
         let out = mix(&[(clip, layer)], 0.0, 2.0).unwrap();
         assert_eq!(out.len(), 2 * 2 * MIX_RATE as usize);
-        // silence before the layer starts, a quarter-scale tone after
+        // silence before the layer starts; after it, a quarter-scale tone
+        // through the centre pan's constant-power gain
         assert_eq!(out[0], 0);
         let late = out[(MIX_RATE as usize + 10) * 2].unsigned_abs();
-        assert!((late as f32 - 0.25 * i16::MAX as f32).abs() < 2.0);
+        let want = 0.25 * std::f32::consts::FRAC_1_SQRT_2 * i16::MAX as f32;
+        assert!((late as f32 - want).abs() < 2.0);
     }
 
     #[test]

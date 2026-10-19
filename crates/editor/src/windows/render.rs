@@ -193,6 +193,10 @@ pub struct RenderWin {
     /// A composition's sound in the video, and its bitrate.
     sound_on: bool,
     audio_kbps: u32,
+    /// The preview player's sound, while it plays a composition, and the
+    /// time it was last at, to tell a jump from playing on.
+    sound: Option<crate::audio::Out>,
+    sound_at: Option<f32>,
     preview: Option<egui::TextureHandle>,
     /// The preview player: a puppet posed per frame for a scene, the
     /// timelapse steps for a timelapse.
@@ -251,6 +255,45 @@ impl RenderWin {
     /// The composition picked, when it is one.
     fn comp<'a>(&self, s: &'a crate::session::Session) -> Option<&'a ayatsuri_format::Composition> {
         self.scene.checked_sub(s.animations.len()).and_then(|ci| s.compositions.get(ci))
+    }
+
+    /// The preview player's sound: a composition's sound layers play along
+    /// while it plays, from where it is, as the Timeline plays them; a jump
+    /// or a loop starts them again from there.
+    fn sync_sound(
+        &mut self,
+        s: &crate::session::Session,
+        prefs: &crate::audio::Prefs,
+        solo: &std::collections::BTreeSet<usize>,
+        dt: f32,
+    ) {
+        let comp =
+            self.comp(s).filter(|_| self.shown && self.playing && self.source == Source::Animation);
+        let Some(comp) = comp else {
+            if self.sound_at.take().is_some()
+                && let Some(mut out) = self.sound.take()
+            {
+                out.stop();
+            }
+            return;
+        };
+        let (cues, live) = crate::audio::comp_cues(comp, &s.audio, self.time);
+        if live.is_empty() {
+            return;
+        }
+        let jumped = self.sound_at.is_none_or(|at| (self.time - (at + dt)).abs() > 0.12);
+        if jumped {
+            if self.sound.as_ref().is_none_or(|o| !o.alive()) {
+                self.sound = crate::audio::Out::open(prefs);
+            }
+            if let Some(out) = &mut self.sound {
+                out.start(cues);
+            }
+        }
+        if let Some(out) = &self.sound {
+            out.sync(&live, solo);
+        }
+        self.sound_at = Some(self.time);
     }
 
     /// Bake every composition again, so the picker and the export see the
@@ -321,6 +364,8 @@ impl RenderWin {
             ffmpeg_failed: None,
             sound_on: !p.sound_off,
             audio_kbps: if p.audio_kbps > 0 { p.audio_kbps } else { 192 },
+            sound: None,
+            sound_at: None,
             preview: None,
             playing: false,
             time: 0.0,
@@ -1470,6 +1515,9 @@ impl EditorUi {
         }
 
         if !win.shown {
+            if let Some(s) = &self.session {
+                win.sync_sound(s, &self.prefs.audio(), &self.mixer.solo, 0.0);
+            }
             return;
         }
         let Some(s) = &self.session else { return };
@@ -1507,6 +1555,7 @@ impl EditorUi {
             }
             ui.ctx().request_repaint();
         }
+        win.sync_sound(s, &self.prefs.audio(), &self.mixer.solo, dt);
         win.refresh_preview(ui.ctx(), s);
         if win.fullscreen {
             let screen = ui.ctx().content_rect();

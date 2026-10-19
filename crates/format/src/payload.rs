@@ -157,6 +157,8 @@ pub struct Layer {
     pub enabled: bool,
     /// Add the layer's values to what is beneath instead of mixing over it.
     pub additive: bool,
+    /// Where a sound sits between left (-1) and right (1).
+    pub pan: f32,
 }
 
 impl Default for Layer {
@@ -172,6 +174,7 @@ impl Default for Layer {
             fade_out: 0.0,
             enabled: true,
             additive: false,
+            pan: 0.0,
         }
     }
 }

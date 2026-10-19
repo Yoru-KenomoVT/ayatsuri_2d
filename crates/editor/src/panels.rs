@@ -237,7 +237,7 @@ pub struct EditorUi {
     /// Output devices as Settings last listed them.
     pub(crate) audio_devices: Option<Vec<crate::audio::Device>>,
     /// The Audio Mixer palette's state.
-    mixer: crate::mixer::Mixer,
+    pub(crate) mixer: crate::mixer::Mixer,
     anim_applied: f32,
     timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
@@ -3275,25 +3275,12 @@ impl EditorUi {
 
             // a composition's sound layers play along: started at the
             // playhead when play begins or jumps, stopped with it
-            let want = comp.as_ref().filter(|_| self.anim_playing).map(|c| {
-                c.layers
-                    .iter()
-                    .enumerate()
-                    .filter(|(li, l)| {
-                        l.enabled
-                            && l.weight > 0.0
-                            && (self.mixer.solo.is_empty() || self.mixer.solo.contains(li))
-                    })
-                    .filter_map(|(li, l)| match &l.source {
-                        ayatsuri_format::LayerSource::Audio(p) => {
-                            s.audio.get(p).cloned().map(|clip| (li, clip, l.clone()))
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            });
+            let want = comp
+                .as_ref()
+                .filter(|_| self.anim_playing)
+                .map(|c| crate::audio::comp_cues(c, &s.audio, self.anim_time));
             match want {
-                Some(cues) => {
+                Some((cues, live)) => {
                     let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
                     let jumped =
                         self.audio_at.is_none_or(|at| (self.anim_time - (at + dt)).abs() > 0.12);
@@ -3301,30 +3288,12 @@ impl EditorUi {
                         if self.audio_out.as_ref().is_none_or(|o| !o.alive()) {
                             self.audio_out = crate::audio::Out::open(&self.prefs.audio());
                         }
-                        let t = self.anim_time;
-                        let list: Vec<crate::audio::Cue> = cues
-                            .into_iter()
-                            .filter_map(|(li, clip, l)| {
-                                let end = ayatsuri_core::comp::layer_end(&l);
-                                if t < l.start || t >= end {
-                                    return None;
-                                }
-                                let speed = l.speed.max(0.05);
-                                let offset = l.in_point + (t - l.start) * speed;
-                                Some(crate::audio::Cue {
-                                    clip,
-                                    offset,
-                                    len: (l.out_point - offset).max(0.0),
-                                    speed,
-                                    layer: l,
-                                    at: t,
-                                    li,
-                                })
-                            })
-                            .collect();
                         if let Some(out) = &mut self.audio_out {
-                            out.start(list);
+                            out.start(cues);
                         }
+                    }
+                    if let Some(out) = &self.audio_out {
+                        out.sync(&live, &self.mixer.solo);
                     }
                     self.audio_at = Some(self.anim_time);
                 }
@@ -4395,11 +4364,6 @@ impl EditorUi {
                         if let Some(out) = &self.audio_out {
                             out.set_volume(vol as f32 / 100.0);
                         }
-                    }
-                    if changed.layers {
-                        // the voices carry their layer, so they start again
-                        // at the playhead with the new level
-                        self.audio_at = None;
                     }
                 } else {
                     ui.weak(crate::i18n::tr("No model loaded."));

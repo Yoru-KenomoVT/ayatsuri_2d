@@ -95,6 +95,8 @@ enum RowKind {
     Layer(usize),
     /// One curve of a layer's scene, shown read-only under it.
     LayerCurve(usize),
+    /// One channel of a stereo sound layer, opened under it.
+    AudioChannel(usize, usize),
 }
 
 #[derive(Clone)]
@@ -722,6 +724,20 @@ impl Timeline {
             });
             let open = self.folded.get(&layer_fold(li)).map(|f| !f).unwrap_or(false);
             if !open {
+                continue;
+            }
+            if let LayerSource::Audio(p) = &l.source {
+                let channels = s.audio.get(p).map_or(0, |c| c.channels);
+                for c in 0..channels.min(2) as usize {
+                    rows.push(Row {
+                        kind: RowKind::AudioChannel(li, c),
+                        depth: 2,
+                        label: if c == 0 { "L".to_string() } else { "R".to_string() },
+                        curve: None,
+                        color: GRAPH_COLORS.get(li % GRAPH_COLORS.len()).copied(),
+                        children: Vec::new(),
+                    });
+                }
                 continue;
             }
             let LayerSource::Scene(name) = &l.source else { continue };
@@ -1735,7 +1751,8 @@ impl Timeline {
                     };
                     let is_audio = matches!(l.source, LayerSource::Audio(_));
                     let open = rows.get(i + 1).is_some_and(|n| n.depth > row.depth);
-                    if is_scene {
+                    let stereo = clip.as_ref().is_some_and(|c| c.channels >= 2);
+                    if is_scene || stereo {
                         twirl(&lp, pos2(indent + 5.0, cy), open, pal.text_faint);
                         let r_fold = ui.interact(
                             Rect::from_min_size(pos2(indent - 2.0, y), vec2(16.0, rh)),
@@ -1900,16 +1917,17 @@ impl Timeline {
                     let label_font = FontId::proportional(10.5);
                     let label_w =
                         bp.layout_no_wrap(label.clone(), label_font.clone(), pal.text).size().x;
-                    {
-                        // the layer's own colour behind the name, fading out to
-                        // the right, so it reads over the waveform; it starts past
-                        // the bar's rounded corner so nothing pokes out
+                    if is_audio {
+                        // the bar's own fill behind the name, fading out to the
+                        // right, so it reads over the waveform; it starts past the
+                        // rounded corner so nothing pokes out
                         let fade = Rect::from_min_max(
                             pos2(x0 + 3.0, bar.min.y),
                             pos2((x0 + label_w + 22.0).min(x1 - 3.0), bar.max.y),
                         );
                         let mut mesh = egui::Mesh::default();
-                        let dark = Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 235);
+                        let dark =
+                            Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 245);
                         let clear = Color32::TRANSPARENT;
                         let mid_x = fade.min.x + (fade.width() - 14.0).max(0.0);
                         mesh.colored_vertex(fade.left_top(), dark);
@@ -2141,6 +2159,48 @@ impl Timeline {
                         *tp.applied = f32::NAN;
                     }
                     let _ = (len, looped, speed);
+                }
+                RowKind::AudioChannel(li, ch) => {
+                    let (li, ch) = (*li, *ch);
+                    let Some(c) = &comp else { continue };
+                    let Some(l) = c.layers.get(li) else { continue };
+                    let LayerSource::Audio(p) = &l.source else { continue };
+                    let Some(clip) = s.audio.get(p).cloned() else { continue };
+                    let col = row.color.unwrap_or(pal.accent);
+                    lp.text(
+                        pos2(indent, cy),
+                        Align2::LEFT_CENTER,
+                        &row.label,
+                        name_font.clone(),
+                        pal.text_faint,
+                    );
+                    // the channel's own waveform over the layer's span
+                    let speed = l.speed.max(1e-3);
+                    let end = ayatsuri_core::comp::layer_end(l);
+                    let (x0, x1) = (tm.x(l.start), tm.x(end));
+                    let bar = Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + rh - 1.0));
+                    ui.set_clip_rect(rows_right.intersect(outer_clip));
+                    gp.rect_filled(bar, 2.0, mix(col, pal.chrome, 0.75));
+                    if let Some(peaks) = clip.peaks_ch.get(ch) {
+                        let wave = mix(col, Color32::WHITE, 0.35);
+                        let x0v = bar.min.x.max(rr.min.x);
+                        let x1v = bar.max.x.min(rr.max.x);
+                        let mut x = x0v;
+                        while x < x1v {
+                            let st = l.in_point + (tm.t(x) - l.start) * speed;
+                            let idx = (st * crate::audio::PEAKS_PER_S) as usize;
+                            let pk = peaks.get(idx).copied().unwrap_or(0.0);
+                            let hh = pk * (bar.height() / 2.0 - 1.0);
+                            if hh > 0.3 {
+                                gp.line_segment(
+                                    [pos2(x, cy - hh), pos2(x, cy + hh)],
+                                    Stroke::new(1.0, wave),
+                                );
+                            }
+                            x += 1.0;
+                        }
+                    }
+                    ui.set_clip_rect(rect.intersect(outer_clip));
                 }
                 RowKind::LayerCurve(li) => {
                     let li = *li;
@@ -3419,6 +3479,7 @@ impl Timeline {
                 l.speed = l.speed.clamp(0.1, 10.0);
                 let top = if matches!(l.source, LayerSource::Audio(_)) { 2.0 } else { 1.0 };
                 l.weight = l.weight.clamp(0.0, top);
+                l.pan = l.pan.clamp(-1.0, 1.0);
                 l.fade_in = l.fade_in.max(0.0);
                 l.fade_out = l.fade_out.max(0.0);
             }
