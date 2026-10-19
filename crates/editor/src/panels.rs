@@ -2949,44 +2949,49 @@ impl EditorUi {
             ui.horizontal(|ui| {
                 let label = self.workspace.name(&self.prefs);
                 let mut pick: Option<Workspace> = None;
-                egui::ComboBox::from_id_salt("workspace")
-                    .selected_text(label)
-                    .width(130.0)
-                    .show_ui(ui, |ui| {
+                // the same flat menu button as the menu bar, in the accent
+                // colour because it is the one that is active
+                let title =
+                    egui::RichText::new(format!("{label}  {}", egui_phosphor::regular::CARET_DOWN))
+                        .color(theme::pal().accent);
+                ui.menu_button(title, |ui| {
+                    if ui
+                        .selectable_label(
+                            self.workspace == Workspace::Modeling,
+                            crate::i18n::tr("Modeling"),
+                        )
+                        .clicked()
+                    {
+                        pick = Some(Workspace::Modeling);
+                    }
+                    if ui
+                        .selectable_label(
+                            self.workspace == Workspace::Animation,
+                            crate::i18n::tr("Animation"),
+                        )
+                        .clicked()
+                    {
+                        pick = Some(Workspace::Animation);
+                    }
+                    for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
                         if ui
-                            .selectable_label(
-                                self.workspace == Workspace::Modeling,
-                                crate::i18n::tr("Modeling"),
-                            )
+                            .selectable_label(self.workspace == Workspace::Custom(i), name)
                             .clicked()
                         {
-                            pick = Some(Workspace::Modeling);
+                            pick = Some(Workspace::Custom(i));
                         }
-                        if ui
-                            .selectable_label(
-                                self.workspace == Workspace::Animation,
-                                crate::i18n::tr("Animation"),
-                            )
-                            .clicked()
-                        {
-                            pick = Some(Workspace::Animation);
-                        }
-                        for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
-                            if ui
-                                .selectable_label(self.workspace == Workspace::Custom(i), name)
-                                .clicked()
-                            {
-                                pick = Some(Workspace::Custom(i));
-                            }
-                        }
-                        ui.separator();
-                        if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
-                            self.show_ws_save = true;
-                        }
-                        if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
-                            self.show_ws_manage = true;
-                        }
-                    });
+                    }
+                    ui.separator();
+                    if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
+                        self.show_ws_save = true;
+                    }
+                    if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
+                        self.show_ws_manage = true;
+                    }
+                    if pick.is_some() || self.show_ws_save || self.show_ws_manage {
+                        ui.close();
+                    }
+                });
                 if let Some(w) = pick {
                     self.set_workspace(w);
                 }

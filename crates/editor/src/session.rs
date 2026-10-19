@@ -500,6 +500,7 @@ fn reimport_into(
             visible: true,
             opacity: layer.opacity,
             clip_to_below: false,
+            blend: ayatsuri_import::Blend::Normal,
         });
     }
     report.missing = (0..model.art_meshes.len())
@@ -2161,6 +2162,7 @@ mod import_paint_tests {
                     visible: true,
                     opacity: 1.0,
                     clip_to_below: false,
+                    blend: ayatsuri_import::Blend::Normal,
                 })
                 .collect(),
         }
