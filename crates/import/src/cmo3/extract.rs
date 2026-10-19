@@ -367,15 +367,8 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
                     }
                 }
             }
-            let Some(shape) = shape else {
-                log::warn!(
-                    "cmo3: deformer {} has no original shape; skipped",
-                    doc.attr(el, "xs.id").unwrap_or("")
-                );
-                continue;
-            };
-            let Some(base) = doc.field_raw(shape, "super") else { continue };
-            let pts = doc.field(base, "positions").map(|p| doc.floats(p)).unwrap_or_default();
+            // Cubism 4 projects keep no original shape; nothing here needs it
+            let _ = shape;
             let uuid = doc.uuid_field(dsrc, "guid").unwrap_or_default();
             let id =
                 doc.field(dsrc, "id").and_then(|i| doc.attr(i, "idstr")).unwrap_or("").to_string();
@@ -419,7 +412,6 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
             } else {
                 DeformerKind::Rotation
             };
-            let _ = pts;
             deformers.push(Deformer { uuid, id, parent: parent_uuid(dsrc), kind, bindings, forms });
         }
     }

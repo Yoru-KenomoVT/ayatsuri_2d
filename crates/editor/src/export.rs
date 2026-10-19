@@ -189,7 +189,7 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     write(&dir.join(&cdi_file), &ayatsuri_import::cubism_json(&cdi), &mut written)?;
     refs.insert("DisplayInfo".into(), json!(cdi_file));
 
-    // expressions go in their own folder, as Live2D's sample models do, and
+    // expressions go in their own folder, as published models have them, and
     // are listed before the motions in the model3.json, Cubism's order
     if opt.expressions && !s.expressions.is_empty() {
         let edir = dir.join("expressions");

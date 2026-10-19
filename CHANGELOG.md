@@ -214,6 +214,9 @@
   counterpart for are drawn normal, with a note in the log.
 - The workspace picker in the toolbar is a flat menu button like the
   menu bar's, in the accent colour.
+- Cubism 4 projects open: their archive table has no tag list (a raw
+  all-ones count) and their deformers carry no original shape, both of
+  which the .cmo3 importer refused.
 
 - Discord Rich Presence shows the app's picture under any Application ID:
   the image is fetched from ayatsuri-2d.org instead of an uploaded asset.

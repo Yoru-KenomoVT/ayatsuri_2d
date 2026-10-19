@@ -2,7 +2,10 @@
 // as worked out from the files: a fixed header with a 32-bit key, then a
 // file table whose integers are XOR'd with the key and whose bytes with
 // its low byte, then the entries themselves. Entries marked obfuscated are
-// XOR'd with the low byte too. `main.xml` is a one-entry streamed zip.
+// XOR'd with the low byte too. `main.xml` is a one-entry streamed zip. An
+// entry is: name, kind, a tag count (-1 in Cubism 4 files, which have no
+// tags), the tags, start, size, an obfuscated flag, a compression byte
+// and eight spare bytes.
 
 use crate::ImportError;
 
@@ -72,7 +75,12 @@ impl<'a> Caff<'a> {
         for _ in 0..count {
             let name = c.text()?;
             let _kind = c.text()?;
-            let tags = c.u32()? as usize;
+            // projects from Cubism 4 write a plain 0xFFFFFFFF here, not run
+            // through the key: no tag list at all
+            let tags = match c.u32()? {
+                n if n == !c.key => 0,
+                n => n as usize,
+            };
             if tags > 1024 {
                 return Err(err("tag list too long"));
             }
