@@ -1138,5 +1138,12 @@
   "Frames per request; smaller answers sooner, larger never stutters": "Rame per versoek; kleiner antwoord gouer, groter hakkel nooit",
   "Not open yet": "Nog nie oop nie",
   "Backend": "Agterkant",
-  "Test sound": "Toetsklank"
+  "Test sound": "Toetsklank",
+  "Audio Mixer": "Klankmenger",
+  "Open a composition to mix its sound layers.": "Maak 'n komposisie oop om sy klanklae te meng.",
+  "Master": "Meester",
+  "Mute": "Demp",
+  "Unmute": "Ontdemp",
+  "No sound layers in this composition. Add one with File > Import Audio…": "Geen klanklae in hierdie komposisie nie. Voeg een by met Lêer > Voer klank in…",
+  "Main out": "Hoofuitset"
 }

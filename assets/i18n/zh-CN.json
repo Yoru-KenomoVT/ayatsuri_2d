@@ -1138,5 +1138,12 @@
   "Frames per request; smaller answers sooner, larger never stutters": "每次请求的帧数；越小响应越快，越大越不会卡顿",
   "Not open yet": "尚未打开",
   "Backend": "后端",
-  "Test sound": "测试声音"
+  "Test sound": "测试声音",
+  "Audio Mixer": "音频混音器",
+  "Open a composition to mix its sound layers.": "打开一个合成来混音它的声音图层。",
+  "Master": "主音量",
+  "Mute": "静音",
+  "Unmute": "取消静音",
+  "No sound layers in this composition. Add one with File > Import Audio…": "此合成中没有声音图层。用 文件 > 导入音频… 添加一个。",
+  "Main out": "主输出"
 }

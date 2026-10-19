@@ -1138,5 +1138,12 @@
   "Frames per request; smaller answers sooner, larger never stutters": "1 回の要求あたりのフレーム数。小さいほど反応が速く、大きいほど途切れません",
   "Not open yet": "まだ開いていません",
   "Backend": "バックエンド",
-  "Test sound": "テスト音"
+  "Test sound": "テスト音",
+  "Audio Mixer": "オーディオミキサー",
+  "Open a composition to mix its sound layers.": "コンポジションを開くと音声レイヤーをミックスできます。",
+  "Master": "マスター",
+  "Mute": "ミュート",
+  "Unmute": "ミュート解除",
+  "No sound layers in this composition. Add one with File > Import Audio…": "このコンポジションに音声レイヤーはありません。ファイル > 音声を読み込み… で追加できます。",
+  "Main out": "メイン出力"
 }

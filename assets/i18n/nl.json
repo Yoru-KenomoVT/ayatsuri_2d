@@ -1138,5 +1138,12 @@
   "Frames per request; smaller answers sooner, larger never stutters": "Frames per verzoek; kleiner reageert sneller, groter hapert nooit",
   "Not open yet": "Nog niet geopend",
   "Backend": "Backend",
-  "Test sound": "Testgeluid"
+  "Test sound": "Testgeluid",
+  "Audio Mixer": "Audiomixer",
+  "Open a composition to mix its sound layers.": "Open een compositie om de geluidslagen te mixen.",
+  "Master": "Master",
+  "Mute": "Dempen",
+  "Unmute": "Dempen opheffen",
+  "No sound layers in this composition. Add one with File > Import Audio…": "Geen geluidslagen in deze compositie. Voeg er een toe met Bestand > Audio importeren…",
+  "Main out": "Hoofduitgang"
 }
