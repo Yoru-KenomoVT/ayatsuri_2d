@@ -222,6 +222,10 @@ pub struct EditorUi {
     /// the tracks were last written into the puppet.
     anim_time: f32,
     anim_playing: bool,
+    /// Playback as it was last frame, and every parameter's value from
+    /// when it started: stopping puts the model back the way it was.
+    anim_was_playing: bool,
+    play_pose: Vec<f32>,
     anim_autokey: bool,
     /// Space went down with a drag, so letting it go is not a play tap.
     space_dragged: bool,
@@ -1021,6 +1025,8 @@ impl Default for EditorUi {
             mixer: crate::mixer::Mixer::default(),
             anim_autokey: true,
             anim_applied: f32::NAN,
+            anim_was_playing: false,
+            play_pose: Vec::new(),
             timeline: crate::timeline::Timeline::default(),
             new_anim: None,
             anim_details: None,
@@ -1735,6 +1741,17 @@ impl EditorUi {
                 .map(|(_, l)| l.clone())
                 .unwrap_or_else(dock::default_workspace),
         };
+        // the Animation workspace opens on the first composition, the
+        // whole piece, and falls back to the first scene when there is none
+        if w == Workspace::Animation
+            && let Some(s) = &mut self.session
+            && s.current_comp.is_none()
+            && !s.compositions.is_empty()
+        {
+            s.current_comp = Some(0);
+            self.anim_time = 0.0;
+            self.anim_applied = f32::NAN;
+        }
         self.workspace = w;
         self.last_layout = self.layout.clone();
     }
@@ -3100,6 +3117,23 @@ impl EditorUi {
         // composition drives them through its layers' blends over the rest
         // pose instead
         if let Some(s) = &mut self.session {
+            // play remembers the pose; stop (from anywhere: the transport, a
+            // key, the menu, the end of a clip) puts it back, so the model
+            // does not stay on the last frame with its eyes shut
+            if self.anim_playing && !self.anim_was_playing {
+                self.play_pose =
+                    (0..s.puppet.model().parameters.len()).map(|i| s.puppet.value(i)).collect();
+                log::debug!("playback: started, pose of {} parameters kept", self.play_pose.len());
+            } else if !self.anim_playing && self.anim_was_playing {
+                for (i, &v) in self.play_pose.iter().enumerate() {
+                    s.puppet.set_value(i, v);
+                }
+                // the clip must not write the stopped frame back over it
+                self.anim_applied = self.anim_time;
+                s.dirty = true;
+                log::debug!("playback: stopped, pose restored");
+            }
+            self.anim_was_playing = self.anim_playing;
             let mut posed = false;
             let comp = s.current_comp.and_then(|ci| s.compositions.get(ci).cloned());
             let scene = match comp {
