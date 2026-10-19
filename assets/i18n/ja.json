@@ -1105,7 +1105,6 @@
   "Off leaves it to the player (1 s)": "オフにするとプレイヤー任せ (1 秒)",
   "Set from pose": "ポーズから設定",
   "Replace the parameters with the pose's differences from default": "パラメータをポーズの初期値との差分で置き換える",
-  "Add parameter": "パラメータを追加",
   "{n} parameters": "{n} 個のパラメータ",
   "Play the playlist": "プレイリストを再生",
   "Crossfade": "クロスフェード",
@@ -1148,5 +1147,13 @@
   "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "<name>.cmo3 を書き出します。Cubism Editor のプロジェクトとして、アートはレイヤーに、メッシュ、デフォーマ、フォルダ分けされたパラメータ、すべてのキーフォーム、クリッピング、物理演算を含みます。アニメーションと音声はプロジェクトには含まれません。moc3 タブからモーションとして書き出してください。",
   "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "Cubism Editor で確認せず、プロジェクトファイルだけから作成しています。Editor が開けない場合は報告してください。",
   "Export as cmo3": "cmo3として書き出し",
-  "Cubism Editor project": "Cubism Editor プロジェクト"
+  "Cubism Editor project": "Cubism Editor プロジェクト",
+  "Add parameter…": "パラメータを追加…",
+  "Add Parameter": "パラメータを追加",
+  "Filter parameters": "パラメータを絞り込む",
+  "Already in this expression": "この表情にすでにあります",
+  "Blend": "ブレンド",
+  "Added to the pose's value; the pose has {id} at {v}.": "ポーズの値に加算します。ポーズでは {id} は {v} です。",
+  "The pose's value times this; the pose has {id} at {v}.": "ポーズの値にこの値を掛けます。ポーズでは {id} は {v} です。",
+  "Replaces the pose's value; the pose has {id} at {v}.": "ポーズの値を置き換えます。ポーズでは {id} は {v} です。"
 }

@@ -1105,7 +1105,6 @@
   "Off leaves it to the player (1 s)": "Af laat dit aan die speler oor (1 s)",
   "Set from pose": "Stel uit pose",
   "Replace the parameters with the pose's differences from default": "Vervang die parameters met die pose se verskille van verstek",
-  "Add parameter": "Voeg parameter by",
   "{n} parameters": "{n} parameters",
   "Play the playlist": "Speel die speellys",
   "Crossfade": "Kruisvloei",
@@ -1148,5 +1147,13 @@
   "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "Skryf <name>.cmo3, 'n Cubism Editor-projek: die kuns as lae, die meshes, deformers, parameters in hul vouers, elke keyform, clipping en fisika. Animasies en klank is nie deel van 'n projek nie; die moc3-oortjie voer dié as motions uit.",
   "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "Geskryf uit projeklêers alleen, sonder Cubism Editor om teen te toets. As die Editor een weier, rapporteer dit asseblief.",
   "Export as cmo3": "Voer uit as cmo3",
-  "Cubism Editor project": "Cubism Editor-projek"
+  "Cubism Editor project": "Cubism Editor-projek",
+  "Add parameter…": "Voeg parameter by…",
+  "Add Parameter": "Voeg parameter by",
+  "Filter parameters": "Filter parameters",
+  "Already in this expression": "Reeds in hierdie uitdrukking",
+  "Blend": "Meng",
+  "Added to the pose's value; the pose has {id} at {v}.": "By die pose se waarde getel; die pose het {id} op {v}.",
+  "The pose's value times this; the pose has {id} at {v}.": "Die pose se waarde maal dit; die pose het {id} op {v}.",
+  "Replaces the pose's value; the pose has {id} at {v}.": "Vervang die pose se waarde; die pose het {id} op {v}."
 }

@@ -1105,7 +1105,6 @@
   "Off leaves it to the player (1 s)": "끄면 플레이어에 맡김 (1초)",
   "Set from pose": "포즈에서 설정",
   "Replace the parameters with the pose's differences from default": "매개변수를 포즈와 기본값의 차이로 바꾸기",
-  "Add parameter": "매개변수 추가",
   "{n} parameters": "매개변수 {n}개",
   "Play the playlist": "재생 목록 재생",
   "Crossfade": "크로스페이드",
@@ -1148,5 +1147,13 @@
   "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "<name>.cmo3를 씁니다. Cubism Editor 프로젝트로, 아트는 레이어로, 메시, 디포머, 폴더별 파라미터, 모든 키폼, 클리핑, 물리가 들어갑니다. 애니메이션과 소리는 프로젝트에 포함되지 않으며 moc3 탭에서 모션으로 내보냅니다.",
   "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "Cubism Editor로 확인하지 않고 프로젝트 파일만으로 만들었습니다. Editor가 열지 못하면 알려 주세요.",
   "Export as cmo3": "cmo3로 내보내기",
-  "Cubism Editor project": "Cubism Editor 프로젝트"
+  "Cubism Editor project": "Cubism Editor 프로젝트",
+  "Add parameter…": "파라미터 추가…",
+  "Add Parameter": "파라미터 추가",
+  "Filter parameters": "파라미터 필터",
+  "Already in this expression": "이 표정에 이미 있습니다",
+  "Blend": "블렌드",
+  "Added to the pose's value; the pose has {id} at {v}.": "포즈 값에 더합니다. 포즈의 {id}은(는) {v}입니다.",
+  "The pose's value times this; the pose has {id} at {v}.": "포즈 값에 이 값을 곱합니다. 포즈의 {id}은(는) {v}입니다.",
+  "Replaces the pose's value; the pose has {id} at {v}.": "포즈 값을 대체합니다. 포즈의 {id}은(는) {v}입니다."
 }

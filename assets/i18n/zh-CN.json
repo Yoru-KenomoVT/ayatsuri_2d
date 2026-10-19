@@ -1105,7 +1105,6 @@
   "Off leaves it to the player (1 s)": "关闭则交给播放器（1 秒）",
   "Set from pose": "从姿势设置",
   "Replace the parameters with the pose's differences from default": "用姿势与默认值的差异替换参数",
-  "Add parameter": "添加参数",
   "{n} parameters": "{n} 个参数",
   "Play the playlist": "播放播放列表",
   "Crossfade": "交叉淡化",
@@ -1148,5 +1147,13 @@
   "Writes <name>.cmo3, a Cubism Editor project: the art as layers, the meshes, deformers, parameters in their folders, every keyform, clipping and physics. Animations and sound are not part of a project; the moc3 tab exports those as motions.": "写出 <name>.cmo3，一个 Cubism Editor 项目：美术作为图层，以及网格、变形器、分文件夹的参数、每个关键形状、剪裁和物理。动画和声音不属于项目，请在 moc3 选项卡中导出为动作。",
   "Written from project files alone, without Cubism Editor to check against. If the Editor refuses one, please report it.": "仅根据项目文件编写，没有用 Cubism Editor 核对。如果 Editor 拒绝打开，请报告。",
   "Export as cmo3": "导出为 cmo3",
-  "Cubism Editor project": "Cubism Editor 项目"
+  "Cubism Editor project": "Cubism Editor 项目",
+  "Add parameter…": "添加参数…",
+  "Add Parameter": "添加参数",
+  "Filter parameters": "筛选参数",
+  "Already in this expression": "此表情中已有",
+  "Blend": "混合",
+  "Added to the pose's value; the pose has {id} at {v}.": "加到姿势的值上；姿势中 {id} 为 {v}。",
+  "The pose's value times this; the pose has {id} at {v}.": "姿势的值乘以此值；姿势中 {id} 为 {v}。",
+  "Replaces the pose's value; the pose has {id} at {v}.": "替换姿势的值；姿势中 {id} 为 {v}。"
 }
