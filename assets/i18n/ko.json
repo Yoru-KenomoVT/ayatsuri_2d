@@ -1124,5 +1124,19 @@
   "Overwrite sets the parameters; Add puts the scene's values on top": "덮어쓰기는 매개변수를 설정하고, 더하기는 씬의 값을 위에 얹습니다",
   "Play / stop": "재생 / 정지",
   "Import Audio…": "오디오 가져오기…",
-  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "WAV, MP3, FLAC, Ogg 파일을 현재 컴포지션의 레이어로 추가합니다 (없으면 새로 만듦)"
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "WAV, MP3, FLAC, Ogg 파일을 현재 컴포지션의 레이어로 추가합니다 (없으면 새로 만듦)",
+  "Audio": "오디오",
+  "Sound output": "사운드 출력",
+  "System default": "시스템 기본값",
+  "Output device": "출력 장치",
+  "Where the sound plays; the system default follows your desktop": "소리가 나오는 곳. 시스템 기본값은 데스크톱 설정을 따릅니다",
+  "Refresh": "새로 고침",
+  "No output found": "출력 장치를 찾을 수 없음",
+  "Volume": "음량",
+  "The editor's own level; playback and the test tone use it": "편집기 자체의 음량. 재생과 테스트 음에 쓰입니다",
+  "Buffer size": "버퍼 크기",
+  "Frames per request; smaller answers sooner, larger never stutters": "요청당 프레임 수. 작을수록 빨리 반응하고 클수록 끊기지 않습니다",
+  "Not open yet": "아직 열리지 않음",
+  "Backend": "백엔드",
+  "Test sound": "테스트 음"
 }

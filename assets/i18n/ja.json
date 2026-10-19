@@ -1124,5 +1124,19 @@
   "Overwrite sets the parameters; Add puts the scene's values on top": "上書きはパラメータを設定し、加算はシーンの値を上に足します",
   "Play / stop": "再生 / 停止",
   "Import Audio…": "音声を読み込み…",
-  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "WAV、MP3、FLAC、Ogg ファイルを現在のコンポジションのレイヤーとして追加します (ない場合は新規作成)"
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "WAV、MP3、FLAC、Ogg ファイルを現在のコンポジションのレイヤーとして追加します (ない場合は新規作成)",
+  "Audio": "オーディオ",
+  "Sound output": "サウンド出力",
+  "System default": "システムの既定",
+  "Output device": "出力デバイス",
+  "Where the sound plays; the system default follows your desktop": "音の出力先。システムの既定はデスクトップの設定に従います",
+  "Refresh": "更新",
+  "No output found": "出力デバイスが見つかりません",
+  "Volume": "音量",
+  "The editor's own level; playback and the test tone use it": "エディタ自身の音量。再生とテスト音に使われます",
+  "Buffer size": "バッファサイズ",
+  "Frames per request; smaller answers sooner, larger never stutters": "1 回の要求あたりのフレーム数。小さいほど反応が速く、大きいほど途切れません",
+  "Not open yet": "まだ開いていません",
+  "Backend": "バックエンド",
+  "Test sound": "テスト音"
 }

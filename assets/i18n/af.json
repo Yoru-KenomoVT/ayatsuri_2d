@@ -1124,5 +1124,19 @@
   "Overwrite sets the parameters; Add puts the scene's values on top": "Oorskryf stel die parameters; Tel by sit die toneel se waardes bo-op",
   "Play / stop": "Speel / stop",
   "Import Audio…": "Voer klank in…",
-  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "Voeg 'n WAV-, MP3-, FLAC- of Ogg-lêer as 'n laag van die huidige komposisie by ('n nuwe een as daar geen is nie)"
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "Voeg 'n WAV-, MP3-, FLAC- of Ogg-lêer as 'n laag van die huidige komposisie by ('n nuwe een as daar geen is nie)",
+  "Audio": "Klank",
+  "Sound output": "Klankuitset",
+  "System default": "Stelselverstek",
+  "Output device": "Uitsettoestel",
+  "Where the sound plays; the system default follows your desktop": "Waar die klank speel; die stelselverstek volg jou lessenaar",
+  "Refresh": "Verfris",
+  "No output found": "Geen uitset gevind nie",
+  "Volume": "Volume",
+  "The editor's own level; playback and the test tone use it": "Die redigeerder se eie vlak; terugspeel en die toetstoon gebruik dit",
+  "Buffer size": "Buffergrootte",
+  "Frames per request; smaller answers sooner, larger never stutters": "Rame per versoek; kleiner antwoord gouer, groter hakkel nooit",
+  "Not open yet": "Nog nie oop nie",
+  "Backend": "Agterkant",
+  "Test sound": "Toetsklank"
 }

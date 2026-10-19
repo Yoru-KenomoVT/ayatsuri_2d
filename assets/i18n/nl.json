@@ -1124,5 +1124,19 @@
   "Overwrite sets the parameters; Add puts the scene's values on top": "Overschrijven zet de parameters; Optellen legt de waarden van de scène erbovenop",
   "Play / stop": "Afspelen / stoppen",
   "Import Audio…": "Audio importeren…",
-  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "Een WAV-, MP3-, FLAC- of Ogg-bestand als laag aan de huidige compositie toevoegen (een nieuwe als er geen is)"
+  "Add a WAV, MP3, FLAC or Ogg file as a layer of the current composition (a new one when there is none)": "Een WAV-, MP3-, FLAC- of Ogg-bestand als laag aan de huidige compositie toevoegen (een nieuwe als er geen is)",
+  "Audio": "Audio",
+  "Sound output": "Geluidsuitvoer",
+  "System default": "Systeemstandaard",
+  "Output device": "Uitvoerapparaat",
+  "Where the sound plays; the system default follows your desktop": "Waar het geluid speelt; de systeemstandaard volgt je bureaublad",
+  "Refresh": "Vernieuwen",
+  "No output found": "Geen uitvoer gevonden",
+  "Volume": "Volume",
+  "The editor's own level; playback and the test tone use it": "Het eigen niveau van de editor; afspelen en de testtoon gebruiken het",
+  "Buffer size": "Buffergrootte",
+  "Frames per request; smaller answers sooner, larger never stutters": "Frames per verzoek; kleiner reageert sneller, groter hapert nooit",
+  "Not open yet": "Nog niet geopend",
+  "Backend": "Backend",
+  "Test sound": "Testgeluid"
 }
