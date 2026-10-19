@@ -4,8 +4,11 @@ The C ABI of the Ayatsuri2D runtime: `ayatsuri.h`, a shared library and a
 static one. Apache-2.0, so a closed game or app can embed it; the editor
 and the rest of the workspace stay GPL-3.0.
 
-- [`docs/reference.md`](docs/reference.md): the developer reference, every
-  call, ownership, threading, rendering, bindings.
+- [`docs/reference.md`](docs/reference.md): the developer guide and
+  reference: quick start, how a frame works, threads, drawing, motions,
+  physics, errors, lifetimes, bindings, and every call.
+- [`docs/diagrams/`](docs/diagrams/README.md): the diagrams the reference
+  calls for, with a brief for each.
 - [`docs/replacing-the-sdk.md`](docs/replacing-the-sdk.md): what a host that
   ships the Cubism SDK gets from it, what this ABI covers, and what comes
   next.

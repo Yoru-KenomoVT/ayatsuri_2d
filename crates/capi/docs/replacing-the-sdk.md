@@ -33,6 +33,7 @@ yet; **runtime** neither has it; **host** belongs in the host by design.
 | Drawable parent part | yes | **have** | `ay2d_mesh_part` |
 | Dynamic flags: visible, visibility changed, opacity changed, draw order changed, render order changed, vertices changed | yes | **have** | `ay2d_mesh_changes`, four bits per mesh |
 | Update | yes | **have** | |
+| Use from several threads | host's job | **have** | set and read from any thread; one driving thread, a second gets `BUSY`; render reads frame N while N + 1 is made |
 | Parameter and part values written by physics read back | yes | **have** | |
 | Moc consistency check / version | yes | **host** | `.aom` validates on load; `ay2d_version` |
 
@@ -65,7 +66,8 @@ arrays, physics with wind and reset, drawables in order with blend flags
 and masks, per-mesh geometry and change flags for GPU hosts, textures as
 stored, motions with fades, loops and events, expressions, the bundle's
 physics, motion and expression files, display names and groups, error
-reporting and the panic guard. A streaming app (tracking, idle motions,
+reporting, the panic guard, and threading: values in and results out from
+any thread, one thread driving. A streaming app (tracking, idle motions,
 expressions, physics) is complete on ABI 1 with its own renderer.
 
 ## Next chunks, in order
