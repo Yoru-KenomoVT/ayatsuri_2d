@@ -268,7 +268,7 @@ struct StripOut {
 /// pan while it changes.
 fn knob(ui: &mut Ui, id: egui::Id, center: egui::Pos2, pan: f32) -> Option<f32> {
     let pal = theme::pal();
-    let r = 9.0;
+    let r = 13.0;
     let rect = Rect::from_center_size(center, vec2(r * 2.0 + 6.0, r * 2.0 + 6.0));
     let resp = ui.interact(rect, id, Sense::click_and_drag()).on_hover_cursor(CursorIcon::Grab);
     let p = ui.painter();
@@ -311,12 +311,12 @@ fn strip_ui(ui: &mut Ui, rect: Rect, s: StripIn) -> StripOut {
     // top: the pan knob, centred; under it L and R at the ends of a line
     // with the pan marked on it, then the reading
     if let Some(pan) = s.pan {
-        let c = pos2(rect.center().x, top + 12.0);
+        let c = pos2(rect.center().x, top + 16.0);
         if let Some(np) = knob(ui, s.id.with("pan"), c, pan) {
             out.pan = Some(np);
         }
-        let line_y = top + 29.0;
-        let (lx, rx) = (rect.min.x + pad + 11.0, rect.max.x - pad - 11.0);
+        let line_y = top + 37.0;
+        let (lx, rx) = (c.x - 16.0, c.x + 16.0);
         let side = FontId::proportional(9.0);
         let p = ui.painter();
         p.text(pos2(lx - 3.0, line_y), Align2::RIGHT_CENTER, "L", side.clone(), pal.text_faint);
@@ -341,7 +341,7 @@ fn strip_ui(ui: &mut Ui, rect: Rect, s: StripIn) -> StripOut {
             FontId::proportional(10.0),
             pal.accent,
         );
-        top += 50.0;
+        top += 58.0;
     }
     // then M and S
     if s.mute.is_some() || s.solo.is_some() {
