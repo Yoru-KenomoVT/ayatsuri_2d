@@ -3360,7 +3360,13 @@ impl EditorUi {
                 self.expr_shown = shown;
                 s.dirty = true;
             }
-            if let Some(e) = shown.and_then(|i| s.expressions.get(i)).cloned() {
+            if let Some(mut e) = shown.and_then(|i| s.expressions.get(i)).cloned() {
+                // the popup's parameter previews too, before it is added
+                if let Some(p) = self.expressions.pending(s)
+                    && !e.params.iter().any(|ep| ep.id == p.id)
+                {
+                    e.params.push(p);
+                }
                 let model = s.puppet.model();
                 let ids: Vec<usize> = e
                     .params

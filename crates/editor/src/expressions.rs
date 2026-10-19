@@ -11,6 +11,8 @@ use crate::session::Session;
 use crate::theme;
 
 const UNDO_STEPS: usize = 64;
+/// Width of a value box: room for a sign, four digits and three decimals.
+const VALUE_W: f32 = 76.0;
 
 const BLENDS: [(&str, ExpressionBlend); 3] = [
     ("Add", ExpressionBlend::Add),
@@ -53,6 +55,14 @@ fn value_range(blend: ExpressionBlend, lo: f32, hi: f32) -> std::ops::RangeInclu
 }
 
 impl Expressions {
+    /// The parameter the Add Parameter popup is setting up, for the
+    /// preview to lay over the pose with the rest of the expression.
+    pub fn pending(&self, s: &Session) -> Option<ExpressionParam> {
+        let add = self.add.as_ref()?;
+        let p = s.puppet.model().parameters.get(add.pick)?;
+        Some(ExpressionParam { id: p.id.clone(), value: add.value, blend: add.blend })
+    }
+
     fn keep(&mut self, s: &Session, merge: bool) {
         if merge && self.dragging {
             return;
@@ -115,19 +125,16 @@ impl Expressions {
         ui.horizontal(|ui| {
             if ui
                 .button(RichText::new(egui_phosphor::regular::PLUS).size(14.0))
-                .on_hover_text(tr(
-                    "New expression from the pose: every parameter moved off its default, added",
-                ))
+                .on_hover_text(tr("New empty expression"))
                 .clicked()
             {
                 self.keep(s, false);
-                let params = Self::from_pose(s);
                 let n = s.expressions.len() + 1;
                 s.expressions.push(Expression {
                     name: format!("expression{n}"),
                     fade_in: None,
                     fade_out: None,
-                    params,
+                    params: Vec::new(),
                 });
                 self.sel = Some(s.expressions.len() - 1);
                 s.modified = true;
@@ -212,18 +219,26 @@ impl Expressions {
         });
         if s.expressions.is_empty() {
             ui.weak(tr(
-                "No expressions yet. Pose the model, then press + to keep the pose as one.",
+                "No expressions yet. Press + for an empty one, then add parameters or set it from the pose.",
             ));
             return;
         }
-        let list_h = (ui.available_height() * 0.3).clamp(60.0, 160.0);
+        // whole rows only, so the list never ends on a half-cut row; each
+        // row spans the palette
+        let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+        let rows_fit = ((ui.available_height() * 0.3).clamp(60.0, 200.0) / row_h).floor().max(2.0);
+        let list_h = rows_fit.min(s.expressions.len() as f32) * row_h;
         egui::ScrollArea::vertical().id_salt("expr-list").max_height(list_h).show(ui, |ui| {
-            for (i, e) in s.expressions.iter().enumerate() {
-                let label = format!("{}  {}", e.name, tr_count(e.params.len()));
-                if ui.selectable_label(self.sel == Some(i), label).clicked() {
-                    self.sel = Some(i);
+            ui.with_layout(Layout::top_down_justified(Align::Min), |ui| {
+                for (i, e) in s.expressions.iter().enumerate() {
+                    let label = format!("{}  {}", e.name, tr_count(e.params.len()));
+                    let b = egui::Button::selectable(self.sel == Some(i), label)
+                        .wrap_mode(egui::TextWrapMode::Truncate);
+                    if ui.add(b).clicked() {
+                        self.sel = Some(i);
+                    }
                 }
-            }
+            });
         });
         ui.separator();
         let Some(i) = self.sel else {
@@ -243,7 +258,10 @@ impl Expressions {
         let mut next = s.expressions.get(i).cloned().unwrap_or_default();
         egui::Grid::new("expr-head").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
             ui.label(tr("Name"));
-            if ui.text_edit_singleline(&mut next.name).changed() {
+            if ui
+                .add(egui::TextEdit::singleline(&mut next.name).desired_width(f32::INFINITY))
+                .changed()
+            {
                 edited = Some(true);
             }
             ui.end_row();
@@ -310,9 +328,15 @@ impl Expressions {
             next.params.push(added);
             edited = Some(false);
         }
+        // a value being set is a value worth seeing: the preview comes on
+        if self.add.is_some() {
+            self.preview = true;
+        }
         ui.add_space(4.0);
         let mut remove: Option<usize> = None;
         egui::ScrollArea::vertical().id_salt("expr-params").show(ui, |ui| {
+            // the rows stripe across the palette, not just under the text
+            ui.set_min_width(ui.available_width());
             egui::Grid::new("expr-params-grid")
                 .num_columns(4)
                 .spacing(vec2(6.0, 2.0))
@@ -333,7 +357,8 @@ impl Expressions {
                             .map_or((-1.0, 1.0), |p| (p.min, p.max));
                         let range = value_range(ep.blend, lo, hi);
                         let span = range.end() - range.start();
-                        let r = ui.add(
+                        let r = ui.add_sized(
+                            vec2(VALUE_W, ui.spacing().interact_size.y),
                             egui::DragValue::new(&mut ep.value)
                                 .range(range)
                                 .speed(span / 300.0)
@@ -377,6 +402,9 @@ impl Expressions {
         if let Some(merge) = edited
             && s.expressions.get(i) != Some(&next)
         {
+            if merge {
+                self.preview = true;
+            }
             self.keep(s, merge);
             if let Some(slot) = s.expressions.get_mut(i) {
                 *slot = next;
@@ -401,9 +429,12 @@ impl Expressions {
         let pal = theme::pal();
         let mut open = true;
         let mut done: Option<Option<ExpressionParam>> = None;
-        crate::windows::Dialog::new(tr("Add Parameter")).open(&mut open).width(360.0).show(
+        // as wide as the window allows, and no wider: long names truncate
+        let width = (ui.ctx().content_rect().width() - 48.0).clamp(360.0, 1600.0);
+        crate::windows::Dialog::new(tr("Add Parameter")).open(&mut open).width(width).show(
             ui.ctx(),
             |ui| {
+                ui.set_max_width(width);
                 // the parameter: a filter box over the list, taken ones greyed
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(egui_phosphor::regular::MAGNIFYING_GLASS).size(13.0));
@@ -414,34 +445,38 @@ impl Expressions {
                     );
                 });
                 let needle = add.filter.to_lowercase();
-                egui::ScrollArea::vertical().id_salt("expr-add-list").max_height(150.0).show(
+                let list_h = (ui.ctx().content_rect().height() * 0.35).clamp(120.0, 400.0);
+                egui::ScrollArea::vertical().id_salt("expr-add-list").max_height(list_h).show(
                     ui,
                     |ui| {
-                        for (pi, p) in model.parameters.iter().enumerate() {
-                            let name = names.get(pi).cloned().unwrap_or_else(|| p.id.clone());
-                            if !needle.is_empty()
-                                && !name.to_lowercase().contains(&needle)
-                                && !p.id.to_lowercase().contains(&needle)
-                            {
-                                continue;
+                        ui.with_layout(Layout::top_down_justified(Align::Min), |ui| {
+                            for (pi, p) in model.parameters.iter().enumerate() {
+                                let name = names.get(pi).cloned().unwrap_or_else(|| p.id.clone());
+                                if !needle.is_empty()
+                                    && !name.to_lowercase().contains(&needle)
+                                    && !p.id.to_lowercase().contains(&needle)
+                                {
+                                    continue;
+                                }
+                                let taken = have.iter().any(|ep| ep.id == p.id);
+                                let label = if taken {
+                                    RichText::new(name).color(pal.text_faint)
+                                } else {
+                                    RichText::new(name)
+                                };
+                                let r = ui.add_enabled(
+                                    !taken,
+                                    egui::Button::selectable(add.pick == pi, label)
+                                        .wrap_mode(egui::TextWrapMode::Truncate),
+                                );
+                                if taken {
+                                    r.on_disabled_hover_text(tr("Already in this expression"));
+                                } else if r.clicked() && add.pick != pi {
+                                    add.pick = pi;
+                                    add.value = 0.0;
+                                }
                             }
-                            let taken = have.iter().any(|ep| ep.id == p.id);
-                            let label = if taken {
-                                RichText::new(name).color(pal.text_faint)
-                            } else {
-                                RichText::new(name)
-                            };
-                            let r = ui.add_enabled(
-                                !taken,
-                                egui::Button::selectable(add.pick == pi, label),
-                            );
-                            if taken {
-                                r.on_disabled_hover_text(tr("Already in this expression"));
-                            } else if r.clicked() && add.pick != pi {
-                                add.pick = pi;
-                                add.value = 0.0;
-                            }
-                        }
+                        });
                     },
                 );
                 ui.separator();
@@ -470,13 +505,17 @@ impl Expressions {
                     let range = value_range(add.blend, lo, hi);
                     let span = range.end() - range.start();
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().slider_width = 180.0;
+                        // the value box keeps one width, so a minus sign
+                        // never shifts the slider
+                        ui.spacing_mut().slider_width =
+                            (ui.available_width() - VALUE_W - 24.0).max(120.0);
                         ui.add(
                             egui::Slider::new(&mut add.value, range.clone())
                                 .show_value(false)
                                 .clamping(egui::SliderClamping::Always),
                         );
-                        ui.add(
+                        ui.add_sized(
+                            vec2(VALUE_W, ui.spacing().interact_size.y),
                             egui::DragValue::new(&mut add.value)
                                 .range(range)
                                 .speed(span / 300.0)
