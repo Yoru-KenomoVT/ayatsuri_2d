@@ -97,7 +97,16 @@
   output while the composition plays (from the playhead, stopped with
   it), and the Render window mixes every sound layer down and hands it to
   ffmpeg beside the frames, so MP4, WebM and MOV come out with sound. The
-  file rides by path, relative to the `.aom`.
+  file rides by path, relative to the `.aom`. On Linux the sound goes to
+  PipeWire (or PulseAudio) over its own protocol, in pure Rust, so
+  Bluetooth and virtual outputs show up and an underrun does not kill the
+  stream; cpal is the fallback and the path on Windows and macOS.
+  **Settings > Audio** picks the output device, the volume and the buffer
+  size, with a test tone. The **Audio Mixer** palette has a fader and a
+  mute per sound layer and a main-out bus with the editor's level and the
+  device it goes to. Layer rows are taller, their bars carry a dark fade
+  behind the name so it reads over a waveform, and a square at either top
+  corner drags inward for a fade in or out.
 - **Expression palette** (Window > Expression; a tab beside the Timeline
   in the Animation workspace): the model's exp3 expressions, listed. The
   + makes one from the pose (every parameter moved off its default,
