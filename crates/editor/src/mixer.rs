@@ -297,14 +297,7 @@ fn knob(ui: &mut Ui, id: egui::Id, center: egui::Pos2, pan: f32) -> Option<f32> 
 }
 
 fn pan_text(pan: f32) -> String {
-    let v = (pan * 100.0).round() as i32;
-    if v == 0 {
-        "C".to_string()
-    } else if v < 0 {
-        format!("L{}", -v)
-    } else {
-        format!("R{v}")
-    }
+    format!("{:.1}", pan * 100.0)
 }
 
 /// One channel strip in `rect`. Narrow strips keep the meters and the
@@ -314,8 +307,43 @@ fn strip_ui(ui: &mut Ui, rect: Rect, s: StripIn) -> StripOut {
     let mut out = StripOut::default();
     let wide = rect.width() >= 80.0;
     let pad = 4.0;
-    // top: M and S
     let mut top = rect.min.y + pad;
+    // top: the pan knob, centred; under it L and R at the ends of a line
+    // with the pan marked on it, then the reading
+    if let Some(pan) = s.pan {
+        let c = pos2(rect.center().x, top + 12.0);
+        if let Some(np) = knob(ui, s.id.with("pan"), c, pan) {
+            out.pan = Some(np);
+        }
+        let line_y = top + 29.0;
+        let (lx, rx) = (rect.min.x + pad + 11.0, rect.max.x - pad - 11.0);
+        let side = FontId::proportional(9.0);
+        let p = ui.painter();
+        p.text(pos2(lx - 3.0, line_y), Align2::RIGHT_CENTER, "L", side.clone(), pal.text_faint);
+        p.text(pos2(rx + 3.0, line_y), Align2::LEFT_CENTER, "R", side, pal.text_faint);
+        if rx > lx {
+            p.line_segment([pos2(lx, line_y), pos2(rx, line_y)], Stroke::new(1.0, pal.text_faint));
+            let mx = lx + (pan.clamp(-1.0, 1.0) + 1.0) / 2.0 * (rx - lx);
+            p.line_segment(
+                [pos2(mx, line_y - 4.0), pos2(mx, line_y + 4.0)],
+                Stroke::new(2.0, pal.accent),
+            );
+            let cx = (lx + rx) / 2.0;
+            p.line_segment(
+                [pos2(cx, line_y - 2.0), pos2(cx, line_y + 2.0)],
+                Stroke::new(1.0, pal.text_faint),
+            );
+        }
+        p.text(
+            pos2(rect.center().x, line_y + 12.0),
+            Align2::CENTER_CENTER,
+            pan_text(pan),
+            FontId::proportional(10.0),
+            pal.accent,
+        );
+        top += 50.0;
+    }
+    // then M and S
     if s.mute.is_some() || s.solo.is_some() {
         let mut row = ui.new_child(
             egui::UiBuilder::new()
@@ -337,30 +365,6 @@ fn strip_ui(ui: &mut Ui, rect: Rect, s: StripIn) -> StripOut {
             out.solo_clicked = true;
         }
         top += 20.0;
-    }
-    // the pan knob, centred, L and R at its ends, its reading under it
-    if let Some(pan) = s.pan {
-        let c = pos2(rect.center().x, top + 12.0);
-        if let Some(np) = knob(ui, s.id.with("pan"), c, pan) {
-            out.pan = Some(np);
-        }
-        let side = FontId::proportional(9.0);
-        ui.painter().text(
-            pos2(c.x - 15.0, c.y),
-            Align2::RIGHT_CENTER,
-            "L",
-            side.clone(),
-            pal.text_faint,
-        );
-        ui.painter().text(pos2(c.x + 15.0, c.y), Align2::LEFT_CENTER, "R", side, pal.text_faint);
-        ui.painter().text(
-            pos2(c.x, c.y + 17.0),
-            Align2::CENTER_CENTER,
-            pan_text(pan),
-            FontId::proportional(10.0),
-            pal.text_faint,
-        );
-        top += 40.0;
     }
     // bottom: the name box, the footer line and the readout
     let name_h = 18.0;
