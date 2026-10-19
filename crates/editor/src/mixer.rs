@@ -338,20 +338,29 @@ fn strip_ui(ui: &mut Ui, rect: Rect, s: StripIn) -> StripOut {
         }
         top += 20.0;
     }
-    // the pan knob and its reading
+    // the pan knob, centred, L and R at its ends, its reading under it
     if let Some(pan) = s.pan {
-        let c = pos2(rect.center().x - 14.0, top + 12.0);
+        let c = pos2(rect.center().x, top + 12.0);
         if let Some(np) = knob(ui, s.id.with("pan"), c, pan) {
             out.pan = Some(np);
         }
+        let side = FontId::proportional(9.0);
         ui.painter().text(
-            pos2(c.x + 16.0, c.y),
-            Align2::LEFT_CENTER,
+            pos2(c.x - 15.0, c.y),
+            Align2::RIGHT_CENTER,
+            "L",
+            side.clone(),
+            pal.text_faint,
+        );
+        ui.painter().text(pos2(c.x + 15.0, c.y), Align2::LEFT_CENTER, "R", side, pal.text_faint);
+        ui.painter().text(
+            pos2(c.x, c.y + 17.0),
+            Align2::CENTER_CENTER,
             pan_text(pan),
             FontId::proportional(10.0),
             pal.text_faint,
         );
-        top += 28.0;
+        top += 40.0;
     }
     // bottom: the name box, the footer line and the readout
     let name_h = 18.0;
