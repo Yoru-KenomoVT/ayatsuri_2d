@@ -209,6 +209,11 @@
 ### Fixed
 
 - The Select tool is called Arrow, as its shortcut always said.
+- Multiply and Add (Linear Dodge) layers from PSD, Krita and Clip Studio
+  files keep their blend mode on import; other modes moc3 has no
+  counterpart for are drawn normal, with a note in the log.
+- The workspace picker in the toolbar is a flat menu button like the
+  menu bar's, in the accent colour.
 
 - Discord Rich Presence shows the app's picture under any Application ID:
   the image is fetched from ayatsuri-2d.org instead of an uploaded asset.
