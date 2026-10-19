@@ -24,13 +24,32 @@ pub struct Expressions {
     pub sel: Option<usize>,
     /// Lay the picked expression over the puppet.
     pub preview: bool,
-    /// The parameter picked in the add row.
-    add_pick: usize,
+    /// The Add Parameter popup while it is open.
+    add: Option<AddParam>,
     /// The whole list as it was before each edit.
     undo: Vec<Vec<Expression>>,
     redo: Vec<Vec<Expression>>,
     /// A drag of a value folds into one step while it lasts.
     dragging: bool,
+}
+
+/// The Add Parameter popup: pick a parameter, set its value on a slider
+/// over the parameter's range, choose the blend, then add it.
+struct AddParam {
+    pick: usize,
+    value: f32,
+    blend: ExpressionBlend,
+    filter: String,
+}
+
+/// The value range a blend makes sense over, for a parameter's min and max.
+fn value_range(blend: ExpressionBlend, lo: f32, hi: f32) -> std::ops::RangeInclusive<f32> {
+    let span = (hi - lo).abs().max(1e-3);
+    match blend {
+        ExpressionBlend::Add => -span..=span,
+        ExpressionBlend::Multiply => 0.0..=10.0,
+        ExpressionBlend::Overwrite => lo.min(hi)..=hi.max(lo),
+    }
 }
 
 impl Expressions {
@@ -265,31 +284,32 @@ impl Expressions {
                 next.params = Self::from_pose(s);
                 edited = Some(false);
             }
-            // add one parameter, picked by name
-            let w = (ui.available_width() - 40.0).max(80.0);
-            egui::ComboBox::from_id_salt("expr-add")
-                .selected_text(names.get(self.add_pick).cloned().unwrap_or_default())
-                .width(w)
-                .show_ui(ui, |ui| {
-                    for (pi, n) in names.iter().enumerate() {
-                        ui.selectable_value(&mut self.add_pick, pi, n);
-                    }
-                });
+            // add one parameter, through the popup
             if ui
-                .button(RichText::new(egui_phosphor::regular::PLUS).size(13.0))
-                .on_hover_text(tr("Add parameter"))
+                .add_enabled(
+                    self.add.is_none() && !model.parameters.is_empty(),
+                    egui::Button::new(tr("Add parameter…")),
+                )
                 .clicked()
-                && let Some(p) = model.parameters.get(self.add_pick)
-                && !next.params.iter().any(|ep| ep.id == p.id)
             {
-                next.params.push(ExpressionParam {
-                    id: p.id.clone(),
+                // the first parameter the expression does not have yet
+                let pick = model
+                    .parameters
+                    .iter()
+                    .position(|p| !next.params.iter().any(|ep| ep.id == p.id))
+                    .unwrap_or(0);
+                self.add = Some(AddParam {
+                    pick,
                     value: 0.0,
                     blend: ExpressionBlend::Add,
+                    filter: String::new(),
                 });
-                edited = Some(false);
             }
         });
+        if let Some(added) = self.add_param_window(ui, s, &names, &next.params) {
+            next.params.push(added);
+            edited = Some(false);
+        }
         ui.add_space(4.0);
         let mut remove: Option<usize> = None;
         egui::ScrollArea::vertical().id_salt("expr-params").show(ui, |ui| {
@@ -311,12 +331,8 @@ impl Expressions {
                             .iter()
                             .find(|p| p.id == ep.id)
                             .map_or((-1.0, 1.0), |p| (p.min, p.max));
-                        let span = (hi - lo).abs().max(1e-3);
-                        let range = match ep.blend {
-                            ExpressionBlend::Add => -span..=span,
-                            ExpressionBlend::Multiply => 0.0..=10.0,
-                            ExpressionBlend::Overwrite => lo..=hi,
-                        };
+                        let range = value_range(ep.blend, lo, hi);
+                        let span = range.end() - range.start();
                         let r = ui.add(
                             egui::DragValue::new(&mut ep.value)
                                 .range(range)
@@ -366,6 +382,155 @@ impl Expressions {
                 *slot = next;
             }
             s.modified = true;
+        }
+    }
+}
+
+impl Expressions {
+    /// The Add Parameter popup. Returns the parameter to add when Add is
+    /// pressed; closes itself on Add, Cancel or the window's close box.
+    fn add_param_window(
+        &mut self,
+        ui: &mut Ui,
+        s: &Session,
+        names: &[String],
+        have: &[ExpressionParam],
+    ) -> Option<ExpressionParam> {
+        let Some(add) = &mut self.add else { return None };
+        let model = s.puppet.model();
+        let pal = theme::pal();
+        let mut open = true;
+        let mut done: Option<Option<ExpressionParam>> = None;
+        crate::windows::Dialog::new(tr("Add Parameter")).open(&mut open).width(360.0).show(
+            ui.ctx(),
+            |ui| {
+                // the parameter: a filter box over the list, taken ones greyed
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(egui_phosphor::regular::MAGNIFYING_GLASS).size(13.0));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut add.filter)
+                            .hint_text(tr("Filter parameters"))
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                let needle = add.filter.to_lowercase();
+                egui::ScrollArea::vertical().id_salt("expr-add-list").max_height(150.0).show(
+                    ui,
+                    |ui| {
+                        for (pi, p) in model.parameters.iter().enumerate() {
+                            let name = names.get(pi).cloned().unwrap_or_else(|| p.id.clone());
+                            if !needle.is_empty()
+                                && !name.to_lowercase().contains(&needle)
+                                && !p.id.to_lowercase().contains(&needle)
+                            {
+                                continue;
+                            }
+                            let taken = have.iter().any(|ep| ep.id == p.id);
+                            let label = if taken {
+                                RichText::new(name).color(pal.text_faint)
+                            } else {
+                                RichText::new(name)
+                            };
+                            let r = ui.add_enabled(
+                                !taken,
+                                egui::Button::selectable(add.pick == pi, label),
+                            );
+                            if taken {
+                                r.on_disabled_hover_text(tr("Already in this expression"));
+                            } else if r.clicked() && add.pick != pi {
+                                add.pick = pi;
+                                add.value = 0.0;
+                            }
+                        }
+                    },
+                );
+                ui.separator();
+                let (lo, hi, current, id) =
+                    model.parameters.get(add.pick).map_or((-1.0, 1.0, 0.0, String::new()), |p| {
+                        (p.min, p.max, s.puppet.value(add.pick), p.id.clone())
+                    });
+                crate::windows::form(ui, "expr-add-form", |ui| {
+                    ui.label(tr("Blend"));
+                    ui.horizontal(|ui| {
+                        for (label, b) in BLENDS {
+                            if ui.selectable_label(add.blend == b, tr(label)).clicked()
+                                && add.blend != b
+                            {
+                                add.blend = b;
+                                add.value = match b {
+                                    ExpressionBlend::Add => 0.0,
+                                    ExpressionBlend::Multiply => 1.0,
+                                    ExpressionBlend::Overwrite => current,
+                                };
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    ui.label(tr("Value"));
+                    let range = value_range(add.blend, lo, hi);
+                    let span = range.end() - range.start();
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().slider_width = 180.0;
+                        ui.add(
+                            egui::Slider::new(&mut add.value, range.clone())
+                                .show_value(false)
+                                .clamping(egui::SliderClamping::Always),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut add.value)
+                                .range(range)
+                                .speed(span / 300.0)
+                                .fixed_decimals(3),
+                        );
+                    });
+                    ui.end_row();
+                });
+                ui.weak(match add.blend {
+                    ExpressionBlend::Add => crate::i18n::trf(
+                        "Added to the pose's value; the pose has {id} at {v}.",
+                        &[("id", &id), ("v", &format!("{current:.3}"))],
+                    ),
+                    ExpressionBlend::Multiply => crate::i18n::trf(
+                        "The pose's value times this; the pose has {id} at {v}.",
+                        &[("id", &id), ("v", &format!("{current:.3}"))],
+                    ),
+                    ExpressionBlend::Overwrite => crate::i18n::trf(
+                        "Replaces the pose's value; the pose has {id} at {v}.",
+                        &[("id", &id), ("v", &format!("{current:.3}"))],
+                    ),
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let free = model
+                        .parameters
+                        .get(add.pick)
+                        .is_some_and(|p| !have.iter().any(|ep| ep.id == p.id));
+                    if ui
+                        .add_enabled(free, egui::Button::new(RichText::new(tr("Add")).strong()))
+                        .clicked()
+                        && let Some(p) = model.parameters.get(add.pick)
+                    {
+                        done = Some(Some(ExpressionParam {
+                            id: p.id.clone(),
+                            value: add.value,
+                            blend: add.blend,
+                        }));
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        done = Some(None);
+                    }
+                });
+            },
+        );
+        if !open {
+            done = Some(None);
+        }
+        match done {
+            Some(result) => {
+                self.add = None;
+                result
+            }
+            None => None,
         }
     }
 }
