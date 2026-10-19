@@ -354,6 +354,10 @@ fn strip_ui(ui: &mut Ui, rect: Rect, s: StripIn) -> StripOut {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         row.spacing_mut().item_spacing.x = 3.0;
+        // centred: the buttons are 18 wide with a 3 gap between
+        let n = usize::from(s.mute.is_some()) + usize::from(s.solo.is_some());
+        let total = n as f32 * 18.0 + (n.saturating_sub(1)) as f32 * 3.0;
+        row.add_space(((rect.width() - pad * 2.0 - total) / 2.0).max(0.0));
         if let Some(m) = s.mute
             && letter(&mut row, "M", m, tr("Mute"), pal.rotation_red).clicked()
         {
