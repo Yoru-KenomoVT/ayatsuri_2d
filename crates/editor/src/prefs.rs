@@ -160,7 +160,7 @@ impl Prefs {
     pub fn audio(&self) -> crate::audio::Prefs {
         crate::audio::Prefs {
             device: self.audio_device.clone(),
-            volume: self.audio_volume.unwrap_or(100).min(100) as f32 / 100.0,
+            volume: self.audio_volume.unwrap_or(100).min(200) as f32 / 100.0,
             buffer_frames: match self.audio_buffer {
                 0 => 1024,
                 n => n,

@@ -8,6 +8,7 @@
 //! protocol straight to PipeWire (see `pulse.rs`); elsewhere, and when no
 //! sound server answers, cpal drives the device.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -79,6 +80,16 @@ pub struct Cue {
     /// cue starts at, so the fades move while it plays.
     pub layer: Layer,
     pub at: f32,
+    /// The layer's index, so the mixer's meters know whose sound it is.
+    pub li: usize,
+}
+
+/// Peak levels since they were last read: per layer and for the main
+/// out, left and right, as linear gain.
+#[derive(Clone, Default)]
+pub struct Levels {
+    pub layers: HashMap<usize, [f32; 2]>,
+    pub main: [f32; 2],
 }
 
 /// A sound playing: where it is in its clip, in the clip's own frames, and
@@ -90,6 +101,7 @@ struct Voice {
     speed: f64,
     layer: Layer,
     t: f64,
+    li: usize,
 }
 
 /// What both outputs pull from: the voices playing, and the master volume
@@ -98,6 +110,8 @@ struct Voice {
 struct Mixer {
     voices: Arc<Mutex<Vec<Voice>>>,
     volume: Arc<AtomicU32>,
+    /// Peaks since the palette last looked.
+    levels: Arc<Mutex<Levels>>,
 }
 
 impl Mixer {
@@ -114,9 +128,11 @@ impl Mixer {
         let frames = buf.len() / channels;
         let mut voices = self.voices.lock().unwrap_or_else(PoisonError::into_inner);
         let dt = 1.0 / rate.max(1) as f64;
+        let mut levels = self.levels.lock().unwrap_or_else(PoisonError::into_inner);
         for v in voices.iter_mut() {
             let step = v.speed * v.clip.rate as f64 / rate.max(1) as f64;
             let ch = v.clip.channels.max(1) as usize;
+            let mut peak = [0.0f32; 2];
             for f in 0..frames {
                 if v.pos >= v.end {
                     break;
@@ -130,17 +146,34 @@ impl Mixer {
                     let cc = c.min(ch - 1);
                     let a = v.clip.samples.get(i0 * ch + cc).copied().unwrap_or(0.0);
                     let b = v.clip.samples.get((i0 + 1) * ch + cc).copied().unwrap_or(a);
+                    let s = (a + (b - a) * t) * gain;
+                    if let Some(pk) = peak.get_mut(c) {
+                        *pk = pk.max(s.abs());
+                    }
                     if let Some(slot) = buf.get_mut(f * channels + c) {
-                        *slot += (a + (b - a) * t) * gain;
+                        *slot += s;
                     }
                 }
                 v.pos += step;
             }
+            // a mono source meters the same on both sides
+            if ch == 1 {
+                peak[1] = peak[0];
+            }
+            let slot = levels.layers.entry(v.li).or_default();
+            slot[0] = slot[0].max(peak[0]);
+            slot[1] = slot[1].max(peak[1]);
         }
         voices.retain(|v| v.pos < v.end);
-        for s in buf.iter_mut() {
+        let mut main = [0.0f32; 2];
+        for (i, s) in buf.iter_mut().enumerate() {
             *s = s.clamp(-1.0, 1.0);
+            if let Some(m) = main.get_mut(i % channels.max(1)) {
+                *m = m.max(s.abs());
+            }
         }
+        levels.main[0] = levels.main[0].max(main[0]);
+        levels.main[1] = levels.main[1].max(main[1]);
     }
 }
 
@@ -203,7 +236,7 @@ impl Out {
     /// sound to be had.
     pub fn open(prefs: &Prefs) -> Option<Self> {
         let mixer = Mixer::default();
-        mixer.volume.store(prefs.volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        mixer.volume.store(prefs.volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
         let frames = prefs.buffer_frames.clamp(128, 8192);
         #[cfg(target_os = "linux")]
         if crate::pulse::available() {
@@ -284,7 +317,12 @@ impl Out {
     }
 
     pub fn set_volume(&self, v: f32) {
-        self.mixer.volume.store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        self.mixer.volume.store(v.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// The peaks since the last call, which clears them.
+    pub fn take_levels(&self) -> Levels {
+        std::mem::take(&mut *self.mixer.levels.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     pub fn stop(&mut self) {
@@ -309,6 +347,7 @@ impl Out {
                 speed: cue.speed.max(0.05) as f64,
                 layer: cue.layer,
                 t: cue.at as f64,
+                li: cue.li,
             });
         }
     }
@@ -326,7 +365,15 @@ impl Out {
             .collect();
         let clip = Arc::new(Clip { rate, channels: 1, samples, peaks: Vec::new() });
         let layer = Layer { out_point: 1.0, ..Layer::default() };
-        self.start(vec![Cue { clip, offset: 0.0, len: 1.0, speed: 1.0, layer, at: 0.0 }]);
+        self.start(vec![Cue {
+            clip,
+            offset: 0.0,
+            len: 1.0,
+            speed: 1.0,
+            layer,
+            at: 0.0,
+            li: usize::MAX,
+        }]);
     }
 }
 

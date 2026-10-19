@@ -236,6 +236,8 @@ pub struct EditorUi {
     pub(crate) audio_at: Option<f32>,
     /// Output devices as Settings last listed them.
     pub(crate) audio_devices: Option<Vec<crate::audio::Device>>,
+    /// The Audio Mixer palette's state.
+    mixer: crate::mixer::Mixer,
     anim_applied: f32,
     timeline: crate::timeline::Timeline,
     new_anim: Option<AnimNew>,
@@ -1016,6 +1018,7 @@ impl Default for EditorUi {
             audio_out: None,
             audio_at: None,
             audio_devices: None,
+            mixer: crate::mixer::Mixer::default(),
             anim_autokey: true,
             anim_applied: f32::NAN,
             timeline: crate::timeline::Timeline::default(),
@@ -3275,10 +3278,15 @@ impl EditorUi {
             let want = comp.as_ref().filter(|_| self.anim_playing).map(|c| {
                 c.layers
                     .iter()
-                    .filter(|l| l.enabled && l.weight > 0.0)
-                    .filter_map(|l| match &l.source {
+                    .enumerate()
+                    .filter(|(li, l)| {
+                        l.enabled
+                            && l.weight > 0.0
+                            && (self.mixer.solo.is_empty() || self.mixer.solo.contains(li))
+                    })
+                    .filter_map(|(li, l)| match &l.source {
                         ayatsuri_format::LayerSource::Audio(p) => {
-                            s.audio.get(p).cloned().map(|clip| (clip, l.clone()))
+                            s.audio.get(p).cloned().map(|clip| (li, clip, l.clone()))
                         }
                         _ => None,
                     })
@@ -3296,7 +3304,7 @@ impl EditorUi {
                         let t = self.anim_time;
                         let list: Vec<crate::audio::Cue> = cues
                             .into_iter()
-                            .filter_map(|(clip, l)| {
+                            .filter_map(|(li, clip, l)| {
                                 let end = ayatsuri_core::comp::layer_end(&l);
                                 if t < l.start || t >= end {
                                     return None;
@@ -3310,6 +3318,7 @@ impl EditorUi {
                                     speed,
                                     layer: l,
                                     at: t,
+                                    li,
                                 })
                             })
                             .collect();
@@ -4373,7 +4382,13 @@ impl EditorUi {
                         .map(|o| o.describe.clone())
                         .or_else(|| self.prefs.audio_device.clone())
                         .unwrap_or_else(|| crate::i18n::tr("System default").to_string());
-                    let changed = crate::mixer::show(ui, s, &mut self.timeline, &mut vol, &route);
+                    let levels =
+                        self.audio_out.as_ref().map(|o| o.take_levels()).unwrap_or_default();
+                    let changed =
+                        self.mixer.show(ui, s, &mut self.timeline, &mut vol, levels, &route);
+                    if self.anim_playing {
+                        ui.ctx().request_repaint();
+                    }
                     if changed.master {
                         self.prefs.audio_volume = Some(vol);
                         self.prefs.save();

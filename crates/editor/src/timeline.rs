@@ -1901,13 +1901,15 @@ impl Timeline {
                     let label_w =
                         bp.layout_no_wrap(label.clone(), label_font.clone(), pal.text).size().x;
                     {
-                        // a dark fade behind the name, so it reads over the waveform
+                        // the layer's own colour behind the name, fading out to
+                        // the right, so it reads over the waveform; it starts past
+                        // the bar's rounded corner so nothing pokes out
                         let fade = Rect::from_min_max(
-                            pos2(x0, bar.min.y),
-                            pos2((x0 + label_w + 22.0).min(x1), bar.max.y),
+                            pos2(x0 + 3.0, bar.min.y),
+                            pos2((x0 + label_w + 22.0).min(x1 - 3.0), bar.max.y),
                         );
                         let mut mesh = egui::Mesh::default();
-                        let dark = Color32::from_black_alpha(150);
+                        let dark = Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 235);
                         let clear = Color32::TRANSPARENT;
                         let mid_x = fade.min.x + (fade.width() - 14.0).max(0.0);
                         mesh.colored_vertex(fade.left_top(), dark);
@@ -3415,7 +3417,8 @@ impl Timeline {
                 let Some(l) = next.layers.get_mut(li) else { return };
                 *l = layer;
                 l.speed = l.speed.clamp(0.1, 10.0);
-                l.weight = l.weight.clamp(0.0, 1.0);
+                let top = if matches!(l.source, LayerSource::Audio(_)) { 2.0 } else { 1.0 };
+                l.weight = l.weight.clamp(0.0, top);
                 l.fade_in = l.fade_in.max(0.0);
                 l.fade_out = l.fade_out.max(0.0);
             }
