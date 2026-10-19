@@ -52,13 +52,13 @@
   row sums up its children's keys and drags them together. A frame
   ruler scrubs, Alt with the wheel zooms at the pointer (a slider in the
   footer too), and the work area bar under the ruler bounds playback:
-  drag its handles, or press B and N to put its ends at the playhead.
+  drag its handles, or press Shift+B and Shift+N to put its ends at the
+  playhead.
   The scene row's bar drags to change the length. S keys the selected
   parameter, Alt with an arrow nudges the selected keys a frame (ten
-  with Shift), Delete removes them and Ctrl+A takes them all; every
+  with Shift), Delete removes them and Ctrl+Alt+A takes them all; every
   Timeline key sits in Settings > Shortcuts > Animation and can be
-  rebound, and goes before the editor's own bindings while the Timeline
-  has the focus. `Animation > Edit Animation Details…` edits the name,
+  rebound, and none of the defaults clashes with an editor binding. `Animation > Edit Animation Details…` edits the name,
   frame rate, length in seconds and loop, and inserts or removes frames
   at the playhead. Space (a tap, not a pan) or Enter plays and pauses.
   Key edits have
@@ -78,11 +78,12 @@
   of a scene (or another composition) from a start time, at a speed,
   faded in and out, and mixes over the layers beneath it by its weight.
   The Timeline shows a composition as bars: slide one, trim either end
-  (Shift snaps to other layers and the playhead), right-click it for
-  fades, speed, split at the playhead, order, duplicate or delete, and
+  (Shift snaps to other layers and the playhead), drag the square at a
+  top corner inward for a fade in or out, right-click it for fades,
+  speed, split at the playhead, order, duplicate or delete, and
   double-click it to open its scene (a button leads back), and drag its
   name up or down the list to reorder the stack. `[` and `]`
-  put a layer's start or end at the playhead, `Ctrl+D` doubles it,
+  put a layer's start or end at the playhead, `Shift+D` doubles it,
   `Ctrl+Shift+D` cuts it there. A layer twirls open to show its scene's
   keys where they land. Play, the Render window and the model export
   all take compositions: export bakes one into a motion with a key on
