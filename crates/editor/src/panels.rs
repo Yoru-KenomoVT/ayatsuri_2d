@@ -4364,6 +4364,32 @@ impl EditorUi {
                     ui.weak(crate::i18n::tr("No model loaded."));
                 }
             }
+            PanelKind::Mixer => {
+                if let Some(s) = &mut self.session {
+                    let mut vol = self.prefs.audio_volume.unwrap_or(100);
+                    let route = self
+                        .audio_out
+                        .as_ref()
+                        .map(|o| o.describe.clone())
+                        .or_else(|| self.prefs.audio_device.clone())
+                        .unwrap_or_else(|| crate::i18n::tr("System default").to_string());
+                    let changed = crate::mixer::show(ui, s, &mut self.timeline, &mut vol, &route);
+                    if changed.master {
+                        self.prefs.audio_volume = Some(vol);
+                        self.prefs.save();
+                        if let Some(out) = &self.audio_out {
+                            out.set_volume(vol as f32 / 100.0);
+                        }
+                    }
+                    if changed.layers {
+                        // the voices carry their layer, so they start again
+                        // at the playhead with the new level
+                        self.audio_at = None;
+                    }
+                } else {
+                    ui.weak(crate::i18n::tr("No model loaded."));
+                }
+            }
             PanelKind::Log => {
                 ui.horizontal(|ui| {
                     ui.weak(crate::i18n::tr("Show:"));

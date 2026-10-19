@@ -21,10 +21,11 @@ pub enum PanelKind {
     Textures,
     Log,
     Expressions,
+    Mixer,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 10] = [
+    pub const ALL: [PanelKind; 11] = [
         PanelKind::Parts,
         PanelKind::Deformers,
         PanelKind::Parameters,
@@ -35,6 +36,7 @@ impl PanelKind {
         PanelKind::Textures,
         PanelKind::Log,
         PanelKind::Expressions,
+        PanelKind::Mixer,
     ];
 
     /// Palette names as Cubism Editor spells them.
@@ -50,6 +52,7 @@ impl PanelKind {
             PanelKind::Textures => "Texture",
             PanelKind::Log => "Log",
             PanelKind::Expressions => "Expression",
+            PanelKind::Mixer => "Audio Mixer",
         }
     }
 }
@@ -116,7 +119,7 @@ pub fn animation_workspace() -> DockNode {
             vsplit(Ratio(0.5), tabs(&[Parts], 0), tabs(&[Deformers, Log], 0)),
             tabs(&[Viewport], 0),
         ),
-        tabs(&[Timeline, Expressions], 0),
+        tabs(&[Timeline, Expressions, Mixer], 0),
     )
 }
 

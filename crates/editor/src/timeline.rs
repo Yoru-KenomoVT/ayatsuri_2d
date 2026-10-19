@@ -20,6 +20,8 @@ const HEADER_H: f32 = 48.0;
 const COLHDR_H: f32 = 20.0;
 const FOOTER_H: f32 = 22.0;
 const ROW_H: f32 = 19.0;
+/// A layer's row, taller so its bar and waveform read.
+const LAYER_ROW_H: f32 = 23.0;
 const RULER_H: f32 = 24.0;
 const NAV_H: f32 = 8.0;
 const MAX_PPS: f32 = 4000.0;
@@ -343,7 +345,13 @@ fn mix(a: Color32, b: Color32, k: f32) -> Color32 {
 }
 
 /// Text cut to a width with an ellipsis.
-fn fit_text(p: &Painter, text: &str, font: &FontId, color: Color32, max_w: f32) -> String {
+pub(crate) fn fit_text(
+    p: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_w: f32,
+) -> String {
     if p.layout_no_wrap(text.to_string(), font.clone(), color).size().x <= max_w {
         return text.to_string();
     }
@@ -611,6 +619,11 @@ fn same_kind(a: Interp, b: Interp) -> bool {
 const UNDO_STEPS: usize = 64;
 
 impl Timeline {
+    /// The next edit starts a fresh undo step, whatever it merges with.
+    pub fn unmerge(&mut self) {
+        self.merge = None;
+    }
+
     /// An action from the shortcut table, run on the next frame.
     pub fn act(&mut self, id: &str) {
         self.pending.push(id.to_string());
@@ -1444,7 +1457,14 @@ impl Timeline {
             Some(c) => self.comp_rows(s, c),
             None => self.rows(s, &anim),
         };
-        let total_h = rows.len() as f32 * ROW_H;
+        // rows are not all one height: a layer's is taller
+        let row_h = |r: &Row| if matches!(r.kind, RowKind::Layer(_)) { LAYER_ROW_H } else { ROW_H };
+        let mut row_ys: Vec<f32> = Vec::with_capacity(rows.len());
+        let mut total_h = 0.0f32;
+        for r in &rows {
+            row_ys.push(total_h);
+            total_h += row_h(r);
+        }
         let max_scroll = (total_h - rows_left.height()).max(0.0);
         let rows_all = Rect::from_min_max(rows_left.min, rows_right.max);
         if ui.rect_contains_pointer(rows_all) {
@@ -1518,13 +1538,14 @@ impl Timeline {
             snap_times.extend([w0, w1]);
         }
         for (i, row) in rows.iter().enumerate() {
-            let y = rows_top - self.scroll_y + i as f32 * ROW_H;
-            if y + ROW_H < rows_top || y > rows_bottom {
+            let rh = row_h(row);
+            let y = rows_top - self.scroll_y + row_ys.get(i).copied().unwrap_or(0.0);
+            if y + rh < rows_top || y > rows_bottom {
                 continue;
             }
-            let rl = Rect::from_min_size(pos2(left.min.x, y), vec2(left.width(), ROW_H));
-            let rr = Rect::from_min_size(pos2(lanes.min.x, y), vec2(lanes.width(), ROW_H));
-            let cy = y + ROW_H / 2.0;
+            let rl = Rect::from_min_size(pos2(left.min.x, y), vec2(left.width(), rh));
+            let rr = Rect::from_min_size(pos2(lanes.min.x, y), vec2(lanes.width(), rh));
+            let cy = y + rh / 2.0;
             let selected_param = matches!(row.kind, RowKind::Param(pi) if *tp.sel_param == Some(pi))
                 || matches!(row.kind, RowKind::Layer(li) if self.sel_layer == Some(li));
             let left_bg = if selected_param {
@@ -1552,7 +1573,7 @@ impl Timeline {
                     let open = !self.folded.get(TOP_FOLD).copied().unwrap_or(false);
                     twirl(&lp, pos2(indent + 5.0, cy), open, pal.text_faint);
                     let r_fold = ui.interact(
-                        Rect::from_min_size(pos2(indent - 2.0, y), vec2(16.0, ROW_H)),
+                        Rect::from_min_size(pos2(indent - 2.0, y), vec2(16.0, rh)),
                         ui.id().with("tl-fold-top"),
                         Sense::click(),
                     );
@@ -1566,8 +1587,7 @@ impl Timeline {
                         name_font.clone(),
                         pal.text,
                     );
-                    let vr =
-                        Rect::from_min_size(pos2(value_x, y + 1.0), vec2(VALUE_W, ROW_H - 2.0));
+                    let vr = Rect::from_min_size(pos2(value_x, y + 1.0), vec2(VALUE_W, rh - 2.0));
                     if let Some(v) = hot_number(
                         ui,
                         &mut self.editing,
@@ -1591,13 +1611,11 @@ impl Timeline {
                     if !self.graph {
                         let bar = Rect::from_min_max(
                             pos2(tm.x(0.0), y + 4.0),
-                            pos2(tm.x(duration), y + ROW_H - 4.0),
+                            pos2(tm.x(duration), y + rh - 4.0),
                         );
                         gp.rect_filled(bar.intersect(rr), 3.0, mix(pal.track, pal.accent, 0.35));
-                        let end = Rect::from_center_size(
-                            pos2(tm.x(duration), cy),
-                            vec2(8.0, ROW_H - 4.0),
-                        );
+                        let end =
+                            Rect::from_center_size(pos2(tm.x(duration), cy), vec2(8.0, rh - 4.0));
                         ui.set_clip_rect(rows_right.intersect(outer_clip));
                         let r_end = ui
                             .interact(end, ui.id().with("tl-scene-end"), Sense::drag())
@@ -1720,7 +1738,7 @@ impl Timeline {
                     if is_scene {
                         twirl(&lp, pos2(indent + 5.0, cy), open, pal.text_faint);
                         let r_fold = ui.interact(
-                            Rect::from_min_size(pos2(indent - 2.0, y), vec2(16.0, ROW_H)),
+                            Rect::from_min_size(pos2(indent - 2.0, y), vec2(16.0, rh)),
                             ui.id().with(("tl-fold-layer", li)),
                             Sense::click(),
                         );
@@ -1730,7 +1748,7 @@ impl Timeline {
                     }
                     let mut x = indent + 14.0;
                     // the eye: the layer plays or sits out
-                    let eye_rect = Rect::from_center_size(pos2(x + 6.0, cy), vec2(14.0, ROW_H));
+                    let eye_rect = Rect::from_center_size(pos2(x + 6.0, cy), vec2(14.0, rh));
                     lp.text(
                         eye_rect.center(),
                         Align2::CENTER_CENTER,
@@ -1757,7 +1775,7 @@ impl Timeline {
                         col,
                     );
                     x += 13.0;
-                    let name_rect = Rect::from_min_max(pos2(x, y), pos2(value_x - 4.0, y + ROW_H));
+                    let name_rect = Rect::from_min_max(pos2(x, y), pos2(value_x - 4.0, y + rh));
                     let label = match &l.source {
                         LayerSource::Scene(_) => row.label.clone(),
                         LayerSource::Composition(_) => {
@@ -1791,8 +1809,7 @@ impl Timeline {
                         ui.ctx().set_cursor_icon(CursorIcon::Grab);
                     }
                     // the weight, as a percentage
-                    let vr =
-                        Rect::from_min_size(pos2(value_x, y + 1.0), vec2(VALUE_W, ROW_H - 2.0));
+                    let vr = Rect::from_min_size(pos2(value_x, y + 1.0), vec2(VALUE_W, rh - 2.0));
                     if let Some(v) = hot_number(
                         ui,
                         &mut self.editing,
@@ -1819,7 +1836,7 @@ impl Timeline {
                     // the bar in the lane
                     ui.set_clip_rect(rows_right.intersect(outer_clip));
                     let (x0, x1) = (tm.x(l.start), tm.x(end));
-                    let bar = Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + ROW_H - 1.0));
+                    let bar = Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + rh - 1.0));
                     let is_sel = self.sel_layer == Some(li);
                     let fill = if l.enabled {
                         mix(col, pal.chrome, 0.55)
@@ -1880,11 +1897,38 @@ impl Timeline {
                         StrokeKind::Inside,
                     );
                     let bp = gp.with_clip_rect(bar.intersect(rows_right));
+                    let label_font = FontId::proportional(10.5);
+                    let label_w =
+                        bp.layout_no_wrap(label.clone(), label_font.clone(), pal.text).size().x;
+                    {
+                        // a dark fade behind the name, so it reads over the waveform
+                        let fade = Rect::from_min_max(
+                            pos2(x0, bar.min.y),
+                            pos2((x0 + label_w + 22.0).min(x1), bar.max.y),
+                        );
+                        let mut mesh = egui::Mesh::default();
+                        let dark = Color32::from_black_alpha(150);
+                        let clear = Color32::TRANSPARENT;
+                        let mid_x = fade.min.x + (fade.width() - 14.0).max(0.0);
+                        mesh.colored_vertex(fade.left_top(), dark);
+                        mesh.colored_vertex(pos2(mid_x, fade.min.y), dark);
+                        mesh.colored_vertex(pos2(mid_x, fade.max.y), dark);
+                        mesh.colored_vertex(fade.left_bottom(), dark);
+                        mesh.colored_vertex(pos2(mid_x, fade.min.y), dark);
+                        mesh.colored_vertex(fade.right_top(), clear);
+                        mesh.colored_vertex(fade.right_bottom(), clear);
+                        mesh.colored_vertex(pos2(mid_x, fade.max.y), dark);
+                        mesh.add_triangle(0, 1, 2);
+                        mesh.add_triangle(0, 2, 3);
+                        mesh.add_triangle(4, 5, 6);
+                        mesh.add_triangle(4, 6, 7);
+                        bp.add(Shape::mesh(mesh));
+                    }
                     bp.text(
                         pos2(x0 + 6.0, cy),
                         Align2::LEFT_CENTER,
                         &label,
-                        FontId::proportional(10.5),
+                        label_font,
                         if l.enabled { pal.text } else { pal.text_faint },
                     );
                     if self.layer_drag.as_ref().is_none_or(|d| d.li != li) {
@@ -2476,7 +2520,9 @@ impl Timeline {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, r)| match r.kind {
-                    RowKind::Layer(li) => Some((li, rows_top - self.scroll_y + i as f32 * ROW_H)),
+                    RowKind::Layer(li) => {
+                        Some((li, rows_top - self.scroll_y + row_ys.get(i).copied().unwrap_or(0.0)))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -2485,11 +2531,13 @@ impl Timeline {
             {
                 // the slot the pointer is over: before the first row whose
                 // middle lies below it
-                let to =
-                    tops.iter().position(|(_, y)| ptr.y < y + ROW_H / 2.0).unwrap_or(tops.len());
+                let to = tops
+                    .iter()
+                    .position(|(_, y)| ptr.y < y + LAYER_ROW_H / 2.0)
+                    .unwrap_or(tops.len());
                 let line_y = match tops.get(to) {
                     Some((_, y)) => *y,
-                    None => tops.last().map_or(rows_top, |(_, y)| y + ROW_H),
+                    None => tops.last().map_or(rows_top, |(_, y)| y + LAYER_ROW_H),
                 };
                 let lp2 = p.with_clip_rect(rows_left.intersect(outer_clip));
                 lp2.line_segment(
