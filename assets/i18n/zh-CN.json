@@ -1145,5 +1145,6 @@
   "Mute": "静音",
   "Unmute": "取消静音",
   "No sound layers in this composition. Add one with File > Import Audio…": "此合成中没有声音图层。用 文件 > 导入音频… 添加一个。",
-  "Main out": "主输出"
+  "Main out": "主输出",
+  "Solo": "独奏"
 }

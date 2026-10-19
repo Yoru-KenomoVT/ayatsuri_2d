@@ -1145,5 +1145,6 @@
   "Mute": "음소거",
   "Unmute": "음소거 해제",
   "No sound layers in this composition. Add one with File > Import Audio…": "이 컴포지션에 사운드 레이어가 없습니다. 파일 > 오디오 가져오기… 로 추가하세요.",
-  "Main out": "메인 출력"
+  "Main out": "메인 출력",
+  "Solo": "솔로"
 }

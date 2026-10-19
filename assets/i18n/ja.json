@@ -1145,5 +1145,6 @@
   "Mute": "ミュート",
   "Unmute": "ミュート解除",
   "No sound layers in this composition. Add one with File > Import Audio…": "このコンポジションに音声レイヤーはありません。ファイル > 音声を読み込み… で追加できます。",
-  "Main out": "メイン出力"
+  "Main out": "メイン出力",
+  "Solo": "ソロ"
 }

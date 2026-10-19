@@ -1145,5 +1145,6 @@
   "Mute": "Dempen",
   "Unmute": "Dempen opheffen",
   "No sound layers in this composition. Add one with File > Import Audio…": "Geen geluidslagen in deze compositie. Voeg er een toe met Bestand > Audio importeren…",
-  "Main out": "Hoofduitgang"
+  "Main out": "Hoofduitgang",
+  "Solo": "Solo"
 }

@@ -1145,5 +1145,6 @@
   "Mute": "Demp",
   "Unmute": "Ontdemp",
   "No sound layers in this composition. Add one with File > Import Audio…": "Geen klanklae in hierdie komposisie nie. Voeg een by met Lêer > Voer klank in…",
-  "Main out": "Hoofuitset"
+  "Main out": "Hoofuitset",
+  "Solo": "Solo"
 }
