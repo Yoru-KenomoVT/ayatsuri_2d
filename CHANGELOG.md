@@ -9,6 +9,15 @@
   clipping and physics, with the names the rigger gave things. Built from
   the project files themselves; checked against a project rigged in
   Cubism, deformer for deformer.
+- **Cubism Editor project export** (File > Export Model > cmo3): the model
+  goes out as a `.cmo3` the way the Editor saves one. Each mesh's art is
+  cut from the texture back into a layer of one layered image and packed
+  into fresh atlases the uvs point into; parts, the deformer tree,
+  parameters in their folders, every keyform in its parent's space,
+  clipping and physics follow. Animations and sound are not part of a
+  project and stay with the motion export. Written from project files
+  alone and checked by reading the result back; Cubism Editor itself has
+  the last word.
 - **Clip Studio Paint files** (`.clip`) open, import and re-import the way
   PSD and Krita files do: folders become parts, every drawn layer becomes
   a mesh with its mask applied, paper and adjustment layers are left out.

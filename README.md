@@ -50,7 +50,8 @@ It reads and writes the formats the rest of the ecosystem already uses:
   Krita `.kra` and Clip Studio Paint `.clip` files.
 - **Exports** a complete moc3 bundle (model, physics, motions, expressions,
   textures) that loads in VTube Studio, OpenVT and anything built on the
-  Cubism SDK.
+  Cubism SDK, and a Cubism Editor project (`.cmo3`) with the rig and the
+  art as layers.
 - **Saves** its own `.aom` (Ayatsuri Open Model) format, a documented, open
   superset of moc3.
 - **Talks** Cubism Editor's integration API, so tools made for Cubism Editor
@@ -113,8 +114,10 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 - **PSD, Krita and Clip Studio import**: folders become parts, layers become
   meshes packed into texture atlases, clipping layers become masks. Import
   into a new model, or add more art to a model you already have.
-- **Cubism project import**: a `.cmo3` opens with its meshes, deformer tree,
-  parameters and folders, keyforms, clipping, physics and names.
+- **Cubism project import and export**: a `.cmo3` opens with its meshes,
+  deformer tree, parameters and folders, keyforms, clipping, physics and
+  names, and a model exports as one, art and all, for riggers who finish in
+  Cubism Editor.
 - **Mesh editing**: auto mesh that follows the outline of the art (Standard,
   Deform and Light presets), add and erase points, connect and cut edges, an
   erase brush, 4-division. Points slide over the art instead of stretching it.
@@ -189,9 +192,11 @@ Save often, keep backups of models you care about, and please
 Not built yet:
 
 - skinning, model templates and the temporary deform tool;
-- cmo3 export (import works; writing Cubism's project graph needs
-  Cubism Editor in the loop to check);
 - the embeddable runtime's C ABI (below).
+
+The cmo3 export is written from project files alone, without Cubism Editor
+to check against: a project it writes reads back here exactly, and the
+Editor is the judge of the rest. If it refuses one, please report it.
 
 See the [changelog](CHANGELOG.md) for what each release added.
 
@@ -275,7 +280,8 @@ crates/format       ayatsuri-format   the model types and the .aom format
 crates/core         ayatsuri-core     deformation, physics, masking, animation,
                                       draw order, editing; no I/O, no renderer
 crates/import       ayatsuri-import   moc3, model3/physics3/motion3/exp3 JSON,
-                                      PSD, Krita, Clip Studio and cmo3 in; moc3 out
+                                      PSD, Krita, Clip Studio and cmo3 in;
+                                      moc3 and cmo3 out
 crates/openmoc3     openmoc3          standalone safe reader for .moc3 files
 crates/render       ayatsuri-render   the GPU renderer
 crates/editor       ayatsuri-editor   the editor: panels, canvas, windows, API
