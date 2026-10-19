@@ -65,7 +65,7 @@ pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
     Ok(out)
 }
 
-pub use cmo3::{Cmo3, from_cmo3};
+pub use cmo3::{Cmo3, Cmo3Export, from_cmo3, to_cmo3};
 pub use exp3::{from_exp3, to_exp3};
 pub use moc3::from_moc3;
 pub use moc3_export::{ExportVersion, VTS_NOTE, export_warnings, to_moc3};

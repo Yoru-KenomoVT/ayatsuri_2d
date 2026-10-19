@@ -5,10 +5,14 @@
 
 mod build;
 mod caff;
+mod caffw;
 mod extract;
+mod write;
 mod xml;
+mod xmlw;
 
 pub use build::Cmo3;
+pub use write::{Cmo3Export, to_cmo3};
 
 /// A project as a rig-ready model, with its display names and folders.
 pub fn from_cmo3(bytes: &[u8], name: &str) -> Result<Cmo3, crate::ImportError> {
@@ -29,6 +33,343 @@ mod tests {
             .join("../../../ayatsuri2d-research/corpus")
             .join(name);
         std::fs::read(p).ok()
+    }
+
+    /// A model built here goes out as a project and comes back the same:
+    /// meshes under a warp and a rotation, keyforms, a folder, physics,
+    /// and the art itself.
+    #[test]
+    fn a_model_round_trips_through_a_written_project() {
+        use ayatsuri_format::model::*;
+        let mut rgba = vec![0u8; 40 * 30 * 4];
+        for px in rgba.chunks_mut(4) {
+            px.copy_from_slice(&[220, 30, 30, 255]);
+        }
+        let mut blue = vec![0u8; 20 * 20 * 4];
+        for px in blue.chunks_mut(4) {
+            px.copy_from_slice(&[30, 30, 220, 255]);
+        }
+        let layer = |name: &str, x, y, w, h, rgba| crate::layers::Layer {
+            name: name.into(),
+            groups: vec!["Body".into()],
+            x,
+            y,
+            width: w,
+            height: h,
+            rgba,
+            visible: true,
+            opacity: 1.0,
+            clip_to_below: false,
+            blend: crate::layers::Blend::Normal,
+        };
+        let doc = crate::layers::Document {
+            width: 128,
+            height: 96,
+            layers: vec![layer("red", 10, 20, 40, 30, rgba), layer("blue", 60, 50, 20, 20, blue)],
+        };
+        let imported = crate::layers::build(&doc).unwrap();
+        let mut model = imported.model;
+        model.parameters.push(Parameter {
+            id: "ParamA".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+        });
+        let c = model.canvas;
+        let unit = |px: f32, py: f32| {
+            ((px - c.origin_x) / c.pixels_per_unit, (py - c.origin_y) / c.pixels_per_unit)
+        };
+        // a 2x2 warp over the canvas, identity at key 0 and bulged at key 1
+        let (gx0, gy0) = unit(0.0, 0.0);
+        let (gx1, gy1) = unit(128.0, 96.0);
+        let mut grid = Vec::new();
+        for r in 0..3 {
+            for col in 0..3 {
+                grid.push(gx0 + (gx1 - gx0) * col as f32 / 2.0);
+                grid.push(gy0 + (gy1 - gy0) * r as f32 / 2.0);
+            }
+        }
+        let mut bulged = grid.clone();
+        bulged[8] += 0.1;
+        bulged[9] -= 0.05;
+        let axis = Binding { axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }] };
+        model.deformers.push(Deformer {
+            id: "Warp".into(),
+            parent_part: Some(0),
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: axis.clone(),
+            kind: DeformerKind::Warp(WarpData {
+                rows: 2,
+                cols: 2,
+                quad: true,
+                opacities: vec![1.0, 1.0],
+                positions: grid.iter().chain(bulged.iter()).copied().collect(),
+            }),
+        });
+        model.deformers.push(Deformer {
+            id: "Rotation".into(),
+            parent_part: Some(0),
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            kind: DeformerKind::Rotation(RotationData {
+                base_angle: 0.0,
+                opacities: vec![1.0],
+                angles: vec![0.0],
+                origins_x: vec![0.0],
+                origins_y: vec![0.0],
+                scales: vec![1.0],
+                reflect_x: vec![false],
+                reflect_y: vec![false],
+            }),
+        });
+        // the red mesh under the warp, in grid space, two keyforms
+        {
+            let m = &mut model.art_meshes[0];
+            m.parent_deformer = Some(0);
+            m.binding = axis;
+            let local: Vec<f32> = m
+                .positions
+                .chunks(2)
+                .flat_map(|p| [(p[0] - gx0) / (gx1 - gx0), (p[1] - gy0) / (gy1 - gy0)])
+                .collect();
+            m.positions = local.iter().chain(local.iter()).copied().collect();
+            m.opacities = vec![1.0, 0.5];
+            m.draw_orders = vec![500.0, 600.0];
+        }
+        // the blue mesh under the rotation, offsets from its origin
+        model.art_meshes[1].parent_deformer = Some(1);
+        model.physics = Some(PhysicsRig {
+            fps: 30.0,
+            gravity_x: 0.0,
+            gravity_y: -1.0,
+            wind_x: 0.0,
+            wind_y: 0.0,
+            groups: vec![PhysicsGroup {
+                id: "PhysicsSetting1".into(),
+                name: "Sway".into(),
+                inputs: vec![PhysicsInput {
+                    param: "ParamA".into(),
+                    weight: 100.0,
+                    kind: PhysicsIo::X,
+                    reflect: false,
+                }],
+                outputs: vec![PhysicsOutput {
+                    param: "ParamA".into(),
+                    vertex: 1,
+                    scale: 7.5,
+                    weight: 100.0,
+                    kind: PhysicsIo::Angle,
+                    reflect: true,
+                }],
+                nodes: vec![
+                    PhysicsNode {
+                        x: 0.0,
+                        y: 0.0,
+                        mobility: 1.0,
+                        delay: 1.0,
+                        acceleration: 1.0,
+                        radius: 0.0,
+                    },
+                    PhysicsNode {
+                        x: 0.0,
+                        y: 5.0,
+                        mobility: 0.9,
+                        delay: 1.0,
+                        acceleration: 1.0,
+                        radius: 5.0,
+                    },
+                ],
+                norm_position: PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
+                norm_angle: PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
+            }],
+        });
+        let bytes = to_cmo3(&Cmo3Export {
+            name: "roundtrip",
+            model: &model,
+            textures: &imported.textures,
+            param_names: &["Sway amount".to_string()],
+            part_names: &imported.part_names,
+            mesh_names: &imported.mesh_names,
+            param_groups: &[("Motion".to_string(), vec![0])],
+        })
+        .unwrap();
+        let back = from_cmo3(&bytes, "roundtrip").unwrap();
+        let m = &back.imported.model;
+        assert_eq!(m.art_meshes.len(), 2);
+        assert_eq!(m.deformers.len(), 2);
+        assert_eq!(m.parameters.len(), 1);
+        assert_eq!(back.param_names, vec!["Sway amount".to_string()]);
+        assert_eq!(back.param_groups, vec![("Motion".to_string(), vec![0])]);
+        assert_eq!(back.imported.mesh_names, vec!["red".to_string(), "blue".to_string()]);
+        assert_eq!(back.imported.part_names, vec!["Body".to_string()]);
+        assert_eq!(back.within, (2, 2), "meshes rest where they did: {:?}", back.off);
+        let warp = m.deformers.iter().find(|d| d.id == "Warp").unwrap();
+        assert_eq!(warp.binding.axes[0].keys, vec![0.0, 1.0]);
+        let DeformerKind::Warp(w) = &warp.kind else { panic!("warp") };
+        assert_eq!((w.rows, w.cols), (2, 2));
+        let want: Vec<f32> = grid.iter().chain(bulged.iter()).copied().collect();
+        for (a, b) in w.positions.iter().zip(&want) {
+            assert!((a - b).abs() < 1e-3, "warp keyforms: {:?} vs {:?}", w.positions, want);
+        }
+        let red = m.art_meshes.iter().position(|a| a.id == "ArtMesh0").unwrap();
+        let red_mesh = &m.art_meshes[red];
+        assert_eq!(
+            red_mesh.parent_deformer.map(|i| m.deformers[i as usize].id.clone()),
+            Some("Warp".into())
+        );
+        assert_eq!(red_mesh.opacities, vec![1.0, 0.5]);
+        assert_eq!(red_mesh.draw_orders, vec![500.0, 600.0]);
+        for (a, b) in red_mesh.positions.iter().zip(&model.art_meshes[0].positions) {
+            assert!((a - b).abs() < 1e-3, "mesh keyforms in grid space");
+        }
+        let blue = m.art_meshes.iter().position(|a| a.id == "ArtMesh1").unwrap();
+        assert_eq!(
+            m.art_meshes[blue].parent_deformer.map(|i| m.deformers[i as usize].id.clone()),
+            Some("Rotation".into())
+        );
+        let rig = m.physics.as_ref().unwrap();
+        assert_eq!(rig.fps, 30.0);
+        assert_eq!(rig.groups.len(), 1);
+        assert_eq!(rig.groups[0].name, "Sway");
+        assert_eq!(rig.groups[0].inputs[0].param, "ParamA");
+        assert_eq!(rig.groups[0].outputs[0].scale, 7.5);
+        assert!(rig.groups[0].outputs[0].reflect);
+        assert_eq!(rig.groups[0].nodes.len(), 2);
+        // the art came back: the middle of the red mesh is red in its page
+        let page = image::load_from_memory(&back.imported.textures[red_mesh.texture as usize])
+            .unwrap()
+            .to_rgba8();
+        let n = red_mesh.vertex_count as f32;
+        let (cu, cv) = (
+            red_mesh.uvs.iter().step_by(2).sum::<f32>() / n,
+            red_mesh.uvs.iter().skip(1).step_by(2).sum::<f32>() / n,
+        );
+        let px =
+            page.get_pixel((cu * page.width() as f32) as u32, (cv * page.height() as f32) as u32).0;
+        assert!(px[0] > 200 && px[2] < 60 && px[3] == 255, "red art came back: {px:?}");
+    }
+
+    /// For a look in Cubism Editor: `AYATSURI_CMO3_OUT=/path/out.cmo3 cargo
+    /// test -p ayatsuri-import rewrite_for_a_look -- --ignored` writes the
+    /// sample project back out through the writer.
+    #[test]
+    #[ignore]
+    fn write_the_sample_project_rewrite_for_a_look() {
+        let (Some(bytes), Ok(out)) =
+            (corpus("Raiuji Vtuber model2.cmo3"), std::env::var("AYATSURI_CMO3_OUT"))
+        else {
+            return;
+        };
+        let first = from_cmo3(&bytes, "raiju").unwrap();
+        let written = to_cmo3(&Cmo3Export {
+            name: "raiju",
+            model: &first.imported.model,
+            textures: &first.imported.textures,
+            param_names: &first.param_names,
+            part_names: &first.imported.part_names,
+            mesh_names: &first.imported.mesh_names,
+            param_groups: &first.param_groups,
+        })
+        .unwrap();
+        std::fs::write(out, written).unwrap();
+    }
+
+    /// The user's own project, read, written and read again, keeps every
+    /// object the first read found.
+    #[test]
+    fn the_sample_project_survives_a_rewrite() {
+        let Some(bytes) = corpus("Raiuji Vtuber model2.cmo3") else { return };
+        let first = from_cmo3(&bytes, "raiju").unwrap();
+        let written = to_cmo3(&Cmo3Export {
+            name: "raiju",
+            model: &first.imported.model,
+            textures: &first.imported.textures,
+            param_names: &first.param_names,
+            part_names: &first.imported.part_names,
+            mesh_names: &first.imported.mesh_names,
+            param_groups: &first.param_groups,
+        })
+        .unwrap();
+        let second = from_cmo3(&written, "raiju").unwrap();
+        let (a, b) = (&first.imported.model, &second.imported.model);
+        assert_eq!(a.art_meshes.len(), b.art_meshes.len());
+        assert_eq!(a.deformers.len(), b.deformers.len());
+        assert_eq!(a.parameters.len(), b.parameters.len());
+        assert_eq!(first.param_groups, second.param_groups);
+        assert_eq!(first.param_names, second.param_names);
+        assert_eq!(first.imported.mesh_names, second.imported.mesh_names);
+        assert_eq!(
+            a.physics.as_ref().map(|p| p.groups.len()),
+            b.physics.as_ref().map(|p| p.groups.len())
+        );
+        assert_eq!(
+            second.within.0, second.within.1,
+            "every mesh rests where it did: {:?}",
+            second.off
+        );
+        for d in &a.deformers {
+            let e = b
+                .deformers
+                .iter()
+                .find(|x| x.id == d.id)
+                .unwrap_or_else(|| panic!("{} lost", d.id));
+            assert_eq!(d.binding.axes.len(), e.binding.axes.len(), "{}", d.id);
+            for (x, y) in d.binding.axes.iter().zip(&e.binding.axes) {
+                assert_eq!(
+                    a.parameters[x.parameter as usize].id,
+                    b.parameters[y.parameter as usize].id
+                );
+                assert_eq!(x.keys, y.keys, "{}", d.id);
+            }
+            match (&d.kind, &e.kind) {
+                (
+                    ayatsuri_format::model::DeformerKind::Warp(p),
+                    ayatsuri_format::model::DeformerKind::Warp(q),
+                ) => {
+                    assert_eq!(p.positions.len(), q.positions.len(), "{}", d.id);
+                    let worst = p
+                        .positions
+                        .iter()
+                        .zip(&q.positions)
+                        .map(|(x, y)| (x - y).abs())
+                        .fold(0.0, f32::max);
+                    assert!(worst < 1e-2, "{}: warp keyforms drift by {worst}", d.id);
+                }
+                (
+                    ayatsuri_format::model::DeformerKind::Rotation(p),
+                    ayatsuri_format::model::DeformerKind::Rotation(q),
+                ) => {
+                    assert_eq!(p.angles, q.angles, "{}", d.id);
+                    assert_eq!(p.scales, q.scales, "{}", d.id);
+                }
+                _ => panic!("{}: kind changed", d.id),
+            }
+        }
+        for m in &a.art_meshes {
+            let n = b
+                .art_meshes
+                .iter()
+                .find(|x| x.id == m.id)
+                .unwrap_or_else(|| panic!("{} lost", m.id));
+            assert_eq!(m.vertex_count, n.vertex_count, "{}", m.id);
+            assert_eq!(m.indices, n.indices, "{}", m.id);
+            assert_eq!(m.positions.len(), n.positions.len(), "{}", m.id);
+            assert_eq!(m.opacities, n.opacities, "{}", m.id);
+            assert_eq!(m.masks.len(), n.masks.len(), "{}", m.id);
+            let worst = m
+                .positions
+                .iter()
+                .zip(&n.positions)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0, f32::max);
+            assert!(worst < 1e-2, "{}: keyforms drift by {worst}", m.id);
+        }
     }
 
     #[test]
