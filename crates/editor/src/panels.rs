@@ -2951,50 +2951,42 @@ impl EditorUi {
         // the Cubism toolbar strip: workspace switcher and edit level
         Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let label = self.workspace.name(&self.prefs);
+                // the workspaces sit side by side like the menu bar's File,
+                // Edit and so on: flat, the active one in the accent colour
                 let mut pick: Option<Workspace> = None;
-                // the same flat menu button as the menu bar, in the accent
-                // colour because it is the one that is active
-                let title =
-                    egui::RichText::new(format!("{label}  {}", egui_phosphor::regular::CARET_DOWN))
-                        .color(theme::pal().accent);
-                ui.menu_button(title, |ui| {
-                    if ui
-                        .selectable_label(
-                            self.workspace == Workspace::Modeling,
-                            crate::i18n::tr("Modeling"),
-                        )
-                        .clicked()
-                    {
-                        pick = Some(Workspace::Modeling);
-                    }
-                    if ui
-                        .selectable_label(
-                            self.workspace == Workspace::Animation,
-                            crate::i18n::tr("Animation"),
-                        )
-                        .clicked()
-                    {
-                        pick = Some(Workspace::Animation);
-                    }
-                    for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
-                        if ui
-                            .selectable_label(self.workspace == Workspace::Custom(i), name)
-                            .clicked()
-                        {
-                            pick = Some(Workspace::Custom(i));
+                let mut entries: Vec<(Workspace, String)> = vec![
+                    (Workspace::Modeling, crate::i18n::tr("Modeling").to_string()),
+                    (Workspace::Animation, crate::i18n::tr("Animation").to_string()),
+                ];
+                for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
+                    entries.push((Workspace::Custom(i), name.clone()));
+                }
+                egui::MenuBar::new().ui(ui, |ui| {
+                    for (w, name) in &entries {
+                        let active = self.workspace == *w;
+                        let text = egui::RichText::new(name).color(if active {
+                            theme::pal().accent
+                        } else {
+                            theme::pal().text
+                        });
+                        let r = ui.add(egui::Button::new(text).frame(false));
+                        if r.clicked() && !active {
+                            pick = Some(w.clone());
                         }
                     }
-                    ui.separator();
-                    if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
-                        self.show_ws_save = true;
-                    }
-                    if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
-                        self.show_ws_manage = true;
-                    }
-                    if pick.is_some() || self.show_ws_save || self.show_ws_manage {
-                        ui.close();
-                    }
+                    ui.menu_button(egui_phosphor::regular::DOTS_THREE, |ui| {
+                        if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
+                            self.show_ws_save = true;
+                        }
+                        if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
+                            self.show_ws_manage = true;
+                        }
+                        if self.show_ws_save || self.show_ws_manage {
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text(crate::i18n::tr("Workspaces"));
                 });
                 if let Some(w) = pick {
                     self.set_workspace(w);
