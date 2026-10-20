@@ -437,3 +437,33 @@ pub extern "C" fn ay2d_parameter_index(m: *const Model, id: *const c_char) -> i3
         model.facts.param_ids.iter().position(|p| p.as_c_str() == want).map_or(-1, |i| i as i32)
     })
 }
+
+// ---- WebAssembly only ------------------------------------------------
+//
+// A JavaScript host can only hand arrays to the library through the
+// module's own memory, so it needs a way to get some. Not part of the C
+// header: a native host uses its own allocator.
+
+/// `len` bytes of the module's memory for a JavaScript host to fill, or
+/// null. Give them back with `ay2d_wasm_free`.
+/// cbindgen:ignore
+#[cfg(target_family = "wasm")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ay2d_wasm_alloc(len: usize) -> *mut u8 {
+    let mut v: Vec<u8> = Vec::with_capacity(len.max(1));
+    let p = v.as_mut_ptr();
+    std::mem::forget(v);
+    p
+}
+
+/// Give back what `ay2d_wasm_alloc` handed out, with the same `len`.
+/// cbindgen:ignore
+#[cfg(target_family = "wasm")]
+#[unsafe(no_mangle)]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn ay2d_wasm_free(p: *mut u8, len: usize) {
+    if !p.is_null() {
+        // SAFETY: p came from ay2d_wasm_alloc with this capacity
+        drop(unsafe { Vec::from_raw_parts(p, 0, len.max(1)) });
+    }
+}

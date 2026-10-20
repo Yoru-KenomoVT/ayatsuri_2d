@@ -268,7 +268,8 @@ fn the_header_names_every_entry_point() {
             let Some(rest) = line.split("fn ay2d_").nth(1) else { continue };
             let name: String =
                 rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-            if !header.contains(&format!("ay2d_{name}(")) {
+            // the WebAssembly allocation calls stay out of the C header on purpose
+            if !name.starts_with("wasm_") && !header.contains(&format!("ay2d_{name}(")) {
                 missing.push(name);
             }
         }
