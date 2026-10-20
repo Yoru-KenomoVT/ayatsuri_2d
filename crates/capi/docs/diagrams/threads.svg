@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400" viewBox="0 0 800 400">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="800" height="400" fill="#1e1e21"/>
+<g id="lanes"><rect x="20" y="40" width="760" height="80" rx="8" fill="#242427"/><rect x="20" y="140" width="760" height="80" rx="8" fill="#242427"/><rect x="20" y="240" width="760" height="80" rx="8" fill="#242427"/>
+<text class="t" x="36" y="74">tracking</text><text class="f" x="36" y="96">sets values</text>
+<text class="t" x="36" y="174">frame</text><text class="f" x="36" y="196">drives the model</text>
+<text class="t" x="36" y="274">render</text><text class="f" x="36" y="296">reads results</text></g>
+<g id="sets" fill="#4cc06a" fill-opacity="0.85">
+<rect x="175" y="69" width="26" height="22" rx="4"/><rect x="235" y="69" width="26" height="22" rx="4"/><rect x="295" y="69" width="26" height="22" rx="4"/><rect x="355" y="69" width="26" height="22" rx="4"/><rect x="415" y="69" width="26" height="22" rx="4"/><rect x="475" y="69" width="26" height="22" rx="4"/><rect x="535" y="69" width="26" height="22" rx="4"/><rect x="595" y="69" width="26" height="22" rx="4"/><rect x="655" y="69" width="26" height="22" rx="4"/><rect x="715" y="69" width="26" height="22" rx="4"/></g>
+<text class="f" x="760" y="112" text-anchor="end">into the inbox, never waits</text>
+<g id="updates">
+<rect class="boxa" x="175" y="155" width="150" height="50" rx="6"/><text class="s" x="190" y="176">update N</text><text class="f" x="190" y="195">writes frame B</text>
+<rect class="boxa" x="400" y="155" width="150" height="50" rx="6"/><text class="s" x="415" y="176">update N+1</text><text class="f" x="415" y="195">writes frame A</text>
+<rect class="boxa" x="625" y="155" width="140" height="50" rx="6"/><text class="s" x="640" y="176">update N+2</text><text class="f" x="640" y="195">writes frame B</text>
+<g fill="#f08e1e"><path d="M333 172 l8 8 -8 8 -8 -8z"/><path d="M558 172 l8 8 -8 8 -8 -8z"/></g>
+<text class="a" x="333" y="150" text-anchor="middle">flip</text><text class="a" x="558" y="150" text-anchor="middle">flip</text></g>
+<g id="draws">
+<rect class="box" x="345" y="255" width="210" height="50" rx="6"/><text class="s" x="360" y="276">draw N</text><text class="f" x="360" y="295">reads frame B (front)</text>
+<rect class="box" x="570" y="255" width="195" height="50" rx="6"/><text class="s" x="585" y="276">draw N+1</text><text class="f" x="585" y="295">reads frame A (front)</text>
+<path class="ln dash" d="M400 210 V250"/><path class="ln dash" d="M550 210 V250"/></g>
+<text class="f" x="475" y="236" text-anchor="middle">overlap is fine</text>
+<g id="time"><path class="ln" d="M160 350 H770" marker-end="url(#ar)"/><text class="f" x="770" y="372" text-anchor="end">time</text></g>
+<text class="f" x="20" y="378">A second thread calling update here would get BUSY.</text>
+</svg>

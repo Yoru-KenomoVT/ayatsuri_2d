@@ -1,9 +1,11 @@
 # Diagrams for the C ABI reference
 
-Each diagram below has a marked spot in [`../reference.md`](../reference.md)
-(search for its file name). Draw them as SVG in this folder; until one
-exists, the text sketch beside its spot stands in. Keep them to the app's
-dark palette so they sit on the docs pages without a frame: background
+The diagrams [`../reference.md`](../reference.md) shows, one SVG each in
+this folder. They are hand-written SVG with real text and named groups
+(`<g id="...">`), so they open cleanly in Inkscape or Figma and edit by
+hand too. A shared `<style>` block at the top of each sets the fonts and
+colours. Keep to the app's dark palette so they sit on the docs pages
+without a frame: background
 `#1e1e21`, panels `#29292d`, lines `#3a3a40`, text `#e4e4e8`, faint text
 `#8e8e96`, accent `#f08e1e`, plus green `#4cc06a` and red `#e86a6a` where a
 yes/no is shown.

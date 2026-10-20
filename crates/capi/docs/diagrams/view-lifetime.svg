@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="270" viewBox="0 0 800 270">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="800" height="270" fill="#1e1e21"/>
+<g id="updates"><rect class="boxa" x="60" y="40" width="140" height="48" rx="6"/><text class="s" x="74" y="61">update N</text><text class="f" x="74" y="79">writes frame B</text>
+<rect class="boxa" x="300" y="40" width="140" height="48" rx="6"/><text class="s" x="314" y="61">update N+1</text><text class="f" x="314" y="79">writes frame A</text>
+<rect class="boxa" x="540" y="40" width="140" height="48" rx="6"/><text class="s" x="554" y="61">update N+2</text><text class="f" x="554" y="79">writes frame B</text></g>
+<g id="view"><rect x="200" y="122" width="340" height="26" rx="4" fill="#4cc06a" fill-opacity="0.85"/>
+<text x="370" y="140" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#1e1e21">a view from frame N (frame B) is good</text>
+<path d="M540 135 H760" stroke="#e86a6a" stroke-width="2" stroke-dasharray="6 5"/><text x="560" y="168" font-family="Inter,system-ui,sans-serif" font-size="13" fill="#e86a6a">stale: N+2 is writing it</text>
+<path class="ln dash" d="M200 90 V120"/><path class="ln dash" d="M540 90 V120"/></g>
+<text class="f" x="200" y="190">taken after update N</text>
+<g id="time"><path class="ln" d="M40 220 H770" marker-end="url(#ar)"/><text class="f" x="770" y="244" text-anchor="end">time</text></g>
+</svg>

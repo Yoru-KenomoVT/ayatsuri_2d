@@ -66,15 +66,7 @@ A model is a rig:
 You never touch deformers or keyforms. You set parameters, call update, and
 read where every mesh's vertices ended up.
 
-> **Diagram** `model-anatomy.svg`: parameters on the left feeding deformers,
-> deformers moving meshes, parts grouping meshes, physics feeding back into
-> parameters. See [diagrams/README.md](diagrams/README.md).
-
-```
-parameters ──► deformers ──► meshes ──► drawables (what you draw)
-     ▲                         │
-     └──── physics ◄───────────┘ (reads some parameters, writes others)
-```
+![Parameters drive deformers, deformers move meshes, meshes become drawables; parts group meshes; physics reads some parameters and writes others](diagrams/model-anatomy.svg)
 
 **Coordinates.** Vertex positions are in *model units*. To get pixels on the
 authored canvas: `pixel = unit × pixels_per_unit + origin`, with y running
@@ -111,9 +103,7 @@ int32_t smile = ay2d_add_expression3(m, "smile", smile_json, smile_len);
 Decode the bundle's PNGs with your engine's image loader. The rig draws from
 `ay2d_texture_count(m)` pages, in the order `model3.json` lists them.
 
-> **Diagram** `bundle-loading.svg`: a model3.json bundle on the left (moc3,
-> PNGs, physics3, motion3s, exp3s), each arrow going to the call that takes
-> it; an .aom on the right going straight into ay2d_load.
+![Each file of a Cubism bundle goes to its own call; an .aom goes straight into ay2d_load](diagrams/bundle-loading.svg)
 
 ---
 
@@ -139,9 +129,7 @@ Values are held to the parameter's range.
 6. the result is **published**: drawables, parameter values, events and
    change flags all come from this published result until the next update
 
-> **Diagram** `update-order.svg`: the six steps as a vertical pipeline, with
-> the inbox entering at the top and the published frame leaving at the
-> bottom.
+![The six steps of ay2d_update, from the inbox to the published frame](diagrams/update-order.svg)
 
 **Draw** reads the published result. Reading values back works the same
 way: `ay2d_get_parameters` returns what the last update made of the pose,
@@ -181,17 +169,7 @@ turns. An update writes the back one and flips it to the front when done,
 so the render thread can keep drawing frame N while the frame thread works
 out frame N + 1.
 
-```
-              update N+1 writes            hosts read
-              ┌──────────┐   flip    ┌──────────┐
-              │  back    │ ───────►  │  front   │ ◄── drawables, values,
-              └──────────┘           └──────────┘     changes, events
-```
-
-> **Diagram** `threads.svg`: the three threads as lanes over time, with
-> the model's inbox, two frames and core between them; show the tracking
-> lane writing the inbox, the frame lane doing update and flipping, the
-> render lane reading the front frame while an update runs.
+![Tracking, frame and render threads over time: sets never wait, updates write one frame while draws read the other](diagrams/threads.svg)
 
 **Load and free** are the only calls that must not overlap anything: load
 before any thread uses the model, free after every thread is done with it.
@@ -215,9 +193,7 @@ for (uint32_t i = 0; i < n; i++) {
 }
 ```
 
-> **Diagram** `drawable-anatomy.svg`: one mesh drawn with its vertices
-> numbered, positions in model space beside the same vertices on the
-> texture page (uvs), and the triangle list underneath.
+![A mesh's positions and uvs pair up by vertex index; indices list its triangles](diagrams/drawable-anatomy.svg)
 
 ### Blending
 
@@ -247,9 +223,7 @@ with `ay2d_mesh_geometry`.
 Several drawables often share the same mask list; group them and render each
 mask set once per frame.
 
-> **Diagram** `masks.svg`: an eye white mesh as the mask, an iris mesh that
-> overflows it, the stencil, and the clipped result; a second row showing
-> the inverted case.
+![A mask mesh, a masked mesh, the stencil and the clipped result, normal and inverted](diagrams/masks.svg)
 
 ### Culling
 
@@ -269,9 +243,7 @@ Positions are model units. The authored picture is the canvas rectangle:
 where `ppu` is `pixels_per_unit` from `ay2d_canvas`. Fit that rectangle to
 your viewport and the model is framed as it was authored.
 
-> **Diagram** `canvas-coords.svg`: the canvas in pixels with its origin
-> marked, the same rectangle in model units, and the arrow for
-> `pixel = unit × ppu + origin`.
+![The canvas in pixels and in model units, and the conversion between them](diagrams/canvas-coords.svg)
 
 ### Uploading only what moved
 
@@ -300,8 +272,7 @@ every bit is set.
   `ay2d_motion_finished` tells you so. A looping one wraps.
 - `ay2d_motion_stop` fades everything out.
 
-> **Diagram** `crossfade.svg`: weight over time for two motions; A at
-> full weight, B starting at t = 2 s, A fading to 0 while B rises to 1.
+![Weight over time as one motion fades out and the next fades in](diagrams/crossfade.svg)
 
 Each update a motion writes its curves over the pose by its weight. Parameters
 it has no curve for keep what you set. That is what lets tracking and a
@@ -331,9 +302,7 @@ authored (or one second when it has none), and `0` to switch at once.
 The rig is a set of pendulum chains. Some parameters push them (head angle,
 body angle) and the swing writes other parameters (hair, accessories).
 
-> **Diagram** `physics-pendulum.svg`: input parameters on the left pushing
-> the top of a chain of pendulum nodes, the chain swinging, output
-> parameters on the right reading the swing at chosen nodes.
+![Input parameters push the top of a pendulum chain; outputs read the swing at chosen nodes](diagrams/physics-pendulum.svg)
 
 - Physics is on after load when the model has a rig. `ay2d_set_physics(m, 0)`
   holds it, so you can drive those parameters by hand.
@@ -394,9 +363,7 @@ frame N stays good while frame N + 1 is made, and goes stale when frame N + 2
 starts writing over it. Take a fresh list after each update and you never
 need to think about it.
 
-> **Diagram** `view-lifetime.svg`: a timeline of updates N, N+1, N+2; a
-> bar for a view taken after N, solid through N+1 and ending where N+2
-> begins.
+![A view from frame N stays good through update N+1 and goes stale when N+2 starts](diagrams/view-lifetime.svg)
 
 ---
 

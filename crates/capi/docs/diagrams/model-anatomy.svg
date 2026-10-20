@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="320" viewBox="0 0 760 320">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="760" height="320" fill="#1e1e21"/>
+<g id="labels"><text class="a" x="95" y="38" text-anchor="middle">you set</text><text class="a" x="670" y="38" text-anchor="middle">you read</text></g>
+<g id="parameters"><rect class="boxa" x="20" y="50" width="150" height="140" rx="8"/>
+<text class="t" x="35" y="76">Parameters</text>
+<text class="m" x="35" y="102">ParamAngleX</text><text class="m" x="35" y="122">ParamEyeLOpen</text><text class="m" x="35" y="142">ParamMouthOpenY</text><text class="m" x="35" y="162" fill="#8e8e96">ParamHairFront</text></g>
+<g id="deformers"><rect class="box" x="215" y="50" width="150" height="140" rx="8"/>
+<text class="t" x="230" y="76">Deformers</text>
+<path class="ln" d="M240 95 Q290 88 340 95 M240 120 Q290 114 340 122 M240 147 Q290 142 340 150 M240 95 L240 147 M290 90 Q286 118 291 144 M340 95 L340 150"/>
+<text class="f" x="230" y="177">warp grids, rotations</text></g>
+<g id="meshes"><rect class="box" x="410" y="50" width="150" height="140" rx="8"/>
+<text class="t" x="425" y="76">Meshes</text>
+<path d="M430 150 L470 95 L500 150 Z M470 95 L530 105 L500 150 Z M500 150 L530 105 L545 160 Z" fill="#f08e1e" fill-opacity="0.18" stroke="#e4e4e8" stroke-width="1.2"/>
+<text class="f" x="425" y="177">textured triangles</text></g>
+<g id="drawables"><rect class="boxa" x="600" y="50" width="140" height="140" rx="8"/>
+<text class="t" x="615" y="76">Drawables</text>
+<rect x="625" y="92" width="70" height="44" rx="4" fill="#3a3a40"/><rect x="637" y="102" width="70" height="44" rx="4" fill="#4a4a52"/><rect x="649" y="112" width="70" height="44" rx="4" fill="#f08e1e" fill-opacity="0.55"/>
+<text class="f" x="615" y="177">back to front</text></g>
+<g id="flow"><path class="ln" d="M172 120 H211" marker-end="url(#ar)"/><path class="ln" d="M367 120 H406" marker-end="url(#ar)"/><path class="ln" d="M562 120 H596" marker-end="url(#ar)"/></g>
+<g id="parts"><rect class="box" x="410" y="235" width="150" height="62" rx="8"/>
+<text class="t" x="425" y="260">Parts</text><text class="f" x="425" y="282">group meshes, fade as one</text>
+<path class="ln dash" d="M485 233 V194"/></g>
+<g id="physics"><rect class="box" x="20" y="235" width="150" height="62" rx="8"/>
+<text class="t" x="35" y="260">Physics</text><text class="f" x="35" y="282">pendulum chains</text>
+<path class="ln" d="M60 192 V231" marker-end="url(#ar)"/><text class="f" x="68" y="218">reads</text>
+<path class="lna" d="M130 233 V196" marker-end="url(#ara)"/><text class="a" x="140" y="218">writes</text></g>
+</svg>

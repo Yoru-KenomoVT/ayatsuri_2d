@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400" viewBox="0 0 800 400">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="800" height="400" fill="#1e1e21"/>
+<g id="pixels"><text class="t" x="40" y="30">canvas, in pixels</text>
+<rect class="box" x="40" y="50" width="240" height="300"/>
+<text class="m" x="46" y="68">0, 0</text><text class="m" x="274" y="342" text-anchor="end">width, height</text>
+<path class="ln" d="M40 50 H110" marker-end="url(#ar)"/><text class="f" x="114" y="54">x</text>
+<path class="ln" d="M40 50 V120" marker-end="url(#ar)"/><text class="f" x="46" y="134">y down</text>
+<circle cx="160" cy="210" r="6" fill="#f08e1e"/><text class="ma" x="160" y="236" text-anchor="middle">origin_x, origin_y</text></g>
+<g id="formula"><rect class="boxa" x="312" y="170" width="176" height="80" rx="8"/>
+<text class="ma" x="400" y="200" text-anchor="middle">pixel =</text><text class="ma" x="400" y="220" text-anchor="middle">unit × ppu + origin</text>
+<text class="f" x="400" y="272" text-anchor="middle">ppu = pixels_per_unit</text>
+<path class="ln" d="M516 210 H492" marker-end="url(#ar)"/><path class="ln" d="M310 210 H288" marker-end="url(#ar)"/></g>
+<g id="units"><text class="t" x="520" y="30">the same, in model units</text>
+<rect class="box" x="520" y="50" width="240" height="300"/>
+<circle cx="640" cy="210" r="6" fill="#f08e1e"/><text class="ma" x="650" y="232">0, 0</text>
+<path class="ln" d="M640 210 H720" marker-end="url(#ar)"/><path class="ln" d="M640 210 V290" marker-end="url(#ar)"/>
+<text class="m" x="526" y="68">-origin_x/ppu, -origin_y/ppu</text>
+<text class="f" x="640" y="372" text-anchor="middle">width/ppu by height/ppu</text></g>
+</svg>
