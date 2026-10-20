@@ -44,6 +44,10 @@ pub struct Transport<'a> {
 pub enum Request {
     NewScene,
     NewComp,
+    /// File > Import Audio, from a composition's context menu.
+    ImportAudio,
+    /// Animation > Edit Animation Details, for what is on show.
+    EditDetails,
 }
 
 /// What the palette is showing: a scene's curves or a composition's layers.
@@ -1603,6 +1607,137 @@ impl Timeline {
                         name_font.clone(),
                         pal.text,
                     );
+                    // right-click on the name: what the scene or the
+                    // composition as a whole can do
+                    let r_title = ui.interact(
+                        Rect::from_min_max(pos2(indent + 16.0, y), pos2(value_x - 4.0, y + rh)),
+                        ui.id().with("tl-top-name"),
+                        Sense::click(),
+                    );
+                    r_title.context_menu(|ui| {
+                        if ui.button(tr("Edit Details…")).clicked() {
+                            request = Some(Request::EditDetails);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if let Some(c) = &comp {
+                            ui.menu_button(tr("Add scene layer"), |ui| {
+                                if s.animations.is_empty() {
+                                    ui.weak(tr("No scenes yet"));
+                                }
+                                for a in &s.animations {
+                                    if ui.button(&a.name).clicked() {
+                                        edits.push(Edit::LayerAdd(LayerSource::Scene(
+                                            a.name.clone(),
+                                        )));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.menu_button(tr("Add composition layer"), |ui| {
+                                let others: Vec<&Composition> =
+                                    s.compositions.iter().filter(|o| o.name != c.name).collect();
+                                if others.is_empty() {
+                                    ui.weak(tr("No other compositions yet"));
+                                }
+                                for o in others {
+                                    if ui.button(&o.name).clicked() {
+                                        edits.push(Edit::LayerAdd(LayerSource::Composition(
+                                            o.name.clone(),
+                                        )));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            if ui.button(tr("Import Audio…")).clicked() {
+                                request = Some(Request::ImportAudio);
+                                ui.close();
+                            }
+                        } else {
+                            let model = s.puppet.model();
+                            ui.menu_button(tr("Add parameter track"), |ui| {
+                                let free: Vec<(usize, String)> = model
+                                    .parameters
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, p)| {
+                                        !anim.curves.iter().any(|c| {
+                                            c.target == CurveTarget::Parameter && c.id == p.id
+                                        })
+                                    })
+                                    .map(|(pi, p)| {
+                                        (pi, s.param_names.get(pi).cloned().unwrap_or(p.id.clone()))
+                                    })
+                                    .collect();
+                                if free.is_empty() {
+                                    ui.weak(tr("Every parameter is animated already"));
+                                }
+                                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                                    for (pi, name) in free {
+                                        if ui.button(name).clicked()
+                                            && let Some(p) = model.parameters.get(pi)
+                                        {
+                                            edits.push(Edit::AddKey(
+                                                CurveTarget::Parameter,
+                                                p.id.clone(),
+                                            ));
+                                            *tp.sel_param = Some(pi);
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            });
+                            if ui
+                                .add_enabled(
+                                    tp.sel_param.is_some(),
+                                    egui::Button::new(tr("Key the selected parameter")),
+                                )
+                                .clicked()
+                            {
+                                self.pending.push("anim-add-key".into());
+                                ui.close();
+                            }
+                            if ui.button(tr("Select every key")).clicked() {
+                                self.pending.push("anim-select-all".into());
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(self.show_all, tr("Show every parameter"))
+                                .clicked()
+                            {
+                                self.show_all = !self.show_all;
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button(tr("Work area start at the playhead")).clicked() {
+                            self.pending.push("anim-work-start".into());
+                            ui.close();
+                        }
+                        if ui.button(tr("Work area end at the playhead")).clicked() {
+                            self.pending.push("anim-work-end".into());
+                            ui.close();
+                        }
+                        if comp.is_none() {
+                            if ui.button(tr("Insert a frame at the playhead")).clicked() {
+                                edits.push(Edit::InsertFrames(1));
+                                ui.close();
+                            }
+                            if ui.button(tr("Remove the frame at the playhead")).clicked() {
+                                edits.push(Edit::RemoveFrames(1));
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button(tr("New Scene…")).clicked() {
+                            request = Some(Request::NewScene);
+                            ui.close();
+                        }
+                        if ui.button(tr("New Composition…")).clicked() {
+                            request = Some(Request::NewComp);
+                            ui.close();
+                        }
+                    });
                     let vr = Rect::from_min_size(pos2(value_x, y + 1.0), vec2(VALUE_W, rh - 2.0));
                     if let Some(v) = hot_number(
                         ui,
@@ -1652,6 +1787,44 @@ impl Timeline {
                     if r_fold.clicked() {
                         toggles.push((name.clone(), open));
                     }
+                    r_fold.context_menu(|ui| {
+                        if ui.button(if open { tr("Fold") } else { tr("Unfold") }).clicked() {
+                            toggles.push((name.clone(), open));
+                            ui.close();
+                        }
+                        ui.separator();
+                        let refs = || {
+                            row.children.iter().flat_map(|(target, id)| {
+                                anim.curves
+                                    .iter()
+                                    .filter(move |c| c.target == *target && &c.id == id)
+                                    .flat_map(move |c| {
+                                        c.keys.iter().map(move |k| KeyRef {
+                                            target: tgt(*target),
+                                            id: id.clone(),
+                                            frame: (k.time * fps).round() as i64,
+                                        })
+                                    })
+                            })
+                        };
+                        if ui.button(tr("Key every parameter here")).clicked() {
+                            for (target, id) in &row.children {
+                                if *target == CurveTarget::Parameter {
+                                    edits.push(Edit::AddKey(*target, id.clone()));
+                                }
+                            }
+                            ui.close();
+                        }
+                        if ui.button(tr("Select the keys in this folder")).clicked() {
+                            self.selected.extend(refs());
+                            ui.close();
+                        }
+                        if ui.button(tr("Delete the keys in this folder")).clicked() {
+                            self.selected = refs().collect();
+                            edits.push(Edit::Delete);
+                            ui.close();
+                        }
+                    });
                     let mut x = indent + 14.0;
                     if let Some(c) = row.color {
                         lp.rect_filled(
@@ -2052,7 +2225,10 @@ impl Timeline {
                         self.sel_layer = Some(li);
                     }
                     let mut open_source = r_body.double_clicked() || r_name.double_clicked();
-                    let menu = |ui: &mut Ui, edits: &mut Vec<Edit>, open_source: &mut bool| {
+                    let menu = |ui: &mut Ui,
+                                edits: &mut Vec<Edit>,
+                                open_source: &mut bool,
+                                request: &mut Option<Request>| {
                         let mut nl = l.clone();
                         let mut changed = false;
                         egui::Grid::new(("tl-layer-menu", li)).num_columns(2).show(ui, |ui| {
@@ -2129,13 +2305,22 @@ impl Timeline {
                             ui.close();
                         }
                         ui.separator();
+                        if ui.button(tr("Import Audio…")).clicked() {
+                            *request = Some(Request::ImportAudio);
+                            ui.close();
+                        }
+                        if ui.button(tr("Edit Details…")).clicked() {
+                            *request = Some(Request::EditDetails);
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui.button(tr("Delete layer")).clicked() {
                             edits.push(Edit::LayerRemove(li));
                             ui.close();
                         }
                     };
-                    r_body.context_menu(|ui| menu(ui, &mut edits, &mut open_source));
-                    r_name.context_menu(|ui| menu(ui, &mut edits, &mut open_source));
+                    r_body.context_menu(|ui| menu(ui, &mut edits, &mut open_source, &mut request));
+                    r_name.context_menu(|ui| menu(ui, &mut edits, &mut open_source, &mut request));
                     if open_source {
                         match &l.source {
                             LayerSource::Scene(n) => {
@@ -2455,6 +2640,112 @@ impl Timeline {
                     let keys: &[Key] = curve.map(|c| c.keys.as_slice()).unwrap_or(&[]);
                     let on_key =
                         keys.iter().any(|k| (k.time * fps).round() as i64 == playhead_frame);
+                    if let Some((target, id)) = row.curve.clone() {
+                        let has_prev = keys
+                            .first()
+                            .is_some_and(|k| ((k.time * fps).round() as i64) < playhead_frame);
+                        let has_next = keys
+                            .last()
+                            .is_some_and(|k| (k.time * fps).round() as i64 > playhead_frame);
+                        let row_refs = || {
+                            keys.iter().map(|k| KeyRef {
+                                target: tgt(target),
+                                id: id.clone(),
+                                frame: (k.time * fps).round() as i64,
+                            })
+                        };
+                        r_name.context_menu(|ui| {
+                            match row.kind {
+                                RowKind::Param(pi) => {
+                                    if ui.button(tr("Key at the playhead")).clicked() {
+                                        edits.push(Edit::AddKey(target, id.clone()));
+                                        *tp.sel_param = Some(pi);
+                                        ui.close();
+                                    }
+                                }
+                                RowKind::Part(part)
+                                    if ui
+                                        .button(tr("Key the opacity at the playhead"))
+                                        .clicked() =>
+                                {
+                                    let cur = curve
+                                        .and_then(|c| {
+                                            ayatsuri_core::anim::sample(&anim, c, *tp.time)
+                                        })
+                                        .unwrap_or(1.0);
+                                    edits.push(Edit::PartValue(part, cur));
+                                    ui.close();
+                                }
+                                _ => {}
+                            }
+                            if ui
+                                .add_enabled(
+                                    on_key,
+                                    egui::Button::new(tr("Remove the key at the playhead")),
+                                )
+                                .clicked()
+                            {
+                                edits.push(Edit::ToggleKey(target, id.clone()));
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui
+                                .add_enabled(has_prev, egui::Button::new(tr("Previous key")))
+                                .clicked()
+                            {
+                                edits.push(Edit::JumpKey(target, id.clone(), false));
+                                ui.close();
+                            }
+                            if ui.add_enabled(has_next, egui::Button::new(tr("Next key"))).clicked()
+                            {
+                                edits.push(Edit::JumpKey(target, id.clone(), true));
+                                ui.close();
+                            }
+                            ui.separator();
+                            let any = !keys.is_empty();
+                            if ui
+                                .add_enabled(
+                                    any,
+                                    egui::Button::new(tr("Select all keys in this row")),
+                                )
+                                .clicked()
+                            {
+                                self.selected.extend(row_refs());
+                                ui.close();
+                            }
+                            ui.add_enabled_ui(any, |ui| {
+                                ui.menu_button(tr("Interpolation for this row"), |ui| {
+                                    for (label, interp) in INTERPS {
+                                        if ui.button(tr(label)).clicked() {
+                                            self.selected = row_refs().collect();
+                                            edits.push(Edit::SetInterp(interp));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            });
+                            if ui
+                                .add_enabled(
+                                    any,
+                                    egui::Button::new(tr("Delete all keys in this row")),
+                                )
+                                .clicked()
+                            {
+                                self.selected = row_refs().collect();
+                                edits.push(Edit::Delete);
+                                ui.close();
+                            }
+                            if let RowKind::Param(pi) = row.kind
+                                && let Some(pr) = s.puppet.model().parameters.get(pi)
+                            {
+                                ui.separator();
+                                if ui.button(tr("Reset to default")).clicked() {
+                                    edits.push(Edit::Value(pi, pr.default));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
                     // navigator: previous key, key here, next key
                     let nav_c = pos2(keys_x + 25.0, cy);
                     let has_prev = keys

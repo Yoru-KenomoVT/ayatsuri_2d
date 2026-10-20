@@ -2241,12 +2241,7 @@ impl EditorUi {
                         .clicked()
                     {
                         ui.close();
-                        self.pick_async(PickFor::ImportAudio, || {
-                            rfd::FileDialog::new()
-                                .add_filter("Audio", &["wav", "mp3", "flac", "ogg", "oga"])
-                                .set_title(crate::i18n::tr("Import Audio…"))
-                                .pick_file()
-                        });
+                        self.pick_audio();
                     }
                     if ui
                         .add_enabled(
@@ -2842,10 +2837,7 @@ impl EditorUi {
                         .clicked()
                     {
                         ui.close();
-                        if let Some((name, fps, duration, looped)) = current {
-                            self.anim_details =
-                                Some(AnimDetails { name, fps, duration, looped, frames: 1 });
-                        }
+                        self.open_anim_details();
                     }
                     if ui
                         .add_enabled(
@@ -4465,7 +4457,36 @@ impl EditorUi {
                     comp: true,
                 });
             }
+            Some(crate::timeline::Request::ImportAudio) => self.pick_audio(),
+            Some(crate::timeline::Request::EditDetails) => self.open_anim_details(),
             None => {}
+        }
+    }
+
+    /// File > Import Audio: pick a sound file for the current composition.
+    fn pick_audio(&mut self) {
+        self.pick_async(PickFor::ImportAudio, || {
+            rfd::FileDialog::new()
+                .add_filter("Audio", &["wav", "mp3", "flac", "ogg", "oga"])
+                .set_title(crate::i18n::tr("Import Audio…"))
+                .pick_file()
+        });
+    }
+
+    /// Animation > Edit Animation Details, for the composition on show,
+    /// else the scene.
+    fn open_anim_details(&mut self) {
+        let current = self.session.as_ref().and_then(|s| {
+            if let Some(c) = s.current_comp.and_then(|i| s.compositions.get(i)) {
+                Some((c.name.clone(), c.fps, c.duration, c.looped))
+            } else {
+                s.current_anim
+                    .and_then(|i| s.animations.get(i))
+                    .map(|a| (a.name.clone(), a.fps, a.duration, a.looped))
+            }
+        });
+        if let Some((name, fps, duration, looped)) = current {
+            self.anim_details = Some(AnimDetails { name, fps, duration, looped, frames: 1 });
         }
     }
 
