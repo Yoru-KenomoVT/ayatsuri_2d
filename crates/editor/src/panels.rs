@@ -2937,8 +2937,9 @@ impl EditorUi {
         // the Cubism toolbar strip: workspace switcher and edit level
         Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                // the workspaces sit side by side like the menu bar's File,
-                // Edit and so on: flat, the active one in the accent colour
+                // the workspace dropdown: a flat menu button like the menu
+                // bar's File and Edit, its entries menu items, the active
+                // one in the accent colour
                 let mut pick: Option<Workspace> = None;
                 let mut entries: Vec<(Workspace, String)> = vec![
                     (Workspace::Modeling, crate::i18n::tr("Modeling").to_string()),
@@ -2947,32 +2948,34 @@ impl EditorUi {
                 for (i, (name, _)) in self.prefs.custom_workspaces.iter().enumerate() {
                     entries.push((Workspace::Custom(i), name.clone()));
                 }
-                egui::MenuBar::new().ui(ui, |ui| {
+                let label = entries
+                    .iter()
+                    .find(|(w, _)| *w == self.workspace)
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_else(|| crate::i18n::tr("Custom").to_string());
+                let title = format!("{label}  {}", egui_phosphor::regular::CARET_DOWN);
+                ui.menu_button(title, |ui| {
                     for (w, name) in &entries {
                         let active = self.workspace == *w;
-                        let text = egui::RichText::new(name).color(if active {
-                            theme::pal().accent
+                        let text = if active {
+                            egui::RichText::new(name).color(theme::pal().accent)
                         } else {
-                            theme::pal().text
-                        });
-                        let r = ui.add(egui::Button::new(text).frame(false));
-                        if r.clicked() && !active {
+                            egui::RichText::new(name)
+                        };
+                        if ui.button(text).clicked() {
                             pick = Some(w.clone());
                         }
                     }
-                    ui.menu_button(egui_phosphor::regular::DOTS_THREE, |ui| {
-                        if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
-                            self.show_ws_save = true;
-                        }
-                        if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
-                            self.show_ws_manage = true;
-                        }
-                        if self.show_ws_save || self.show_ws_manage {
-                            ui.close();
-                        }
-                    })
-                    .response
-                    .on_hover_text(crate::i18n::tr("Workspaces"));
+                    ui.separator();
+                    if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
+                        self.show_ws_save = true;
+                    }
+                    if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
+                        self.show_ws_manage = true;
+                    }
+                    if pick.is_some() || self.show_ws_save || self.show_ws_manage {
+                        ui.close();
+                    }
                 });
                 if let Some(w) = pick {
                     self.set_workspace(w);
