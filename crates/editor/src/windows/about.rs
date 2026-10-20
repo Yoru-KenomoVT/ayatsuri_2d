@@ -12,6 +12,9 @@ use egui::{Align, Color32, FontId, Layout, Rect, RichText, Sense, Stroke, Ui, po
 use egui::ScrollArea;
 
 use crate::discord::GITHUB;
+
+/// The project site: downloads, docs and tutorials.
+const WEBSITE: &str = "https://ayatsuri-2d.org";
 use crate::panels::{EditorUi, WashKey, dithered_wash};
 use crate::theme;
 
@@ -341,6 +344,12 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
     });
     ui.add_space(16.0);
     ui.horizontal(|ui| {
+        if ui
+            .button(format!("{}  {}", egui_phosphor::regular::GLOBE, crate::i18n::tr("Website")))
+            .clicked()
+        {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(WEBSITE));
+        }
         if ui
             .button(format!(
                 "{}  {}",

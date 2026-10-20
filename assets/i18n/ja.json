@@ -1175,5 +1175,6 @@
   "Key the opacity at the playhead": "再生ヘッドで不透明度にキーを打つ",
   "Remove the key at the playhead": "再生ヘッドのキーを削除",
   "Interpolation for this row": "この行の補間",
-  "Delete all keys in this row": "この行のキーをすべて削除"
+  "Delete all keys in this row": "この行のキーをすべて削除",
+  "Website": "ウェブサイト"
 }

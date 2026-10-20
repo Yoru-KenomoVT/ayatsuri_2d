@@ -1175,5 +1175,6 @@
   "Key the opacity at the playhead": "在播放头处为不透明度打关键帧",
   "Remove the key at the playhead": "删除播放头处的关键帧",
   "Interpolation for this row": "此行的插值",
-  "Delete all keys in this row": "删除此行的所有关键帧"
+  "Delete all keys in this row": "删除此行的所有关键帧",
+  "Website": "网站"
 }

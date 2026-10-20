@@ -1175,5 +1175,6 @@
   "Key the opacity at the playhead": "재생 헤드에서 불투명도 키 넣기",
   "Remove the key at the playhead": "재생 헤드의 키 제거",
   "Interpolation for this row": "이 행의 보간",
-  "Delete all keys in this row": "이 행의 키 모두 삭제"
+  "Delete all keys in this row": "이 행의 키 모두 삭제",
+  "Website": "웹사이트"
 }
