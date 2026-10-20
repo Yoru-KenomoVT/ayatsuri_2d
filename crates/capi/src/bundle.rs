@@ -39,10 +39,8 @@ pub extern "C" fn ay2d_add_physics3(m: *mut Model, json: *const u8, len: usize) 
         let c = &mut *g;
         // the rig lives inside the puppet from construction: rebuild it
         // around the same model and carry the pose across
-        let values: Vec<f32> =
-            (0..model.facts.param_ids.len()).map(|i| c.puppet.value(i)).collect();
-        let parts: Vec<f32> =
-            (0..model.facts.part_ids.len()).map(|i| c.puppet.part_user_opacity(i)).collect();
+        let values = c.base.clone();
+        let parts = c.base_parts.clone();
         let mut rigged = c.puppet.model().clone();
         rigged.physics = Some(rig);
         let mut puppet = Puppet::new(rigged);

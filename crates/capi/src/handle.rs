@@ -69,6 +69,11 @@ pub(crate) struct Facts {
 /// What an update drives; one caller at a time.
 pub(crate) struct Core {
     pub puppet: Puppet,
+    /// The pose every update starts from: what the host set, else the
+    /// defaults. Motions, expressions and physics layer over it each frame
+    /// and never write it, so what they did ends when they do.
+    pub base: Vec<f32>,
+    pub base_parts: Vec<f32>,
     /// Physics runs on update while this is set; on by default when the
     /// model has a rig.
     pub physics_on: bool,
@@ -299,9 +304,12 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
         let exprs = crate::expressions::Expressions::new(&payload.expressions, &param_index);
         let inbox =
             Inbox { params: vec![None; m.parameters.len()], parts: vec![None; m.parts.len()] };
+        let (n_params, n_parts) = (m.parameters.len(), m.parts.len());
         let mut puppet = Puppet::new(payload.model);
         puppet.update();
         let physics_on = puppet.has_physics();
+        let base: Vec<f32> = (0..n_params).map(|i| puppet.value(i)).collect();
+        let base_parts = vec![1.0; n_parts];
         let model = Model {
             facts: Facts {
                 textures: payload.textures.into_iter().map(|b| b.into_vec()).collect(),
@@ -310,6 +318,8 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
             has_physics: AtomicBool::new(physics_on),
             core: Mutex::new(Core {
                 puppet,
+                base,
+                base_parts,
                 physics_on,
                 scenes: payload.animations,
                 comps: payload.compositions,

@@ -31,17 +31,26 @@ pub extern "C" fn ay2d_update(m: *mut Model, dt: f32) -> Status {
         };
         let c = &mut *g;
         {
+            // the host's values become the base pose
             let mut inbox = lock(&model.inbox);
-            for (i, slot) in inbox.params.iter_mut().enumerate() {
+            for (slot, b) in inbox.params.iter_mut().zip(c.base.iter_mut()) {
                 if let Some(v) = slot.take() {
-                    c.puppet.set_value(i, v);
+                    *b = v;
                 }
             }
-            for (i, slot) in inbox.parts.iter_mut().enumerate() {
+            for (slot, b) in inbox.parts.iter_mut().zip(c.base_parts.iter_mut()) {
                 if let Some(v) = slot.take() {
-                    c.puppet.set_part_opacity(i, v);
+                    *b = v;
                 }
             }
+        }
+        // every update starts from the base pose, so a cleared expression or
+        // a stopped motion leaves nothing behind and an Add never piles up
+        for (i, &v) in c.base.iter().enumerate() {
+            c.puppet.set_value(i, v);
+        }
+        for (i, &v) in c.base_parts.iter().enumerate() {
+            c.puppet.set_part_opacity(i, v);
         }
         c.player.advance(dt);
         c.exprs.advance(dt);

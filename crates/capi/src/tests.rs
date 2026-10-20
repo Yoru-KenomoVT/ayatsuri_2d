@@ -641,3 +641,32 @@ fn views_outlive_the_next_update() {
     assert_ne!(floats(now[0].positions, 8), before, "the new view shows frame N + 1");
     ay2d_free(m);
 }
+
+/// An expression on a parameter the host never sets is undone when it is
+/// cleared, and an Add does not pile up frame after frame: every update
+/// starts from the pose the host set (or the defaults).
+#[test]
+fn clearing_an_expression_undoes_it() {
+    let m = load();
+    let mut out = [0.0f32; 2];
+    assert_eq!(ay2d_expression_set(m, 0, 0.0), Status::Ok);
+    for _ in 0..5 {
+        ay2d_update(m, 1.0 / 60.0);
+    }
+    ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+    assert!((out[0] - 0.25).abs() < 1e-5, "one add of 0.25, not five: {}", out[0]);
+    assert_eq!(ay2d_expression_clear(m, 0.0), Status::Ok);
+    ay2d_update(m, 1.0 / 60.0);
+    ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+    assert_eq!(out[0], 0.0, "back to the default once cleared");
+    // a motion's value does not stick after it stops either
+    ay2d_motion_play(m, 0, 0, 0.0);
+    for _ in 0..30 {
+        ay2d_update(m, 1.0 / 60.0);
+    }
+    ay2d_motion_stop(m, 0.0);
+    ay2d_update(m, 1.0 / 60.0);
+    ay2d_get_parameters(m, out.as_mut_ptr(), 2);
+    assert_eq!(out[0], 0.0, "the motion let go");
+    ay2d_free(m);
+}
