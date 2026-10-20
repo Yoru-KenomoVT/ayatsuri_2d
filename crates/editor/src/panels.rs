@@ -123,20 +123,6 @@ enum Workspace {
     Custom(usize),
 }
 
-impl Workspace {
-    fn name(&self, prefs: &Prefs) -> String {
-        match self {
-            Workspace::Modeling => crate::i18n::tr("Modeling").into(),
-            Workspace::Animation => crate::i18n::tr("Animation").into(),
-            Workspace::Custom(i) => prefs
-                .custom_workspaces
-                .get(*i)
-                .map(|(n, _)| n.clone())
-                .unwrap_or_else(|| crate::i18n::tr("Custom").into()),
-        }
-    }
-}
-
 /// The editor workspace: a dockable tree of palettes around one loaded
 /// puppet, laid out and styled after Cubism Editor's Modeling workspace.
 pub struct EditorUi {
