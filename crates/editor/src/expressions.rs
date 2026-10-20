@@ -10,7 +10,6 @@ use crate::i18n::tr;
 use crate::session::Session;
 use crate::theme;
 
-const UNDO_STEPS: usize = 64;
 /// Width of a value box: room for a sign, four digits and three decimals.
 const VALUE_W: f32 = 76.0;
 
@@ -28,11 +27,6 @@ pub struct Expressions {
     pub preview: bool,
     /// The Add Parameter popup while it is open.
     add: Option<AddParam>,
-    /// The whole list as it was before each edit.
-    undo: Vec<Vec<Expression>>,
-    redo: Vec<Vec<Expression>>,
-    /// A drag of a value folds into one step while it lasts.
-    dragging: bool,
 }
 
 /// The Add Parameter popup: pick a parameter, set its value on a slider
@@ -63,34 +57,6 @@ impl Expressions {
         Some(ExpressionParam { id: p.id.clone(), value: add.value, blend: add.blend })
     }
 
-    fn keep(&mut self, s: &Session, merge: bool) {
-        if merge && self.dragging {
-            return;
-        }
-        self.dragging = merge;
-        self.redo.clear();
-        self.undo.push(s.expressions.clone());
-        if self.undo.len() > UNDO_STEPS {
-            self.undo.remove(0);
-        }
-    }
-
-    pub fn undo(&mut self, s: &mut Session) -> bool {
-        let Some(before) = self.undo.pop() else { return false };
-        self.redo.push(std::mem::replace(&mut s.expressions, before));
-        s.modified = true;
-        self.dragging = false;
-        true
-    }
-
-    pub fn redo(&mut self, s: &mut Session) -> bool {
-        let Some(after) = self.redo.pop() else { return false };
-        self.undo.push(std::mem::replace(&mut s.expressions, after));
-        s.modified = true;
-        self.dragging = false;
-        true
-    }
-
     /// The parameters the pose moved off their defaults, as the expression
     /// Cubism would make from it: each an Add of the difference.
     fn from_pose(s: &Session) -> Vec<ExpressionParam> {
@@ -114,9 +80,6 @@ impl Expressions {
     /// Draw the palette into the space left in `ui`.
     pub fn show(&mut self, ui: &mut Ui, s: &mut Session) {
         let pal = theme::pal();
-        if ui.input(|i| i.pointer.any_released()) {
-            self.dragging = false;
-        }
         if self.sel.is_some_and(|i| i >= s.expressions.len()) {
             self.sel = None;
         }
@@ -128,7 +91,6 @@ impl Expressions {
                 .on_hover_text(tr("New empty expression"))
                 .clicked()
             {
-                self.keep(s, false);
                 let n = s.expressions.len() + 1;
                 s.expressions.push(Expression {
                     name: format!("expression{n}"),
@@ -150,7 +112,6 @@ impl Expressions {
                 && let Some(i) = self.sel
                 && let Some(e) = s.expressions.get(i).cloned()
             {
-                self.keep(s, false);
                 let mut e = e;
                 e.name = format!("{} copy", e.name);
                 s.expressions.insert(i + 1, e);
@@ -167,7 +128,6 @@ impl Expressions {
                 && let Some(i) = self.sel
                 && i < s.expressions.len()
             {
-                self.keep(s, false);
                 s.expressions.remove(i);
                 self.sel = if s.expressions.is_empty() {
                     None
@@ -175,31 +135,6 @@ impl Expressions {
                     Some(i.min(s.expressions.len() - 1))
                 };
                 s.modified = true;
-            }
-            ui.add_space(6.0);
-            if ui
-                .add_enabled(
-                    !self.undo.is_empty(),
-                    egui::Button::new(
-                        RichText::new(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE).size(14.0),
-                    ),
-                )
-                .on_hover_text(tr("Undo"))
-                .clicked()
-            {
-                self.undo(s);
-            }
-            if ui
-                .add_enabled(
-                    !self.redo.is_empty(),
-                    egui::Button::new(
-                        RichText::new(egui_phosphor::regular::ARROW_CLOCKWISE).size(14.0),
-                    ),
-                )
-                .on_hover_text(tr("Redo"))
-                .clicked()
-            {
-                self.redo(s);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let on = self.preview && self.sel.is_some();
@@ -405,7 +340,6 @@ impl Expressions {
             if merge {
                 self.preview = true;
             }
-            self.keep(s, merge);
             if let Some(slot) = s.expressions.get_mut(i) {
                 *slot = next;
             }
