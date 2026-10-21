@@ -6,7 +6,7 @@
 
 - **Cubism Editor projects** (`.cmo3`) open as whole models: art, meshes,
   parts, the deformer tree, parameters in their folders, every keyform,
-  clipping and physics, with the names the rigger gave things. Built from
+  clipping, blend modes and physics, with the names the rigger gave things. Built from
   the project files themselves; checked against a project rigged in
   Cubism, deformer for deformer.
 - **Cubism Editor project export** (File > Export Model > cmo3): the model
@@ -15,9 +15,12 @@
   into fresh atlases the uvs point into; parts, the deformer tree,
   parameters in their folders, every keyform in its parent's space,
   clipping and physics follow. Animations and sound are not part of a
-  project and stay with the motion export. Written from project files
-  alone and checked by reading the result back; Cubism Editor itself has
-  the last word.
+  project and stay with the motion export. Before a project is written it
+  passes a strict reading: every reference resolves to an object of the
+  right class, every list and array holds what its count says, and each
+  object has the fields, value types and attributes a project saved by
+  the Editor gives it. Written from project files alone and checked by
+  reading the result back.
 - **Clip Studio Paint files** (`.clip`) open, import and re-import the way
   PSD and Krita files do: folders become parts, every drawn layer becomes
   a mesh with its mask applied, paper and adjustment layers are left out.
@@ -123,12 +126,21 @@
   of the layer's colour so it reads over a waveform, and a square at
   either top corner drags inward for a fade in or out.
 - **Expression palette** (Window > Expression; a tab beside the Timeline
-  in the Animation workspace): the model's exp3 expressions, listed. The
-  + makes one from the pose (every parameter moved off its default,
-  added), Set from pose does the same to an existing one, and each
-  parameter row drags its value with Add, Multiply or Overwrite. Fades
-  are optional. The eye lays the picked expression over the pose as a
-  preview; its own undo and redo sit in the header.
+  in the Animation workspace): the model's exp3 expressions, listed
+  across the palette's full width. The + makes an empty one; Add
+  parameter opens a list to filter and pick from, with a slider and a
+  value box, and Set from pose fills one from every parameter moved off
+  its default. Each parameter row drags its value with Add, Multiply or
+  Overwrite, fades are optional, and the model shows the expression as
+  its values change.
+- **Timeline context menus**: right-click a row name. The scene row edits
+  the details, adds a parameter track, keys the selected parameter,
+  selects every key, sets the work area, inserts or removes a frame and
+  makes scenes and compositions; folders fold, key, select or delete
+  their keys; parameter and part rows key, remove, step, select,
+  re-interpolate, delete and reset; a composition's rows add scene and
+  composition layers and import audio.
+- **Website** button in About, beside GitHub, opens ayatsuri-2d.org.
 - **Temporary Deform Tool** (Modeling > Temporary Deform Tool), as in
   Cubism: throwaway control points around the selected meshes or warp
   deformer, gone once the tool is released. Enlarge/Reduce, Rotation, Free
@@ -243,8 +255,8 @@
 - Multiply and Add (Linear Dodge) layers from PSD, Krita and Clip Studio
   files keep their blend mode on import; other modes moc3 has no
   counterpart for are drawn normal, with a note in the log.
-- The workspace picker in the toolbar is a flat menu button like the
-  menu bar's, in the accent colour.
+- The workspace picker in the toolbar is a dropdown styled like the menu
+  bar's menus, with the open workspace in the accent colour.
 - Cubism 4 projects open: their archive table has no tag list (a raw
   all-ones count) and their deformers carry no original shape, both of
   which the .cmo3 importer refused.
