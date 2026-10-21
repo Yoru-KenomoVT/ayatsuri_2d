@@ -133,6 +133,16 @@
   its default. Each parameter row drags its value with Add, Multiply or
   Overwrite, fades are optional, and the model shows the expression as
   its values change.
+- **Blend modes from Cubism 5.3**: a mesh's colour blend can be Add,
+  Add (Glow), Darken, Multiply, Color Burn, Linear Burn, Lighten, Screen,
+  Color Dodge, Overlay, Soft Light, Hard Light, Linear Light, Hue or
+  Color, besides Normal and the two older Add and Multiply, and its alpha
+  blend Over, Atop, Out, Conjoint or Disjoint (Properties > Blend mode,
+  Alpha blend). The canvas, Render exports and thumbnails draw them; PSD,
+  Krita and Clip Studio layers and Cubism projects bring theirs in; moc3
+  5.3 keeps them, and an export to an older version draws each with the
+  nearest of Normal, Add and Multiply and says so. The C ABI reports them
+  through `ay2d_mesh_blend`.
 - **Timeline context menus**: right-click a row name. The scene row edits
   the details, adds a parameter track, keys the selected parameter,
   selects every key, sets the work area, inserts or removes a frame and
@@ -252,9 +262,10 @@
 - A middle-button drag only pans the view; it used to move the mesh or
   points under the pointer as well.
 - The Select tool is called Arrow, as its shortcut always said.
-- Multiply and Add (Linear Dodge) layers from PSD, Krita and Clip Studio
-  files keep their blend mode on import; other modes moc3 has no
-  counterpart for are drawn normal, with a note in the log.
+- Layers from PSD, Krita and Clip Studio files keep their blend mode on
+  import: Multiply and Add (Linear Dodge) as the modes every moc3 has, the
+  rest as Cubism 5.3's; Vivid Light becomes Linear Light, the nearest, and
+  a mode with nothing close is drawn normal with a note in the log.
 - Re-import PSD applies each layer's blend mode to the mesh it updates;
   it used to keep the mesh's old mode, so a layer set to Multiply after
   the first import stayed Normal.
