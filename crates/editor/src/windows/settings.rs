@@ -597,6 +597,7 @@ impl EditorUi {
             // the canvas and overlays live on this page too
             self.prefs.view_bg = None;
             self.prefs.view_bg_alpha = None;
+            self.prefs.canvas_page = None;
             self.prefs.overlay = Default::default();
             self.prefs.ui_scale = None;
             self.prefs.text_size = None;
@@ -633,6 +634,45 @@ impl EditorUi {
                     self.prefs.view_bg = Some([r, g, b]);
                     self.prefs.view_bg_alpha = (a < 255).then_some(a);
                     save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Canvas"),
+            crate::i18n::tr("The model's page, under the art"),
+            |ui| {
+                if ui.small_button(crate::i18n::tr("Reset")).clicked() {
+                    self.prefs.canvas_page = None;
+                    save = true;
+                }
+                let mut pick = self.prefs.canvas_page_color().unwrap_or(theme::pal().canvas);
+                if ui.color_edit_button_srgba(&mut pick).changed() {
+                    let [r, g, b, _] = pick.to_srgba_unmultiplied();
+                    self.prefs.canvas_page = Some([r, g, b]);
+                    save = true;
+                }
+                // quick picks, darkest last: long sessions are easier on grey
+                for (name, c) in [
+                    ("Dark grey", [0x3A, 0x3A, 0x3E]),
+                    ("Mid grey", [0x80, 0x80, 0x84]),
+                    ("Light grey", [0xD6, 0xD6, 0xD8]),
+                    ("White", [0xFF, 0xFF, 0xFF]),
+                ] {
+                    let col = egui::Color32::from_rgb(c[0], c[1], c[2]);
+                    let (r, resp) =
+                        ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+                    ui.painter().rect_filled(r, 3.0, col);
+                    ui.painter().rect_stroke(
+                        r,
+                        3.0,
+                        egui::Stroke::new(1.0, theme::pal().border),
+                        egui::StrokeKind::Inside,
+                    );
+                    if resp.on_hover_text(crate::i18n::tr(name)).clicked() {
+                        self.prefs.canvas_page = Some(c);
+                        save = true;
+                    }
                 }
             },
         );

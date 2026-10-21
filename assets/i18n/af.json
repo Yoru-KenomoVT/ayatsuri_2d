@@ -1188,6 +1188,11 @@
   "Columns": "Kolomme",
   "Rows": "Rye",
   "Unbind": "Ontbind",
+  "The model's page, under the art": "Die model se bladsy, onder die kuns",
+  "Dark grey": "Donkergrys",
+  "Mid grey": "Middelgrys",
+  "Light grey": "Liggrys",
+  "White": "Wit",
   "About Physics (online manual)": "Oor fisika (aanlyn handleiding)",
   "Apply Skinning…": "Pas skinning toe…",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves everything in parallel. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "Sleep 'n beheerpunt om te vervorm. Ctrl+sleep skuif net die beheerpunt. Shift+sleep skuif alles parallel. Sleep die anker om die middelpunt van Rotasie en Vergroot/Verklein te skuif.\n\nTydelike pad: klik om 'n beheerpunt by te voeg, klik op die pad om een in te voeg, Alt+klik vee uit.\n\nElke sleep beland op die sleutelvorm waarop die parameters staan, as een ontdoen-stap."

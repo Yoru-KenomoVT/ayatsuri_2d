@@ -1188,6 +1188,11 @@
   "Columns": "列",
   "Rows": "行",
   "Unbind": "解除",
+  "The model's page, under the art": "アートの下にあるモデルのキャンバス",
+  "Dark grey": "ダークグレー",
+  "Mid grey": "グレー",
+  "Light grey": "ライトグレー",
+  "White": "白",
   "About Physics (online manual)": "物理演算について（オンラインマニュアル）",
   "Apply Skinning…": "スキニングを適用…",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves everything in parallel. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "コントロールポイントをドラッグして変形します。Ctrl+ドラッグでコントロールポイントだけを移動します。Shift+ドラッグですべてを平行移動します。アンカーをドラッグすると回転と拡大・縮小の中心が移動します。\n\n一時パス: クリックでコントロールポイントを追加、パス上のクリックで挿入、Alt+クリックで削除します。\n\nドラッグはパラメータがあるキーフォームに、1回の取り消し単位として反映されます。"

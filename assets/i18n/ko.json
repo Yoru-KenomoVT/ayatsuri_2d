@@ -1188,6 +1188,11 @@
   "Columns": "열",
   "Rows": "행",
   "Unbind": "해제",
+  "The model's page, under the art": "아트 아래의 모델 캔버스",
+  "Dark grey": "진한 회색",
+  "Mid grey": "회색",
+  "Light grey": "밝은 회색",
+  "White": "흰색",
   "About Physics (online manual)": "물리 연산 정보 (온라인 매뉴얼)",
   "Apply Skinning…": "스키닝 적용…",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves everything in parallel. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "컨트롤 포인트를 드래그하여 변형합니다. Ctrl+드래그는 컨트롤 포인트만 이동합니다. Shift+드래그는 모두 평행 이동합니다. 앵커를 드래그하면 회전과 확대/축소의 중심이 이동합니다.\n\n임시 패스: 클릭하여 컨트롤 포인트 추가, 패스를 클릭하여 삽입, Alt+클릭으로 삭제합니다.\n\n각 드래그는 파라미터가 있는 키폼에 실행 취소 한 단계로 적용됩니다."

@@ -42,6 +42,8 @@ pub struct Prefs {
     /// three-channel colours still load. None is opaque.
     pub accent_alpha: Option<u8>,
     pub view_bg_alpha: Option<u8>,
+    /// The model's canvas (the page under the art), when not the theme's.
+    pub canvas_page: Option<[u8; 3]>,
     pub reopen_last: bool,
     pub toolbar_docked: bool,
     pub toolbar_pos: Option<[f32; 2]>,
@@ -143,6 +145,11 @@ impl Prefs {
     pub fn view_bg_color(&self) -> Option<egui::Color32> {
         let a = self.view_bg_alpha.unwrap_or(255);
         self.view_bg.map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
+    }
+
+    /// The saved colour of the canvas page, if one was picked.
+    pub fn canvas_page_color(&self) -> Option<egui::Color32> {
+        self.canvas_page.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
     }
 
     /// The interface look these preferences ask for.
