@@ -1,44 +1,92 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="320" viewBox="0 0 760 320">
-<style>
-.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
-.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
-.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
-.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
-.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
-.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
-.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
-.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
-.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
-.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
-.dash{stroke-dasharray:5 4}
-</style>
-<defs>
-<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
-<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
-</defs>
-<rect width="760" height="320" fill="#1e1e21"/>
-<g id="labels"><text class="a" x="95" y="38" text-anchor="middle">you set</text><text class="a" x="670" y="38" text-anchor="middle">you read</text></g>
-<g id="parameters"><rect class="boxa" x="20" y="50" width="150" height="140" rx="8"/>
-<text class="t" x="35" y="76">Parameters</text>
-<text class="m" x="35" y="102">ParamAngleX</text><text class="m" x="35" y="122">ParamEyeLOpen</text><text class="m" x="35" y="142">ParamMouthOpenY</text><text class="m" x="35" y="162" fill="#8e8e96">ParamHairFront</text></g>
-<g id="deformers"><rect class="box" x="215" y="50" width="150" height="140" rx="8"/>
-<text class="t" x="230" y="76">Deformers</text>
-<path class="ln" d="M240 95 Q290 88 340 95 M240 120 Q290 114 340 122 M240 147 Q290 142 340 150 M240 95 L240 147 M290 90 Q286 118 291 144 M340 95 L340 150"/>
-<text class="f" x="230" y="177">warp grids, rotations</text></g>
-<g id="meshes"><rect class="box" x="410" y="50" width="150" height="140" rx="8"/>
-<text class="t" x="425" y="76">Meshes</text>
-<path d="M430 150 L470 95 L500 150 Z M470 95 L530 105 L500 150 Z M500 150 L530 105 L545 160 Z" fill="#f08e1e" fill-opacity="0.18" stroke="#e4e4e8" stroke-width="1.2"/>
-<text class="f" x="425" y="177">textured triangles</text></g>
-<g id="drawables"><rect class="boxa" x="600" y="50" width="140" height="140" rx="8"/>
-<text class="t" x="615" y="76">Drawables</text>
-<rect x="625" y="92" width="70" height="44" rx="4" fill="#3a3a40"/><rect x="637" y="102" width="70" height="44" rx="4" fill="#4a4a52"/><rect x="649" y="112" width="70" height="44" rx="4" fill="#f08e1e" fill-opacity="0.55"/>
-<text class="f" x="615" y="177">back to front</text></g>
-<g id="flow"><path class="ln" d="M172 120 H211" marker-end="url(#ar)"/><path class="ln" d="M367 120 H406" marker-end="url(#ar)"/><path class="ln" d="M562 120 H596" marker-end="url(#ar)"/></g>
-<g id="parts"><rect class="box" x="410" y="235" width="150" height="62" rx="8"/>
-<text class="t" x="425" y="260">Parts</text><text class="f" x="425" y="282">group meshes, fade as one</text>
-<path class="ln dash" d="M485 233 V194"/></g>
-<g id="physics"><rect class="box" x="20" y="235" width="150" height="62" rx="8"/>
-<text class="t" x="35" y="260">Physics</text><text class="f" x="35" y="282">pendulum chains</text>
-<path class="ln" d="M60 192 V231" marker-end="url(#ar)"/><text class="f" x="68" y="218">reads</text>
-<path class="lna" d="M130 233 V196" marker-end="url(#ara)"/><text class="a" x="140" y="218">writes</text></g>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="760" height="320" viewBox="0 0 760 320">
+  <defs>
+    <clipPath id="clip-path-1">
+      <path d="M200.92 114.4 L212.12 114.4 L212.12 125.6 L200.92 125.6 Z"/>
+    </clipPath>
+    <clipPath id="clip-path-2">
+      <path d="M395.92 114.4 L407.12 114.4 L407.12 125.6 L395.92 125.6 Z"/>
+    </clipPath>
+    <clipPath id="clip-path-3">
+      <path d="M585.92 114.4 L597.12 114.4 L597.12 125.6 L585.92 125.6 Z"/>
+    </clipPath>
+    <clipPath id="clip-path-4">
+      <path d="M65.6 220.92 L65.6 232.12 L54.4 232.12 L54.4 220.92 Z"/>
+    </clipPath>
+    <clipPath id="clip-path-5">
+      <path d="M123.7 207.34 L123.7 194.74 L136.3 194.74 L136.3 207.34 Z"/>
+    </clipPath>
+  </defs>
+  <title>model-anatomy.svg</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M0 0 L760 0 L760 320 L0 320 Z" fill="#1e1e21"/>
+    <g id="labels">
+      <text transform="matrix(1 0 0 1 95 38)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#f08e1e" text-anchor="middle"><tspan x="0" y="0">you set</tspan></text>
+      <text transform="matrix(1 0 0 1 670 38)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#f08e1e" text-anchor="middle"><tspan x="0" y="0">you read</tspan></text>
+    </g>
+    <g id="parameters">
+      <path d="M28 50 L162 50 C166.418 50 170 53.582 170 58 L170 182 C170 186.418 166.418 190 162 190 L28 190 C23.582 190 20 186.418 20 182 L20 58 C20 53.582 23.582 50 28 50 Z" fill="#29292d" stroke="#f08e1e" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 35 76)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">Parameters</tspan></text>
+      <text transform="matrix(1 0 0 1 35 102)" x="0" y="0" xml:space="preserve" font-family="&apos;JetBrains Mono&apos;, monospace" font-size="13" fill="#e4e4e8"><tspan x="0" y="0">ParamAngleX</tspan></text>
+      <text transform="matrix(1 0 0 1 35 122)" x="0" y="0" xml:space="preserve" font-family="&apos;JetBrains Mono&apos;, monospace" font-size="13" fill="#e4e4e8"><tspan x="0" y="0">ParamEyeLOpen</tspan></text>
+      <text transform="matrix(1 0 0 1 35 142)" x="0" y="0" xml:space="preserve" font-family="&apos;JetBrains Mono&apos;, monospace" font-size="13" fill="#e4e4e8"><tspan x="0" y="0">ParamMouthOpenY</tspan></text>
+      <text transform="matrix(1 0 0 1 35 162)" x="0" y="0" xml:space="preserve" font-family="&apos;JetBrains Mono&apos;, monospace" font-size="13" fill="#e4e4e8"><tspan x="0" y="0">ParamHairFront</tspan></text>
+    </g>
+    <g id="deformers">
+      <path d="M223.125 50 L357.125 50 C361.544 50 365.125 53.582 365.125 58 L365.125 182 C365.125 186.418 361.544 190 357.125 190 L223.125 190 C218.707 190 215.125 186.418 215.125 182 L215.125 58 C215.125 53.582 218.707 50 223.125 50 Z" fill="#29292d" stroke="#3a3a40" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 230.125 76)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">Deformers</tspan></text>
+      <path d="M240.661 95.097 C273.994 90.431 307.327 90.431 340.661 95.097 M239.493 120 C272.826 116 306.186 116.513 339.519 121.847 M240.814 147.106 C274.148 143.772 307.327 144.78 340.661 150.113 M241.352 94.395 C241.352 94.395 239.54 112.201 239.491 120.15 C239.433 129.728 241.718 147.763 241.718 147.763 M290.226 91.174 C287.559 109.841 287.892 127.841 291.226 145.174 M339.991 94.322 C339.991 94.322 339.068 112.661 339.047 121.843 C339.025 131.525 339.991 149.371 339.991 149.371" fill="none" stroke="#8e8e96" stroke-width="1.6"/>
+      <text transform="matrix(1 0 0 1 230.125 177)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">warp grids, rotations</tspan></text>
+    </g>
+    <g id="meshes">
+      <path d="M418 50 L552 50 C556.418 50 560 53.582 560 58 L560 182 C560 186.418 556.418 190 552 190 L418 190 C413.582 190 410 186.418 410 182 L410 58 C410 53.582 413.582 50 418 50 Z" fill="#29292d" stroke="#3a3a40" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 425 76)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">Meshes</tspan></text>
+      <path d="M430 150 L470 95 L498.965 150.576 Z M471.159 94.686 L530 105 L500.064 150.113 Z M500.92 150.77 L530.715 105.9 L545 160 Z" fill="#f08e1e" fill-opacity="0.18" stroke="#e4e4e8" stroke-width="1.2"/>
+      <text transform="matrix(1 0 0 1 425 177)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">textured triangles</tspan></text>
+    </g>
+    <g id="drawables">
+      <path d="M608 50 L732 50 C736.418 50 740 53.582 740 58 L740 182 C740 186.418 736.418 190 732 190 L608 190 C603.582 190 600 186.418 600 182 L600 58 C600 53.582 603.582 50 608 50 Z" fill="#29292d" stroke="#f08e1e" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 615 76)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">Drawables</tspan></text>
+      <path d="M629 92 L691 92 C693.209 92 695 93.791 695 96 L695 132 C695 134.209 693.209 136 691 136 L629 136 C626.791 136 625 134.209 625 132 L625 96 C625 93.791 626.791 92 629 92 Z" fill="#3a3a40"/>
+      <path d="M641 102 L703 102 C705.209 102 707 103.791 707 106 L707 142 C707 144.209 705.209 146 703 146 L641 146 C638.791 146 637 144.209 637 142 L637 106 C637 103.791 638.791 102 641 102 Z" fill="#4a4a52"/>
+      <path d="M653 112 L715 112 C717.209 112 719 113.791 719 116 L719 152 C719 154.209 717.209 156 715 156 L653 156 C650.791 156 649 154.209 649 152 L649 116 C649 113.791 650.791 112 653 112 Z" fill="#f08e1e" fill-opacity="0.55"/>
+      <text transform="matrix(1 0 0 1 615 177)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">back to front</tspan></text>
+    </g>
+    <g id="flow">
+      <path d="M172 120 L211 120" fill="none" stroke="#8e8e96" stroke-width="1.6"/>
+      <g clip-path="url(#clip-path-1)">
+        <path d="M200.92 114.4 L212.12 120 L200.92 125.6 Z" fill="#8e8e96"/>
+      </g>
+      <path d="M367 120 L406 120" fill="none" stroke="#8e8e96" stroke-width="1.6"/>
+      <g clip-path="url(#clip-path-2)">
+        <path d="M395.92 114.4 L407.12 120 L395.92 125.6 Z" fill="#8e8e96"/>
+      </g>
+      <path d="M562 120 L596 120" fill="none" stroke="#8e8e96" stroke-width="1.6"/>
+      <g clip-path="url(#clip-path-3)">
+        <path d="M585.92 114.4 L597.12 120 L585.92 125.6 Z" fill="#8e8e96"/>
+      </g>
+    </g>
+    <g id="parts">
+      <path d="M401.86 235 L569.02 235 C574.532 235 579 238.582 579 243 L579 289 C579 293.418 574.532 297 569.02 297 L401.86 297 C396.348 297 391.88 293.418 391.88 289 L391.88 243 C391.88 238.582 396.348 235 401.86 235 Z" fill="#29292d" stroke="#3a3a40" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 406.88 260)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">Parts</tspan></text>
+      <text transform="matrix(1 0 0 1 406.88 282)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">group meshes, fade as one</tspan></text>
+      <path d="M485 233 L485 194" fill="none" stroke="#8e8e96" stroke-width="1.6" stroke-dasharray="5 4"/>
+    </g>
+    <g id="physics">
+      <path d="M28 235 L162 235 C166.418 235 170 238.582 170 243 L170 289 C170 293.418 166.418 297 162 297 L28 297 C23.582 297 20 293.418 20 289 L20 243 C20 238.582 23.582 235 28 235 Z" fill="#29292d" stroke="#3a3a40" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 35 260)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">Physics</tspan></text>
+      <text transform="matrix(1 0 0 1 35 282)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">pendulum chains</tspan></text>
+      <path d="M60 192 L60 231" fill="none" stroke="#8e8e96" stroke-width="1.6"/>
+      <g clip-path="url(#clip-path-4)">
+        <path d="M65.6 220.92 L60 232.12 L54.4 220.92 Z" fill="#8e8e96"/>
+      </g>
+      <text transform="matrix(1 0 0 1 68 218)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">reads</tspan></text>
+      <path d="M130 233 L130 196" fill="none" stroke="#f08e1e" stroke-width="1.8"/>
+      <g clip-path="url(#clip-path-5)">
+        <path d="M123.7 207.34 L130 194.74 L136.3 207.34 Z" fill="#f08e1e"/>
+      </g>
+      <text transform="matrix(1 0 0 1 140 218)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#f08e1e"><tspan x="0" y="0">writes</tspan></text>
+    </g>
+    <path d="M239.51 118.077" fill="#ffffff" stroke="#000000" stroke-miterlimit="10"/>
+  </g>
 </svg>

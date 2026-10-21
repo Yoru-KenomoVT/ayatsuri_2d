@@ -1,40 +1,72 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400" viewBox="0 0 800 400">
-<style>
-.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
-.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
-.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
-.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
-.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
-.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
-.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
-.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
-.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
-.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
-.dash{stroke-dasharray:5 4}
-</style>
-<defs>
-<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
-<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
-</defs>
-<rect width="800" height="400" fill="#1e1e21"/>
-<g id="lanes"><rect x="20" y="40" width="760" height="80" rx="8" fill="#242427"/><rect x="20" y="140" width="760" height="80" rx="8" fill="#242427"/><rect x="20" y="240" width="760" height="80" rx="8" fill="#242427"/>
-<text class="t" x="36" y="74">tracking</text><text class="f" x="36" y="96">sets values</text>
-<text class="t" x="36" y="174">frame</text><text class="f" x="36" y="196">drives the model</text>
-<text class="t" x="36" y="274">render</text><text class="f" x="36" y="296">reads results</text></g>
-<g id="sets" fill="#4cc06a" fill-opacity="0.85">
-<rect x="175" y="69" width="26" height="22" rx="4"/><rect x="235" y="69" width="26" height="22" rx="4"/><rect x="295" y="69" width="26" height="22" rx="4"/><rect x="355" y="69" width="26" height="22" rx="4"/><rect x="415" y="69" width="26" height="22" rx="4"/><rect x="475" y="69" width="26" height="22" rx="4"/><rect x="535" y="69" width="26" height="22" rx="4"/><rect x="595" y="69" width="26" height="22" rx="4"/><rect x="655" y="69" width="26" height="22" rx="4"/><rect x="715" y="69" width="26" height="22" rx="4"/></g>
-<text class="f" x="760" y="112" text-anchor="end">into the inbox, never waits</text>
-<g id="updates">
-<rect class="boxa" x="175" y="155" width="150" height="50" rx="6"/><text class="s" x="190" y="176">update N</text><text class="f" x="190" y="195">writes frame B</text>
-<rect class="boxa" x="400" y="155" width="150" height="50" rx="6"/><text class="s" x="415" y="176">update N+1</text><text class="f" x="415" y="195">writes frame A</text>
-<rect class="boxa" x="625" y="155" width="140" height="50" rx="6"/><text class="s" x="640" y="176">update N+2</text><text class="f" x="640" y="195">writes frame B</text>
-<g fill="#f08e1e"><path d="M333 172 l8 8 -8 8 -8 -8z"/><path d="M558 172 l8 8 -8 8 -8 -8z"/></g>
-<text class="a" x="333" y="150" text-anchor="middle">flip</text><text class="a" x="558" y="150" text-anchor="middle">flip</text></g>
-<g id="draws">
-<rect class="box" x="345" y="255" width="210" height="50" rx="6"/><text class="s" x="360" y="276">draw N</text><text class="f" x="360" y="295">reads frame B (front)</text>
-<rect class="box" x="570" y="255" width="195" height="50" rx="6"/><text class="s" x="585" y="276">draw N+1</text><text class="f" x="585" y="295">reads frame A (front)</text>
-<path class="ln dash" d="M400 210 V250"/><path class="ln dash" d="M550 210 V250"/></g>
-<text class="f" x="475" y="236" text-anchor="middle">overlap is fine</text>
-<g id="time"><path class="ln" d="M160 350 H770" marker-end="url(#ar)"/><text class="f" x="770" y="372" text-anchor="end">time</text></g>
-<text class="f" x="20" y="378">A second thread calling update here would get BUSY.</text>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="800" height="400" viewBox="0 0 800 400">
+  <defs>
+    <clipPath id="clip-path-1">
+      <path d="M759.92 344.4 L771.12 344.4 L771.12 355.6 L759.92 355.6 Z"/>
+    </clipPath>
+  </defs>
+  <title>threads.svg</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M0 0 L800 0 L800 400 L0 400 Z" fill="#1e1e21"/>
+    <g id="lanes">
+      <path d="M28 40 L772 40 C776.418 40 780 43.582 780 48 L780 112 C780 116.418 776.418 120 772 120 L28 120 C23.582 120 20 116.418 20 112 L20 48 C20 43.582 23.582 40 28 40 Z" fill="#242427"/>
+      <path d="M28 140 L772 140 C776.418 140 780 143.582 780 148 L780 212 C780 216.418 776.418 220 772 220 L28 220 C23.582 220 20 216.418 20 212 L20 148 C20 143.582 23.582 140 28 140 Z" fill="#242427"/>
+      <path d="M28 240 L772 240 C776.418 240 780 243.582 780 248 L780 312 C780 316.418 776.418 320 772 320 L28 320 C23.582 320 20 316.418 20 312 L20 248 C20 243.582 23.582 240 28 240 Z" fill="#242427"/>
+      <text transform="matrix(1 0 0 1 36 74)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">tracking</tspan></text>
+      <text transform="matrix(1 0 0 1 36 96)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">sets values</tspan></text>
+      <text transform="matrix(1 0 0 1 36 174)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">frame</tspan></text>
+      <text transform="matrix(1 0 0 1 36 196)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">drives the model</tspan></text>
+      <text transform="matrix(1 0 0 1 36 274)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#e4e4e8"><tspan x="0" y="0">render</tspan></text>
+      <text transform="matrix(1 0 0 1 36 296)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">reads results</tspan></text>
+    </g>
+    <g id="sets">
+      <path d="M179 69 L197 69 C199.209 69 201 70.791 201 73 L201 87 C201 89.209 199.209 91 197 91 L179 91 C176.791 91 175 89.209 175 87 L175 73 C175 70.791 176.791 69 179 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M239 69 L257 69 C259.209 69 261 70.791 261 73 L261 87 C261 89.209 259.209 91 257 91 L239 91 C236.791 91 235 89.209 235 87 L235 73 C235 70.791 236.791 69 239 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M299 69 L317 69 C319.209 69 321 70.791 321 73 L321 87 C321 89.209 319.209 91 317 91 L299 91 C296.791 91 295 89.209 295 87 L295 73 C295 70.791 296.791 69 299 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M359 69 L377 69 C379.209 69 381 70.791 381 73 L381 87 C381 89.209 379.209 91 377 91 L359 91 C356.791 91 355 89.209 355 87 L355 73 C355 70.791 356.791 69 359 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M419 69 L437 69 C439.209 69 441 70.791 441 73 L441 87 C441 89.209 439.209 91 437 91 L419 91 C416.791 91 415 89.209 415 87 L415 73 C415 70.791 416.791 69 419 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M479 69 L497 69 C499.209 69 501 70.791 501 73 L501 87 C501 89.209 499.209 91 497 91 L479 91 C476.791 91 475 89.209 475 87 L475 73 C475 70.791 476.791 69 479 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M539 69 L557 69 C559.209 69 561 70.791 561 73 L561 87 C561 89.209 559.209 91 557 91 L539 91 C536.791 91 535 89.209 535 87 L535 73 C535 70.791 536.791 69 539 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M599 69 L617 69 C619.209 69 621 70.791 621 73 L621 87 C621 89.209 619.209 91 617 91 L599 91 C596.791 91 595 89.209 595 87 L595 73 C595 70.791 596.791 69 599 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M659 69 L677 69 C679.209 69 681 70.791 681 73 L681 87 C681 89.209 679.209 91 677 91 L659 91 C656.791 91 655 89.209 655 87 L655 73 C655 70.791 656.791 69 659 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+      <path d="M719 69 L737 69 C739.209 69 741 70.791 741 73 L741 87 C741 89.209 739.209 91 737 91 L719 91 C716.791 91 715 89.209 715 87 L715 73 C715 70.791 716.791 69 719 69 Z" fill="#4cc06a" fill-opacity="0.85"/>
+    </g>
+    <text transform="matrix(1 0 0 1 760 112)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96" text-anchor="end"><tspan x="0" y="0">into the inbox, never waits</tspan></text>
+    <g id="updates">
+      <path d="M181 155 L319 155 C322.314 155 325 157.686 325 161 L325 199 C325 202.314 322.314 205 319 205 L181 205 C177.686 205 175 202.314 175 199 L175 161 C175 157.686 177.686 155 181 155 Z" fill="#29292d" stroke="#f08e1e" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 190 176)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="14" fill="#e4e4e8"><tspan x="0" y="0">update N</tspan></text>
+      <text transform="matrix(1 0 0 1 190 195)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">writes frame B</tspan></text>
+      <path d="M406 155 L544 155 C547.314 155 550 157.686 550 161 L550 199 C550 202.314 547.314 205 544 205 L406 205 C402.686 205 400 202.314 400 199 L400 161 C400 157.686 402.686 155 406 155 Z" fill="#29292d" stroke="#f08e1e" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 415 176)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="14" fill="#e4e4e8"><tspan x="0" y="0">update N+1</tspan></text>
+      <text transform="matrix(1 0 0 1 415 195)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">writes frame A</tspan></text>
+      <path d="M631 155 L759 155 C762.314 155 765 157.686 765 161 L765 199 C765 202.314 762.314 205 759 205 L631 205 C627.686 205 625 202.314 625 199 L625 161 C625 157.686 627.686 155 631 155 Z" fill="#29292d" stroke="#f08e1e" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 640 176)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="14" fill="#e4e4e8"><tspan x="0" y="0">update N+2</tspan></text>
+      <text transform="matrix(1 0 0 1 640 195)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">writes frame B</tspan></text>
+      <g>
+        <path d="M350 173 L358 181 L350 189 L342 181 Z" fill="#f08e1e"/>
+        <path d="M574 173 L583 181 L575 189 L566 181 Z" fill="#f08e1e"/>
+      </g>
+      <text transform="matrix(1 0 0 1 350 165)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#f08e1e" text-anchor="middle"><tspan x="0" y="0">flip</tspan></text>
+      <text transform="matrix(1 0 0 1 575 165)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#f08e1e" text-anchor="middle"><tspan x="0" y="0">flip</tspan></text>
+    </g>
+    <g id="draws">
+      <path d="M264.852 255 L462.852 255 C466.166 255 468.852 257.686 468.852 261 L468.852 299 C468.852 302.314 466.166 305 462.852 305 L264.852 305 C261.538 305 258.852 302.314 258.852 299 L258.852 261 C258.852 257.686 261.538 255 264.852 255 Z" fill="#29292d" stroke="#3a3a40" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 273.852 276)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="14" fill="#e4e4e8"><tspan x="0" y="0">draw N</tspan></text>
+      <text transform="matrix(1 0 0 1 273.852 295)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">reads frame B (front)</tspan></text>
+      <path d="M489.852 255 L672.852 255 C676.166 255 678.852 257.686 678.852 261 L678.852 299 C678.852 302.314 676.166 305 672.852 305 L489.852 305 C486.538 305 483.852 302.314 483.852 299 L483.852 261 C483.852 257.686 486.538 255 489.852 255 Z" fill="#29292d" stroke="#3a3a40" stroke-width="1.5"/>
+      <text transform="matrix(1 0 0 1 498.852 276)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="14" fill="#e4e4e8"><tspan x="0" y="0">draw N+1</tspan></text>
+      <text transform="matrix(1 0 0 1 498.852 295)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">reads frame A (front)</tspan></text>
+      <path d="M400 210 L400 250" fill="none" stroke="#8e8e96" stroke-width="1.6" stroke-dasharray="5 4"/>
+      <path d="M550 210 L550 250" fill="none" stroke="#8e8e96" stroke-width="1.6" stroke-dasharray="5 4"/>
+    </g>
+    <text transform="matrix(1 0 0 1 475 236)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96" text-anchor="middle"><tspan x="0" y="0">overlap is fine</tspan></text>
+    <g id="time">
+      <path d="M160 350 L770 350" fill="none" stroke="#8e8e96" stroke-width="1.6"/>
+      <g clip-path="url(#clip-path-1)">
+        <path d="M759.92 344.4 L771.12 350 L759.92 355.6 Z" fill="#8e8e96"/>
+      </g>
+      <text transform="matrix(1 0 0 1 770 372)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96" text-anchor="end"><tspan x="0" y="0">time</tspan></text>
+    </g>
+    <text transform="matrix(1 0 0 1 20 378)" x="0" y="0" xml:space="preserve" font-family="Inter, sans-serif" font-size="13" fill="#8e8e96"><tspan x="0" y="0">A second thread calling update here would get BUSY.</tspan></text>
+  </g>
 </svg>
