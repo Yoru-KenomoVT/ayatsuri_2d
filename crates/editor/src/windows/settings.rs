@@ -1007,14 +1007,21 @@ impl EditorUi {
                 section(ui, &cat.to_uppercase());
             }
             let armed = self.rebind == Some(action);
-            let clash = texts.iter().filter(|t| **t == text).count() > 1;
+            // actions with no key yet never clash with each other
+            let clash = !text.is_empty() && texts.iter().filter(|t| **t == text).count() > 1;
             let changed = self.prefs.keybinds.iter().any(|(a, _)| a == action);
             row(ui, label, "", |ui| {
                 if changed && ui.small_button(crate::i18n::tr("Reset")).clicked() {
                     self.prefs.keybinds.retain(|(a, _)| a != action);
                     self.prefs.save();
                 }
-                let shown = if armed { crate::i18n::tr("press keys…").to_string() } else { text };
+                let shown = if armed {
+                    crate::i18n::tr("press keys…").to_string()
+                } else if text.is_empty() {
+                    crate::i18n::tr("Not set").to_string()
+                } else {
+                    text
+                };
                 let rich = if armed {
                     RichText::new(shown).color(theme::pal().accent)
                 } else if clash {
@@ -1066,4 +1073,5 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("Smaller / larger brush", "[  /  ]"),
     ("Size the selection brush", "B+Drag"),
     ("Key the selected parameter", "K"),
+    ("Put a parameter slider exactly on a key", "Right-click"),
 ];

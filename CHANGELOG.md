@@ -230,6 +230,9 @@
   exact value.
 - **Canvas colour** (Settings > Appearance > Canvas): the page under the
   art can be any colour, with grey quick picks for long sessions.
+- **Shortcuts for the Temporary Deform Tool** in Settings > Keyboard: one
+  per method and one to deselect it, not set until you pick keys, as in
+  Cubism. The Built in list now has right-click to put a slider on a key.
 - Every new string of this release is in all six languages.
 
 ### Fixed

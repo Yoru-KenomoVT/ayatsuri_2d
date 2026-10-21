@@ -2741,8 +2741,21 @@ impl EditorUi {
                             if m == temp_deform::Method::Warp {
                                 ui.separator();
                             }
+                            let id = match m {
+                                temp_deform::Method::Zoom => "temp-zoom",
+                                temp_deform::Method::Rotation => "temp-rotation",
+                                temp_deform::Method::Free => "temp-free",
+                                temp_deform::Method::Perspective => "temp-perspective",
+                                temp_deform::Method::Distort => "temp-distort",
+                                temp_deform::Method::Warp => "temp-warp",
+                                temp_deform::Method::Path => "temp-path",
+                            };
                             if ui
-                                .add_enabled(can_temp, egui::Button::new(crate::i18n::tr(m.label())))
+                                .add_enabled(
+                                    can_temp,
+                                    egui::Button::new(crate::i18n::tr(m.label()))
+                                        .shortcut_text(self.sc(id)),
+                                )
                                 .clicked()
                             {
                                 ui.close();
@@ -2755,7 +2768,8 @@ impl EditorUi {
                                 self.tdeform.is_some(),
                                 egui::Button::new(crate::i18n::tr(
                                     "Deselect the Temporary Deform Tool",
-                                )),
+                                ))
+                                .shortcut_text(self.sc("temp-deselect")),
                             )
                             .clicked()
                         {
@@ -5639,6 +5653,14 @@ impl EditorUi {
                 }
                 log::info!("{} locked mesh(es)", self.mesh_locked.len());
             }
+            "temp-zoom" => self.start_temp_deform(temp_deform::Method::Zoom),
+            "temp-rotation" => self.start_temp_deform(temp_deform::Method::Rotation),
+            "temp-free" => self.start_temp_deform(temp_deform::Method::Free),
+            "temp-perspective" => self.start_temp_deform(temp_deform::Method::Perspective),
+            "temp-distort" => self.start_temp_deform(temp_deform::Method::Distort),
+            "temp-warp" => self.start_temp_deform(temp_deform::Method::Warp),
+            "temp-path" => self.start_temp_deform(temp_deform::Method::Path),
+            "temp-deselect" => self.end_temp_deform(),
             "unlock-all" => {
                 self.mesh_locked.clear();
                 self.def_locked.clear();
@@ -12110,6 +12132,15 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Modeling", "delete-deformer-content", "Delete deformer and its content", C, K::Delete),
         ("Modeling", "lock-unselected", "Lock unselected", CS, K::Num2),
         ("Modeling", "unlock-all", "Unlock all", CA, K::Num2),
+        // the temporary deform tool has no keys until you pick some, as in Cubism
+        ("Modeling", "temp-zoom", "Temporary deform: Enlarge/Reduce", N, K::F35),
+        ("Modeling", "temp-rotation", "Temporary deform: Rotation", N, K::F35),
+        ("Modeling", "temp-free", "Temporary deform: Free Transform", N, K::F35),
+        ("Modeling", "temp-perspective", "Temporary deform: Perspective", N, K::F35),
+        ("Modeling", "temp-distort", "Temporary deform: Distort", N, K::F35),
+        ("Modeling", "temp-warp", "Temporary deform: Temporary Warp", N, K::F35),
+        ("Modeling", "temp-path", "Temporary deform: Temporary Path", N, K::F35),
+        ("Modeling", "temp-deselect", "Deselect the Temporary Deform Tool", N, K::F35),
         ("Animation", "anim-first", "Move to the beginning", N, K::Home),
         ("Animation", "anim-last", "Move to the end", N, K::End),
         ("Animation", "anim-prev-frame", "Previous frame", N, K::PageUp),
@@ -12157,6 +12188,10 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
 };
 
 pub(crate) fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
+    // F35 stands for an action with no key yet
+    if sc.logical_key == egui::Key::F35 && sc.modifiers.is_none() {
+        return String::new();
+    }
     let mut out = String::new();
     if sc.modifiers.command || sc.modifiers.ctrl {
         out.push_str("Ctrl+");
