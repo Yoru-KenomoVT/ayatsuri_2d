@@ -8175,6 +8175,9 @@ impl EditorUi {
         if resp.dragged() && (space || middle) {
             self.view_pan += resp.drag_delta();
         }
+        // a middle drag only pans: from here on the tools treat it like a
+        // Space drag and leave the model alone
+        let space = space || middle || resp.dragged_by(egui::PointerButton::Middle);
         if resp.secondary_clicked() {
             self.ctx_click = resp.interact_pointer_pos();
         }

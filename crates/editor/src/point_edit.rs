@@ -322,7 +322,8 @@ impl PtInput {
             shift,
             alt,
             any_down,
-            drag_started: resp.drag_started(),
+            // only the left button edits; a middle drag pans the view
+            drag_started: resp.drag_started_by(egui::PointerButton::Primary),
             drag_stopped: resp.drag_stopped(),
             clicked: resp.clicked(),
         }
