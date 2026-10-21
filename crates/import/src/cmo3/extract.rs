@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use super::caff::Caff;
 use super::xml::Doc;
 use crate::ImportError;
+use ayatsuri_format::model::flags;
 
 fn err(msg: impl Into<String>) -> ImportError {
     ImportError::Export(format!("cmo3: {}", msg.into()))
@@ -53,6 +54,8 @@ pub struct Mesh {
     pub clip: Vec<usize>,
     pub bindings: Vec<Binding>,
     pub forms: Vec<Form>,
+    /// Blend, double sided and inverted mask, as the model's mesh flags.
+    pub flags: u8,
 }
 
 pub enum DeformerKind {
@@ -626,6 +629,20 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
         else {
             continue;
         };
+        let mut mesh_flags = 0;
+        match doc.field(el, "colorComposition").and_then(|c| doc.attr(c, "v")) {
+            Some("ADD") => mesh_flags |= flags::BLEND_ADDITIVE,
+            Some("MULTIPLY") => mesh_flags |= flags::BLEND_MULTIPLICATIVE,
+            Some("NORMAL") | None => {}
+            Some(other) => log::info!("cmo3: {mid}: blend {other} is drawn normal"),
+        }
+        // culling off is the Editor's default: both sides drawn
+        if !doc.bool_field(el, "culling", false) {
+            mesh_flags |= flags::DOUBLE_SIDED;
+        }
+        if doc.bool_field(draw_src, "invertClippingMask", false) {
+            mesh_flags |= flags::INVERTED_MASK;
+        }
         let mut layer = None;
         if let Some(exts) = doc.field_raw(ctrl, "_extensions") {
             for ext in doc.items(exts) {
@@ -697,6 +714,7 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
                 clip: Vec::new(),
                 bindings,
                 forms,
+                flags: mesh_flags,
             },
             guid_key: guid.and_then(|g| doc.attr(g, "xs.ref").map(str::to_string)),
             guid_uuid: guid.and_then(|g| doc.uuid_of(g)),

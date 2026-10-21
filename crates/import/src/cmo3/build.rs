@@ -278,6 +278,7 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
         let (parent, space) = parent_of(m.deformer.as_deref(), &kinds);
         let (binding, slots) = binding_of(&m.bindings, &m.forms, &param_ids).map_err(err)?;
         let am = model.art_meshes.get_mut(k).ok_or_else(|| err("mesh index"))?;
+        am.flags = m.flags;
         // the importer's quad maps model units to atlas uvs; read each
         // point's uv off it at the mesh's resting canvas position
         let q = |v: &[f32], i: usize| v.get(i).copied().unwrap_or(0.0);
