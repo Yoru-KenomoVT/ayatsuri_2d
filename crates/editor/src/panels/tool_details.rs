@@ -55,7 +55,7 @@ const NOT_YET: &str = "Not built yet";
 
 /// A section header: title, a rule, and an info button whose popup holds
 /// the how-to text, so the palette itself stays short.
-fn section(ui: &mut Ui, title: &str, info: &'static str) {
+pub(super) fn section(ui: &mut Ui, title: &str, info: &'static str) {
     let info = if info.is_empty() { info } else { crate::i18n::tr(info) };
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -151,6 +151,7 @@ impl EditorUi {
                 Tool::WarpCreate | Tool::RotationCreate => self.td_create(ui),
                 Tool::BrushSelect | Tool::DeformBrush => self.td_brush(ui),
                 Tool::ArtPath => self.td_artpath(ui),
+                Tool::TempDeform => self.td_temp_deform(ui),
                 Tool::TextureAtlas => {
                     section(
                         ui,

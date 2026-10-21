@@ -129,6 +129,16 @@
   parameter row drags its value with Add, Multiply or Overwrite. Fades
   are optional. The eye lays the picked expression over the pose as a
   preview; its own undo and redo sit in the header.
+- **Temporary Deform Tool** (Modeling > Temporary Deform Tool), as in
+  Cubism: throwaway control points around the selected meshes or warp
+  deformer, gone once the tool is released. Enlarge/Reduce, Rotation, Free
+  Transform, Perspective and Distort put a box around the art, Temporary
+  Warp Deformation a grid (columns and rows in Tool Details), Temporary
+  Path Deformation a path you click out. Drag a control point to deform,
+  Ctrl+drag to move the point only, Shift+drag to move everything; the
+  anchor is the centre for Rotation and Enlarge/Reduce. Each drag lands on
+  the current keyform as one undo step; the green check in the view, Unbind
+  or Esc lets go (#14).
 - **Physics playlists** (Physics Settings > Playlist): groups of scenes
   played top to bottom with a crossfade, a group's scenes at once, each
   overwriting or adding at a weight, so the physics can be watched

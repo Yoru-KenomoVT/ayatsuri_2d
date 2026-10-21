@@ -15,6 +15,8 @@ mod api_bar;
 mod deformer_dialog;
 mod param_menu;
 mod physics_page;
+mod skin_dialog;
+mod temp_deform;
 mod tool_details;
 use crate::logging;
 use crate::prefs::Prefs;
@@ -36,6 +38,8 @@ enum Tool {
     Glue,
     ArtPath,
     TextureAtlas,
+    /// Modeling > Temporary Deform Tool, bound to the selection.
+    TempDeform,
 }
 
 impl Tool {
@@ -68,6 +72,7 @@ impl Tool {
             Tool::Glue => "",
             Tool::ArtPath => egui_phosphor::regular::PEN_NIB,
             Tool::TextureAtlas => egui_phosphor::regular::SQUARES_FOUR,
+            Tool::TempDeform => egui_phosphor::regular::BOUNDING_BOX,
         }
     }
     fn label(self) -> &'static str {
@@ -84,6 +89,7 @@ impl Tool {
             Tool::Glue => "Glue",
             Tool::ArtPath => "ArtPath",
             Tool::TextureAtlas => "Texture Atlas",
+            Tool::TempDeform => "Temporary Deform Tool",
         }
     }
 }
@@ -380,6 +386,9 @@ pub struct EditorUi {
     clip_with: Option<usize>,
     clip_search: String,
     dbrush: Option<DeformStroke>,
+    tdeform: Option<temp_deform::TempDeform>,
+    tdeform_cols: usize,
+    tdeform_rows: usize,
     dbrush_hardness: f32,
     dbrush_strength: f32,
     show_guides: bool,
@@ -1110,6 +1119,9 @@ impl Default for EditorUi {
             clip_search: String::new(),
             clip_invert: false,
             dbrush: None,
+            tdeform: None,
+            tdeform_cols: 3,
+            tdeform_rows: 3,
             dbrush_hardness: 0.3,
             dbrush_strength: 0.7,
             show_guides: true,
@@ -2719,10 +2731,34 @@ impl EditorUi {
                             self.run_param_cmd(ParamCmd::FourCorners);
                         }
                     });
-                    let _ = ui.add_enabled(
-                        false,
-                        egui::Button::new(crate::i18n::tr("Temporary Deform Tool")),
-                    );
+                    let can_temp = self.can_temp_deform();
+                    ui.menu_button(crate::i18n::tr("Temporary Deform Tool"), |ui| {
+                        for m in temp_deform::Method::ALL {
+                            if m == temp_deform::Method::Warp {
+                                ui.separator();
+                            }
+                            if ui
+                                .add_enabled(can_temp, egui::Button::new(crate::i18n::tr(m.label())))
+                                .clicked()
+                            {
+                                ui.close();
+                                self.start_temp_deform(m);
+                            }
+                        }
+                        ui.separator();
+                        if ui
+                            .add_enabled(
+                                self.tdeform.is_some(),
+                                egui::Button::new(crate::i18n::tr(
+                                    "Deselect the Temporary Deform Tool",
+                                )),
+                            )
+                            .clicked()
+                        {
+                            ui.close();
+                            self.end_temp_deform();
+                        }
+                    });
                     ui.separator();
                     if ui
                         .add_enabled(
@@ -6341,6 +6377,10 @@ impl EditorUi {
     // ---- Part palette ------------------------------------------------------
 
     fn parts_panel(&mut self, ui: &mut Ui) {
+        // Cubism greys the palette out while the temporary deform tool is bound
+        if self.tdeform.is_some() {
+            ui.disable();
+        }
         let Some(s) = &mut self.session else {
             ui.weak(crate::i18n::tr("No model loaded."));
             return;
@@ -7003,6 +7043,9 @@ impl EditorUi {
     }
 
     fn deformers_panel(&mut self, ui: &mut Ui) {
+        if self.tdeform.is_some() {
+            ui.disable();
+        }
         let mut def_cmd: Option<DefCmd> = None;
         let mut def_mesh_rows: Vec<usize> = Vec::new();
         let mut def_mesh_click: Option<usize> = None;
@@ -11775,6 +11818,17 @@ impl EditorUi {
                     }
                 });
             self.show_guide_settings = open;
+        }
+
+        if self.tdeform.is_some() {
+            let xf = temp_deform::ViewXf {
+                origin,
+                scale,
+                cx: c.origin_x,
+                cy: c.origin_y,
+                ppu: c.pixels_per_unit,
+            };
+            self.temp_deform_canvas(ui, &resp, view, xf, space);
         }
 
         // zoom strip
