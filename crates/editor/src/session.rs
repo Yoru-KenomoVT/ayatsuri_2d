@@ -550,8 +550,9 @@ fn reimport_into(
             .collect();
         am.texture = page_offset + quad.texture;
         // the layer's blend mode as the file has it now
-        let blend = flags::BLEND_ADDITIVE | flags::BLEND_MULTIPLICATIVE;
-        am.flags = (am.flags & !blend) | (quad.flags & blend);
+        let bits = flags::BLEND_ADDITIVE | flags::BLEND_MULTIPLICATIVE;
+        am.flags = (am.flags & !bits) | (quad.flags & bits);
+        am.blend = quad.blend;
         // Reset mesh goes back to the new art's quad
         if let Some(slot) = originals.get_mut(mi) {
             *slot = (quad.uvs.clone(), quad.indices.clone());
@@ -2165,7 +2166,7 @@ mod import_paint_tests {
                     visible: true,
                     opacity: 1.0,
                     clip_to_below: false,
-                    blend: ayatsuri_import::Blend::Normal,
+                    blend: ayatsuri_import::Blend::NORMAL,
                 })
                 .collect(),
         }
@@ -2281,6 +2282,7 @@ mod import_paint_tests {
                 enabled: true,
                 texture: 0,
                 flags: 0,
+                blend: Default::default(),
                 vertex_count: 0,
                 uvs: vec![],
                 indices: vec![],
@@ -2314,6 +2316,7 @@ mod import_paint_tests {
             enabled: true,
             texture,
             flags: 0,
+            blend: Default::default(),
             vertex_count: 0,
             uvs: vec![],
             indices: vec![],
@@ -2353,7 +2356,7 @@ mod import_paint_tests {
             px[0] = 10;
         }
         // and set to Multiply in the paint program
-        updated.layers[0].blend = ayatsuri_import::Blend::Multiplicative;
+        updated.layers[0].blend.color = ayatsuri_import::ColorBlend::MultiplyCompatible;
         let r = reimport_into(&mut s, &ctx, updated).unwrap();
         assert_eq!(r.updated, 1);
         assert_eq!(r.new_layers, vec!["Torso/Sleeve".to_string()]);

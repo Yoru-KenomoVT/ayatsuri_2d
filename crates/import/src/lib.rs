@@ -19,7 +19,7 @@ mod physics3;
 mod psd_doc;
 mod sqlite;
 
-pub use layers::{Blend, Document, Imported, Layer};
+pub use layers::{AlphaBlend, Blend, ColorBlend, Document, Imported, Layer};
 
 /// A paint document's layers by file extension (`psd`, `kra` or `clip`),
 /// before they are turned into a model, with how many layers were skipped

@@ -263,18 +263,22 @@ pub fn read_kra(bytes: &[u8]) -> Result<(Document, usize), ImportError> {
             skipped += 1;
             continue;
         };
-        let blend = match e.composite.as_str() {
-            "multiply" => Blend::Multiplicative,
-            "add" | "linear_dodge" => Blend::Additive,
-            "" | "normal" | "pass through" | "passthrough" => Blend::Normal,
-            other => {
-                log::warn!(
-                    "kra: layer {:?} blends as {other}, which moc3 has no mode for; drawn normal",
-                    e.name
-                );
-                Blend::Normal
-            }
+        // Krita's composite op ids, mostly the mode's name in snake case
+        let name = match e.composite.as_str() {
+            "" | "passthrough" => "normal".to_string(),
+            "burn" => "color burn".to_string(),
+            "dodge" => "color dodge".to_string(),
+            "soft_light_svg" => "soft light".to_string(),
+            other => other.replace('_', " "),
         };
+        let blend = crate::layers::paint_blend(&name).unwrap_or_else(|| {
+            log::warn!(
+                "kra: layer {:?} blends as {}, which moc3 has no mode for; drawn normal",
+                e.name,
+                e.composite
+            );
+            Blend::NORMAL
+        });
         layers.push(Layer {
             name: e.name,
             groups: e.groups,

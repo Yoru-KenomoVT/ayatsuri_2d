@@ -37,7 +37,17 @@ const SCHEMA: &str = include_str!("schema.txt");
 
 impl Schema {
     pub fn builtin() -> Self {
-        Self::parse(SCHEMA)
+        let mut s = Self::parse(SCHEMA);
+        // 5.3's alpha blend on a mesh, which the sample project predates
+        if let Some(c) = s.classes.get_mut("CArtMeshSource") {
+            c.fields
+                .insert("alphaComposition".into(), (0, ["AlphaComposition".to_string()].into()));
+        }
+        s.classes.insert(
+            "AlphaComposition".into(),
+            Class { seen: 1, attrs: [("v".to_string(), 1)].into(), ..Class::default() },
+        );
+        s
     }
 
     /// Learn the shapes from a project's graph.

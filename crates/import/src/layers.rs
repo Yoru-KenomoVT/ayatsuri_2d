@@ -24,30 +24,41 @@ pub struct Layer {
     /// Clipped to the nearest unclipped layer below, Photoshop style; it
     /// becomes a mask on the mesh.
     pub clip_to_below: bool,
-    /// How the layer blends; the two modes moc3 has, else normal.
+    /// How the layer blends, as the mesh will.
     pub blend: Blend,
 }
 
-/// A layer's blend mode as moc3 knows them: Cubism has Normal, Additive
-/// (Photoshop's Linear Dodge) and Multiplicative; anything else is drawn
-/// normal, with a note in the log.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Blend {
-    #[default]
-    Normal,
-    Additive,
-    Multiplicative,
-}
+pub use ayatsuri_format::model::{AlphaBlend, Blend, ColorBlend};
 
-impl Blend {
-    /// The drawable flag bits for the mode.
-    pub fn flags(self) -> u8 {
-        match self {
-            Blend::Normal => 0,
-            Blend::Additive => ayatsuri_format::model::flags::BLEND_ADDITIVE,
-            Blend::Multiplicative => ayatsuri_format::model::flags::BLEND_MULTIPLICATIVE,
-        }
-    }
+/// A paint program's blend mode as a mesh's. Multiply and Add (Linear
+/// Dodge) become the compatible modes every moc3 can carry, so the model
+/// looks the same in apps that only open moc3 5.0; the rest become moc3
+/// 5.3's own. `None` for a mode moc3 has nothing close to.
+pub fn paint_blend(name: &str) -> Option<Blend> {
+    use ColorBlend::*;
+    let color = match name {
+        "normal" | "pass through" => Normal,
+        "multiply" => MultiplyCompatible,
+        "add" | "linear dodge" => AddCompatible,
+        "add glow" | "glow dodge" => AddGlow,
+        "darken" => Darken,
+        "color burn" => ColorBurn,
+        "linear burn" => LinearBurn,
+        "lighten" => Lighten,
+        "screen" => Screen,
+        "color dodge" => ColorDodge,
+        "overlay" => Overlay,
+        "soft light" => SoftLight,
+        "hard light" => HardLight,
+        "linear light" => LinearLight,
+        // Vivid Light is Color Burn and Dodge split at mid grey; Linear
+        // Light is the same split with straight lines, the nearest moc3 has
+        "vivid light" => LinearLight,
+        "hue" => Hue,
+        "color" => Color,
+        _ => return None,
+    };
+    Some(Blend { color, alpha: AlphaBlend::Over })
 }
 
 /// A whole document, layers bottom to top.
@@ -282,7 +293,8 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             visible: true,
             enabled: true,
             texture: *page as u32,
-            flags: layer.blend.flags(),
+            flags: layer.blend.legacy_bits().0,
+            blend: layer.blend,
             vertex_count: 4,
             uvs: vec![u0, v0, u1, v0, u1, v1, u0, v1],
             indices: vec![0, 1, 2, 0, 2, 3],

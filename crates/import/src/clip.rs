@@ -301,7 +301,8 @@ struct Row {
     visible: bool,
     opacity: f32,
     clip: bool,
-    /// `LayerComposite`: 0 normal, 2 multiply, 11 add, 12 add (glow).
+    /// `LayerComposite`: Clip Studio's blend mode number (0 normal, 2
+    /// multiply, 11 add, 12 add (glow), 14 overlay; see `paint_blend`).
     composite: i64,
     masking: i64,
     x: i64,
@@ -463,17 +464,37 @@ pub fn read_clip(bytes: &[u8]) -> Result<(Document, usize), ImportError> {
             visible: r.visible,
             opacity: r.opacity,
             clip_to_below: r.clip,
-            blend: match r.composite {
-                2 => Blend::Multiplicative,
-                11 | 12 => Blend::Additive,
-                0 | 30 => Blend::Normal,
-                other => {
+            blend: {
+                let name = match r.composite {
+                    0 => "normal",
+                    1 => "darken",
+                    2 => "multiply",
+                    3 => "color burn",
+                    4 => "linear burn",
+                    7 => "lighten",
+                    8 => "screen",
+                    9 => "color dodge",
+                    10 => "glow dodge",
+                    11 => "add",
+                    12 => "add glow",
+                    14 => "overlay",
+                    15 => "soft light",
+                    16 => "hard light",
+                    17 => "vivid light",
+                    18 => "linear light",
+                    23 => "hue",
+                    25 => "color",
+                    30 => "pass through",
+                    _ => "",
+                };
+                crate::layers::paint_blend(name).unwrap_or_else(|| {
                     log::warn!(
-                        "clip: layer {:?} blends as composite {other}, which moc3 has no mode for; drawn normal",
-                        r.name
+                        "clip: layer {:?} blends as composite {}, which moc3 has no mode for; drawn normal",
+                        r.name,
+                        r.composite
                     );
-                    Blend::Normal
-                }
+                    Blend::NORMAL
+                })
             },
         });
     }

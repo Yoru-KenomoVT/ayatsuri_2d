@@ -78,20 +78,36 @@ fn read_inner(bytes: &[u8]) -> Result<Document, ImportError> {
             opacity: l.opacity() as f32 / 255.0,
             clip_to_below: !l.is_clipping_mask(),
             // the psd crate keeps its BlendMode type private; its discriminants
-            // are Photoshop's order: 0 pass through, 1 normal, 4 multiply,
-            // 11 linear dodge (add)
-            blend: match l.blend_mode() as u8 {
-                4 => Blend::Multiplicative,
-                11 => Blend::Additive,
-                0 | 1 => Blend::Normal,
-                _ => {
+            // are Photoshop's order
+            blend: {
+                let name = match l.blend_mode() as u8 {
+                    0 => "pass through",
+                    1 => "normal",
+                    3 => "darken",
+                    4 => "multiply",
+                    5 => "color burn",
+                    6 => "linear burn",
+                    8 => "lighten",
+                    9 => "screen",
+                    10 => "color dodge",
+                    11 => "linear dodge",
+                    13 => "overlay",
+                    14 => "soft light",
+                    15 => "hard light",
+                    16 => "vivid light",
+                    17 => "linear light",
+                    24 => "hue",
+                    26 => "color",
+                    _ => "",
+                };
+                crate::layers::paint_blend(name).unwrap_or_else(|| {
                     log::warn!(
                         "psd: layer {:?} blends as {:?}, which moc3 has no mode for; drawn normal",
                         l.name(),
                         l.blend_mode()
                     );
-                    Blend::Normal
-                }
+                    Blend::NORMAL
+                })
             },
         });
     }

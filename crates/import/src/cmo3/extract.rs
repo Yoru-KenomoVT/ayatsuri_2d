@@ -13,7 +13,32 @@ use std::collections::HashMap;
 use super::caff::Caff;
 use super::xml::Doc;
 use crate::ImportError;
-use ayatsuri_format::model::flags;
+use ayatsuri_format::model::{AlphaBlend, Blend, ColorBlend, flags};
+
+/// Cubism Editor's names for the colour blends, in moc3 code order: the
+/// bare three are the modes every version has, the rest arrived in 5.3.
+pub(super) const COLOR_TOKENS: [&str; 18] = [
+    "NORMAL",
+    "ADD",
+    "MULTIPLY",
+    "ADD_R2_TSL",
+    "ADD_R2",
+    "DARKEN",
+    "MULTIPLY_R2",
+    "COLORBURN_TSL",
+    "LINEARBURN_TSL",
+    "LIGHTEN",
+    "SCREEN",
+    "COLORDODGE_TSL",
+    "OVERLAY",
+    "SOFTLIGHT",
+    "HARDLIGHT",
+    "LINEARLIGHT_TSL",
+    "HSL_HUE",
+    "HSL_COLOR",
+];
+/// And for the alpha blends, 5.3 only.
+pub(super) const ALPHA_TOKENS: [&str; 5] = ["OVER", "ATOP", "OUT", "CONJOINT", "DISJOINT"];
 
 fn err(msg: impl Into<String>) -> ImportError {
     ImportError::Export(format!("cmo3: {}", msg.into()))
@@ -56,6 +81,8 @@ pub struct Mesh {
     pub forms: Vec<Form>,
     /// Blend, double sided and inverted mask, as the model's mesh flags.
     pub flags: u8,
+    /// Colour and alpha blend.
+    pub blend: Blend,
 }
 
 pub enum DeformerKind {
@@ -629,13 +656,23 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
         else {
             continue;
         };
-        let mut mesh_flags = 0;
-        match doc.field(el, "colorComposition").and_then(|c| doc.attr(c, "v")) {
-            Some("ADD") => mesh_flags |= flags::BLEND_ADDITIVE,
-            Some("MULTIPLY") => mesh_flags |= flags::BLEND_MULTIPLICATIVE,
-            Some("NORMAL") | None => {}
-            Some(other) => log::info!("cmo3: {mid}: blend {other} is drawn normal"),
-        }
+        let token = |field: &str| doc.field(el, field).and_then(|c| doc.attr(c, "v"));
+        let color = match token("colorComposition") {
+            None => ColorBlend::Normal,
+            Some(t) => match COLOR_TOKENS.iter().position(|&k| k == t) {
+                Some(i) => ColorBlend::from_code(i as u8).unwrap_or_default(),
+                None => {
+                    log::info!("cmo3: {mid}: blend {t} is drawn normal");
+                    ColorBlend::Normal
+                }
+            },
+        };
+        let alpha = token("alphaComposition")
+            .and_then(|t| ALPHA_TOKENS.iter().position(|&k| k == t))
+            .and_then(|i| AlphaBlend::from_code(i as u8))
+            .unwrap_or_default();
+        let blend = Blend { color, alpha };
+        let mut mesh_flags = blend.legacy_bits().0;
         // culling off is the Editor's default: both sides drawn
         if !doc.bool_field(el, "culling", false) {
             mesh_flags |= flags::DOUBLE_SIDED;
@@ -715,6 +752,7 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
                 bindings,
                 forms,
                 flags: mesh_flags,
+                blend,
             },
             guid_key: guid.and_then(|g| doc.attr(g, "xs.ref").map(str::to_string)),
             guid_uuid: guid.and_then(|g| doc.uuid_of(g)),

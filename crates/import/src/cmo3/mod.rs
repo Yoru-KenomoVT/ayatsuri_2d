@@ -61,7 +61,7 @@ mod tests {
             visible: true,
             opacity: 1.0,
             clip_to_below: false,
-            blend: crate::layers::Blend::Normal,
+            blend: crate::layers::Blend::NORMAL,
         };
         let doc = crate::layers::Document {
             width: 128,
@@ -70,6 +70,12 @@ mod tests {
         };
         let imported = crate::layers::build(&doc).unwrap();
         let mut model = imported.model;
+        // a 5.3 blend on one mesh, a compatible one on the other
+        model.art_meshes[0].blend =
+            Blend { color: ColorBlend::SoftLight, alpha: AlphaBlend::Disjoint };
+        model.art_meshes[1].blend =
+            Blend { color: ColorBlend::MultiplyCompatible, alpha: AlphaBlend::Over };
+        model.art_meshes[1].flags |= flags::BLEND_MULTIPLICATIVE;
         model.parameters.push(Parameter {
             id: "ParamA".into(),
             min: 0.0,
@@ -204,6 +210,10 @@ mod tests {
         let m = &back.imported.model;
         assert_eq!(m.art_meshes.len(), 2);
         assert_eq!(m.deformers.len(), 2);
+        assert_eq!(
+            m.art_meshes.iter().map(|x| x.blend).collect::<Vec<_>>(),
+            model.art_meshes.iter().map(|x| x.blend).collect::<Vec<_>>()
+        );
         assert_eq!(m.parameters.len(), 1);
         assert_eq!(back.param_names, vec!["Sway amount".to_string()]);
         assert_eq!(back.param_groups, vec![("Motion".to_string(), vec![0])]);

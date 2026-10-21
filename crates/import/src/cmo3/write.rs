@@ -13,12 +13,12 @@
 
 use std::collections::HashMap;
 
-use ayatsuri_format::model::{DeformerKind, Model, PhysicsIo, flags};
+use ayatsuri_format::model::{AlphaBlend, Blend, DeformerKind, Model, PhysicsIo, flags};
 
 use super::caffw;
 use super::xmlw::{Tree, fmt_f};
 use crate::ImportError;
-use crate::layers::{self, Blend, Document, Layer, PAGE};
+use crate::layers::{self, Document, Layer, PAGE};
 
 fn err(msg: impl Into<String>) -> ImportError {
     ImportError::Export(format!("cmo3: {}", msg.into()))
@@ -871,7 +871,7 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
             visible: true,
             opacity: 1.0,
             clip_to_below: false,
-            blend: Blend::Normal,
+            blend: Blend::NORMAL,
         });
     }
     let packed = layers::build(&Document { width: cw, height: ch, layers: layers_in })?;
@@ -1391,14 +1391,16 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
         if let Some(&tex) = textures.get(pl.page) {
             w.t.set(node, "texture", tex);
         }
-        let blend = if m.flags & flags::BLEND_ADDITIVE != 0 {
-            "ADD"
-        } else if m.flags & flags::BLEND_MULTIPLICATIVE != 0 {
-            "MULTIPLY"
-        } else {
-            "NORMAL"
-        };
-        w.t.enum_v(node, "ColorComposition", "colorComposition", blend);
+        let blend = Blend::of(m.blend, m.flags);
+        let token = super::extract::COLOR_TOKENS.get(blend.color.code() as usize).copied();
+        w.t.enum_v(node, "ColorComposition", "colorComposition", token.unwrap_or("NORMAL"));
+        // projects before 5.3 have no alpha blend; written only when it says
+        // something
+        if blend.alpha != AlphaBlend::Over
+            && let Some(t) = super::extract::ALPHA_TOKENS.get(blend.alpha.code() as usize)
+        {
+            w.t.enum_v(node, "AlphaComposition", "alphaComposition", t);
+        }
         w.t.b(node, "culling", m.flags & flags::DOUBLE_SIDED == 0);
         w.t.enum_v(node, "TextureState", "textureState", "TEXTURE_ATLAS");
         w.t.s(node, "userData", "");
