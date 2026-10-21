@@ -1,7 +1,10 @@
 // The wgpu backend. Draws the frame into an MSAA offscreen target, with
 // Cubism-style soft clipping masks: each mask set renders its texture alpha
 // into an R8 buffer, and masked draws multiply by it (or its inverse).
-// Everything blends in gamma space, matching Live2D and egui.
+// Everything blends in gamma space, matching Live2D and egui. Normal and
+// the two compatible modes blend in hardware; moc3 5.3's other modes need
+// what is underneath, so before such a mesh the frame so far is copied to
+// a backdrop texture and the mesh's shader mixes against it.
 
 use std::ops::Range;
 
@@ -18,7 +21,18 @@ pub enum BlendMode {
     Normal,
     Additive,
     Multiplicative,
+    /// moc3 5.3's colour and alpha blend codes, drawn against a copy of
+    /// the frame so far.
+    Advanced {
+        color: u8,
+        alpha: u8,
+    },
 }
+
+const COLOR_MODES: u32 = 18;
+const ALPHA_MODES: u32 = 5;
+/// One mode pair per uniform slot, at the alignment dynamic offsets need.
+const MODE_STRIDE: u64 = 256;
 
 /// How a draw consults the mask buffer.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -119,6 +133,102 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(t.rgb * in.color.rgb, t.a) * in.color.a * f;
 }
 
+@group(3) @binding(0) var backdrop: texture_2d<f32>;
+@group(3) @binding(1) var<uniform> blend_mode: vec4<u32>;
+
+fn screen1(s: f32, b: f32) -> f32 { return s + b - s * b; }
+fn hard1(s: f32, b: f32) -> f32 {
+    if s <= 0.5 { return b * 2.0 * s; }
+    return screen1(2.0 * s - 1.0, b);
+}
+fn soft1(s: f32, b: f32) -> f32 {
+    if s <= 0.5 { return b - (1.0 - 2.0 * s) * b * (1.0 - b); }
+    var d = sqrt(b);
+    if b <= 0.25 { d = ((16.0 * b - 12.0) * b + 4.0) * b; }
+    return b + (2.0 * s - 1.0) * (d - b);
+}
+fn burn1(s: f32, b: f32) -> f32 {
+    if b >= 1.0 { return 1.0; }
+    if s <= 0.0 { return 0.0; }
+    return 1.0 - min(1.0, (1.0 - b) / s);
+}
+fn dodge1(s: f32, b: f32) -> f32 {
+    if b <= 0.0 { return 0.0; }
+    if s >= 1.0 { return 1.0; }
+    return min(1.0, b / (1.0 - s));
+}
+fn lum(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.3, 0.59, 0.11)); }
+fn clip_color(c: vec3<f32>) -> vec3<f32> {
+    let l = lum(c);
+    let n = min(c.r, min(c.g, c.b));
+    let x = max(c.r, max(c.g, c.b));
+    var o = c;
+    if n < 0.0 && l - n > 1e-6 { o = l + (o - l) * l / (l - n); }
+    if x > 1.0 && x - l > 1e-6 { o = l + (o - l) * (1.0 - l) / (x - l); }
+    return o;
+}
+fn set_lum(c: vec3<f32>, l: f32) -> vec3<f32> { return clip_color(c + (l - lum(c))); }
+fn sat(c: vec3<f32>) -> f32 { return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)); }
+fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
+    let x = max(c.r, max(c.g, c.b));
+    let n = min(c.r, min(c.g, c.b));
+    if x - n <= 1e-6 { return vec3<f32>(0.0); }
+    return (c - n) * s / (x - n);
+}
+
+// the same maths as ayatsuri_core::compose::mix
+fn mix_color(mode: u32, s: vec3<f32>, b: vec3<f32>) -> vec3<f32> {
+    switch mode {
+        case 3u: { return min(s + b, vec3<f32>(1.0)); }
+        case 4u: { return s + b; }
+        case 5u: { return min(s, b); }
+        case 6u: { return s * b; }
+        case 7u: { return vec3<f32>(burn1(s.r, b.r), burn1(s.g, b.g), burn1(s.b, b.b)); }
+        case 8u: { return max(s + b - 1.0, vec3<f32>(0.0)); }
+        case 9u: { return max(s, b); }
+        case 10u: { return s + b - s * b; }
+        case 11u: { return vec3<f32>(dodge1(s.r, b.r), dodge1(s.g, b.g), dodge1(s.b, b.b)); }
+        case 12u: { return vec3<f32>(hard1(b.r, s.r), hard1(b.g, s.g), hard1(b.b, s.b)); }
+        case 13u: { return vec3<f32>(soft1(s.r, b.r), soft1(s.g, b.g), soft1(s.b, b.b)); }
+        case 14u: { return vec3<f32>(hard1(s.r, b.r), hard1(s.g, b.g), hard1(s.b, b.b)); }
+        case 15u: { return clamp(b + 2.0 * s - 1.0, vec3<f32>(0.0), vec3<f32>(1.0)); }
+        case 16u: { return set_lum(set_sat(s, sat(b)), lum(b)); }
+        case 17u: { return set_lum(s, lum(b)); }
+        default: { return s; }
+    }
+}
+
+fn unpremul(c: vec4<f32>) -> vec3<f32> {
+    if c.a <= 1e-6 { return vec3<f32>(0.0); }
+    return clamp(c.rgb / c.a, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+@fragment
+fn fs_advanced(in: VsOut) -> @location(0) vec4<f32> {
+    let t = textureSample(tex, smp, in.uv);
+    let muv = in.pos.xy / uni.view.xy;
+    let m = textureSample(mask_tex, smp, muv).r;
+    var f = 1.0;
+    if mask_mode.x == 1u { f = m; }
+    if mask_mode.x == 2u { f = 1.0 - m; }
+    let src = vec4<f32>(t.rgb * in.color.rgb, t.a) * in.color.a * f;
+    let dst = textureLoad(backdrop, vec2<i32>(in.pos.xy), 0);
+    let sa = src.a;
+    let da = dst.a;
+    let cs = unpremul(src);
+    let cb = unpremul(dst);
+    let mixed = mix_color(blend_mode.x, cs, cb);
+    var p = vec3<f32>(sa * da, sa * (1.0 - da), da * (1.0 - sa));
+    if blend_mode.y == 3u { p = vec3<f32>(min(sa, da), max(sa - da, 0.0), max(da - sa, 0.0)); }
+    if blend_mode.y == 4u { p = vec3<f32>(max(sa + da - 1.0, 0.0), min(sa, 1.0 - da), min(da, 1.0 - sa)); }
+    var keep = vec3<f32>(1.0, 1.0, 1.0);
+    if blend_mode.y == 1u { keep = vec3<f32>(1.0, 0.0, 1.0); }
+    if blend_mode.y == 2u { keep = vec3<f32>(0.0, 1.0, 0.0); }
+    let w = p * keep;
+    let rgb = clamp(w.x * mixed + w.y * cs + w.z * cb, vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(rgb, clamp(w.x + w.y + w.z, 0.0, 1.0));
+}
+
 @fragment
 fn fs_mask(in: VsOut) -> @location(0) vec4<f32> {
     let a = textureSample(tex, smp, in.uv).a * in.color.a;
@@ -186,6 +296,10 @@ pub struct GpuRenderer {
     sampler: wgpu::Sampler,
     mask_pipeline: wgpu::RenderPipeline,
     draw_pipelines: Vec<(BlendMode, wgpu::RenderPipeline)>,
+    advanced_pipeline: wgpu::RenderPipeline,
+    backdrop_layout: wgpu::BindGroupLayout,
+    /// Every colour and alpha mode pair, one per `MODE_STRIDE` slot.
+    advanced_modes: wgpu::Buffer,
     blit_pipeline: wgpu::RenderPipeline,
     mode_bufs: [wgpu::Buffer; 3],
     // bound as group 2 during mask passes, where the real mask buffer is the
@@ -208,6 +322,9 @@ struct Offscreen {
     blit_bind: wgpu::BindGroup,
     mode_binds: [wgpu::BindGroup; 3],
     mask: wgpu::TextureView,
+    /// A copy of the frame so far, for the advanced blend modes to read.
+    backdrop_tex: wgpu::Texture,
+    backdrop_bind: wgpu::BindGroup,
     w: u32,
     h: u32,
 }
@@ -215,7 +332,7 @@ struct Offscreen {
 fn blend_state(mode: BlendMode) -> wgpu::BlendState {
     use wgpu::{BlendComponent, BlendFactor as F, BlendOperation::Add};
     match mode {
-        BlendMode::Normal => wgpu::BlendState {
+        BlendMode::Normal | BlendMode::Advanced { .. } => wgpu::BlendState {
             color: BlendComponent {
                 src_factor: F::One,
                 dst_factor: F::OneMinusSrcAlpha,
@@ -403,6 +520,78 @@ impl GpuRenderer {
             draw_pipelines.push((blend, p));
         }
 
+        let backdrop_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                tex_entry(
+                    0,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let advanced_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[
+                Some(&uni_layout),
+                Some(&tex_layout),
+                Some(&mask_layout),
+                Some(&backdrop_layout),
+            ],
+            immediate_size: 0,
+        });
+        // the shader does all the blending; the target just takes it
+        let advanced_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ayatsuri-draw-advanced"),
+            layout: Some(&advanced_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(vertex_layout.clone())],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_advanced"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let advanced_modes = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ayatsuri-blend-modes"),
+            size: MODE_STRIDE * u64::from(COLOR_MODES * ALPHA_MODES),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        for c in 0..COLOR_MODES {
+            for a in 0..ALPHA_MODES {
+                let slot = u64::from(c * ALPHA_MODES + a) * MODE_STRIDE;
+                queue.write_buffer(&advanced_modes, slot, bytemuck::cast_slice(&[c, a, 0u32, 0]));
+            }
+        }
+
         let blit_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[Some(&blit_layout)],
@@ -484,6 +673,9 @@ impl GpuRenderer {
             sampler,
             mask_pipeline,
             draw_pipelines,
+            advanced_pipeline,
+            backdrop_layout,
+            advanced_modes,
             blit_pipeline,
             mode_bufs,
             dummy_mode_bind: None,
@@ -665,6 +857,31 @@ impl GpuRenderer {
         );
         let color = color_tex.create_view(&Default::default());
         let mask = make("ayatsuri-maskbuf", MASK_FORMAT, 1, att_bind);
+        let backdrop_tex = make_tex(
+            "ayatsuri-backdrop",
+            OFFSCREEN_FORMAT,
+            1,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let backdrop_view = backdrop_tex.create_view(&Default::default());
+        let backdrop_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.backdrop_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&backdrop_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.advanced_modes,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(16),
+                    }),
+                },
+            ],
+        });
         let blit_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.blit_layout,
@@ -698,8 +915,18 @@ impl GpuRenderer {
                 ],
             })
         });
-        self.offscreen =
-            Some(Offscreen { msaa, color, color_tex, blit_bind, mode_binds, mask, w, h });
+        self.offscreen = Some(Offscreen {
+            msaa,
+            color,
+            color_tex,
+            blit_bind,
+            mode_binds,
+            mask,
+            backdrop_tex,
+            backdrop_bind,
+            w,
+            h,
+        });
     }
 
     /// The last frame drawn, read back as premultiplied RGBA rows, for an
@@ -878,30 +1105,38 @@ impl GpuRenderer {
             {
                 i += 1;
             }
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ayatsuri-model"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: if self.samples > 1 { &o.msaa } else { &o.color },
-                    depth_slice: None,
-                    resolve_target: (self.samples > 1).then_some(&o.color),
-                    ops: wgpu::Operations {
-                        load: if first_main {
-                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                        } else {
-                            wgpu::LoadOp::Load
-                        },
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let target = if self.samples > 1 { &o.msaa } else { &o.color };
+            let resolve = (self.samples > 1).then_some(&o.color);
+            let open = |encoder: &mut wgpu::CommandEncoder, clear: bool| {
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("ayatsuri-model"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target,
+                            depth_slice: None,
+                            resolve_target: resolve,
+                            ops: wgpu::Operations {
+                                load: if clear {
+                                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                                } else {
+                                    wgpu::LoadOp::Load
+                                },
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    })
+                    .forget_lifetime();
+                pass.set_bind_group(0, &self.uni_bind, &[]);
+                pass.set_vertex_buffer(0, vbuf.slice(..));
+                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                pass
+            };
+            let mut pass = Some(open(encoder, first_main));
             first_main = false;
-            pass.set_bind_group(0, &self.uni_bind, &[]);
-            pass.set_vertex_buffer(0, vbuf.slice(..));
-            pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
             for cmd in packet.cmds.get(run_start..i).unwrap_or(&[]) {
                 let Cmd::Draw { indices, texture, blend, mask } = cmd else { continue };
                 let Some(bind) = self
@@ -912,19 +1147,45 @@ impl GpuRenderer {
                 else {
                     continue;
                 };
-                if let Some((_, p)) = self.draw_pipelines.iter().find(|(b, _)| b == blend) {
-                    pass.set_pipeline(p);
-                    pass.set_bind_group(1, bind, &[]);
-                    let mode = match mask {
-                        MaskMode::None => 0,
-                        MaskMode::Normal => 1,
-                        MaskMode::Inverted => 2,
-                    };
-                    let Some(mode_bind) = o.mode_binds.get(mode) else { continue };
-                    pass.set_bind_group(2, mode_bind, &[]);
-                    pass.draw_indexed(indices.clone(), 0, 0..1);
+                let mode = match mask {
+                    MaskMode::None => 0,
+                    MaskMode::Normal => 1,
+                    MaskMode::Inverted => 2,
+                };
+                let Some(mode_bind) = o.mode_binds.get(mode) else { continue };
+                if let BlendMode::Advanced { color, alpha } = *blend {
+                    // finish what is drawn so far (resolving it), copy it
+                    // as the backdrop, and carry on in a fresh pass
+                    drop(pass.take());
+                    encoder.copy_texture_to_texture(
+                        o.color_tex.as_image_copy(),
+                        o.backdrop_tex.as_image_copy(),
+                        wgpu::Extent3d {
+                            width: o.w.max(1),
+                            height: o.h.max(1),
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    let mut p = open(encoder, false);
+                    let slot = u32::from(color).min(COLOR_MODES - 1) * ALPHA_MODES
+                        + u32::from(alpha).min(ALPHA_MODES - 1);
+                    p.set_pipeline(&self.advanced_pipeline);
+                    p.set_bind_group(1, bind, &[]);
+                    p.set_bind_group(2, mode_bind, &[]);
+                    p.set_bind_group(3, &o.backdrop_bind, &[slot * MODE_STRIDE as u32]);
+                    p.draw_indexed(indices.clone(), 0, 0..1);
+                    pass = Some(p);
+                    continue;
+                }
+                let Some(p) = pass.as_mut() else { continue };
+                if let Some((_, pipeline)) = self.draw_pipelines.iter().find(|(b, _)| b == blend) {
+                    p.set_pipeline(pipeline);
+                    p.set_bind_group(1, bind, &[]);
+                    p.set_bind_group(2, mode_bind, &[]);
+                    p.draw_indexed(indices.clone(), 0, 0..1);
                 }
             }
+            drop(pass);
         }
         if first_main {
             let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -951,5 +1212,24 @@ impl GpuRenderer {
         pass.set_pipeline(&self.blit_pipeline);
         pass.set_bind_group(0, &o.blit_bind, &[]);
         pass.draw(0..3, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The shaders parse and validate as wgpu will see them, so a typo in
+    /// the blend maths fails here and not on someone's GPU.
+    #[test]
+    fn the_shaders_validate() {
+        for (name, src) in [("model", super::SHADER), ("blit", super::BLIT)] {
+            let module =
+                naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {e}"));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
     }
 }

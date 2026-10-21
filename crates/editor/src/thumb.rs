@@ -226,6 +226,27 @@ fn resolve(fb: &[f32], fw: usize, ss: usize, rows_out: &mut [u8]) {
     }
 }
 
+/// One straight-alpha source pixel drawn into a straight-alpha frame pixel
+/// with the mesh's blend.
+fn put(dst: &mut [f32], src: [f32; 4], blend: ayatsuri_format::model::Blend) {
+    let [r, g, b, a] = src;
+    let da = dst.get(3).copied().unwrap_or(0.0);
+    let d = |i: usize| dst.get(i).copied().unwrap_or(0.0) * da;
+    let out = ayatsuri_core::compose::over(blend, [r * a, g * a, b * a, a], [d(0), d(1), d(2), da]);
+    let oa = out[3];
+    for (i, v) in out.iter().enumerate() {
+        if let Some(slot) = dst.get_mut(i) {
+            *slot = if i == 3 {
+                oa
+            } else if oa > 1e-6 {
+                (v / oa).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+    }
+}
+
 /// Draw every drawable into a float RGBA buffer the raster's size.
 fn draw(r: &Raster, puppet: &Puppet, textures: &[TexData]) -> Vec<f32> {
     let (width, height) = (r.w, r.h);
@@ -272,14 +293,7 @@ fn draw(r: &Raster, puppet: &Puppet, textures: &[TexData]) -> Vec<f32> {
             src[3] = a;
             let at = (py * width + px) * 4;
             if let Some(dst) = fb.get_mut(at..at + 4) {
-                for ch in 0..3 {
-                    if let (Some(dc), Some(&sc)) = (dst.get_mut(ch), src.get(ch)) {
-                        *dc = sc * a + *dc * (1.0 - a);
-                    }
-                }
-                if let Some(da) = dst.get_mut(3) {
-                    *da = a + *da * (1.0 - a);
-                }
+                put(dst, src, d.blend);
             }
         });
     }
@@ -370,14 +384,7 @@ pub fn render_filtered(
             src[3] = a;
             let at = (py * width + px) * 4;
             if let Some(dst) = fb.get_mut(at..at + 4) {
-                for ch in 0..3 {
-                    if let (Some(dc), Some(&sc)) = (dst.get_mut(ch), src.get(ch)) {
-                        *dc = sc * a + *dc * (1.0 - a);
-                    }
-                }
-                if let Some(da) = dst.get_mut(3) {
-                    *da = a + *da * (1.0 - a);
-                }
+                put(dst, src, d.blend);
             }
         });
     }

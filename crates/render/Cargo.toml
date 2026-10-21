@@ -14,3 +14,6 @@ workspace = true
 ayatsuri-core = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
+
+[dev-dependencies]
+naga = { version = "30", features = ["wgsl-in"] }

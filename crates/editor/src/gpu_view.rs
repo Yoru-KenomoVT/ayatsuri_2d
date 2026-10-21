@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use ayatsuri_core::Puppet;
-use ayatsuri_format::model::{Canvas, flags};
+use ayatsuri_format::model::{Canvas, ColorBlend, flags};
 use ayatsuri_render::{BlendMode, Cmd, GpuRenderer, MaskMode, Packet, TexData, Vertex};
 
 pub struct ModelPaint {
@@ -124,12 +124,11 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
         if d.opacity <= 0.0 || d.indices.is_empty() {
             continue;
         }
-        let blend = if d.flags & flags::BLEND_ADDITIVE != 0 {
-            BlendMode::Additive
-        } else if d.flags & flags::BLEND_MULTIPLICATIVE != 0 {
-            BlendMode::Multiplicative
-        } else {
-            BlendMode::Normal
+        let blend = match d.blend.color {
+            ColorBlend::AddCompatible => BlendMode::Additive,
+            ColorBlend::MultiplyCompatible => BlendMode::Multiplicative,
+            _ if d.blend.is_simple() => BlendMode::Normal,
+            _ => BlendMode::Advanced { color: d.blend.color.code(), alpha: d.blend.alpha.code() },
         };
         let mut mask = MaskMode::None;
         if !d.masks.is_empty() {

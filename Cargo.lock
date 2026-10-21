@@ -259,6 +259,7 @@ version = "0.5.5"
 dependencies = [
  "ayatsuri-core",
  "bytemuck",
+ "naga",
  "wgpu",
 ]
 
