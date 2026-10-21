@@ -565,6 +565,7 @@ mod tests {
                 enabled: true,
                 texture: 0,
                 flags: 0,
+                blend: Default::default(),
                 vertex_count: 3,
                 uvs: base.to_vec(),
                 indices: vec![0, 1, 2],

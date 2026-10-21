@@ -187,6 +187,155 @@ pub mod flags {
     pub const INVERTED_MASK: u8 = 1 << 3;
 }
 
+/// How a mesh's colour meets what is drawn under it, in moc3 5.3's order
+/// (its number is the moc3 code). The two `Compatible` modes are the
+/// premultiplied Add and Multiply every moc3 before 5.3 has, which the
+/// `flags` bits also say; the rest need the backdrop to draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ColorBlend {
+    #[default]
+    Normal,
+    AddCompatible,
+    MultiplyCompatible,
+    Add,
+    AddGlow,
+    Darken,
+    Multiply,
+    ColorBurn,
+    LinearBurn,
+    Lighten,
+    Screen,
+    ColorDodge,
+    Overlay,
+    SoftLight,
+    HardLight,
+    LinearLight,
+    Hue,
+    Color,
+}
+
+impl ColorBlend {
+    pub const ALL: [ColorBlend; 18] = [
+        ColorBlend::Normal,
+        ColorBlend::AddCompatible,
+        ColorBlend::MultiplyCompatible,
+        ColorBlend::Add,
+        ColorBlend::AddGlow,
+        ColorBlend::Darken,
+        ColorBlend::Multiply,
+        ColorBlend::ColorBurn,
+        ColorBlend::LinearBurn,
+        ColorBlend::Lighten,
+        ColorBlend::Screen,
+        ColorBlend::ColorDodge,
+        ColorBlend::Overlay,
+        ColorBlend::SoftLight,
+        ColorBlend::HardLight,
+        ColorBlend::LinearLight,
+        ColorBlend::Hue,
+        ColorBlend::Color,
+    ];
+
+    pub fn code(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_code(c: u8) -> Option<Self> {
+        Self::ALL.get(c as usize).copied()
+    }
+}
+
+/// How a mesh's alpha meets the backdrop's, in moc3 5.3's order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum AlphaBlend {
+    #[default]
+    Over,
+    Atop,
+    Out,
+    Conjoint,
+    Disjoint,
+}
+
+impl AlphaBlend {
+    pub const ALL: [AlphaBlend; 5] = [
+        AlphaBlend::Over,
+        AlphaBlend::Atop,
+        AlphaBlend::Out,
+        AlphaBlend::Conjoint,
+        AlphaBlend::Disjoint,
+    ];
+
+    pub fn code(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_code(c: u8) -> Option<Self> {
+        Self::ALL.get(c as usize).copied()
+    }
+}
+
+/// A mesh's blend: colour and alpha. moc3 5.3 stores it as one word,
+/// colour in the low byte and alpha in the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Blend {
+    pub color: ColorBlend,
+    pub alpha: AlphaBlend,
+}
+
+impl Blend {
+    pub const NORMAL: Blend = Blend { color: ColorBlend::Normal, alpha: AlphaBlend::Over };
+
+    /// The blend a mesh draws with: what it stores, or for a mesh saved
+    /// before blends had their own field, what its flag bits say.
+    pub fn of(stored: Blend, mesh_flags: u8) -> Blend {
+        if stored != Blend::NORMAL {
+            return stored;
+        }
+        let color = if mesh_flags & flags::BLEND_ADDITIVE != 0 {
+            ColorBlend::AddCompatible
+        } else if mesh_flags & flags::BLEND_MULTIPLICATIVE != 0 {
+            ColorBlend::MultiplyCompatible
+        } else {
+            ColorBlend::Normal
+        };
+        Blend { color, alpha: AlphaBlend::Over }
+    }
+
+    /// Draws with plain hardware blending (no backdrop read). The two
+    /// compatible modes ignore the alpha blend, as in Cubism.
+    pub fn is_simple(self) -> bool {
+        matches!(self.color, ColorBlend::AddCompatible | ColorBlend::MultiplyCompatible)
+            || self == Blend::NORMAL
+    }
+
+    pub fn to_moc3(self) -> i32 {
+        i32::from(self.color.code()) | i32::from(self.alpha.code()) << 8
+    }
+
+    pub fn from_moc3(word: i32) -> Blend {
+        Blend {
+            color: ColorBlend::from_code((word & 0xff) as u8).unwrap_or_default(),
+            alpha: AlphaBlend::from_code(((word >> 8) & 0xff) as u8).unwrap_or_default(),
+        }
+    }
+
+    /// The flag bits a moc3 before 5.3 can carry: the closest of normal,
+    /// add and multiply. `exact` is false when that changes how it looks.
+    pub fn legacy_bits(self) -> (u8, bool) {
+        use ColorBlend::*;
+        let (bits, same) = match self.color {
+            Normal => (0, true),
+            AddCompatible => return (flags::BLEND_ADDITIVE, true),
+            MultiplyCompatible => return (flags::BLEND_MULTIPLICATIVE, true),
+            Add | AddGlow | Lighten | Screen | ColorDodge => (flags::BLEND_ADDITIVE, false),
+            Multiply | Darken | ColorBurn | LinearBurn => (flags::BLEND_MULTIPLICATIVE, false),
+            Overlay | SoftLight | HardLight | LinearLight | Hue | Color => (0, false),
+        };
+        (bits, same && self.alpha == AlphaBlend::Over)
+    }
+}
+
 /// A textured triangle mesh: the thing that is actually drawn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtMesh {
@@ -197,6 +346,11 @@ pub struct ArtMesh {
     pub enabled: bool,
     pub texture: u32,
     pub flags: u8,
+    /// Colour and alpha blend; Normal and Over by default, and for files
+    /// saved before it existed (their flag bits still count, see
+    /// [`Blend::of`]).
+    #[serde(default)]
+    pub blend: Blend,
     pub vertex_count: u32,
     /// `vertex_count * 2`, shared by every keyform.
     #[serde(with = "f32_bin")]

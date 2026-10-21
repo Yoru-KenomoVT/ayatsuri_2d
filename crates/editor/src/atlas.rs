@@ -213,6 +213,7 @@ mod tests {
             enabled: true,
             texture: page,
             flags: 0,
+            blend: Default::default(),
             vertex_count: n,
             uvs: uvs.to_vec(),
             indices: vec![0, 1, 2],

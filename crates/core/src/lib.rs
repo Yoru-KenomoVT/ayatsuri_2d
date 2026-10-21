@@ -14,12 +14,13 @@ pub mod automesh;
 pub mod bezier;
 pub mod blend;
 pub mod comp;
+pub mod compose;
 pub mod deform;
 pub mod edit;
 pub mod keyform;
 pub mod physics;
 
-use ayatsuri_format::model::{DeformerKind, Model};
+use ayatsuri_format::model::{Blend, DeformerKind, Model};
 use deform::{Rotation, Vec2, rotation_transform, signed_angle, v2, warp_transform};
 
 /// A loaded puppet: the model plus every buffer the frame loop needs,
@@ -946,6 +947,7 @@ impl Puppet {
                 mesh: mi,
                 texture: m.texture,
                 flags: m.flags,
+                blend: Blend::of(m.blend, m.flags),
                 opacity: self.mesh_opacity.get(mi).copied().unwrap_or(0.0),
                 positions: self.mesh_pos.get(off..off.saturating_add(len)).unwrap_or(&[]),
                 uvs: &m.uvs,
@@ -967,6 +969,8 @@ pub struct Drawable<'a> {
     pub mesh: usize,
     pub texture: u32,
     pub flags: u8,
+    /// Colour and alpha blend, from the mesh or its flag bits.
+    pub blend: Blend,
     pub opacity: f32,
     /// xy pairs, `vertex_count * 2`.
     pub positions: &'a [f32],
@@ -1012,6 +1016,7 @@ mod tests {
                 enabled: true,
                 texture: 0,
                 flags: 0,
+                blend: Default::default(),
                 vertex_count: 3,
                 uvs: vec![0.0; 6],
                 indices: vec![0, 1, 2],
