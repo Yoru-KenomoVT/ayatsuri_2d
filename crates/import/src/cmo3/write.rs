@@ -1901,6 +1901,17 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
     // 5. the archive
     let xml = w.t.emit(HEAD, ms);
     let W { mut files, .. } = w;
+    // nothing leaves that the strict reading refuses
+    let doc = super::xml::Doc::parse(xml.as_bytes())?;
+    let names: Vec<&str> = files.list.iter().map(|f| f.name.as_str()).collect();
+    let problems = super::check::check(&doc, &super::check::Schema::builtin(), &names);
+    if !problems.is_empty() {
+        let shown: Vec<&str> = problems.iter().take(8).map(String::as_str).collect();
+        return Err(err(format!(
+            "the written project fails the strict check: {}",
+            shown.join("; ")
+        )));
+    }
     files.list.push(caffw::File {
         name: "main.xml".into(),
         bytes: caffw::zip_one(xml.as_bytes())?,

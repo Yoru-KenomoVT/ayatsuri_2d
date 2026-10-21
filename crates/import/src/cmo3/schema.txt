@@ -1,0 +1,891 @@
+class ACAffecterForm 20
+ field super 20 ACForm
+class ACAffecterSource 20
+ field editVersion 20 i
+ field guid 20 CAffecterGuid
+ field id 20 CAffecterId
+ field super 20 ACParameterControllableSource
+ field targetDeformerGuid 20 CDeformerGuid
+class ACBlend 312
+class ACDeformerForm 342
+ field coordType 342 CoordType
+ field multiplyColor 342 CFloatColor
+ field opacity 342 f
+ field screenColor 342 CFloatColor
+ field super 342 ACForm
+class ACDeformerOriginalShape 70
+ field autoRefreshIsAvailable 70 b
+ field baseAngle 4 f
+ field circleRadiusTimesScale 4 f
+ field col 66 i
+ field creationMethod 70 CreationMethod
+ field globalAngle 4 f
+ field globalScale 4 f
+ field handleLength 4 f
+ field isReflectX 4 b
+ field isReflectY 4 b
+ field lastUpdatedTimeString 70 s
+ field positions 70 float-array
+ field row 66 i
+class ACDeformerSource 70
+ field guid 70 CDeformerGuid
+ field id 70 CDeformerId
+ field super 70 ACParameterControllableSource
+ field targetDeformerGuid 70 CDeformerGuid
+class ACDrawableForm 280
+ field coordType 280 CoordType
+ field drawOrder 280 i
+ field multiplyColor 280 CFloatColor
+ field opacity 280 f
+ field screenColor 280 CFloatColor
+ field super 280 ACForm
+class ACDrawableSource 120
+ field clipGuidList 120 carray_list
+ field guid 120 CDrawableGuid
+ field icon16 120 CImageIcon
+ field icon32 120 CImageIcon
+ field id 120 CDrawableId
+ field invertClippingMask 120 b
+ field super 120 ACParameterControllableSource
+ field targetDeformerGuid 120 CDeformerGuid
+class ACExtension 575
+ field _owner 575 CArtMeshSource CRotationDeformerSource CWarpDeformerSource
+ field guid 575 CExtensionGuid
+class ACForm 704
+ field _source 704 CArtMeshSource CGlueSource CPartSource CRotationDeformerSource CWarpDeformerSource
+ field guid 704 CFormGuid
+ field isAnimatedForm 704 b
+ field isLocalAnimatedForm 704 b
+ field name 704 null s
+ field notes 704 s
+class ACImageLayer 765
+ field super 765 ACLayerEntry
+class ACLayerEntry 1257
+ field _layeredImage 1257 CLayeredImage
+ field _optionOfIOption 1257 hash_map
+ field blend 1257 CBlend_Darken CBlend_HardLight CBlend_Multiply CBlend_Normal CBlend_NotSupported CBlend_VividLight
+ field group 1257 CLayerGroup null
+ field guid 1257 CLayerGuid
+ field isClipping 1257 b
+ field isVisible 1257 b
+ field memo 1257 s
+ field name 1257 s
+ field opacity255 1257 i
+class ACLayerGroup 492
+ field _children 492 carray_list
+ field super 492 ACLayerEntry
+class ACParameterControllableSource 272
+ field _extensions 272 carray_list
+ field internalColor_direct_argb 272 null
+ field isLocked 272 b
+ field isVisible 272 b
+ field keyformGridSource 272 KeyformGridSource
+ field keyformMorphTargetSet 272 KeyFormMorphTargetSet
+ field labelColor 272 CLabelColor
+ field localName 272 s
+ field parentGuid 272 CPartGuid null
+class ACTextureInput 240
+ field _owner 240 CTextureInputExtension
+ field optionalTransformOnCanvas 240 CAffine
+class AValueConnector 405
+class Anisotropy 2
+ attr v 2
+class BindMethod 2
+ attr v 2
+class CAffecterGuid 20
+ attr note 20
+ attr uuid 20
+class CAffecterId 20
+ attr idstr 20
+class CAffecterSourceSet 1
+ field _sources 1 carray_list
+class CAffine 879
+ attr m00 879
+ attr m01 879
+ attr m02 879
+ attr m10 879
+ attr m11 879
+ attr m12 879
+class CArtMeshForm 280
+ field positions 280 float-array
+ field super 280 ACDrawableForm
+class CArtMeshSource 120
+ field colorComposition 120 ColorComposition
+ field culling 120 b
+ field indices 120 int-array
+ field keyforms 120 carray_list
+ field positions 120 float-array
+ field super 120 ACDrawableSource
+ field texture 120 GTexture2D
+ field textureState 120 TextureState
+ field userData 120 s
+ field uvs 120 float-array
+class CArtPathBrushSetting 1
+ field brushes 1 carray_list
+class CBlend_Darken 6
+ field super 6 ACBlend
+class CBlend_HardLight 6
+ field super 6 ACBlend
+class CBlend_Multiply 6
+ field super 6 ACBlend
+class CBlend_Normal 6
+ field super 6 ACBlend
+class CBlend_NotSupported 282
+ field blendKey 282 s
+ field super 282 ACBlend
+class CBlend_VividLight 6
+ field super 6 ACBlend
+class CCachedImage 137
+ field _cachedImageResource 137 CImageResource
+ field hasMargin 137 b
+ field isCleaned 137 b
+ field isSharedImage 137 b
+ field mipmapLevel 137 i
+ field rawImageSize 137 CSize
+ field reductionRatio 137 i
+ field transformRawImageToCachedImage 137 CAffine
+class CCachedImageManager 137
+ field cachedImages 137 array_list
+ field defaultCacheType 137 CachedImageType
+ field rawImage 137 CImageResource
+ field requiredMipmapLevel 137 i
+class CColor 63
+class CControllerCurve 2
+ field _curvePoints 2 carray_list
+ field curveId 2 CControllerCurveGuid
+ field isOpen 2 b
+ field lineHardnessPercent 2 f
+ field lineWidth 2 f
+class CControllerCurveGuid 2
+ attr note 2
+ attr uuid 2
+class CControllerExtension 2
+ field bindMethod 2 BindMethod
+ field controlCurves 2 carray_list
+ field controlPoints 2 carray_list
+ field editLevel 2 i
+ field maxBindCount 2 i
+ field subArtMeshGuids 2 array_list
+ field super 2 ACExtension
+ field targetPoints 2 carray_list
+class CControllerPoint 14
+ field _owner 14 CControllerExtension
+ field assignedCurve 14 CControllerCurve
+ field coordType 14 CoordType
+ field ctrlPtId 14 CControllerPointGuid
+ field isCorner 14 b
+ field pointInTriangle 14 PointInTriangle
+ field pointOnCanvasForRecovery 14 GVector2
+ field posOnLocalOfDefaultKeyform 14 GVector2
+ field totalEffectToPointInTriangle 14 f
+class CControllerPointGuid 14
+ attr note 14
+ attr uuid 14
+class CDeformerGuid 76
+ attr note 76
+ attr uuid 76
+class CDeformerId 70
+ attr idstr 70
+class CDeformerOriginalShapeExtension 70
+ field originalShape 70 RotationDeformerOriginalShape WarpDeformerOriginalShape
+ field super 70 ACExtension
+class CDeformerSourceSet 1
+ field _sources 1 carray_list
+class CDrawableGuid 120
+ attr note 120
+ attr uuid 120
+class CDrawableId 120
+ attr idstr 120
+class CDrawableSourceSet 1
+ field _sources 1 carray_list
+class CEditableMeshExtension 120
+ field editableMesh 120 GEditableMesh2
+ field isLocked 120 b
+ field super 120 ACExtension
+class CEffectParameterGroups 1
+ field _parameterGroups 1 hash_map
+class CExtensionGuid 575
+ attr note 575
+ attr uuid 575
+class CFloatColor 1244
+ attr alpha 1244
+ attr blue 1244
+ attr green 1244
+ attr red 1244
+class CFormGuid 704
+ attr note 704
+ attr uuid 704
+class CGameMotionSet 1
+ field gameMotionGroups 1 carray_list
+ field gameMotions 1 carray_list
+class CGlueForm 20
+ field intensity 20 f
+ field super 20 ACAffecterForm
+class CGlueSource 20
+ field bindVertexUids 20 long-array
+ field keyforms 20 carray_list
+ field super 20 ACAffecterSource
+ field tabPosOnCanvas 20 GVector2
+ field targetArtMeshA_guid 20 CDrawableGuid
+ field targetArtMeshB_guid 20 CDrawableGuid
+ field weights 20 float-array
+class CGuidesSetting 1
+ field guidesModeling 1 carray_list
+class CImageCanvas 1
+ field background 1 CColor
+ field pixelHeight 1 i
+ field pixelWidth 1 i
+class CImageIcon 1800
+ field image 1800 CWritableImage
+class CImageResource 767
+ attr height 767
+ attr imageFileBuf_size 767
+ attr previewFileBuf_size 767
+ attr type 767
+ attr width 767
+ field imageFileBuf 767 file
+class CLabelColor 284
+ attr customizedColorInt 284
+ field labelType 284 CLabelColorType
+class CLabelColorType 284
+ attr v 284
+class CLayer 765
+ field _optionOfIOption 765 hash_map
+ field boundsOnImageDoc 765 CRect
+ field icon16 765 CImageIcon
+ field icon64 765 CImageIcon
+ field imageResource 765 CImageResource
+ field layerIdentifier 765 CLayerIdentifier
+ field layerInfo 765 linked_map
+ field super 765 ACImageLayer
+class CLayerGroup 492
+ field layerIdentifier 492 CLayerIdentifier null
+ field super 492 ACLayerGroup
+class CLayerGuid 1257
+ attr note 1257
+ attr uuid 1257
+class CLayerIdentifier 1251
+ field layerId 1251 null
+ field layerIdValue_testImpl 1251 i
+ field layerName 1251 s
+class CLayerInputData 135
+ field affine 135 CAffine
+ field clippingOnTexturePx 135 null
+ field layer 135 CLayer
+class CLayerSelectorMap 135
+ field _imageToLayerInput 135 linked_map
+class CLayeredImage 6
+ field _rootLayer 6 CLayerGroup
+ field description 6 s
+ field guid 6 CLayeredImageGuid
+ field height 6 i
+ field icon16 6 null
+ field icon64 6 null
+ field layerSet 6 LayerSet
+ field memo 6 s
+ field name 6 s
+ field psdBytes 6 null
+ field psdFile 6 file
+ field psdFileLastModified 6 l
+ field width 6 i
+class CLayeredImageGuid 6
+ attr note 6
+ attr uuid 6
+class CMeshGeneratorExtension 120
+ field meshGenerateSetting 120 MeshGenerateSetting
+ field super 120 ACExtension
+class CMocExportType 1
+ attr v 1
+class CModelExportSettingDialogData 1
+ field enableExtendEdgeColor 1 b
+ field exportDisplayInfoJson 1 b
+ field exportInvisibleArtMesh 1 b
+ field exportInvisiblePart 1 b
+ field exportMotionSyncJson 1 b
+ field exportNizimaPreviewTextureScale 1 i
+ field exportPhysicsJson 1 b
+ field exportSketchPart 1 b
+ field exportTextureScale 1 i
+ field exportTrackCursorJson 1 b
+ field exportType 1 CMocExportType
+ field exportUserDataJson 1 b
+ field normalOriginX 1 f
+ field normalOriginY 1 f
+ field pixelsPerUnit 1 f
+ field version 1 FormatVersion
+class CModelGuid 1
+ attr note 1
+ attr uuid 1
+class CModelImage 135
+ attr modelImageVersion 135
+ field _filteredImage 135 CImageResource
+ field _group 135 CModelImageGroup
+ field _materialLocalToCanvasTransform 135 CAffine
+ field cachedImageManager 135 CCachedImageManager
+ field guid 135 CModelImageGuid
+ field icon16 135 CImageIcon
+ field inputFilter 135 ModelImageFilterSet
+ field inputFilterEnv 135 ModelImageFilterEnv
+ field linkedRawImageGuids 135 carray_list
+ field memo 135 s
+ field name 135 s
+class CModelImageGroup 6
+ field _linkedRawImageGuids 6 carray_list
+ field _modelImages 6 carray_list
+ field groupName 6 s
+ field memo 6 s
+class CModelImageGuid 146
+ attr note 146
+ attr uuid 146
+class CModelInfo 1
+ field _effectParameterGroups 1 CEffectParameterGroups
+ field originInPixels 1 CPoint
+ field pixelsPerUnit 1 f
+class CModelSource 1
+ attr isDefaultKeyformLocked 1
+ field _icon16 1 CImageIcon
+ field _icon32 1 CImageIcon
+ field _icon64 1 CImageIcon
+ field affecterSourceSet 1 CAffecterSourceSet
+ field artPathBrushesSetting 1 CArtPathBrushSetting
+ field canvas 1 CImageCanvas
+ field deformerSourceSet 1 CDeformerSourceSet
+ field drawableSourceSet 1 CDrawableSourceSet
+ field editorEdition 1 EditorEdition
+ field gameMotionSet 1 CGameMotionSet
+ field guid 1 CModelGuid
+ field guides 1 CGuidesSetting
+ field latestVersionOfLastModelerNo 1 i
+ field modelInfo 1 CModelInfo
+ field modelOptions 1 hash_map
+ field modelViewerSetting 1 ModelViewerSetting
+ field motionSyncSettingsSet 1 CMotionSyncSettingSourceSet
+ field name 1 s
+ field parameterGroupSet 1 CParameterGroupSet
+ field parameterSourceSet 1 CParameterSourceSet
+ field partSourceSet 1 CPartSourceSet
+ field physicsSettingsSourceSet 1 CPhysicsSettingsSourceSet
+ field randomPoseSetting 1 CRandomPoseSettingManager
+ field rootParameterGroup 1 CParameterGroup
+ field rootPart 1 CPartSource
+ field targetVersionNo 1 i
+ field textureManager 1 CTextureManager
+ field useLegacyDrawOrder__testImpl 1 b
+class CMotionSyncSettingSourceSet 1
+ field _settingSourceSetMotionSync 1 linked_set
+class CParameterGroup 12
+ field _childGuids 12 carray_list
+ field description 12 s
+ field folderIsOpened 12 b
+ field guid 12 CParameterGroupGuid
+ field id 12 CParameterGroupId
+ field labelColor 12 CLabelColor
+ field name 12 s
+ field parentGroupGuid 12 CParameterGroupGuid null
+class CParameterGroupGuid 12
+ attr note 12
+ attr uuid 12
+class CParameterGroupId 12
+ attr idstr 12
+class CParameterGroupSet 1
+ field _groups 1 carray_list
+class CParameterGuid 39
+ attr note 39
+ attr uuid 39
+class CParameterId 61
+ attr idstr 61
+class CParameterSource 39
+ field combined 39 b
+ field decimalPlaces 39 i
+ field defaultValue 39 f
+ field description 39 s
+ field guid 39 CParameterGuid
+ field id 39 CParameterId
+ field isRepeat 39 b
+ field maxValue 39 f
+ field minValue 39 f
+ field name 39 s
+ field paramType 39 Type
+ field parentGroupGuid 39 CParameterGroupGuid
+ field snapEpsilon 39 f
+class CParameterSourceSet 1
+ field _sources 1 carray_list
+class CPartForm 62
+ field drawOrder 62 i
+ field super 62 ACForm
+class CPartGuid 62
+ attr note 62
+ attr uuid 62
+class CPartId 62
+ attr idstr 62
+class CPartSource 62
+ field _childGuids 62 carray_list
+ field defaultOrder_forEditor 62 i
+ field enableDrawOrderGroup 62 b
+ field guid 62 CPartGuid
+ field id 62 CPartId
+ field isSketch 62 b
+ field keyforms 62 carray_list
+ field partsEditColor 62 CColor
+ field super 62 ACParameterControllableSource
+ field targetDeformerGuid 62 CDeformerGuid
+class CPartSourceSet 1
+ field _sources 1 carray_list
+class CPhysicsDataGuid 40
+ attr note 40
+ attr uuid 40
+class CPhysicsInput 10
+ field angleScale 10 f
+ field guid 10 CPhysicsDataGuid
+ field isReverse 10 b
+ field source 10 CParameterGuid
+ field translationScale 10 GVector2
+ field type 10 CPhysicsSourceType
+ field weight 10 f
+class CPhysicsOutput 12
+ field angleScale 12 f
+ field destination 12 CParameterGuid
+ field guid 12 CPhysicsDataGuid
+ field isReverse 12 b
+ field translationScale 12 GVector2
+ field type 12 CPhysicsSourceType
+ field vertexIndex 12 i
+ field weight 12 f
+class CPhysicsSettingId 5
+ attr idstr 5
+class CPhysicsSettingsGuid 5
+ attr note 5
+ attr uuid 5
+class CPhysicsSettingsSource 5
+ field guid 5 CPhysicsSettingsGuid
+ field id 5 CPhysicsSettingId
+ field inputs 5 carray_list
+ field name 5 s
+ field normalizedAngleDefaultValue 5 f
+ field normalizedAngleValueMax 5 f
+ field normalizedAngleValueMin 5 f
+ field normalizedPositionDefaultValue 5 f
+ field normalizedPositionValueMax 5 f
+ field normalizedPositionValueMin 5 f
+ field outputs 5 carray_list
+ field vertices 5 carray_list
+class CPhysicsSettingsSourceSet 1
+ field _sourceCubismPhysics 1 carray_list
+ field selectedCubismPhysics 1 CPhysicsSettingsGuid
+ field settingFPS 1 i
+class CPhysicsSourceType 22
+ attr v 22
+class CPhysicsVertex 18
+ field acceleration 18 f
+ field delay 18 f
+ field guid 18 CPhysicsDataGuid
+ field mobility 18 f
+ field position 18 GVector2
+ field radius 18 f
+class CPoint 1
+ field x 1 i
+ field y 1 i
+class CRandomPoseGroupData 12
+ field isExpand 12 b
+class CRandomPoseParamData 39
+ field isEnable 39 b
+class CRandomPoseSetting 1
+ field groups.keys 1 array_list
+ field groups.values 1 array_list
+ field parameters.keys 1 array_list
+ field parameters.values 1 array_list
+class CRandomPoseSettingManager 1
+ field _settings 1 array_list
+ field currentIndex 1 i
+class CRect 765
+ field height 765 i
+ field width 765 i
+ field x 765 i
+ field y 765 i
+class CRotationDeformerForm 54
+ attr angle 54
+ attr isReflectX 54
+ attr isReflectY 54
+ attr originX 54
+ attr originY 54
+ attr scale 54
+ field super 54 ACDeformerForm
+class CRotationDeformerSource 4
+ field baseAngle 4 f
+ field circleRadiusOnCanvas 4 f
+ field handleLengthOnCanvas 4 f
+ field keyforms 4 carray_list
+ field super 4 ACDeformerSource
+ field useBoneUi_testImpl 4 b
+class CSize 137
+ attr height 137
+ attr width 137
+class CTextureAtlas 2
+ field cachedAtlasImage 2 CImageResource
+ field cachedImageManager 2 CCachedImageManager
+ field guid 2 CTextureAtlasGuid
+ field height 2 i
+ field lockCachedAtlasImage 2 b
+ field modelImages 2 carray_list
+ field name 2 s
+ field width 2 i
+class CTextureAtlasGuid 2
+ attr note 2
+ attr uuid 2
+class CTextureInputExtension 120
+ field _textureInputs 120 carray_list
+ field currentTextureInputData 120 CTextureInput_TextureAtlasRegion
+ field super 120 ACExtension
+class CTextureInput_ModelImage 120
+ field _modelImageGuid 120 CModelImageGuid
+ field super 120 ACTextureInput
+class CTextureInput_TextureAtlasRegion 120
+ field inputImageLocalToCanvasTransform 120 CAffine
+ field super 120 ACTextureInput
+ field textureAtlasGuid 120 CTextureAtlasGuid
+class CTextureManager 1
+ field _modelImageGroups 1 carray_list
+ field _rawImages 1 carray_list
+ field _textureAtlases 1 carray_list
+ field artPathBrushUsingLayeredImageIds 1 carray_list
+ field isTextureInputModelImageMode 1 b
+ field previewReductionRatio 1 i
+ field textureList 1 TextureImageGroup
+class CTopologyObserverExtension 11
+ field observers 11 carray_list
+ field super 11 ACExtension
+class CWarpDeformerBezierExtension 132
+ field bezierCol 132 i
+ field bezierRow 132 i
+ field editLevel 132 i
+ field super 132 ACExtension
+class CWarpDeformerForm 288
+ field positions 288 float-array
+ field super 288 ACDeformerForm
+class CWarpDeformerSource 66
+ field col 66 i
+ field isQuadTransform 66 b
+ field keyforms 66 carray_list
+ field row 66 i
+ field super 66 ACDeformerSource
+class CWritableImage 1800
+ attr height 1800
+ attr type 1800
+ attr width 1800
+ field image 1800 file
+class CachedImageType 137
+ attr v 137
+class ColorComposition 120
+ attr v 120
+class CoordType 16
+ field coordName 16 s
+class CreationMethod 140
+ attr v 140
+class EditorEdition 1
+ field edition 1 i
+class Effect 621
+ field effectorPt 621 PointOnCurve
+ field weight 621 f
+class EffectParameterType 2
+ attr v 2
+class EnvConnection 540
+ field _envValueDef 540 FilterValue
+ field filter 540 FilterInstance
+ field filterValueDef 540 FilterValue
+class EnvValueConnector 270
+ field envValueId 270 FilterValueId
+ field super 270 AValueConnector
+class EnvValueSet 270
+ field id 270 FilterValueId
+ field updateTimeMs 270 l
+ field value 270 CLayerSelectorMap CLayeredImageGuid
+class ExtendedInterpolationType 103
+ attr v 103
+class FilterEnv 135
+ field envValues 135 hash_map
+ field parentEnv 135 null
+class FilterInstance 270
+ attr filterName 270
+ field filterDef 270 null
+ field filterDefGuid 270 StaticFilterDefGuid
+ field filterId 270 FilterInstanceId
+ field inputConnectors 270 hash_map
+ field outputConnectors 270 hash_map
+ field ownerFilterSet 270 ModelImageFilterSet
+class FilterInstanceId 270
+ attr idstr 270
+class FilterMode 2
+ field magFilter 2 MagFilter
+ field minFilter 2 MinFilter
+ field owner 2 GTexture2D
+class FilterOutputValueConnector 135
+ field id 135 FilterValueId
+ field instance 135 FilterInstance
+ field super 135 AValueConnector
+ field valueDef 135 FilterValue
+class FilterSet 135
+ field _externalInputs 135 linked_map
+ field _externalOutputs 135 linked_map
+ field filterMap 135 linked_map
+class FilterValue 54
+ field defaultValueInitializer 54 null
+ field id 54 FilterValueId
+ field name 54 s
+class FilterValueId 60
+ attr idstr 60
+class FormatVersion 1
+ attr v 1
+class GEditableMesh2 120
+ attr nextPointUid 120
+ attr useDelaunayTriangulation 120
+ field coordType 120 CoordType
+ field edge 120 short-array
+ field edgePriority 120 byte-array
+ field meshGuid 120 GEditableMeshGuid
+ field point 120 float-array
+ field pointPriority 120 byte-array
+ field pointUid 120 int-array
+class GEditableMeshGuid 120
+ attr note 120
+ attr uuid 120
+class GTexture 2
+ field anisotropy 2 Anisotropy
+ field filterMode 2 FilterMode
+ field guid 2 GTextureGuid
+ field name 2 s
+ field wrapMode 2 WrapMode
+class GTexture2D 2
+ field isPremultiplied 2 b
+ field mipmapLevel 2 i
+ field srcImageResource 2 CImageResource
+ field super 2 GTexture
+ field transformImageResource01toLogical01 2 CAffine
+class GTextureGuid 2
+ attr note 2
+ attr uuid 2
+class GTransform2 110
+ field eulerAngle 110 f
+ field position 110 GVector2
+ field scale 110 GVector2
+class GVector2 929
+ field x 929 f
+ field y 929 f
+class InterpolationType 103
+ attr v 103
+class KeyFormMorphTarget 2
+ field editBaseParameterMap 2 MorphTargetEditBaseParameterMap
+ field keyValue 2 f
+ field keyformGuid 2 CFormGuid
+ field owner 2 CWarpDeformerSource
+ field parameterGuid 2 CParameterGuid
+class KeyFormMorphTargetSet 272
+ field _morphTargets 272 carray_list
+ field blendWeightConstraintSet 272 MorphTargetBlendWeightConstraintSet
+class KeyOnParameter 997
+ field binding 997 KeyformBindingSource
+ field keyIndex 997 i
+class KeyformBindingSource 103
+ field _gridSource 103 KeyformGridSource
+ field description 103 s
+ field extendedInterpolationScale 103 f
+ field extendedInterpolationType 103 ExtendedInterpolationType
+ field insertPointCount 103 i
+ field interpolationType 103 InterpolationType
+ field keys 103 array_list
+ field parameterGuid 103 CParameterGuid
+class KeyformGridAccessKey 702
+ field _keyOnParameterList 702 array_list
+class KeyformGridSource 272
+ field keyformBindings 272 array_list
+ field keyformsOnGrid 272 array_list
+class KeyformOnGrid 702
+ field accessKey 702 KeyformGridAccessKey
+ field keyformGuid 702 CFormGuid
+class LayerSet 6
+ field _layerEntryList 6 carray_list
+ field _layeredImage 6 CLayeredImage
+class LayeredImageWrapper 4
+ field image 4 CLayeredImage
+ field importedTimeMSec 4 l
+ field isReplaced 4 b
+ field lastModifiedTimeMSec 4 l
+class MagFilter 2
+ attr v 2
+class MeshGenerateSetting 120
+ field polygonInnerDensity 120 i
+ field polygonInnerMargin 120 i
+ field polygonMargin 120 i
+ field polygonMinBoundsPt 120 i
+ field polygonMinMargin 120 i
+ field polygonOuterDensity 120 i
+ field thresholdAlpha 120 i
+class MeshPointRef 621
+ field _artMeshSource 621 CArtMeshSource
+ field _index 621 i
+ field artMeshGuid 621 CDrawableGuid
+ field coordType 621 CoordType
+ field keyForm 621 CArtMeshForm
+ field pointUid 621 l
+ field positions 621 float-array
+ field step 621 i
+class MinFilter 2
+ attr v 2
+class ModelImageEntry 110
+ field atlas 110 CTextureAtlas
+ field atlasLocalToCanvasTransform 110 CAffine
+ field materialLocalToAtlasTransform 110 GTransform2
+ field modelImageGuid 110 CModelImageGuid
+class ModelImageFilterEnv 135
+ field super 135 FilterEnv
+class ModelImageFilterSet 135
+ field super 135 FilterSet
+class ModelViewerSetting 1
+ field trackCursorSettings 1 array_list
+class MorphTargetBlendWeightConstraintSet 272
+ field _constraints 272 carray_list
+class MorphTargetEditBaseParameterMap 2
+ field baseParameterMap 2 null
+class PointInTriangle 14
+ field ptIndex1 14 i
+ field ptIndex2 14 i
+ field ptIndex3 14 i
+ field weight1 14 f
+ field weight2 14 f
+ field weight3 14 f
+class PointOnCurve 621
+ field _posOnLocal 621 GVector2
+ field curveId 621 CControllerCurveGuid
+ field distance 621 f
+ field totalT 621 f
+class RotationDeformerOriginalShape 4
+ field autoRefreshIsAvailable 4 b
+ field baseAngle 4 f
+ field circleRadiusTimesScale 4 f
+ field creationMethod 4 CreationMethod
+ field globalAngle 4 f
+ field globalScale 4 f
+ field handleLength 4 f
+ field isReflectX 4 b
+ field isReflectY 4 b
+ field lastUpdatedTimeString 4 s
+ field positions 4 float-array
+ field super 4 ACDeformerOriginalShape
+class StaticFilterDefGuid 12
+ attr note 12
+ attr uuid 12
+class TargetPoint 621
+ field _point 621 MeshPointRef
+ field effects 621 carray_list
+class TextureImageGroup 1
+ field children 1 carray_list
+class TextureState 120
+ attr v 120
+class TrackCursorSetting 39
+ field guid 39 CParameterGuid
+ field value 39 TrackCursorSettingItemType
+ field weight 39 f
+class TrackCursorSettingItemType 39
+ attr v 39
+class Type 39
+ attr v 39
+class WarpDeformerOriginalShape 66
+ field autoRefreshIsAvailable 66 b
+ field col 66 i
+ field creationMethod 66 CreationMethod
+ field lastUpdatedTimeString 66 s
+ field positions 66 float-array
+ field row 66 i
+ field super 66 ACDeformerOriginalShape
+class WrapMode 2
+ attr v 2
+class array_list 1629
+ attr count 1629
+class b 5785
+class byte-array 240
+ attr count 240
+class carray_list 2722
+ attr count 2722
+class entry 1757
+ field key 1757 CLayeredImageGuid EffectParameterType FilterInstanceId FilterValueId
+ field value 1757 EnvConnection EnvValueConnector EnvValueSet FilterInstance FilterOutputValueConnector array_list carray_list
+class f 5348
+class file 2573
+ attr path 2567
+class float-array 1018
+ attr count 1018
+class hash_map 1934
+ attr count 1934
+ attr keyType 1393
+ field MODEL_EXPORT_SETTING_KEY 1 CModelExportSettingDialogData
+class i 10504
+class int-array 240
+ attr count 240
+class l 905
+class linked_map 1305
+ attr count 1305
+ attr keyType 765
+class linked_set 1
+ attr count 1
+class long-array 20
+ attr count 20
+class null 2853
+class s 5870
+class short-array 120
+ attr count 120
+items ACDrawableSource.clipGuidList CDrawableGuid
+items ACLayerGroup._children CLayer CLayerGroup
+items ACParameterControllableSource._extensions CControllerExtension CDeformerOriginalShapeExtension CEditableMeshExtension CMeshGeneratorExtension CTextureInputExtension CTopologyObserverExtension CWarpDeformerBezierExtension
+items CAffecterSourceSet._sources CGlueSource
+items CArtMeshSource.keyforms CArtMeshForm
+items CCachedImageManager.cachedImages CCachedImage
+items CControllerCurve._curvePoints CControllerPoint
+items CControllerExtension.controlCurves CControllerCurve
+items CControllerExtension.controlPoints CControllerPoint
+items CControllerExtension.subArtMeshGuids CDrawableGuid
+items CControllerExtension.targetPoints TargetPoint
+items CDeformerSourceSet._sources CRotationDeformerSource CWarpDeformerSource
+items CDrawableSourceSet._sources CArtMeshSource
+items CEffectParameterGroups._parameterGroups entry
+items CGlueSource.keyforms CGlueForm
+items CLayerSelectorMap._imageToLayerInput entry
+items CModelImage.linkedRawImageGuids CLayeredImageGuid
+items CModelImageGroup._linkedRawImageGuids CLayeredImageGuid
+items CModelImageGroup._modelImages CModelImage
+items CParameterGroup._childGuids CParameterGroupGuid CParameterGuid
+items CParameterGroupSet._groups CParameterGroup
+items CParameterSourceSet._sources CParameterSource
+items CPartSource._childGuids CAffecterGuid CDeformerGuid CDrawableGuid CPartGuid
+items CPartSource.keyforms CPartForm
+items CPartSourceSet._sources CPartSource
+items CPhysicsSettingsSource.inputs CPhysicsInput
+items CPhysicsSettingsSource.outputs CPhysicsOutput
+items CPhysicsSettingsSource.vertices CPhysicsVertex
+items CPhysicsSettingsSourceSet._sourceCubismPhysics CPhysicsSettingsSource
+items CRandomPoseSetting.groups.keys CParameterGroupId
+items CRandomPoseSetting.groups.values CRandomPoseGroupData
+items CRandomPoseSetting.parameters.keys CParameterId
+items CRandomPoseSetting.parameters.values CRandomPoseParamData
+items CRandomPoseSettingManager._settings CRandomPoseSetting
+items CRotationDeformerSource.keyforms CRotationDeformerForm
+items CTextureAtlas.modelImages ModelImageEntry
+items CTextureInputExtension._textureInputs CTextureInput_ModelImage CTextureInput_TextureAtlasRegion
+items CTextureManager._modelImageGroups CModelImageGroup
+items CTextureManager._rawImages LayeredImageWrapper
+items CTextureManager._textureAtlases CTextureAtlas
+items CTopologyObserverExtension.observers CControllerExtension
+items CWarpDeformerSource.keyforms CWarpDeformerForm
+items FilterEnv.envValues entry
+items FilterInstance.inputConnectors entry
+items FilterInstance.outputConnectors entry
+items FilterSet._externalInputs entry
+items FilterSet._externalOutputs entry
+items FilterSet.filterMap entry
+items KeyFormMorphTargetSet._morphTargets KeyFormMorphTarget
+items KeyformBindingSource.keys f
+items KeyformGridAccessKey._keyOnParameterList KeyOnParameter
+items KeyformGridSource.keyformBindings KeyformBindingSource
+items KeyformGridSource.keyformsOnGrid KeyformOnGrid
+items LayerSet._layerEntryList CLayer CLayerGroup
+items ModelViewerSetting.trackCursorSettings TrackCursorSetting
+items TargetPoint.effects Effect
+items entry.value CLayerInputData CParameterGuid

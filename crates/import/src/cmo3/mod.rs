@@ -6,6 +6,7 @@
 mod build;
 mod caff;
 mod caffw;
+mod check;
 mod extract;
 mod write;
 mod xml;
@@ -282,6 +283,54 @@ mod tests {
 
     /// The user's own project, read, written and read again, keeps every
     /// object the first read found.
+    /// A project's graph and the names in its archive, for the check.
+    fn strict(bytes: &[u8]) -> Vec<String> {
+        let caff = caff::Caff::open(bytes).unwrap();
+        let doc = xml::Doc::parse(&caff.main_xml().unwrap()).unwrap();
+        let names: Vec<&str> = caff.entries.iter().map(|e| e.name.as_str()).collect();
+        check::check(&doc, &check::Schema::builtin(), &names)
+    }
+
+    /// schema.txt is learned from the sample project, saved by the Editor:
+    /// `cargo test -p ayatsuri-import -- --ignored write_the_schema`.
+    #[test]
+    #[ignore]
+    fn write_the_schema() {
+        let Some(bytes) = corpus("Raiuji Vtuber model2.cmo3") else { return };
+        let caff = caff::Caff::open(&bytes).unwrap();
+        let doc = xml::Doc::parse(&caff.main_xml().unwrap()).unwrap();
+        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cmo3/schema.txt");
+        std::fs::write(out, check::Schema::learn(&doc).write()).unwrap();
+    }
+
+    /// The Editor's own project passes the check, so its rules are ones the
+    /// Editor keeps.
+    #[test]
+    fn the_sample_project_passes_the_strict_check() {
+        let Some(bytes) = corpus("Raiuji Vtuber model2.cmo3") else { return };
+        let problems = strict(&bytes);
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    /// The check sees a missing field, a broken reference and a list that
+    /// miscounts its items.
+    #[test]
+    fn the_strict_check_catches_damage() {
+        let Some(bytes) = corpus("Raiuji Vtuber model2.cmo3") else { return };
+        let caff = caff::Caff::open(&bytes).unwrap();
+        let xml = String::from_utf8(caff.main_xml().unwrap()).unwrap();
+        let damaged = xml
+            .replacen("xs.ref=\"#5\"", "xs.ref=\"#999999\"", 1)
+            .replace("<b xs.n=\"culling\">", "<b xs.n=\"cullingX\">")
+            .replacen("count=\"", "count=\"9", 1);
+        let doc = xml::Doc::parse(damaged.as_bytes()).unwrap();
+        let names: Vec<&str> = caff.entries.iter().map(|e| e.name.as_str()).collect();
+        let problems = check::check(&doc, &check::Schema::builtin(), &names).join("\n");
+        assert!(problems.contains("is missing its field culling"), "{problems}");
+        assert!(problems.contains("refers to #999999, which is not defined"), "{problems}");
+        assert!(problems.contains("items and holds"), "{problems}");
+    }
+
     #[test]
     fn the_sample_project_survives_a_rewrite() {
         let Some(bytes) = corpus("Raiuji Vtuber model2.cmo3") else { return };
@@ -304,6 +353,16 @@ mod tests {
         assert_eq!(first.param_groups, second.param_groups);
         assert_eq!(first.param_names, second.param_names);
         assert_eq!(first.imported.mesh_names, second.imported.mesh_names);
+        // blend, double sided and inverted mask: the six Multiply meshes
+        // stay Multiply and every mesh keeps both sides
+        use ayatsuri_format::model::flags;
+        let mesh_flags = |m: &ayatsuri_format::model::Model| {
+            m.art_meshes.iter().map(|x| x.flags).collect::<Vec<_>>()
+        };
+        assert_eq!(mesh_flags(a), mesh_flags(b));
+        let multiply = a.art_meshes.iter().filter(|m| m.flags & flags::BLEND_MULTIPLICATIVE != 0);
+        assert_eq!(multiply.count(), 6);
+        assert!(a.art_meshes.iter().all(|m| m.flags & flags::DOUBLE_SIDED != 0));
         assert_eq!(
             a.physics.as_ref().map(|p| p.groups.len()),
             b.physics.as_ref().map(|p| p.groups.len())
