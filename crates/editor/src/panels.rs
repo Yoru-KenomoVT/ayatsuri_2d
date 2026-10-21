@@ -300,6 +300,9 @@ pub struct EditorUi {
     sel_param: Option<usize>,
     param_edit: Option<ParamEdit>,
     pmenu: param_menu::ParamMenuState,
+    /// The key Motion Mirroring last wrote to (parameter, key) and the
+    /// selection it was for; its red mark goes when the selection changes.
+    mirror_mark: Option<(usize, f32, Vec<ayatsuri_core::edit::Target>)>,
     deformer_dialog: Option<deformer_dialog::DeformerDialog>,
     /// Extra meshes picked by the lasso, beyond `selected`.
     multi_sel: Vec<usize>,
@@ -1067,6 +1070,7 @@ impl Default for EditorUi {
             sel_param: None,
             param_edit: None,
             pmenu: param_menu::ParamMenuState::default(),
+            mirror_mark: None,
             deformer_dialog: None,
             multi_sel: Vec::new(),
             part_pick: Vec::new(),
@@ -4777,6 +4781,10 @@ impl EditorUi {
             });
             if n > 0 {
                 log::info!("deleted the key near {at:.3} on {n} object(s)");
+            } else if targets.is_empty() {
+                log::warn!("Delete Keyform: select the objects whose key to delete first");
+            } else {
+                log::warn!("Delete Keyform: the selected objects have no keys on this parameter");
             }
         }
     }
@@ -6044,6 +6052,7 @@ impl EditorUi {
     /// Parameter palette (link buttons, every right-click menu); without it
     /// the list only moves values, as on the physics page.
     fn param_list(&mut self, ui: &mut Ui, id: &str, full: bool, list_h: f32) -> Vec<ParamAction> {
+        let marks = self.key_marks();
         // rows borrow the session hard, so it steps out of self for a moment
         let Some(mut s) = self.session.take() else { return Vec::new() };
         // a parameter in no folder would never be drawn: file it at the top
@@ -6163,6 +6172,7 @@ impl EditorUi {
                             can_edit,
                             subject,
                             full,
+                            &marks,
                             &mut actions,
                         );
                     }
@@ -12620,17 +12630,82 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// The Cubism parameter slider: a track, hollow circles on every key, and
-/// the filled pink handle at the current value. Returns true when dragged.
+/// How the sliders show their keys this frame, the way Cubism does: keys
+/// every selected object has are green, yellow when only some of them have
+/// one, and the key Motion Mirroring last wrote to carries a red glow.
+#[derive(Default)]
+struct KeyMarks {
+    /// How many objects are selected.
+    picked: usize,
+    /// Per parameter: the selected objects' keys and how many have each.
+    keys: Vec<Vec<(f32, usize)>>,
+    mirrored: Option<(usize, f32)>,
+}
+
+/// One slider's share of [`KeyMarks`].
+#[derive(Default)]
+struct KeyLook {
+    picked: usize,
+    keys: Vec<(f32, usize)>,
+    mirrored: Option<f32>,
+}
+
+impl KeyMarks {
+    fn look(&self, pi: usize) -> KeyLook {
+        KeyLook {
+            picked: self.picked,
+            keys: self.keys.get(pi).cloned().unwrap_or_default(),
+            mirrored: self.mirrored.filter(|m| m.0 == pi).map(|m| m.1),
+        }
+    }
+}
+
+impl EditorUi {
+    fn key_marks(&mut self) -> KeyMarks {
+        use ayatsuri_core::edit::Target;
+        let targets = self.param_targets();
+        if self.mirror_mark.as_ref().is_some_and(|m| m.2 != targets) {
+            self.mirror_mark = None;
+        }
+        let Some(s) = &self.session else { return KeyMarks::default() };
+        let model = s.puppet.model();
+        let mut keys: Vec<Vec<(f32, usize)>> = vec![Vec::new(); model.parameters.len()];
+        for t in &targets {
+            let binding = match *t {
+                Target::ArtMesh(i) => model.art_meshes.get(i).map(|m| &m.binding),
+                Target::Deformer(i) => model.deformers.get(i).map(|d| &d.binding),
+                Target::Part(i) => model.parts.get(i).map(|p| &p.binding),
+            };
+            for axis in binding.map(|b| b.axes.as_slice()).unwrap_or_default() {
+                let Some(list) = keys.get_mut(axis.parameter as usize) else { continue };
+                for &k in &axis.keys {
+                    match list.iter_mut().find(|(e, _)| (*e - k).abs() < 1e-5) {
+                        Some((_, n)) => *n += 1,
+                        None => list.push((k, 1)),
+                    }
+                }
+            }
+        }
+        KeyMarks {
+            picked: targets.len(),
+            keys,
+            mirrored: self.mirror_mark.as_ref().map(|m| (m.0, m.1)),
+        }
+    }
+}
+
+/// The Cubism parameter slider: a track, a dot on every key, and the
+/// filled handle at the current value. Returns whether the value moved,
+/// the response, and whether a right-click stuck the slider onto a key
+/// (Cubism's key adhesion; the menu stays shut then).
 fn param_slider(
     ui: &mut Ui,
     width: f32,
     value: &mut f32,
-    min: f32,
-    max: f32,
-    default: f32,
+    (min, max, default): (f32, f32, f32),
     keys: &[f32],
-) -> (bool, egui::Response) {
+    look: &KeyLook,
+) -> (bool, egui::Response, bool) {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click_and_drag());
     let painter = ui.painter();
     let pad = 6.0;
@@ -12643,12 +12718,26 @@ fn param_slider(
         Stroke::new(1.0, theme::pal().track),
     );
     for &k in keys {
-        painter.circle(
-            pos2(x_of(k), cy),
-            3.0,
-            Color32::WHITE,
-            Stroke::new(1.0, theme::pal().key_ring),
-        );
+        let at = pos2(x_of(k), cy);
+        if look.mirrored.is_some_and(|m| (m - k).abs() < 1e-5) {
+            // where the mirror wrote: a red glow under the dot
+            for (r, a) in [(9.0, 40u8), (7.0, 70), (5.0, 110)] {
+                painter.circle_filled(at, r, Color32::from_rgba_unmultiplied(0xE5, 0x39, 0x35, a));
+            }
+        }
+        let held = look.keys.iter().find(|(e, _)| (*e - k).abs() < 1e-5).map_or(0, |e| e.1);
+        let fill = if held == 0 {
+            Color32::WHITE
+        } else if held < look.picked {
+            Color32::from_rgb(0xF4, 0xD0, 0x3F)
+        } else {
+            Color32::from_rgb(0x4C, 0xC0, 0x6A)
+        };
+        painter.circle(at, 3.0, fill, Stroke::new(1.0, theme::pal().key_ring));
+        // the selected key: the slider sits on it
+        if held > 0 && (*value - k).abs() <= span * 1e-4 {
+            painter.circle_stroke(at, 4.6, Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35)));
+        }
     }
     // a faint tick at the default, the way Cubism hints the rest value
     let dx = x_of(default);
@@ -12659,14 +12748,32 @@ fn param_slider(
     painter.circle_filled(pos2(x_of(*value), cy), 4.5, theme::pal().accent);
 
     let mut changed = false;
-    if (resp.dragged() || resp.clicked())
+    // the left button only: a right-click opens the menu and must leave the
+    // value where it is (bar the snap onto a key, below)
+    if (resp.dragged_by(egui::PointerButton::Primary) || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
     {
         let f = ((p.x - rect.min.x - pad) / (rect.width() - pad * 2.0)).clamp(0.0, 1.0);
         *value = min + f * span;
         changed = true;
     }
-    (changed, resp)
+    // right-click near a key: the slider sticks to it, exactly
+    let mut stuck = false;
+    if resp.secondary_clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+        && let Some(k) = keys
+            .iter()
+            .copied()
+            .map(|k| (k, (x_of(k) - p.x).abs()))
+            .filter(|&(_, d)| d <= 6.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(k, _)| k)
+    {
+        *value = k;
+        changed = true;
+        stuck = true;
+    }
+    (changed, resp, stuck)
 }
 
 fn paint_eye(ui: &Ui, rect: Rect, own: bool, effective: bool) {
@@ -12949,6 +13056,7 @@ fn parameter_row(
     can_edit: bool,
     subject: Option<param_menu::Moving>,
     full: bool,
+    marks: &KeyMarks,
     actions: &mut Vec<ParamAction>,
 ) {
     let Some((min, max, default, decimals)) =
@@ -13016,7 +13124,8 @@ fn parameter_row(
             });
         }
         let slider_w = (ui.available_width() - 68.0).max(40.0);
-        let (changed, slider_resp) = param_slider(ui, slider_w, &mut v, min, max, default, &keys);
+        let (changed, slider_resp, on_key) =
+            param_slider(ui, slider_w, &mut v, (min, max, default), &keys, &marks.look(pi));
         if slider_resp.is_pointer_button_down_on() {
             s.params_held.push(pi);
         }
@@ -13027,7 +13136,7 @@ fn parameter_row(
         if slider_resp.drag_stopped() {
             log::debug!("parameter {display} dragged to {v:.3}");
         }
-        if full {
+        if full && !on_key {
             slider_resp.context_menu(|ui| {
                 if let Some(c) = param_menu::slider_menu(ui, pi, v, can_edit) {
                     actions.push(ParamAction::Cmd(c));
@@ -13193,7 +13302,9 @@ fn combined_pad(
         s.params_held.push(pa);
         s.params_held.push(pb);
     }
-    if (resp.dragged() || resp.clicked())
+    // the left button only: the right-click menu acts on the values as they
+    // are, so opening it must not move the dot
+    if (resp.dragged_by(egui::PointerButton::Primary) || resp.clicked())
         && let Some(ptr) = resp.interact_pointer_pos()
     {
         let fa = ((ptr.x - pad.min.x) / pad.width()).clamp(0.0, 1.0);

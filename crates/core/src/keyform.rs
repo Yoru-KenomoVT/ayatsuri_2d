@@ -396,6 +396,30 @@ pub fn four_corners(
     wrote
 }
 
+/// Each point's mirror twin on a mesh: the point nearest its reflection
+/// across the middle of the mesh's bounding box (left and right for
+/// `horizontal`, top and bottom for `vertical`), as Cubism pairs them. A
+/// symmetric mesh pairs exactly; a lopsided one with the closest it has.
+fn mirror_twins(rest: &[[f32; 2]], horizontal: bool, vertical: bool) -> Vec<usize> {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for &[x, y] in rest {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    rest.iter()
+        .enumerate()
+        .map(|(i, &[x, y])| {
+            let wx = if horizontal { 2.0 * mx - x } else { x };
+            let wy = if vertical { 2.0 * my - y } else { y };
+            rest.iter()
+                .enumerate()
+                .map(|(j, &[qx, qy])| (j, (qx - wx).powi(2) + (qy - wy).powi(2)))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map_or(i, |(j, _)| j)
+        })
+        .collect()
+}
+
 /// Motion Mirroring: the key nearest `from` is mirrored across the
 /// parameter default and written into the opposite key. Movement away from
 /// the default key is what flips, so a face turned left becomes the same
@@ -449,13 +473,20 @@ pub fn mirror_motion(
         }
         let old = c.data.clone();
         let g = |k: usize, e: usize| old.get(k * c.elems + e).copied().unwrap_or(0.0);
+        // a mesh's twins, per centre keyform: the point opposite each one
+        let mut twins: std::collections::HashMap<usize, Vec<usize>> = Default::default();
         for &(d, s, ce) in &triples {
             match c.kind {
                 Kind::Points { grid } => {
                     let n = c.elems / 2;
+                    if grid.is_none() && !twins.contains_key(&ce) {
+                        let rest: Vec<[f32; 2]> =
+                            (0..n).map(|p| [g(ce, p * 2), g(ce, p * 2 + 1)]).collect();
+                        twins.insert(ce, mirror_twins(&rest, horizontal, vertical));
+                    }
                     for p in 0..n {
-                        // the point's mirror twin: same index on a mesh,
-                        // the opposite column/row on a lattice
+                        // the point's mirror twin: the opposite column/row
+                        // on a lattice, the point across the centre on a mesh
                         let q = match grid {
                             Some((cols, rows)) if cols > 0 => {
                                 let (r, col) = (p / cols, p % cols);
@@ -463,7 +494,7 @@ pub fn mirror_motion(
                                 let r = if vertical { rows.saturating_sub(1) - r } else { r };
                                 r * cols + col
                             }
-                            _ => p,
+                            _ => twins.get(&ce).and_then(|t| t.get(p).copied()).unwrap_or(p),
                         };
                         for (e, sign) in [(0usize, sx), (1, sy)] {
                             let v = g(ce, p * 2 + e) + sign * (g(s, q * 2 + e) - g(ce, q * 2 + e));
@@ -563,10 +594,39 @@ mod tests {
         m.art_meshes[0].positions[5 * 6] = 0.9;
         let wrote = mirror_motion(&mut m, Target::ArtMesh(0), 0, 1.0, true, false);
         assert_eq!(wrote, Some(-1.0));
-        // left (keyform 3) is the centre minus the right's movement
-        assert!((form_x(&m, 3) + 0.9).abs() < 1e-5);
+        // left (keyform 3): point 0's movement lands on its twin across the
+        // middle (point 1, at x = 1), flipped: 1.0 - 0.9
+        let p1_x = m.art_meshes[0].positions[3 * 6 + 2];
+        assert!((p1_x - 0.1).abs() < 1e-5);
         // the default key cannot be mirrored
         assert_eq!(mirror_motion(&mut m, Target::ArtMesh(0), 0, 0.0, true, false), None);
+    }
+
+    #[test]
+    fn a_mesh_mirrors_each_point_into_its_twin_across_the_middle() {
+        // four points, two on the left (x = -1) and two on the right (x = 1)
+        let rest = [-1.0f32, 0.0, -1.0, 1.0, 1.0, 0.0, 1.0, 1.0];
+        let mut m = model();
+        let mesh = &mut m.art_meshes[0];
+        mesh.vertex_count = 4;
+        mesh.uvs = rest.to_vec();
+        mesh.indices = vec![0, 1, 2, 1, 3, 2];
+        mesh.binding.axes = vec![BindingAxis { parameter: 0, keys: vec![-1.0, 0.0, 1.0] }];
+        mesh.opacities = vec![1.0; 3];
+        mesh.draw_orders = vec![500.0; 3];
+        // keyform 2 (X = 1): the left points move 0.5 right, the right ones 0.1
+        let mut turned = rest;
+        for (i, dx) in [(0, 0.5), (2, 0.5), (4, 0.1), (6, 0.1)] {
+            turned[i] += dx;
+        }
+        mesh.positions = [rest, rest, turned].concat();
+        assert_eq!(mirror_motion(&mut m, Target::ArtMesh(0), 0, 1.0, true, false), Some(-1.0));
+        let left_key = &m.art_meshes[0].positions[..8];
+        // a real mirror: the right points take the left ones' big move,
+        // flipped, and the left points the right ones' small one
+        let dx = |p: usize| left_key[p * 2] - rest[p * 2];
+        assert!((dx(2) + 0.5).abs() < 1e-5 && (dx(3) + 0.5).abs() < 1e-5);
+        assert!((dx(0) + 0.1).abs() < 1e-5 && (dx(1) + 0.1).abs() < 1e-5);
     }
 
     #[test]

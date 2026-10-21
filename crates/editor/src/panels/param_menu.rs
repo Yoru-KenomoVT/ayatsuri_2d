@@ -1045,6 +1045,9 @@ impl EditorUi {
                         }
                         wrote.is_some()
                     });
+                    if let Some(k) = wrote {
+                        self.mirror_mark = Some((p, k, self.param_targets()));
+                    }
                     match wrote {
                         Some(k) => log::info!("mirrored into the key at {k}"),
                         None => log::warn!(

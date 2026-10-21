@@ -196,7 +196,7 @@ fn fader(ui: &mut Ui, id: egui::Id, span: Rect, gain_now: f32) -> (Option<f32>, 
         Stroke::new(1.0, pal.border),
     );
     let mut out = None;
-    if (resp.dragged() || resp.clicked())
+    if (resp.dragged_by(egui::PointerButton::Primary) || resp.clicked())
         && let Some(ptr) = resp.interact_pointer_pos()
     {
         let f = ((span.max.y - ptr.y) / span.height()).clamp(0.0, 1.0);
