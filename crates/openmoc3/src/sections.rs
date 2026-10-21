@@ -653,6 +653,19 @@ pub const SECTIONS: &[SectionDesc] = &[
         count_of: |c| c.parameters,
         elem_size: 4,
     },
+    // v6 (Cubism 5.3): offscreen drawing and per-mesh blend modes
+    SectionDesc {
+        slot: 152,
+        name: "Parts v5.3: Offscreen Indices",
+        count_of: |c| c.parts,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 153,
+        name: "Art Meshes v5.3: Blend Modes (colour in the low byte, alpha in the next)",
+        count_of: |c| c.art_meshes,
+        elem_size: 4,
+    },
 ];
 
 /// Slots worth naming: everything else is reached through them.

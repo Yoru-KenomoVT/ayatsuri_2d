@@ -378,6 +378,8 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
     let m_parent_deformer = moc.i32s(40)?;
     let m_texture = moc.i32s(41)?;
     let m_flags = moc.u8s(42)?;
+    // 5.3 gives every mesh a colour and alpha blend of its own
+    let m_blend = moc.i32s(153).ok();
     let m_vertex_counts = moc.i32s(43)?;
     let m_uv_begin = moc.i32s(44)?;
     let m_idx_begin = moc.i32s(45)?;
@@ -468,6 +470,11 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             enabled: m_enabled.get(i).unwrap_or(1) != 0,
             texture: m_texture.get(i).unwrap_or(0).max(0) as u32,
             flags: m_flags.get(i).copied().unwrap_or(0),
+            blend: m_blend
+                .as_ref()
+                .and_then(|b| b.get(i))
+                .map(ayatsuri_format::model::Blend::from_moc3)
+                .unwrap_or_default(),
             vertex_count,
             uvs,
             indices,

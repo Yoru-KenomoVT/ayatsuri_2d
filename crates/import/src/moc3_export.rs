@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use ayatsuri_format::model::{Binding, DeformerKind, Model, flags};
+use ayatsuri_format::model::{Binding, Blend, DeformerKind, Model, flags};
 
 use crate::ImportError;
 
@@ -120,6 +120,18 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
     }
     if version.max_slot() >= 152 {
         out.push(VTS_NOTE.into());
+    } else {
+        let changed = model
+            .art_meshes
+            .iter()
+            .filter(|m| !Blend::of(m.blend, m.flags).legacy_bits().1)
+            .count();
+        if changed > 0 {
+            out.push(format!(
+                "{changed} mesh(es) use a blend mode only moc3 5.3 can store; this version \
+                 draws them with the closest of Normal, Add and Multiply"
+            ));
+        }
     }
     if model.physics.is_some() {
         // physics never lives in the moc3 itself; noted so nobody hunts for it
@@ -549,7 +561,17 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         ),
     );
     sect.insert(41, i32s(&model.art_meshes.iter().map(|m| m.texture as i32).collect::<Vec<_>>()));
-    sect.insert(42, model.art_meshes.iter().map(|m| m.flags).collect());
+    // blend bits: the closest of normal, add and multiply, which is all a
+    // moc3 before 5.3 has (5.3 also reads them, beside its own codes)
+    let blend_bits = flags::BLEND_ADDITIVE | flags::BLEND_MULTIPLICATIVE;
+    sect.insert(
+        42,
+        model
+            .art_meshes
+            .iter()
+            .map(|m| (m.flags & !blend_bits) | Blend::of(m.blend, m.flags).legacy_bits().0)
+            .collect(),
+    );
     sect.insert(
         43,
         i32s(&model.art_meshes.iter().map(|m| m.vertex_count as i32).collect::<Vec<_>>()),
@@ -753,23 +775,12 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
 
     // ---- v5.3 extensions (152-166) ----
     // no offscreens: every part says so (-1), every part keyform points at
-    // no offscreen keyform; each mesh's blend mode is its old flag bits in
-    // the new encoding (colour blend in the low byte, alpha blend "over")
+    // no offscreen keyform; each mesh's colour and alpha blend in one word
+    // (colour in the low byte)
     if version.max_slot() >= 152 {
         sect.insert(152, i32s(&vec![-1i32; n_parts]));
-        let modes: Vec<i32> = model
-            .art_meshes
-            .iter()
-            .map(|m| {
-                if m.flags & flags::BLEND_ADDITIVE != 0 {
-                    1
-                } else if m.flags & flags::BLEND_MULTIPLICATIVE != 0 {
-                    2
-                } else {
-                    0
-                }
-            })
-            .collect();
+        let modes: Vec<i32> =
+            model.art_meshes.iter().map(|m| Blend::of(m.blend, m.flags).to_moc3()).collect();
         sect.insert(153, i32s(&modes));
         sect.insert(160, i32s(&vec![-1i32; part_keyforms]));
     }
@@ -947,6 +958,7 @@ mod tests {
             enabled: true,
             texture: 0,
             flags: 0,
+            blend: Default::default(),
             vertex_count: 3,
             uvs: vec![0.0; 6],
             indices: vec![0, 1, 2],
@@ -966,6 +978,45 @@ mod tests {
                 assert!(floats(&file, slot, 1).iter().all(|&c| c == 0.0), "{} screen", v.label());
             }
         }
+    }
+
+    #[test]
+    fn blend_modes_survive_5_3_and_fall_back_before_it() {
+        use ayatsuri_format::model::{AlphaBlend, ColorBlend};
+        let mesh = |id: &str, color| ayatsuri_format::model::ArtMesh {
+            id: id.into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Blend { color, alpha: AlphaBlend::Atop },
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: Default::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        };
+        let mut model = Model::new();
+        model.art_meshes.push(mesh("Overlay", ColorBlend::Overlay));
+        model.art_meshes.push(mesh("Screen", ColorBlend::Screen));
+
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_03).unwrap()).unwrap();
+        let got: Vec<Blend> = back.art_meshes.iter().map(|m| m.blend).collect();
+        assert_eq!(got, model.art_meshes.iter().map(|m| m.blend).collect::<Vec<_>>());
+
+        // 5.0 has only normal, add and multiply: overlay draws normal,
+        // screen adds, and the export says so
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_00).unwrap()).unwrap();
+        let m = &back.art_meshes;
+        assert_eq!(Blend::of(m[0].blend, m[0].flags), Blend::NORMAL);
+        assert_eq!(Blend::of(m[1].blend, m[1].flags).color, ColorBlend::AddCompatible);
+        let warnings = export_warnings(&model, ExportVersion::V5_00).join(" ");
+        assert!(warnings.contains("2 mesh(es) use a blend mode"), "{warnings}");
     }
 
     #[test]
