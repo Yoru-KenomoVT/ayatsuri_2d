@@ -7819,38 +7819,65 @@ impl EditorUi {
                 let targets: Vec<ayatsuri_core::edit::Target> =
                     picked.iter().map(|&m| ayatsuri_core::edit::Target::ArtMesh(m)).collect();
                 opacity_row(ui, s, &targets, self.sel_param);
-                use ayatsuri_format::model::flags;
-                let blend = if m.flags & flags::BLEND_ADDITIVE != 0 {
-                    1
-                } else if m.flags & flags::BLEND_MULTIPLICATIVE != 0 {
-                    2
-                } else {
-                    0
-                };
+                use ayatsuri_format::model::{AlphaBlend, Blend, ColorBlend, flags};
+                let blend = Blend::of(m.blend, m.flags);
                 let mut new_blend = blend;
-                ui.horizontal(|ui| {
+                let label = |ui: &mut egui::Ui, text: &'static str| {
                     ui.add_sized(
                         [74.0, 16.0],
                         egui::Label::new(
-                            egui::RichText::new(crate::i18n::tr("Blend mode"))
+                            egui::RichText::new(crate::i18n::tr(text))
                                 .color(theme::pal().text_faint)
                                 .size(11.0),
                         ),
                     );
+                };
+                ui.horizontal(|ui| {
+                    label(ui, "Blend mode");
                     egui::ComboBox::from_id_salt(("blend", i))
-                        .selected_text(crate::i18n::tr(
-                            ["Normal", "Additive", "Multiply"]
-                                .get(new_blend.min(2))
-                                .copied()
-                                .unwrap_or("Normal"),
-                        ))
+                        .selected_text(crate::i18n::trc(color_blend_name(new_blend.color)))
                         .show_ui(ui, |ui| {
-                            for (bi, name) in ["Normal", "Additive", "Multiply"].iter().enumerate()
-                            {
-                                ui.selectable_value(&mut new_blend, bi, crate::i18n::tr(name));
+                            for c in COLOR_BLEND_MENU {
+                                ui.selectable_value(
+                                    &mut new_blend.color,
+                                    c,
+                                    crate::i18n::trc(color_blend_name(c)),
+                                );
                             }
                         });
                 });
+                // the two modes from before 5.3 ignore the alpha blend
+                let compatible = matches!(
+                    new_blend.color,
+                    ColorBlend::AddCompatible | ColorBlend::MultiplyCompatible
+                );
+                ui.horizontal(|ui| {
+                    label(ui, "Alpha blend");
+                    ui.add_enabled_ui(!compatible, |ui| {
+                        egui::ComboBox::from_id_salt(("alpha-blend", i))
+                            .selected_text(crate::i18n::trc(alpha_blend_name(new_blend.alpha)))
+                            .show_ui(ui, |ui| {
+                                for a in AlphaBlend::ALL {
+                                    ui.selectable_value(
+                                        &mut new_blend.alpha,
+                                        a,
+                                        crate::i18n::trc(alpha_blend_name(a)),
+                                    );
+                                }
+                            });
+                    });
+                });
+                if compatible {
+                    new_blend.alpha = AlphaBlend::Over;
+                }
+                if !new_blend.legacy_bits().1 {
+                    ui.horizontal(|ui| {
+                        ui.add_space(78.0);
+                        ui.weak(crate::i18n::tr(
+                            "Kept by moc3 5.3; older versions draw the nearest of Normal, Add and Multiply",
+                        ));
+                    });
+                }
                 let mut double_sided = m.flags & flags::DOUBLE_SIDED != 0;
                 let mut inverted = m.flags & flags::INVERTED_MASK != 0;
                 ui.horizontal(|ui| {
@@ -7880,12 +7907,7 @@ impl EditorUi {
                         | flags::BLEND_MULTIPLICATIVE
                         | flags::DOUBLE_SIDED
                         | flags::INVERTED_MASK);
-                if new_blend == 1 {
-                    new_flags |= flags::BLEND_ADDITIVE;
-                }
-                if new_blend == 2 {
-                    new_flags |= flags::BLEND_MULTIPLICATIVE;
-                }
+                new_flags |= new_blend.legacy_bits().0;
                 if double_sided {
                     new_flags |= flags::DOUBLE_SIDED;
                 }
@@ -7987,10 +8009,11 @@ impl EditorUi {
                     log::info!("{} clips by {} mesh(es)", s.mesh_name(i), masks.len());
                 }
 
-                if new_flags != m.flags || (order - base_order).abs() > 0.5 {
+                if new_flags != m.flags || new_blend != blend || (order - base_order).abs() > 0.5 {
                     let changed = s.edit(|model| {
                         let Some(am) = model.art_meshes.get_mut(i) else { return false };
                         am.flags = new_flags;
+                        am.blend = new_blend;
                         if (order - base_order).abs() > 0.5 {
                             let delta = order - base_order;
                             for d in &mut am.draw_orders {
@@ -13705,6 +13728,7 @@ mod drag_tests {
             enabled: true,
             texture: 0,
             flags: 0,
+            blend: Default::default(),
             vertex_count: 3,
             uvs: vec![0.0; 6],
             indices: vec![0, 1, 2],
@@ -13795,6 +13819,7 @@ mod mesh_delete_tests {
                 enabled: true,
                 texture: 0,
                 flags: 0,
+                blend: Default::default(),
                 vertex_count: 3,
                 uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
                 indices: vec![0, 1, 2],
@@ -13873,6 +13898,7 @@ mod key_cmd_tests {
             enabled: true,
             texture: 0,
             flags: 0,
+            blend: Default::default(),
             vertex_count: 1,
             uvs: vec![0.0, 0.0],
             indices: vec![0, 0, 0],
@@ -14075,6 +14101,7 @@ mod eyedropper_tests {
             enabled: true,
             texture: 0,
             flags: 0,
+            blend: Default::default(),
             vertex_count: 4,
             uvs: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
             indices: vec![0, 1, 2, 0, 2, 3],
@@ -14099,5 +14126,66 @@ mod eyedropper_tests {
         assert_eq!(at(0.75, 0.25, &mut cache), Some([0, 255, 0, 255]));
         assert_eq!(at(0.25, 0.75, &mut cache), Some([0, 0, 255, 255]));
         assert_eq!(at(2.0, 2.0, &mut cache), None);
+    }
+}
+
+/// The colour blends as the Properties menu lists them: Cubism's order,
+/// with the two modes from before 5.3 last.
+const COLOR_BLEND_MENU: [ayatsuri_format::model::ColorBlend; 18] = {
+    use ayatsuri_format::model::ColorBlend::*;
+    [
+        Normal,
+        Add,
+        AddGlow,
+        Darken,
+        Multiply,
+        ColorBurn,
+        LinearBurn,
+        Lighten,
+        Screen,
+        ColorDodge,
+        Overlay,
+        SoftLight,
+        HardLight,
+        LinearLight,
+        Hue,
+        Color,
+        AddCompatible,
+        MultiplyCompatible,
+    ]
+};
+
+fn color_blend_name(c: ayatsuri_format::model::ColorBlend) -> &'static str {
+    use ayatsuri_format::model::ColorBlend::*;
+    match c {
+        Normal => "blend|Normal",
+        Add => "blend|Add",
+        AddGlow => "blend|Add (Glow)",
+        Darken => "blend|Darken",
+        Multiply => "blend|Multiply",
+        ColorBurn => "blend|Color Burn",
+        LinearBurn => "blend|Linear Burn",
+        Lighten => "blend|Lighten",
+        Screen => "blend|Screen",
+        ColorDodge => "blend|Color Dodge",
+        Overlay => "blend|Overlay",
+        SoftLight => "blend|Soft Light",
+        HardLight => "blend|Hard Light",
+        LinearLight => "blend|Linear Light",
+        Hue => "blend|Hue",
+        Color => "blend|Color",
+        AddCompatible => "blend|Add (Before 5.3)",
+        MultiplyCompatible => "blend|Multiply (Before 5.3)",
+    }
+}
+
+fn alpha_blend_name(a: ayatsuri_format::model::AlphaBlend) -> &'static str {
+    use ayatsuri_format::model::AlphaBlend::*;
+    match a {
+        Over => "blend|Over",
+        Atop => "blend|Atop",
+        Out => "blend|Out",
+        Conjoint => "blend|Conjoint",
+        Disjoint => "blend|Disjoint",
     }
 }

@@ -157,6 +157,17 @@ pub fn tr(en: &'static str) -> &'static str {
     }
 }
 
+/// Interface text whose English is ambiguous, keyed with its context
+/// (`"blend|Add"`): the translation of the whole key, or the English after
+/// the bar.
+pub fn trc(key: &'static str) -> &'static str {
+    let table = ACTIVE.read().ok().and_then(|a| *a);
+    match table.and_then(|t| t.get(key)) {
+        Some(s) => s.as_str(),
+        None => key.split_once('|').map_or(key, |(_, en)| en),
+    }
+}
+
 /// Interface text with values: {name} placeholders filled in.
 pub fn trf(en: &'static str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
     let mut out = tr(en).to_string();
