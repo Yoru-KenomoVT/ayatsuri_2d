@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ayatsuri_core::Puppet;
-use ayatsuri_format::model::Binding;
+use ayatsuri_format::model::{Binding, flags};
 use ayatsuri_format::{AomPayload, Meta, Model};
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use log::{debug, info, warn};
@@ -500,7 +500,7 @@ fn reimport_into(
             visible: true,
             opacity: layer.opacity,
             clip_to_below: false,
-            blend: ayatsuri_import::Blend::Normal,
+            blend: layer.blend,
         });
     }
     report.missing = (0..model.art_meshes.len())
@@ -549,6 +549,9 @@ fn reimport_into(
             })
             .collect();
         am.texture = page_offset + quad.texture;
+        // the layer's blend mode as the file has it now
+        let blend = flags::BLEND_ADDITIVE | flags::BLEND_MULTIPLICATIVE;
+        am.flags = (am.flags & !blend) | (quad.flags & blend);
         // Reset mesh goes back to the new art's quad
         if let Some(slot) = originals.get_mut(mi) {
             *slot = (quad.uvs.clone(), quad.indices.clone());
@@ -2349,6 +2352,8 @@ mod import_paint_tests {
         for px in updated.layers[0].rgba.as_chunks_mut::<4>().0 {
             px[0] = 10;
         }
+        // and set to Multiply in the paint program
+        updated.layers[0].blend = ayatsuri_import::Blend::Multiplicative;
         let r = reimport_into(&mut s, &ctx, updated).unwrap();
         assert_eq!(r.updated, 1);
         assert_eq!(r.new_layers, vec!["Torso/Sleeve".to_string()]);
@@ -2358,6 +2363,10 @@ mod import_paint_tests {
         assert!(m.art_meshes[0].texture as usize >= pages);
         assert_eq!(m.art_meshes[0].positions, before.art_meshes[0].positions);
         assert_ne!(m.art_meshes[0].uvs, before.art_meshes[0].uvs);
+        assert_eq!(
+            m.art_meshes[0].flags & flags::BLEND_MULTIPLICATIVE,
+            flags::BLEND_MULTIPLICATIVE
+        );
         // Arm kept its old art
         assert_eq!(m.art_meshes[1].texture, before.art_meshes[1].texture);
         assert_eq!(m.art_meshes[1].uvs, before.art_meshes[1].uvs);

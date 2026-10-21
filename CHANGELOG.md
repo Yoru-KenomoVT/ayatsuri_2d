@@ -255,6 +255,9 @@
 - Multiply and Add (Linear Dodge) layers from PSD, Krita and Clip Studio
   files keep their blend mode on import; other modes moc3 has no
   counterpart for are drawn normal, with a note in the log.
+- Re-import PSD applies each layer's blend mode to the mesh it updates;
+  it used to keep the mesh's old mode, so a layer set to Multiply after
+  the first import stayed Normal.
 - The workspace picker in the toolbar is a dropdown styled like the menu
   bar's menus, with the open workspace in the accent colour.
 - Cubism 4 projects open: their archive table has no tag list (a raw
