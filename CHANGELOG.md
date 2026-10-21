@@ -223,10 +223,19 @@
 - The update banner and About show **What's new** for the release on
   offer: its changelog, folded away until opened.
 - The Clip by list has a search box and lists ArtPaths first.
+- **Key dots show the selection**, as in Cubism: green when every
+  selected object has the key, yellow when only some do, a red border on
+  the key the slider sits on, and a red glow on the key Motion Mirroring
+  just wrote to. **Right-click near a key** and the slider sticks to its
+  exact value.
+- **Canvas colour** (Settings > Appearance > Canvas): the page under the
+  art can be any colour, with grey quick picks for long sessions.
 - Every new string of this release is in all six languages.
 
 ### Fixed
 
+- A middle-button drag only pans the view; it used to move the mesh or
+  points under the pointer as well.
 - The Select tool is called Arrow, as its shortcut always said.
 - Multiply and Add (Linear Dodge) layers from PSD, Krita and Clip Studio
   files keep their blend mode on import; other modes moc3 has no
