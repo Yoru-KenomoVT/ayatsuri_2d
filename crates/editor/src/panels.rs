@@ -8361,7 +8361,6 @@ impl EditorUi {
             Vec::new()
         };
         vp.rect_filled(page, 0.0, self.prefs.canvas_page_color().unwrap_or(theme::pal().canvas));
-        vp.rect_stroke(page, 0.0, Stroke::new(1.0, Color32::from_gray(0x8c)), StrokeKind::Outside);
 
         let to_screen = |x: f32, y: f32| -> Pos2 {
             let px = c.origin_x + x * c.pixels_per_unit;
