@@ -340,6 +340,8 @@ pub struct DisplayInfo {
     pub groups: Vec<(String, Vec<u32>)>,
     /// 0xRRGGBB per folder, -1 for none; empty in older files.
     pub group_colors: Vec<i32>,
+    /// Colours picked for single keys: parameter, key value, 0xRRGGBB.
+    pub key_colors: Vec<(u32, f32, i32)>,
     /// Display names of parts and art meshes (PSD layer and group names);
     /// empty in older files, which fall back to IDs.
     pub part_names: Vec<String>,

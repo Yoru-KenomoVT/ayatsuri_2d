@@ -1236,6 +1236,7 @@
   "Ellipse Interpolation": "Ellips-interpolasie",
   "SNS Interpolation": "SNS-interpolasie",
   "Keyforms blend along a curve instead of a straight line, so a sway made of turned keys keeps its size. Needs three keys or more; applies to the selected objects. Points is how many keys a moc3 export adds between each pair so other apps follow the curve.": "Sleutelvorms meng langs 'n kurwe in plaas van 'n reguit lyn, sodat 'n swaai van gedraaide sleutels sy grootte behou. Benodig drie of meer sleutels; geld vir die gekose voorwerpe. Punte is hoeveel sleutels 'n moc3-uitvoer tussen elke paar byvoeg sodat ander toepassings die kurwe volg.",
+  "Key color": "Sleutelkleur",
   "About Physics (online manual)": "Oor fisika (aanlyn handleiding)",
   "Apply Skinning…": "Pas skinning toe…",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves everything in parallel. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "Sleep 'n beheerpunt om te vervorm. Ctrl+sleep skuif net die beheerpunt. Shift+sleep skuif alles parallel. Sleep die anker om die middelpunt van Rotasie en Vergroot/Verklein te skuif.\n\nTydelike pad: klik om 'n beheerpunt by te voeg, klik op die pad om een in te voeg, Alt+klik vee uit.\n\nElke sleep beland op die sleutelvorm waarop die parameters staan, as een ontdoen-stap."

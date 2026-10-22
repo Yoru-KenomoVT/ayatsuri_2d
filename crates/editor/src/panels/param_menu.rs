@@ -39,6 +39,8 @@ pub(super) enum ParamCmd {
     Mirror(usize),
     /// Extended Interpolation for a parameter on the selected objects.
     Curve(usize),
+    /// A colour for one key (None clears it).
+    KeyColor(usize, f32, Option<[u8; 3]>),
     ResetAll,
     DeleteEmptyParams,
     DeleteEmptyGroups,
@@ -134,8 +136,12 @@ const LABEL_COLORS: [[u8; 3]; 6] = [
 /// The label colour picker shared by parameters and folders. Returns the
 /// pick: Some(Some(rgb)) for a colour, Some(None) for clear.
 fn color_menu(ui: &mut Ui) -> Option<Option<[u8; 3]>> {
+    color_menu_named(ui, crate::i18n::tr("Label color"))
+}
+
+fn color_menu_named(ui: &mut Ui, label: &str) -> Option<Option<[u8; 3]>> {
     let mut out = None;
-    ui.menu_button(crate::i18n::tr("Label color"), |ui| {
+    ui.menu_button(label, |ui| {
         ui.horizontal(|ui| {
             for c in LABEL_COLORS {
                 let (rect, resp) =
@@ -243,8 +249,20 @@ pub(super) fn name_menu(
 
 /// The popup on a slider: keys first, then Select / Reflect / Adjust /
 /// Change, which work on the selected objects.
-pub(super) fn slider_menu(ui: &mut Ui, pi: usize, v: f32, can_edit: bool) -> Option<ParamCmd> {
+pub(super) fn slider_menu(
+    ui: &mut Ui,
+    pi: usize,
+    v: f32,
+    key: Option<f32>,
+    can_edit: bool,
+) -> Option<ParamCmd> {
     let mut out = None;
+    // on a key: its own colour first
+    if let Some(k) = key
+        && let Some(pick) = color_menu_named(ui, crate::i18n::tr("Key color"))
+    {
+        out = Some(ParamCmd::KeyColor(pi, k, pick));
+    }
     item(ui, can_edit, crate::i18n::tr("Add Single Keyform"), ParamCmd::AddSingle(pi, v), &mut out);
     item(ui, can_edit, crate::i18n::tr("Delete Keyform"), ParamCmd::DeleteKey(pi), &mut out);
     ui.separator();
@@ -732,6 +750,14 @@ impl EditorUi {
                 self.pmenu.adjust = Some((pi, v, v));
             }
             ParamCmd::Change(pi) => self.pmenu.change = Some((pi, pi)),
+            ParamCmd::KeyColor(pi, k, pick) => {
+                let Some(s) = &mut self.session else { return };
+                s.key_colors.retain(|e| !(e.0 == pi && (e.1 - k).abs() < 1e-5));
+                if let Some(c) = pick {
+                    s.key_colors.push((pi, k, c));
+                }
+                s.modified = true;
+            }
         }
     }
 

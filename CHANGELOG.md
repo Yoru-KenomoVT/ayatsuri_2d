@@ -270,6 +270,8 @@
   more. A moc3 or cmo3 export adds Points keys between each pair so other
   apps follow the curve; keys added on a curved parameter take the curve's
   shape (#21).
+- **Key colours**: right-click the key the slider sits on for Key color, to
+  tell keys apart; saved with the model (#19).
 - Every new string of this release is in all six languages.
 
 ### Fixed

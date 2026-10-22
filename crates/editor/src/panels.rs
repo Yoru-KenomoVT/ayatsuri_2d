@@ -5230,6 +5230,12 @@ impl EditorUi {
         if pi < s.param_colors.len() {
             s.param_colors.remove(pi);
         }
+        s.key_colors.retain(|e| e.0 != pi);
+        for e in &mut s.key_colors {
+            if e.0 > pi {
+                e.0 -= 1;
+            }
+        }
         for g in &mut s.groups {
             g.params.retain(|&p| p != pi);
             for p in &mut g.params {
@@ -12797,6 +12803,8 @@ struct KeyMarks {
     /// Per parameter: the selected objects' keys and how many have each.
     keys: Vec<Vec<(f32, usize)>>,
     mirrored: Option<(usize, f32)>,
+    /// Colours picked for single keys.
+    colors: Vec<(usize, f32, [u8; 3])>,
 }
 
 /// One slider's share of [`KeyMarks`].
@@ -12805,6 +12813,7 @@ struct KeyLook {
     picked: usize,
     keys: Vec<(f32, usize)>,
     mirrored: Option<f32>,
+    colors: Vec<(f32, [u8; 3])>,
 }
 
 impl KeyMarks {
@@ -12813,6 +12822,7 @@ impl KeyMarks {
             picked: self.picked,
             keys: self.keys.get(pi).cloned().unwrap_or_default(),
             mirrored: self.mirrored.filter(|m| m.0 == pi).map(|m| m.1),
+            colors: self.colors.iter().filter(|c| c.0 == pi).map(|c| (c.1, c.2)).collect(),
         }
     }
 }
@@ -12847,6 +12857,7 @@ impl EditorUi {
             picked: targets.len(),
             keys,
             mirrored: self.mirror_mark.as_ref().map(|m| (m.0, m.1)),
+            colors: s.key_colors.clone(),
         }
     }
 }
@@ -12890,7 +12901,15 @@ fn param_slider(
         } else {
             Color32::from_rgb(0x4C, 0xC0, 0x6A)
         };
-        painter.circle(at, 3.0, fill, Stroke::new(1.0, theme::pal().key_ring));
+        match look.colors.iter().find(|c| (c.0 - k).abs() < 1e-5) {
+            Some(&(_, [r, g, b])) => {
+                let ring = if held == 0 { theme::pal().key_ring } else { fill };
+                painter.circle(at, 3.2, Color32::from_rgb(r, g, b), Stroke::new(1.4, ring));
+            }
+            None => {
+                painter.circle(at, 3.0, fill, Stroke::new(1.0, theme::pal().key_ring));
+            }
+        }
         // the selected key: the slider sits on it
         if held > 0 && (*value - k).abs() <= span * 1e-4 {
             painter.circle_stroke(at, 4.6, Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35)));
@@ -12925,6 +12944,7 @@ fn param_slider(
             .filter(|&(_, d)| d <= 6.0)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(k, _)| k)
+        && (*value - k).abs() > span * 1e-4
     {
         *value = k;
         changed = true;
@@ -13293,9 +13313,11 @@ fn parameter_row(
         if slider_resp.drag_stopped() {
             log::debug!("parameter {display} dragged to {v:.3}");
         }
+        let span = (max - min).max(1e-6);
+        let on = keys.iter().copied().find(|k| (v - k).abs() <= span * 1e-4);
         if full && !on_key {
             slider_resp.context_menu(|ui| {
-                if let Some(c) = param_menu::slider_menu(ui, pi, v, can_edit) {
+                if let Some(c) = param_menu::slider_menu(ui, pi, v, on, can_edit) {
                     actions.push(ParamAction::Cmd(c));
                 }
             });
@@ -13473,12 +13495,12 @@ fn combined_pad(
     resp.context_menu(|ui| {
         // the slider popup for each of the pad's two parameters
         ui.menu_button(truncate(&name_a, 18), |ui| {
-            if let Some(c) = param_menu::slider_menu(ui, pa, va, can_edit) {
+            if let Some(c) = param_menu::slider_menu(ui, pa, va, None, can_edit) {
                 actions.push(ParamAction::Cmd(c));
             }
         });
         ui.menu_button(truncate(&name_b, 18), |ui| {
-            if let Some(c) = param_menu::slider_menu(ui, pb, vb, can_edit) {
+            if let Some(c) = param_menu::slider_menu(ui, pb, vb, None, can_edit) {
                 actions.push(ParamAction::Cmd(c));
             }
         });

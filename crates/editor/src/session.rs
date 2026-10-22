@@ -196,6 +196,9 @@ pub struct Session {
     pub deformer_shown: Vec<bool>,
     /// Label colors on parameter rows, palette only, saved in .aom.
     pub param_colors: Vec<Option<[u8; 3]>>,
+    /// Colours picked for single keys on the sliders: parameter, key value,
+    /// colour. Saved in .aom.
+    pub key_colors: Vec<(usize, f32, [u8; 3])>,
     /// Full-resolution egui textures, decoded only when something actually
     /// zooms into them (mesh edit); the palette thumbs stay 256px.
     full_tex: Vec<Option<TextureHandle>>,
@@ -807,6 +810,7 @@ impl Session {
         self.current_comp = old.current_comp;
         self.param_names = old.param_names;
         self.param_colors = old.param_colors;
+        self.key_colors = old.key_colors;
         self.groups = old.groups;
         self.combined = old.combined;
         self.model_groups = old.model_groups;
@@ -890,6 +894,7 @@ impl Session {
         self.current_comp = old.current_comp;
         self.param_names = old.param_names;
         self.param_colors = old.param_colors;
+        self.key_colors = old.key_colors;
         self.groups = old.groups;
         self.combined = old.combined;
         self.model_groups = old.model_groups;
@@ -988,6 +993,18 @@ impl Session {
             if d.param_names.len() == n {
                 s.param_names = d.param_names;
             }
+            s.key_colors = d
+                .key_colors
+                .iter()
+                .filter(|&&(p, _, c)| (p as usize) < n && c >= 0)
+                .map(|&(p, k, c)| {
+                    (
+                        p as usize,
+                        k,
+                        [((c >> 16) & 0xff) as u8, ((c >> 8) & 0xff) as u8, (c & 0xff) as u8],
+                    )
+                })
+                .collect();
             if d.param_colors.len() == n {
                 s.param_colors = d
                     .param_colors
@@ -1297,6 +1314,7 @@ impl Session {
             departed: HashMap::new(),
             deformer_shown: vec![true; n_defs],
             param_colors: vec![None; n_params],
+            key_colors: Vec::new(),
             full_tex: vec![None; n_tex],
             combined,
             model_groups: None,
@@ -1748,6 +1766,13 @@ impl Session {
             expressions: self.expressions.clone(),
             display: Some(ayatsuri_format::DisplayInfo {
                 param_names: self.param_names.clone(),
+                key_colors: self
+                    .key_colors
+                    .iter()
+                    .map(|&(p, k, [r, g, b])| {
+                        (p as u32, k, ((r as i32) << 16) | ((g as i32) << 8) | (b as i32))
+                    })
+                    .collect(),
                 param_colors: self
                     .param_colors
                     .iter()
