@@ -63,6 +63,8 @@ pub(crate) struct Facts {
     pub repeat: Vec<bool>,
     pub part_parents: Vec<i32>,
     pub mesh_parts: Vec<i32>,
+    /// moc3 5.3's blend word per mesh: colour code, alpha code above it.
+    pub mesh_blends: Vec<u32>,
     pub meshes: Vec<MeshStatic>,
 }
 
@@ -288,6 +290,13 @@ pub extern "C" fn ay2d_load(bytes: *const u8, len: usize) -> *mut Model {
             ranges: m.parameters.iter().map(|p| (p.min, p.max, p.default)).collect(),
             repeat: m.parameters.iter().map(|p| p.repeat).collect(),
             part_parents: m.parts.iter().map(|p| p.parent_part.map_or(-1, |x| x as i32)).collect(),
+            mesh_blends: m
+                .art_meshes
+                .iter()
+                .map(|a| {
+                    ayatsuri_format::model::Blend::of(a.blend, a.flags).to_moc3().max(0) as u32
+                })
+                .collect(),
             mesh_parts: m
                 .art_meshes
                 .iter()

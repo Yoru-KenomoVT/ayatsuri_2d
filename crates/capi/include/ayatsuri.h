@@ -424,6 +424,18 @@ int32_t ay2d_part_parent(const struct ay2d_model *m, uint32_t i);
 int32_t ay2d_mesh_part(const struct ay2d_model *m, uint32_t i);
 
 /*
+ Mesh `i`'s blend as moc3 5.3 encodes it: the colour blend in the low
+ byte (0 Normal, 1 Add before 5.3, 2 Multiply before 5.3, 3 Add, 4 Add
+ glow, 5 Darken, 6 Multiply, 7 Color burn, 8 Linear burn, 9 Lighten,
+ 10 Screen, 11 Color dodge, 12 Overlay, 13 Soft light, 14 Hard light,
+ 15 Linear light, 16 Hue, 17 Color) and the alpha blend in the next
+ (0 Over, 1 Atop, 2 Out, 3 Conjoint, 4 Disjoint). 0, 1 and 2 with Over
+ are what the drawable's `AY2D_FLAG_*` blend bits already say; anything
+ else needs the backdrop to draw. 0 for an index out of range.
+ */
+uint32_t ay2d_mesh_blend(const struct ay2d_model *m, uint32_t i);
+
+/*
  How many parameter folders the file's palette has.
  */
 uint32_t ay2d_parameter_group_count(const struct ay2d_model *m);

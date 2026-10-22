@@ -181,6 +181,19 @@ pub extern "C" fn ay2d_mesh_part(m: *const Model, i: u32) -> i32 {
     guard(-1, || model(m).map_or(-1, |m| m.facts.mesh_parts.get(i as usize).copied().unwrap_or(-1)))
 }
 
+/// Mesh `i`'s blend as moc3 5.3 encodes it: the colour blend in the low
+/// byte (0 Normal, 1 Add before 5.3, 2 Multiply before 5.3, 3 Add, 4 Add
+/// glow, 5 Darken, 6 Multiply, 7 Color burn, 8 Linear burn, 9 Lighten,
+/// 10 Screen, 11 Color dodge, 12 Overlay, 13 Soft light, 14 Hard light,
+/// 15 Linear light, 16 Hue, 17 Color) and the alpha blend in the next
+/// (0 Over, 1 Atop, 2 Out, 3 Conjoint, 4 Disjoint). 0, 1 and 2 with Over
+/// are what the drawable's `AY2D_FLAG_*` blend bits already say; anything
+/// else needs the backdrop to draw. 0 for an index out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn ay2d_mesh_blend(m: *const Model, i: u32) -> u32 {
+    guard(0, || model(m).map_or(0, |m| m.facts.mesh_blends.get(i as usize).copied().unwrap_or(0)))
+}
+
 /// How many parameter folders the file's palette has.
 #[unsafe(no_mangle)]
 pub extern "C" fn ay2d_parameter_group_count(m: *const Model) -> u32 {

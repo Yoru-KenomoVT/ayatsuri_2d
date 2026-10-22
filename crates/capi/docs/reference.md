@@ -210,6 +210,17 @@ If your renderer works in premultiplied alpha, premultiply the textures at
 load and use `(one, one-minus-src-alpha)` for normal and `(one, one)` for
 additive.
 
+**moc3 5.3 blend modes.** A model saved for Cubism 5.3 can give a mesh one
+of sixteen colour blends (Darken, Screen, Overlay, Soft Light, Hue and the
+rest) and an alpha blend (Over, Atop, Out, Conjoint, Disjoint).
+`ay2d_mesh_blend` says which. The flags above stay correct for every mesh:
+a 5.3 mode sets the nearest of normal, additive and multiplicative, so a
+renderer that only does those three still draws something close. To draw
+the 5.3 modes exactly, read what is already drawn under the mesh (copy the
+target, or use framebuffer fetch) and mix in the shader with the
+[W3C Compositing and Blending](https://www.w3.org/TR/compositing-1/)
+formulas. Only meshes with such a mode need it.
+
 ### Masks
 
 A drawable with `mask_count > 0` only shows where its mask meshes have
@@ -458,7 +469,7 @@ one thread at a time with `BUSY` for a second.
 | [Library](#library) | `ay2d_abi_version` `ay2d_version` `ay2d_last_error` |
 | [Model](#model) | `ay2d_load` `ay2d_free` `ay2d_canvas` and the counts |
 | [Ids and names](#ids-and-names) | `ay2d_parameter_id` `ay2d_parameter_name` `ay2d_parameter_index` and the part and mesh versions |
-| [Model facts](#model-facts) | `ay2d_parameter_repeat` `ay2d_parameter_keys` `ay2d_part_parent` `ay2d_mesh_part` and the groups |
+| [Model facts](#model-facts) | `ay2d_parameter_repeat` `ay2d_parameter_keys` `ay2d_part_parent` `ay2d_mesh_part` `ay2d_mesh_blend` and the groups |
 | [Parameters](#parameters) | `ay2d_parameter_ranges` `ay2d_get_parameters` `ay2d_set_parameters` `ay2d_set_all_parameters` |
 | [Parts](#parts) | `ay2d_get_part_opacities` `ay2d_set_part_opacities` |
 | [Update](#update) | `ay2d_update` |
@@ -583,6 +594,18 @@ int32_t ay2d_mesh_part(const ay2d_model *m, uint32_t i);
 ```
 The part that holds a part or a mesh, or `-1` at the top. **Thread:** any.
 
+#### ay2d_mesh_blend
+```c
+uint32_t ay2d_mesh_blend(const ay2d_model *m, uint32_t i);
+```
+Mesh `i`'s blend as moc3 5.3 stores it: the colour blend in the low byte,
+the alpha blend in the next. Colour: 0 Normal, 1 Add (before 5.3),
+2 Multiply (before 5.3), 3 Add, 4 Add (glow), 5 Darken, 6 Multiply,
+7 Color burn, 8 Linear burn, 9 Lighten, 10 Screen, 11 Color dodge,
+12 Overlay, 13 Soft light, 14 Hard light, 15 Linear light, 16 Hue, 17 Color.
+Alpha: 0 Over, 1 Atop, 2 Out, 3 Conjoint, 4 Disjoint. 0, 1 and 2 with Over
+are what the drawable's flags already say; see [Blending](#blending).
+**Thread:** any.
 #### ay2d_parameter_group_count, ay2d_parameter_group_name, ay2d_parameter_group
 ```c
 uint32_t    ay2d_parameter_group_count(const ay2d_model *m);
