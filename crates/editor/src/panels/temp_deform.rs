@@ -6,8 +6,8 @@
 //
 // Every drag lands on the keyform the parameters sit on as one undo step.
 // Ctrl+drag moves a control point only (the art stays put), Shift+drag
-// moves everything in parallel, and the anchor in the middle is the centre
-// for Rotation and Enlarge/Reduce.
+// moves straight (horizontally, vertically or at 45 degrees), and the
+// anchor in the middle is the centre for Rotation and Enlarge/Reduce.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
 
@@ -102,8 +102,6 @@ enum Mode {
     Deform,
     /// Ctrl: move the control only.
     Control,
-    /// Shift: move everything in parallel.
-    Parallel,
 }
 
 struct Drag {
@@ -440,9 +438,6 @@ fn quad_drag(
 ) -> ([V; 4], V) {
     let d = to - from;
     let mut q = *q0;
-    if mode == Mode::Parallel {
-        return (q0.map(|p| p + d), a0 + d);
-    }
     match grab {
         Grab::Anchor => return (q, a0 + d),
         Grab::Corner(i) if mode == Mode::Control => bump(&mut q, i, d),
@@ -624,15 +619,21 @@ impl TempDeform {
         }
     }
 
-    fn drag_to(&mut self, to: V, snap: bool) {
+    fn drag_to(&mut self, to: V, shift: bool) {
         let Some(d) = &self.drag else { return };
+        // Shift: turning snaps the angle, anything else moves straight
+        let turning = matches!(d.grab, Grab::Stalk)
+            || matches!(d.grab, Grab::Corner(_)) && self.method == Method::Rotation;
+        let snap = shift && turning;
+        let to =
+            if shift && !turning { d.from + crate::point_edit::straight(to - d.from) } else { to };
         let delta = to - d.from;
         match (&mut self.frame, &d.frame) {
             (Frame::Quad { now, anchor, rest }, Frame::Quad { now: q0, anchor: a0, .. }) => {
                 let (q, a) = quad_drag(self.method, q0, *a0, d.grab, d.mode, d.from, to, snap);
                 *now = q;
                 *anchor = a;
-                if d.mode == Mode::Control || d.grab == Grab::Anchor && d.mode != Mode::Parallel {
+                if d.mode == Mode::Control || d.grab == Grab::Anchor {
                     // the art stays: the box is bound where it now is
                     *rest = q;
                 }
@@ -640,9 +641,7 @@ impl TempDeform {
             (Frame::Grid { now, .. }, Frame::Grid { now: g0, .. })
             | (Frame::Path { now, .. }, Frame::Path { now: g0, .. }) => {
                 let Grab::Point(k) = d.grab else { return };
-                if d.mode == Mode::Parallel {
-                    *now = g0.iter().map(|&p| p + delta).collect();
-                } else if let (Some(p), Some(&p0)) = (now.get_mut(k), g0.get(k)) {
+                if let (Some(p), Some(&p0)) = (now.get_mut(k), g0.get(k)) {
                     *p = p0 + delta;
                 }
             }
@@ -893,18 +892,9 @@ impl EditorUi {
             && let Some(grab) = td.hit(p, &xf)
             && !(mods.alt && matches!(td.frame, Frame::Path { .. }))
         {
-            let mode = if mods.command {
-                Mode::Control
-            } else if mods.shift
-                && grab != Grab::Stalk
-                && !matches!(grab, Grab::Corner(_) if td.method == Method::Rotation)
-            {
-                Mode::Parallel
-            } else {
-                Mode::Deform
-            };
+            let mode = if mods.command { Mode::Control } else { Mode::Deform };
             let start = td.mapped();
-            let deforms = mode != Mode::Control && !(grab == Grab::Anchor && mode == Mode::Deform);
+            let deforms = mode != Mode::Control && grab != Grab::Anchor;
             let live = if deforms {
                 td.targets.iter().map(|&(t, _)| LiveDrag::start(&mut s.puppet, t)).collect()
             } else {
@@ -1081,7 +1071,7 @@ impl EditorUi {
         super::tool_details::section(
             ui,
             tr("Transform method"),
-            "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves everything in parallel. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.",
+            "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves straight: horizontally, vertically or at 45°. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.",
         );
         let current = self.tdeform.as_ref().map(|t| t.method);
         let mut pick = None;
@@ -1119,6 +1109,16 @@ mod tests {
 
     fn close(a: V, b: V) -> bool {
         (a - b).length() < 1e-3
+    }
+
+    #[test]
+    fn shift_moves_straight() {
+        use crate::point_edit::straight;
+        // nearly flat goes flat, nearly diagonal goes diagonal
+        assert!(close(straight(vec2(10.0, 1.0)), vec2(10.0, 0.0)));
+        assert!(close(straight(vec2(1.0, -9.0)), vec2(0.0, -9.0)));
+        let d = straight(vec2(5.0, 4.6));
+        assert!((d.x - d.y).abs() < 1e-4 && d.x > 4.0);
     }
 
     #[test]

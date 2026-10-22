@@ -141,6 +141,7 @@
   one, and every deformer gets a parameter (-45 to 45) in a folder named
   after the mesh. The original mesh is hidden and kept. It is all plain
   deformers, glue and parameters, so it exports to moc3 for any version.
+  Ctrl+drag to move the point only, Shift+drag to move straight; the
 - **Blend modes from Cubism 5.3**: a mesh's colour blend can be Add,
   Add (Glow), Darken, Multiply, Color Burn, Linear Burn, Lighten, Screen,
   Color Dodge, Overlay, Soft Light, Hard Light, Linear Light, Hue or
@@ -272,6 +273,9 @@
   shape (#21).
 - **Key colours**: right-click the key the slider sits on for Key color, to
   tell keys apart; saved with the model (#19).
+- **Shift+drag moves straight**, horizontally, vertically or at 45°, for
+  mesh points, warp points and boxes, and the Temporary Deform Tool's
+  points (#15).
 - Every new string of this release is in all six languages.
 
 ### Fixed

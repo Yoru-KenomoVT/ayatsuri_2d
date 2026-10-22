@@ -107,10 +107,25 @@ impl Xform {
     }
 }
 
+/// Shift-drag: a move goes straight, horizontally, vertically or at 45
+/// degrees, whichever is nearest the pointer.
+pub fn straight(d: Vec2) -> Vec2 {
+    if d.length_sq() < 1e-12 {
+        return d;
+    }
+    let step = std::f32::consts::FRAC_PI_4;
+    let a = (d.y.atan2(d.x) / step).round() * step;
+    let dir = Vec2::new(a.cos(), a.sin());
+    dir * d.dot(dir)
+}
+
 pub fn xform(d: &PtDrag, shift: bool, alt: bool) -> Xform {
     let id = Xform { o: d.bbox.center(), m: [1.0, 0.0, 0.0, 1.0], t: Vec2::ZERO };
     match d.grab {
-        Grab::Point | Grab::Move => Xform { t: d.ptr - d.start, ..id },
+        Grab::Point | Grab::Move => {
+            let t = d.ptr - d.start;
+            Xform { t: if shift { straight(t) } else { t }, ..id }
+        }
         Grab::Marquee => id,
         Grab::Scale { hx, hy } => {
             let r = d.bbox;
