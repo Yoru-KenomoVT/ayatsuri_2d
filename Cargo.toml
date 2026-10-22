@@ -67,3 +67,11 @@ lto = "thin"
 codegen-units = 1
 # line tables only: crash backtraces name file and line, binary stays lean
 debug = "line-tables-only"
+
+# The C library on its own: everything the entry points do not reach is
+# gone, and no Rust names stay in the file. `cargo xtask capi` uses it.
+[profile.capi-release]
+inherits = "release"
+lto = "fat"
+debug = false
+strip = "symbols"

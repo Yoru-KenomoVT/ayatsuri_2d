@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="440" viewBox="0 0 800 440">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<defs>
+<clipPath id="eye"><ellipse cx="87" cy="65" rx="60" ry="32"/></clipPath>
+<mask id="noteye"><rect width="175" height="130" fill="#fff"/><ellipse cx="87" cy="65" rx="60" ry="32" fill="#000"/></mask>
+</defs>
+<rect width="800" height="440" fill="#1e1e21"/>
+<g class="f"><text x="20" y="40">mask mesh</text><text x="215" y="40">masked mesh</text><text x="410" y="40">stencil</text><text x="605" y="40">result</text></g>
+<g id="row1">
+<g transform="translate(20 52)"><rect class="box" x="0" y="0" width="175" height="130" rx="8"/><ellipse cx="87" cy="65" rx="60" ry="32" fill="#e4e4e8"/></g>
+<g transform="translate(215 52)"><rect class="box" x="0" y="0" width="175" height="130" rx="8"/><circle cx="117" cy="65" r="34" fill="#f08e1e"/></g>
+<g transform="translate(410 52)"><rect x="0" y="0" width="175" height="130" rx="8" fill="#000"/><ellipse cx="87" cy="65" rx="60" ry="32" fill="#4cc06a"/></g>
+<g transform="translate(605 52)"><rect class="box" x="0" y="0" width="175" height="130" rx="8"/><ellipse cx="87" cy="65" rx="60" ry="32" fill="#e4e4e8"/><circle cx="117" cy="65" r="34" fill="#f08e1e" clip-path="url(#eye)"/></g></g>
+<text class="f" x="20" y="208">The iris only shows inside the eye white.</text>
+<line x1="20" y1="226" x2="780" y2="226" stroke="#29292d" stroke-width="1.5"/>
+<text class="a" x="20" y="256">with AY2D_FLAG_INVERTED_MASK</text>
+<g id="row2">
+<g transform="translate(20 270)"><rect class="box" x="0" y="0" width="175" height="130" rx="8"/><ellipse cx="87" cy="65" rx="60" ry="32" fill="#e4e4e8"/></g>
+<g transform="translate(215 270)"><rect class="box" x="0" y="0" width="175" height="130" rx="8"/><circle cx="117" cy="65" r="34" fill="#f08e1e"/></g>
+<g transform="translate(410 270)"><rect x="0" y="0" width="175" height="130" rx="8" fill="#000"/><ellipse cx="87" cy="65" rx="60" ry="32" fill="#4cc06a"/></g>
+<g transform="translate(605 270)"><rect class="box" x="0" y="0" width="175" height="130" rx="8"/><ellipse cx="87" cy="65" rx="60" ry="32" fill="none" stroke="#8e8e96" stroke-dasharray="4 4"/><circle cx="117" cy="65" r="34" fill="#f08e1e" mask="url(#noteye)"/></g></g>
+<text class="f" x="20" y="428">Inverted: it only shows outside.</text>
+</svg>

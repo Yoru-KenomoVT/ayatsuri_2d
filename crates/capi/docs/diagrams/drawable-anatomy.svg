@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400" viewBox="0 0 800 400">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="800" height="400" fill="#1e1e21"/>
+<g id="positions"><rect class="box" x="20" y="40" width="360" height="220" rx="8"/><text class="t" x="20" y="28">positions <tspan class="f" dx="6">model units, after the update</tspan></text>
+<path d="M100 100 L320 80 L340 230 Z" fill="#f08e1e" fill-opacity="0.22"/><path d="M100 100 L340 230 L90 220 Z" fill="#f08e1e" fill-opacity="0.10"/>
+<path d="M100 100 L320 80 L340 230 L90 220 Z M100 100 L340 230" fill="none" stroke="#e4e4e8" stroke-width="1.4"/>
+<g fill="#e4e4e8"><circle cx="100" cy="100" r="4"/><circle cx="320" cy="80" r="4"/><circle cx="340" cy="230" r="4"/><circle cx="90" cy="220" r="4"/></g>
+<text class="m" x="84" y="92">0</text><text class="m" x="328" y="76">1</text><text class="m" x="348" y="246">2</text><text class="m" x="72" y="238">3</text></g>
+<g id="uvs"><rect class="box" x="420" y="40" width="360" height="220" rx="8"/><text class="t" x="420" y="28">uvs <tspan class="f" dx="6">the same vertices on the texture page</tspan></text>
+<rect x="450" y="58" width="300" height="184" fill="#1e1e21" stroke="#3a3a40"/>
+<text class="f" x="454" y="74">0, 0</text><text class="f" x="746" y="236" text-anchor="end">1, 1</text>
+<path d="M520 90 L690 90 L690 205 Z" fill="#f08e1e" fill-opacity="0.22"/><path d="M520 90 L690 205 L520 205 Z" fill="#f08e1e" fill-opacity="0.10"/>
+<path d="M520 90 H690 V205 H520 Z M520 90 L690 205" fill="none" stroke="#e4e4e8" stroke-width="1.4"/>
+<g fill="#e4e4e8"><circle cx="520" cy="90" r="4"/><circle cx="690" cy="90" r="4"/><circle cx="690" cy="205" r="4"/><circle cx="520" cy="205" r="4"/></g>
+<text class="m" x="505" y="86">0</text><text class="m" x="698" y="86">1</text><text class="m" x="698" y="220">2</text><text class="m" x="505" y="220">3</text></g>
+<path class="lna dash" d="M326 84 Q520 20 684 86" marker-end="url(#ara)"/><text class="a" x="505" y="44" text-anchor="middle">same index</text>
+<g id="arrays">
+<text class="f" x="20" y="300">positions</text><text class="m" x="110" y="300">x0 y0 | x1 y1 | x2 y2 | x3 y3</text><text class="f" x="420" y="300">vertex_count = 4</text>
+<text class="f" x="20" y="330">uvs</text><text class="m" x="110" y="330">u0 v0 | u1 v1 | u2 v2 | u3 v3</text><text class="f" x="420" y="330">fixed: upload once</text>
+<text class="f" x="20" y="360">indices</text><text class="m" x="110" y="360">0 1 2 | 0 2 3</text><text class="f" x="420" y="360">index_count = 6, two triangles</text></g>
+</svg>

@@ -192,7 +192,8 @@ Save often, keep backups of models you care about, and please
 Not built yet:
 
 - skinning, model templates and the temporary deform tool;
-- the embeddable runtime's C ABI (below).
+- language bindings over the C ABI (the header is there; Unity, Godot and
+  Python wrappers are not yet).
 
 The cmo3 export is written from project files alone, without Cubism Editor
 to check against: a project it writes reads back here exactly, and the
@@ -238,25 +239,32 @@ millisecond.
 
 More in [`docs/goals.md`](docs/goals.md).
 
-## The runtime and the C ABI (planned)
+## The runtime and the C ABI
 
 The long-term product is the **runtime**, the part that makes a puppet move,
-embeddable anywhere that can call C: Unity, Unreal, Godot, Python, JavaScript,
-or an engine of your own. The plan is a deliberately coarse ABI, arrays in and
-arrays out, so a binding never pays one call per parameter:
+embeddable anywhere that can call C: Unity, Unreal, Godot, Python,
+JavaScript, or an engine of your own. A frame is three calls, set, update,
+draw:
 
 ```c
 #include <ayatsuri.h>
 
-ay2d_model *m = ay2d_load(bytes, len);      /* validates; NULL on bad input  */
-ay2d_set_params(m, ids, values, n);         /* arrays in, never per-object   */
-ay2d_update(m, dt);
-ay2d_drawables(m, &out);                    /* or keep it on the GPU         */
+ay2d_model *m = ay2d_load(bytes, len);            /* .aom or .moc3; NULL on bad input */
+uint32_t ax = (uint32_t)ay2d_parameter_index(m, "ParamAngleX");
+ay2d_set_parameters(m, &ax, &value, 1);           /* arrays in, from any thread      */
+ay2d_update(m, dt);                               /* motions, expressions, physics   */
+uint32_t n = ay2d_drawables(m, NULL, 0);          /* back to front, views, no copies */
+ay2d_drawables(m, out, n);
 ```
 
-Today `crates/capi` only exports `ay2d_abi_version()`. The design is in
-[`docs/integration.md`](docs/integration.md). Until it lands, every model
-exports to moc3, so it runs on the Cubism SDK in the meantime.
+It plays the model's motions and expressions, runs its physics, loads a
+Cubism bundle file by file, tells a GPU host which meshes moved, and lets a
+tracking thread, a frame thread and a render thread share one model.
+`cargo xtask capi` builds the shared and static libraries with the header
+generated from the Rust source into `target/capi/`, then links and runs the
+C host in `crates/capi/examples/host.c` against them. The developer
+reference is [`crates/capi/docs/reference.md`](crates/capi/docs/reference.md).
+The crate is Apache-2.0 so a closed game can embed it; the editor stays GPL.
 
 ## Build from source
 
@@ -285,11 +293,11 @@ crates/import       ayatsuri-import   moc3, model3/physics3/motion3/exp3 JSON,
 crates/openmoc3     openmoc3          standalone safe reader for .moc3 files
 crates/render       ayatsuri-render   the GPU renderer
 crates/editor       ayatsuri-editor   the editor: panels, canvas, windows, API
-crates/capi         ayatsuri-capi     the C ABI (planned, see above)
+crates/capi         ayatsuri-capi     the C ABI: ayatsuri.h, shared and static libs
 apps/ayatsuri                         the editor app
 apps/ayatsuri-launcher                the launcher and splash
 packaging/                            Windows, macOS and Linux packages
-xtask                                 cargo xtask ci | layers | credits
+xtask                                 cargo xtask ci | layers | credits | capi
 ```
 
 `ayatsuri-core` never depends on `openmoc3`: the moc3 parser is the

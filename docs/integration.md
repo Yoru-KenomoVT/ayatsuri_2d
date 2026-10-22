@@ -22,6 +22,45 @@ breaking everyone, so it is there from the first published header.
 
 Panics never cross the boundary: an embedder crash is our crash.
 
+The full developer reference, with every call, is
+[`crates/capi/docs/reference.md`](../crates/capi/docs/reference.md). What
+the ABI still needs to stand in for the Cubism SDK is in
+[`replacing-the-sdk.md`](../crates/capi/docs/replacing-the-sdk.md).
+
+In short:
+
+- **Models** load from an `.aom` (everything in one file) or a `.moc3`
+  (the rig; the bundle's physics, motion and expression JSON files are
+  added as bytes). The paint and project parsers never compile into the
+  library: it takes the import crate with its `documents` feature off, and
+  `cargo xtask layers` checks it.
+- **A frame** is set, update, draw: parameters in as arrays by index, one
+  update that runs motions, expressions and physics and publishes the
+  result, then the drawables back to front as views into it.
+- **Threads**: setting values and reading the published result work from
+  any thread at any time; the calls that drive the model (update, motions,
+  expressions, physics settings) belong to one thread, and a second one
+  gets `BUSY`. Update writes one published frame while hosts read the
+  other, so a render thread draws frame N while N + 1 is made.
+- **Safety**: every raw pointer is turned into a reference in one file
+  (`handle.rs`), a test keeps `unsafe` out of the rest, and a panic inside
+  is caught at the boundary and returned as a status.
+
+### The header
+
+`crates/capi/include/ayatsuri.h` is generated from the Rust source by
+`cargo xtask capi` (cbindgen), and `cargo xtask capi --check` in CI fails
+when the committed copy is stale. Edit the Rust, never the header.
+
+### Linking
+
+`cargo xtask capi` leaves `target/capi/` with the header, the shared library
+for plugin hosts and the static one to compile in, built with full LTO and
+stripped symbols. With the static library the host's own linker
+(`--gc-sections`, `-dead_strip`, `/OPT:REF`) drops every function the host
+never calls. `crates/capi/examples/host.c` is a complete host and the check
+CI runs.
+
 ## Plugin protocol
 
 Ayatsuri2D speaks the VTube Studio plugin protocol, which is publicly

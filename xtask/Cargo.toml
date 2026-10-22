@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Repo tasks: cargo xtask layers | credits | ci"
+description = "Repo tasks: cargo xtask layers | credits | ci | capi | soak"
 version.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -10,3 +10,5 @@ license.workspace = true
 [dependencies]
 serde_json = { workspace = true }
 toml = "1"
+# the C header, read straight off the capi crate's source
+cbindgen = { version = "0.29", default-features = false }

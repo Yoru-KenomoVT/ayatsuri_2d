@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="390" viewBox="0 0 760 390">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="760" height="390" fill="#1e1e21"/>
+<text class="f" x="20" y="30">A Cubism bundle: one call per file</text>
+<g id="files">
+<rect class="box" x="20" y="44" width="230" height="34" rx="6"/><text class="m" x="34" y="66">model.moc3</text>
+<rect class="box" x="20" y="88" width="230" height="34" rx="6"/><text class="m" x="34" y="110">texture_00.png</text>
+<rect class="box" x="20" y="132" width="230" height="34" rx="6"/><text class="m" x="34" y="154">model.physics3.json</text>
+<rect class="box" x="20" y="176" width="230" height="34" rx="6"/><text class="m" x="34" y="198">idle.motion3.json</text>
+<rect class="box" x="20" y="220" width="230" height="34" rx="6"/><text class="m" x="34" y="242">smile.exp3.json</text></g>
+<g id="calls">
+<rect class="boxa" x="470" y="44" width="270" height="34" rx="6"/><text class="ma" x="484" y="66">ay2d_load</text>
+<rect x="470" y="88" width="270" height="34" rx="6" fill="none" stroke="#3a3a40" stroke-width="1.5" stroke-dasharray="5 4"/><text class="f" x="484" y="110">your engine's image loader</text>
+<rect class="boxa" x="470" y="132" width="270" height="34" rx="6"/><text class="ma" x="484" y="154">ay2d_add_physics3</text>
+<rect class="boxa" x="470" y="176" width="270" height="34" rx="6"/><text class="ma" x="484" y="198">ay2d_add_motion3</text>
+<rect class="boxa" x="470" y="220" width="270" height="34" rx="6"/><text class="ma" x="484" y="242">ay2d_add_expression3</text></g>
+<g id="arrows"><path class="ln" d="M252 61 H466" marker-end="url(#ar)"/><path class="ln dash" d="M252 105 H466" marker-end="url(#ar)"/><path class="ln" d="M252 149 H466" marker-end="url(#ar)"/><path class="ln" d="M252 193 H466" marker-end="url(#ar)"/><path class="ln" d="M252 237 H466" marker-end="url(#ar)"/></g>
+<line x1="20" y1="282" x2="740" y2="282" stroke="#29292d" stroke-width="1.5"/>
+<text class="f" x="20" y="312">An .aom: everything in one call</text>
+<g id="aom"><rect class="box" x="20" y="326" width="230" height="34" rx="6"/><text class="m" x="34" y="348">model.aom</text>
+<path class="lna" d="M252 343 H466" marker-end="url(#ara)"/>
+<rect class="boxa" x="470" y="326" width="270" height="34" rx="6"/><text class="ma" x="484" y="348">ay2d_load</text>
+<text class="f" x="740" y="312" text-anchor="end">rig, textures, motions, physics</text></g>
+</svg>

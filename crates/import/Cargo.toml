@@ -10,6 +10,13 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["documents"]
+# Paint documents (PSD, Krita, Clip Studio) and Cubism Editor projects
+# (cmo3), with the image, zip and XML crates they need. Off, the crate is
+# moc3 plus the Cubism JSON files only, which is what the C ABI compiles.
+documents = ["dep:psd", "dep:zip", "dep:image", "dep:miniz_oxide", "dep:quick-xml"]
+
 [dependencies]
 ayatsuri-core = { workspace = true }
 ayatsuri-format = { workspace = true }
@@ -19,10 +26,10 @@ log = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 # paint documents in: Photoshop through `psd`, Krita's zip through `zip`
-psd = "0.3"
-zip = { version = "9", default-features = false, features = ["deflate"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+psd = { version = "0.3", optional = true }
+zip = { version = "9", default-features = false, features = ["deflate"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Clip Studio tiles and Cubism project zips are deflate streams
-miniz_oxide = { workspace = true }
+miniz_oxide = { workspace = true, optional = true }
 # Cubism Editor projects keep their object graph as XML
-quick-xml = "0.41"
+quick-xml = { version = "0.41", optional = true }

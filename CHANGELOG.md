@@ -9,6 +9,28 @@
   clipping, blend modes and physics, with the names the rigger gave things. Built from
   the project files themselves; checked against a project rigged in
   Cubism, deformer for deformer.
+- **The C ABI** (`crates/capi`, Apache-2.0): the runtime for anything that
+  calls C, with `ayatsuri.h` generated from the Rust source.
+  - Loads an `.aom`, or a `.moc3` with the bundle's physics, motion and
+    expression JSON files added as bytes. The paint and project parsers are
+    left out of the library.
+  - Parameters and part opacities go in as arrays by index;
+    `ay2d_update` plays motions (scenes and compositions, with crossfades,
+    loops, seek, speed and polled events) and expressions, steps physics
+    and publishes the result.
+  - `ay2d_drawables` hands back every visible mesh back to front as views
+    into that result (positions, uvs, triangles, masks, blend flags);
+    `ay2d_mesh_geometry` serves masks and GPU hosts, `ay2d_mesh_changes`
+    says which meshes moved.
+  - Display names, the keys each parameter is rigged at, parents, folders
+    and the EyeBlink and LipSync groups for a UI.
+  - Values are set and results read from any thread; one thread drives
+    the model and a second gets `BUSY`; a render thread draws frame N
+    while N + 1 is made.
+  - Every call returns a status and a failing one changes nothing; panics
+    never cross the boundary. `cargo xtask capi` builds the shared and
+    static libraries with symbols stripped, writes the header and runs a
+    C host against the result.
 - **Cubism Editor project export** (File > Export Model > cmo3): the model
   goes out as a `.cmo3` the way the Editor saves one. Each mesh's art is
   cut from the texture back into a layer of one layered image and packed

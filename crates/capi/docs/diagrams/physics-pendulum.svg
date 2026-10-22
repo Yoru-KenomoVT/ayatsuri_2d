@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="380" viewBox="0 0 800 380">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="800" height="380" fill="#1e1e21"/>
+<text class="f" x="20" y="30">inputs push the top</text><text class="f" x="780" y="30" text-anchor="end">outputs read the swing</text>
+<g id="inputs"><rect class="boxa" x="20" y="60" width="190" height="36" rx="6"/><text class="ma" x="34" y="83">ParamAngleX</text>
+<rect class="boxa" x="20" y="110" width="190" height="36" rx="6"/><text class="ma" x="34" y="133">ParamBodyAngleX</text>
+<path class="lna" d="M212 78 Q260 80 290 88" marker-end="url(#ara)"/><path class="lna" d="M212 128 Q260 118 290 98" marker-end="url(#ara)"/></g>
+<g id="rest" stroke="#3a3a40" stroke-dasharray="4 4" fill="none" stroke-width="1.5"><path d="M300 92 V320"/><circle cx="300" cy="170" r="7"/><circle cx="300" cy="245" r="7"/><circle cx="300" cy="320" r="7"/></g>
+<text class="f" x="290" y="350" text-anchor="end">at rest</text>
+<g id="chain"><path d="M300 92 L340 165 L392 232 L456 290" fill="none" stroke="#e4e4e8" stroke-width="2"/>
+<rect x="292" y="84" width="16" height="16" fill="#f08e1e"/>
+<g fill="#e4e4e8"><circle cx="340" cy="165" r="8"/><circle cx="392" cy="232" r="8"/><circle cx="456" cy="290" r="8"/></g>
+<text class="m" x="354" y="163">1</text><text class="m" x="406" y="230">2</text><text class="m" x="470" y="288">3</text></g>
+<g id="outputs"><rect class="box" x="580" y="140" width="200" height="36" rx="6"/><text class="m" x="594" y="163">ParamHairFront</text>
+<rect class="box" x="580" y="207" width="200" height="36" rx="6"/><text class="m" x="594" y="230">ParamHairSide</text>
+<rect class="box" x="580" y="274" width="200" height="36" rx="6"/><text class="m" x="594" y="297">ParamHairBack</text>
+<path class="ln dash" d="M352 162 H576" marker-end="url(#ar)"/><path class="ln dash" d="M404 228 H576" marker-end="url(#ar)"/><path class="ln dash" d="M468 292 H576" marker-end="url(#ar)"/>
+<text class="f" x="420" y="152">angle at node 1</text></g>
+<g id="forces"><path class="ln" d="M220 230 H270" marker-end="url(#ar)"/><text class="f" x="210" y="235" text-anchor="end">wind</text>
+<path class="ln" d="M250 270 V320" marker-end="url(#ar)"/><text class="f" x="240" y="300" text-anchor="end">gravity</text></g>
+</svg>

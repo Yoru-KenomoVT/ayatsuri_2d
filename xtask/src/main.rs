@@ -2,7 +2,8 @@
 //!
 //! `layers` enforces the dependency rules in docs/architecture.md as a build
 //! failure rather than a convention. `credits` regenerates the open-source
-//! list the About window shows. `ci` runs every gate.
+//! list the About window shows. `capi` builds the C library and writes its
+//! header off the Rust source. `ci` runs every gate.
 
 use std::error::Error;
 use std::path::Path;
@@ -18,7 +19,13 @@ const RULES: &[(&str, &[&str], &str)] = &[
         &["openmoc3", "ayatsuri-import"],
         "ayatsuri-core must never depend on openmoc3",
     ),
-    ("crates/capi", &["openmoc3", "ayatsuri-import"], "the ABI never compiles the moc3 parser"),
+    // the ABI reads moc3 and the Cubism JSON files through ayatsuri-import
+    // with its default features off: no paint or project parsers in it
+    (
+        "crates/capi",
+        &["openmoc3", "psd", "zip", "image", "quick-xml"],
+        "the ABI takes only the moc3 and JSON side of the import crate",
+    ),
     // Nothing below the editor knows the UI toolkit exists.
     ("crates/format", &["egui", "eframe"], "format is UI-free"),
     ("crates/core", &["egui", "eframe"], "core is UI-free"),
@@ -189,7 +196,109 @@ fn ci() -> Result<()> {
     run("cargo", &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?;
     run("cargo", &["test", "--workspace"])?;
     credits(true)?;
+    capi(&["--check".to_string()])?;
     layers()
+}
+
+/// Where the C header lives in the repo, generated and committed so a host
+/// needs no Rust toolchain to read it.
+const HEADER: &str = "crates/capi/include/ayatsuri.h";
+
+/// `cargo xtask capi`: build the C library under the stripped profile and
+/// write `ayatsuri.h` from the crate's source, both into `target/capi/`.
+/// `--header` only writes the header; `--check` fails when the committed
+/// header is not what the source says.
+fn capi(args: &[String]) -> Result<()> {
+    let header_only = args.iter().any(|a| a == "--header");
+    let check = args.iter().any(|a| a == "--check");
+    let config = cbindgen::Config::from_file("crates/capi/cbindgen.toml")?;
+    let bindings =
+        cbindgen::Builder::new().with_crate("crates/capi").with_config(config).generate()?;
+    let mut fresh = Vec::new();
+    bindings.write(&mut fresh);
+    let fresh = String::from_utf8(fresh)?;
+    if check {
+        let committed = std::fs::read_to_string(HEADER).unwrap_or_default();
+        if committed != fresh {
+            return Err(format!("{HEADER} is stale: run `cargo xtask capi`").into());
+        }
+        println!("{HEADER} matches the source");
+        return Ok(());
+    }
+    std::fs::create_dir_all("crates/capi/include")?;
+    std::fs::write(HEADER, &fresh)?;
+    println!("wrote {HEADER}");
+    if header_only {
+        return Ok(());
+    }
+    run("cargo", &["build", "--profile", "capi-release", "-p", "ayatsuri-capi"])?;
+    let out = Path::new("target/capi");
+    std::fs::create_dir_all(out)?;
+    std::fs::copy(HEADER, out.join("ayatsuri.h"))?;
+    let mut shipped = vec!["ayatsuri.h".to_string()];
+    for entry in std::fs::read_dir("target/capi-release")? {
+        let path = entry?.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let ours = name.starts_with("libayatsuri_capi") || name.starts_with("ayatsuri_capi");
+        let lib = [".so", ".a", ".dylib", ".dll", ".lib"].iter().any(|e| name.ends_with(e));
+        if ours && lib {
+            std::fs::copy(&path, out.join(&name))?;
+            shipped.push(name);
+        }
+    }
+    std::fs::copy("crates/capi/LICENSE", out.join("LICENSE"))?;
+    println!("target/capi/: {}", shipped.join(", "));
+    host_check(out)
+}
+
+/// The end-to-end check: the C host example compiled against the static
+/// library and run on the fixture model. Skipped, with a note, when no C
+/// compiler is on the path.
+fn host_check(out: &Path) -> Result<()> {
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    if Command::new(&cc).arg("--version").output().is_err() {
+        println!("no C compiler ({cc}) on the path; the host check is skipped");
+        return Ok(());
+    }
+    let model = out.join("small.aom");
+    let model_s = model.to_string_lossy().into_owned();
+    run(
+        "cargo",
+        &[
+            "run",
+            "-q",
+            "-p",
+            "ayatsuri-capi",
+            "--features",
+            "fixture",
+            "--example",
+            "small_aom",
+            "--",
+            &model_s,
+        ],
+    )?;
+    let exe = out.join(if cfg!(windows) { "host.exe" } else { "host" });
+    let exe_s = exe.to_string_lossy().into_owned();
+    // the archive by path, so the link is static and the linker's
+    // gc-sections keeps only what the host's calls reach
+    let archive = if cfg!(windows) {
+        "target/capi-release/ayatsuri_capi.lib"
+    } else {
+        "target/capi-release/libayatsuri_capi.a"
+    };
+    let mut args =
+        vec!["crates/capi/examples/host.c", "-Icrates/capi/include", "-o", &exe_s, archive];
+    if cfg!(target_os = "linux") {
+        args.extend(["-Wl,--gc-sections", "-lpthread", "-ldl", "-lm"]);
+    } else if cfg!(target_os = "macos") {
+        args.extend(["-Wl,-dead_strip", "-framework", "CoreFoundation"]);
+    }
+    run(&cc, &args)?;
+    run(&exe_s, &[&model_s])?;
+    if let Ok(meta) = std::fs::metadata(&exe) {
+        println!("host linked statically: {} KB", meta.len() / 1024);
+    }
+    Ok(())
 }
 
 fn main() {
@@ -200,7 +309,8 @@ fn main() {
             "credits" => credits(std::env::args().nth(2).is_some_and(|a| a == "--check")),
             "ci" => ci(),
             "soak" => soak(&std::env::args().skip(2).collect::<Vec<_>>()),
-            _ => Err("usage: cargo xtask <layers|credits [--check]|ci|soak <model.aom> [seconds]>"
+            "capi" => capi(&std::env::args().skip(2).collect::<Vec<_>>()),
+            _ => Err("usage: cargo xtask <layers|credits [--check]|ci|capi [--header|--check]|soak <model.aom> [seconds]>"
                 .into()),
         };
     if let Err(e) = result {

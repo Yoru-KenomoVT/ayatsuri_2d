@@ -7,23 +7,31 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "documents")]
 mod clip;
+#[cfg(feature = "documents")]
 mod cmo3;
 mod exp3;
+#[cfg(feature = "documents")]
 mod kra;
+#[cfg(feature = "documents")]
 mod layers;
 mod moc3;
 mod moc3_export;
 mod motion3;
 mod physics3;
+#[cfg(feature = "documents")]
 mod psd_doc;
+#[cfg(feature = "documents")]
 mod sqlite;
 
+#[cfg(feature = "documents")]
 pub use layers::{AlphaBlend, Blend, ColorBlend, Document, Imported, Layer};
 
 /// A paint document's layers by file extension (`psd`, `kra` or `clip`),
 /// before they are turned into a model, with how many layers were skipped
 /// while reading. Anything else is read as a PSD.
+#[cfg(feature = "documents")]
 pub fn read_document(bytes: &[u8], ext: &str) -> Result<(Document, usize), ImportError> {
     match ext {
         "kra" => kra::read_kra(bytes),
@@ -33,11 +41,13 @@ pub fn read_document(bytes: &[u8], ext: &str) -> Result<(Document, usize), Impor
 }
 
 /// Whether a file extension names a paint document this crate opens.
+#[cfg(feature = "documents")]
 pub fn is_paint_ext(ext: &str) -> bool {
     matches!(ext, "psd" | "kra" | "clip")
 }
 
 /// A paint document, by extension, as a fresh rig-ready model.
+#[cfg(feature = "documents")]
 pub fn from_paint(bytes: &[u8], ext: &str) -> Result<Imported, ImportError> {
     let (doc, skipped) = read_document(bytes, ext)?;
     let mut out = layers::build(&doc)?;
@@ -46,11 +56,13 @@ pub fn from_paint(bytes: &[u8], ext: &str) -> Result<Imported, ImportError> {
 }
 
 /// Any layered document (already read from its file) as a fresh model.
+#[cfg(feature = "documents")]
 pub fn from_layers(doc: &Document) -> Result<Imported, ImportError> {
     layers::build(doc)
 }
 
 /// A Photoshop document as a fresh, rig-ready model.
+#[cfg(feature = "documents")]
 pub fn from_psd(bytes: &[u8]) -> Result<Imported, ImportError> {
     let doc = psd_doc::read_psd(bytes)?;
     layers::build(&doc)
@@ -58,6 +70,7 @@ pub fn from_psd(bytes: &[u8]) -> Result<Imported, ImportError> {
 
 /// A Krita document as a fresh, rig-ready model. Layers Krita stores in
 /// other colour models are skipped and counted.
+#[cfg(feature = "documents")]
 pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
     let (doc, skipped) = kra::read_kra(bytes)?;
     let mut out = layers::build(&doc)?;
@@ -65,6 +78,7 @@ pub fn from_kra(bytes: &[u8]) -> Result<Imported, ImportError> {
     Ok(out)
 }
 
+#[cfg(feature = "documents")]
 pub use cmo3::{Cmo3, Cmo3Export, from_cmo3, to_cmo3};
 pub use exp3::{from_exp3, to_exp3};
 pub use moc3::from_moc3;

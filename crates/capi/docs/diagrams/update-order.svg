@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="640" viewBox="0 0 680 640">
+<style>
+.t{font:600 15px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.s{font:14px Inter,system-ui,sans-serif;fill:#e4e4e8}
+.f{font:13px Inter,system-ui,sans-serif;fill:#8e8e96}
+.m{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#e4e4e8}
+.ma{font:13px "JetBrains Mono",ui-monospace,monospace;fill:#f08e1e}
+.a{font:600 13px Inter,system-ui,sans-serif;fill:#f08e1e}
+.box{fill:#29292d;stroke:#3a3a40;stroke-width:1.5}
+.boxa{fill:#29292d;stroke:#f08e1e;stroke-width:1.5}
+.ln{stroke:#8e8e96;stroke-width:1.6;fill:none}
+.lna{stroke:#f08e1e;stroke-width:1.8;fill:none}
+.dash{stroke-dasharray:5 4}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8e8e96"/></marker>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f08e1e"/></marker>
+</defs>
+<rect width="680" height="640" fill="#1e1e21"/>
+<g id="in"><rect class="box" x="140" y="18" width="300" height="40" rx="20"/><text class="ma" x="290" y="43" text-anchor="middle">ay2d_set_parameters</text><text class="f" x="452" y="43">any thread</text>
+<path class="ln" d="M290 60 V86" marker-end="url(#ar)"/></g>
+<g id="steps" font-family="Inter,system-ui,sans-serif">
+<rect class="box" x="80" y="90" width="420" height="52" rx="8"/><circle cx="108" cy="116" r="13" fill="#f08e1e"/><text x="108" y="121" text-anchor="middle" font-weight="700" font-size="13" fill="#1e1e21">1</text><text class="s" x="132" y="121">Values you set come in from the inbox</text>
+<rect class="box" x="80" y="160" width="420" height="52" rx="8"/><circle cx="108" cy="186" r="13" fill="#f08e1e"/><text x="108" y="191" text-anchor="middle" font-weight="700" font-size="13" fill="#1e1e21">2</text><text class="s" x="132" y="191">Playing motions write over the pose</text>
+<rect class="box" x="80" y="230" width="420" height="52" rx="8"/><circle cx="108" cy="256" r="13" fill="#f08e1e"/><text x="108" y="261" text-anchor="middle" font-weight="700" font-size="13" fill="#1e1e21">3</text><text class="s" x="132" y="261">The shown expression writes over that</text>
+<rect class="box" x="80" y="300" width="420" height="52" rx="8"/><circle cx="108" cy="326" r="13" fill="#f08e1e"/><text x="108" y="331" text-anchor="middle" font-weight="700" font-size="13" fill="#1e1e21">4</text><text class="s" x="132" y="331">Physics steps, if the rig is on</text>
+<rect class="box" x="80" y="370" width="420" height="52" rx="8"/><circle cx="108" cy="396" r="13" fill="#f08e1e"/><text x="108" y="401" text-anchor="middle" font-weight="700" font-size="13" fill="#1e1e21">5</text><text class="s" x="132" y="401">Deformers and meshes move, order sorts</text>
+<rect class="boxa" x="80" y="440" width="420" height="52" rx="8"/><circle cx="108" cy="466" r="13" fill="#f08e1e"/><text x="108" y="471" text-anchor="middle" font-weight="700" font-size="13" fill="#1e1e21">6</text><text class="s" x="132" y="471">The result is published</text></g>
+<g id="links"><path class="ln" d="M290 144 V156" marker-end="url(#ar)"/><path class="ln" d="M290 214 V226" marker-end="url(#ar)"/><path class="ln" d="M290 284 V296" marker-end="url(#ar)"/><path class="ln" d="M290 354 V366" marker-end="url(#ar)"/><path class="ln" d="M290 424 V436" marker-end="url(#ar)"/></g>
+<g id="bracket"><path class="lna" d="M512 90 H522 V492 H512"/><text class="ma" x="532" y="285">ay2d_update</text><text class="f" x="532" y="305">frame thread</text></g>
+<g id="out"><path class="lna" d="M290 494 V522" marker-end="url(#ara)"/>
+<rect class="boxa" x="50" y="526" width="480" height="96" rx="8"/><text class="a" x="68" y="552">published frame: read from any thread</text>
+<text class="m" x="68" y="578">ay2d_drawables      ay2d_get_parameters</text><text class="m" x="68" y="602">ay2d_mesh_changes   ay2d_motion_events</text></g>
+</svg>
