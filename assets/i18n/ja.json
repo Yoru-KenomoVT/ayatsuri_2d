@@ -1206,6 +1206,7 @@
   "{count} pieces": "{count} 個のピース",
   "Previous page (drop a piece here to move it there)": "前のページ（ピースをここにドロップすると移動します）",
   "Next page (drop a piece here to move it there)": "次のページ（ピースをここにドロップすると移動します）",
+  "Scroll to zoom, drag empty space to pan": "スクロールでズーム、空いている所をドラッグで移動",
   "Enlarge/Reduce": "拡大・縮小",
   "Free Transform": "自由変形",
   "Perspective": "遠近法",

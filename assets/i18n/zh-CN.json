@@ -1206,6 +1206,7 @@
   "{count} pieces": "{count} 个碎片",
   "Previous page (drop a piece here to move it there)": "上一页（把碎片拖放到这里即可移过去）",
   "Next page (drop a piece here to move it there)": "下一页（把碎片拖放到这里即可移过去）",
+  "Scroll to zoom, drag empty space to pan": "滚动缩放，拖动空白处平移",
   "Enlarge/Reduce": "放大/缩小",
   "Free Transform": "自由变换",
   "Perspective": "透视",

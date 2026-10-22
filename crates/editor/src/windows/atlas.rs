@@ -21,6 +21,12 @@ pub struct AtlasWin {
     drag: Option<(usize, Vec2)>,
     fit: bool,
     error: Option<String>,
+    /// View zoom (1 shows the whole page in the square) and where the
+    /// page's corner sits from the square's, in screen points.
+    zoom: f32,
+    pan: Vec2,
+    /// Dragging empty space or with the middle button moves the view.
+    panning: bool,
 }
 
 /// The sizes the page picker offers.
@@ -45,6 +51,9 @@ impl AtlasWin {
             drag: None,
             fit: true,
             error: None,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            panning: false,
         }
     }
 
@@ -247,32 +256,98 @@ impl EditorUi {
                     win.page = t;
                 }
                 ui.separator();
+                // zoom: the wheel or a pinch around the pointer, these buttons,
+                // or Fit; drag empty space (or with the middle button) to pan
+                let mut fit = false;
+                let mut step_zoom: Option<f32> = None;
+                ui.horizontal(|ui| {
+                    ui.weak(tr("Scroll to zoom, drag empty space to pan"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(tr("Fit")).clicked() {
+                            fit = true;
+                        }
+                        if ui.button(egui_phosphor::regular::PLUS).clicked() {
+                            step_zoom = Some(1.25);
+                        }
+                        ui.label(format!("{:.0}%", win.zoom * 100.0));
+                        if ui.button(egui_phosphor::regular::MINUS).clicked() {
+                            step_zoom = Some(0.8);
+                        }
+                    });
+                });
                 // the page: a square, pieces drawn from their old page's thumbnail
                 let side = ui.available_height().min(ui.available_width() - 220.0).max(300.0);
                 ui.horizontal_top(|ui| {
                     let (rect, resp) =
                         ui.allocate_exact_size(vec2(side, side), Sense::click_and_drag());
                     let painter = ui.painter_at(rect);
-                    painter.rect_filled(rect, 3.0, Color32::from_gray(40));
+                    painter.rect_filled(rect, 3.0, Color32::from_gray(30));
                     let n = win.layout.page_size as f32;
+                    // zoom about a screen point, keeping the page point under it
+                    let zoom_at = |win: &mut AtlasWin, at: Pos2, factor: f32| {
+                        let old = side * win.zoom / n;
+                        let page_pt = (at - rect.min - win.pan) / old;
+                        win.zoom = (win.zoom * factor).clamp(0.5, 32.0);
+                        let new = side * win.zoom / n;
+                        win.pan = at - rect.min - page_pt * new;
+                    };
+                    if fit || (resp.double_clicked() && !win.panning && win.drag.is_none()) {
+                        win.zoom = 1.0;
+                        win.pan = Vec2::ZERO;
+                    }
+                    if let Some(f) = step_zoom {
+                        zoom_at(win, rect.center(), f);
+                    }
+                    if resp.hovered() {
+                        let (scroll, pinch, at) = ui.input(|i| {
+                            (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos())
+                        });
+                        if let Some(at) = at {
+                            let factor = if pinch != 1.0 { pinch } else { (scroll / 300.0).exp() };
+                            if (factor - 1.0).abs() > 1e-4 {
+                                zoom_at(win, at, factor);
+                            }
+                        }
+                    }
+                    // the page stays at least partly on screen
+                    let scale = side * win.zoom / n;
+                    let page_px = n * scale;
+                    win.pan.x = win.pan.x.clamp(-page_px + 40.0, side - 40.0);
+                    win.pan.y = win.pan.y.clamp(-page_px + 40.0, side - 40.0);
+                    let origin = rect.min + win.pan;
                     let to_screen =
-                        |x: f32, y: f32| pos2(rect.min.x + x / n * side, rect.min.y + y / n * side);
+                        |x: f32, y: f32| pos2(origin.x + x * scale, origin.y + y * scale);
                     let from_screen =
-                        |p: Pos2| ((p.x - rect.min.x) / side * n, (p.y - rect.min.y) / side * n);
-                    // a faint grid every 256 px, so sizes read at a glance
-                    let step = 256.0 / n * side;
+                        |p: Pos2| ((p.x - origin.x) / scale, (p.y - origin.y) / scale);
+                    let page_rect = Rect::from_min_size(origin, vec2(page_px, page_px));
+                    painter.rect_filled(page_rect, 0.0, Color32::from_gray(40));
+                    // a faint grid every 256 px (finer when zoomed in), so sizes
+                    // read at a glance
+                    let grid = if scale * 64.0 > 24.0 { 64.0 } else { 256.0 };
+                    let c = Color32::from_gray(52);
                     let mut g = 0.0;
-                    while g < side {
-                        let c = Color32::from_gray(52);
-                        painter.line_segment(
-                            [pos2(rect.min.x + g, rect.min.y), pos2(rect.min.x + g, rect.max.y)],
-                            Stroke::new(1.0, c),
-                        );
-                        painter.line_segment(
-                            [pos2(rect.min.x, rect.min.y + g), pos2(rect.max.x, rect.min.y + g)],
-                            Stroke::new(1.0, c),
-                        );
-                        g += step;
+                    while g <= n {
+                        let x = origin.x + g * scale;
+                        let y = origin.y + g * scale;
+                        if x >= rect.min.x && x <= rect.max.x {
+                            painter.line_segment(
+                                [
+                                    pos2(x, page_rect.min.y.max(rect.min.y)),
+                                    pos2(x, page_rect.max.y.min(rect.max.y)),
+                                ],
+                                Stroke::new(1.0, c),
+                            );
+                        }
+                        if y >= rect.min.y && y <= rect.max.y {
+                            painter.line_segment(
+                                [
+                                    pos2(page_rect.min.x.max(rect.min.x), y),
+                                    pos2(page_rect.max.x.min(rect.max.x), y),
+                                ],
+                                Stroke::new(1.0, c),
+                            );
+                        }
+                        g += grid;
                     }
                     let pointer = resp.interact_pointer_pos();
                     let mut hit: Option<usize> = None;
@@ -318,7 +393,16 @@ impl EditorUi {
                             hit = Some(i);
                         }
                     }
+                    // panning: the middle button anywhere, or the left on empty space
+                    let middle = ui.input(|i| i.pointer.middle_down());
+                    if resp.drag_started() && (middle || hit.is_none()) {
+                        win.panning = true;
+                    }
+                    if win.panning {
+                        win.pan += resp.drag_delta();
+                    }
                     if resp.drag_started()
+                        && !win.panning
                         && let Some(i) = hit
                         && let Some(pt) = pointer
                         && let Some(pl) = win.layout.places.get(i)
@@ -343,6 +427,7 @@ impl EditorUi {
                     }
                     if ui.input(|inp| inp.pointer.any_released()) {
                         win.drag = None;
+                        win.panning = false;
                     }
                     // the piece list for this page
                     ui.vertical(|ui| {

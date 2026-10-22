@@ -1206,6 +1206,7 @@
   "{count} pieces": "조각 {count}개",
   "Previous page (drop a piece here to move it there)": "이전 페이지(조각을 여기에 놓으면 그 페이지로 이동합니다)",
   "Next page (drop a piece here to move it there)": "다음 페이지(조각을 여기에 놓으면 그 페이지로 이동합니다)",
+  "Scroll to zoom, drag empty space to pan": "스크롤로 확대/축소, 빈 곳을 드래그해 이동",
   "Enlarge/Reduce": "확대/축소",
   "Free Transform": "자유 변형",
   "Perspective": "원근",

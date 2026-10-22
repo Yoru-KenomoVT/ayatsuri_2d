@@ -332,6 +332,9 @@
   of view, the API server waits for a connection instead of checking
   twenty times a second, and the sound output closes when playback stops
   instead of streaming silence.
+- The Texture Atlas page zooms (scroll or pinch around the pointer, the
+  zoom buttons, Fit or a double-click to see the whole page) and pans
+  (drag empty space, or the middle button anywhere).
 - The Texture Atlas, Render, Timelapse and Guide Line Settings windows
   use the same frame as every other dialog (title strip to move it, the
   same close button) and can be resized from the corner.
