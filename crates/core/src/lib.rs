@@ -233,6 +233,12 @@ impl Puppet {
         self.physics.as_ref().and_then(|p| p.group_nodes(rig_group))
     }
 
+    /// How far one rig group's frame is tilted by its angle inputs, in
+    /// degrees: the physics dialog's rotating cross.
+    pub fn physics_group_tilt(&self, rig_group: usize) -> Option<f32> {
+        self.physics.as_ref().and_then(|p| p.group_tilt(rig_group))
+    }
+
     /// The physics dialog's per-group Valid checkbox.
     pub fn set_physics_group_enabled(&mut self, rig_group: usize, on: bool) {
         if let Some(ph) = &mut self.physics {

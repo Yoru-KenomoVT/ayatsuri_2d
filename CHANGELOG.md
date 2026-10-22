@@ -332,6 +332,11 @@
   of view, the API server waits for a connection instead of checking
   twenty times a second, and the sound output closes when playback stops
   instead of streaming silence.
+- The physics pendulum preview's cross sits on the pendulum's root and
+  turns with the group's angle inputs as they move, with the angle shown
+  beside it, as in Cubism.
+- The Physics page no longer has a Help menu linking to Cubism's manual;
+  Ayatsuri2D's own manual comes later.
 - The Texture Atlas page zooms (scroll or pinch around the pointer, the
   zoom buttons, Fit or a double-click to see the whole page) and pans
   (drag empty space, or the middle button anywhere).

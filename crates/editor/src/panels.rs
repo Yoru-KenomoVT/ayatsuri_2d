@@ -3816,6 +3816,7 @@ impl EditorUi {
         nodes: &[ayatsuri_format::model::PhysicsNode],
         size: Vec2,
         live_chain: Option<Vec<(f32, f32)>>,
+        tilt: f32,
     ) {
         // sized by its panel, which the user drags; never by itself
         let (prect, presp) = ui.allocate_exact_size(size, Sense::click_and_drag());
@@ -3827,10 +3828,7 @@ impl EditorUi {
         for f in [0.25f32, 0.5, 0.75] {
             let x = prect.min.x + prect.width() * f;
             let y = prect.min.y + prect.height() * f;
-            let grid = Stroke::new(
-                if f == 0.5 { 1.0 } else { 0.5 },
-                theme::pal().border.gamma_multiply(if f == 0.5 { 1.0 } else { 0.5 }),
-            );
+            let grid = Stroke::new(0.5, theme::pal().border.gamma_multiply(0.5));
             pp.line_segment([pos2(x, prect.min.y), pos2(x, prect.max.y)], grid);
             pp.line_segment([pos2(prect.min.x, y), pos2(prect.max.x, y)], grid);
         }
@@ -3936,6 +3934,18 @@ impl EditorUi {
             }
             _ => self.phys_prev.iter().map(|p| (p.0, p.1)).collect(),
         };
+        // the frame's cross through the pivot, turned by the angle inputs as
+        // they move (and by the view's own turn), as in Cubism
+        if let Some(&(ax, ay)) = drawn.first() {
+            let pivot = map(ax, ay);
+            let (ts, tc) = (tilt + self.phys_page.prev_rot).to_radians().sin_cos();
+            let reach_px = prect.width().hypot(prect.height());
+            let cross = Stroke::new(1.0, theme::pal().border);
+            for (dx, dy) in [(tc, ts), (-ts, tc)] {
+                let d = vec2(dx, dy) * reach_px;
+                pp.line_segment([pivot - d, pivot + d], cross);
+            }
+        }
         let stroke = Stroke::new(1.6, theme::pal().rotation_red);
         let mut prev: Option<Pos2> = None;
         for (i, &(x, y)) in drawn.iter().enumerate() {
@@ -3965,7 +3975,11 @@ impl EditorUi {
                 "Scale: {scale}\nAngle: {angle}",
                 &[
                     ("scale", &format!("{:.1}", self.phys_zoom * 10.0)),
-                    ("angle", &format!("{:.1}", -self.phys_page.prev_rot)),
+                    ("angle", &{
+                        // no "-0.0" at rest
+                        let a = -(tilt + self.phys_page.prev_rot);
+                        format!("{:.1}", if a.abs() < 0.05 { 0.0 } else { a })
+                    }),
                 ],
             ),
             FontId::proportional(9.5),

@@ -1243,6 +1243,5 @@
   "Keyforms blend along a curve instead of a straight line, so a sway made of turned keys keeps its size. Needs three keys or more; applies to the selected objects. Points is how many keys a moc3 export adds between each pair so other apps follow the curve.": "キーフォームを直線ではなく曲線に沿って補間するので、回転したキーで作った揺れでもサイズが保たれます。キーが3つ以上必要で、選択中のオブジェクトに適用されます。点数はmoc3書き出し時に各キーの間へ追加するキーの数で、他のアプリでも曲線どおりに動きます。",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves straight: horizontally, vertically or at 45°. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "コントロールポイントをドラッグして変形します。Ctrl+ドラッグでコントロールポイントだけを移動します。Shift+ドラッグで水平・垂直・45°の方向にまっすぐ移動します。アンカーをドラッグすると回転と拡大・縮小の中心が移動します。\n\n一時パス: クリックでコントロールポイントを追加、パス上のクリックで挿入、Alt+クリックで削除します。\n\nドラッグはパラメータがあるキーフォームに、1回の取り消し単位として反映されます。",
   "Key color": "キーの色",
-  "About Physics (online manual)": "物理演算について（オンラインマニュアル）",
   "Apply Skinning…": "スキニングを適用…"
 }

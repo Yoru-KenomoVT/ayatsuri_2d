@@ -1243,6 +1243,5 @@
   "Keyforms blend along a curve instead of a straight line, so a sway made of turned keys keeps its size. Needs three keys or more; applies to the selected objects. Points is how many keys a moc3 export adds between each pair so other apps follow the curve.": "关键形态沿曲线而不是直线插值，因此由旋转关键形态组成的摆动能保持大小。需要三个或以上关键点，作用于所选对象。点数是 moc3 导出时在每两个关键点之间添加的关键点数量，使其他应用也按曲线运动。",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves straight: horizontally, vertically or at 45°. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "拖动控制点进行变形。Ctrl+拖动只移动控制点。Shift+拖动沿水平、垂直或45°方向直线移动。拖动锚点可移动旋转和放大/缩小的中心。\n\n临时路径：单击添加控制点，单击路径插入控制点，Alt+单击删除。\n\n每次拖动都会作为一步撤销写入参数所在的关键形态。",
   "Key color": "关键点颜色",
-  "About Physics (online manual)": "关于物理演算 (在线手册)",
   "Apply Skinning…": "应用蒙皮…"
 }

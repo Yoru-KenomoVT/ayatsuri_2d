@@ -63,7 +63,13 @@ struct GroupSim {
     inputs: Vec<InputSim>,
     outputs: Vec<OutputSim>,
     nodes: Vec<NodeSim>,
+    /// The angle inputs' sum at the last step, in degrees: how far the
+    /// pendulum's frame is tilted, which the dialog draws as its cross.
+    tilt: f32,
 }
+
+/// Quiet steps in a row that count as at rest: half a second at 60 Hz.
+const SETTLE: u32 = 30;
 
 pub struct Physics {
     groups: Vec<GroupSim>,
@@ -73,6 +79,12 @@ pub struct Physics {
     acc: f32,
     /// Outputs exist to apply; false until the first full step.
     primed: bool,
+    /// Steps in a row that moved no output. A swing slows to nothing at
+    /// each end, so one quiet step is not rest: only `SETTLE` of them are.
+    quiet: u32,
+    /// Every enabled input's value at the last call: when one changes the
+    /// strands are about to move, even before the next step runs.
+    seen: Vec<f32>,
     /// A parameter the user is dragging by hand: physics leaves it alone
     /// until let go, so its slider can be moved.
     held: Vec<usize>,
@@ -139,6 +151,7 @@ impl Physics {
             let node_count = nodes.len();
             groups.push(GroupSim {
                 rig_index,
+                tilt: 0.0,
                 inputs: g
                     .inputs
                     .iter()
@@ -188,6 +201,8 @@ impl Physics {
             step: 1.0 / fps,
             acc: 0.0,
             primed: false,
+            quiet: SETTLE,
+            seen: Vec::new(),
             held: Vec::new(),
         })
     }
@@ -201,6 +216,12 @@ impl Physics {
 
     /// The dialog's per-group Valid checkbox: a disabled group neither
     /// simulates nor writes its outputs. Resets to enabled on rebuild.
+    /// How far one rig group's frame is tilted by its angle inputs, in
+    /// degrees, as of the last step.
+    pub fn group_tilt(&self, rig_group: usize) -> Option<f32> {
+        self.groups.iter().find(|g| g.rig_index == rig_group).map(|g| g.tilt)
+    }
+
     pub fn set_group_enabled(&mut self, rig_group: usize, on: bool) {
         if let Some(g) = self.groups.iter_mut().find(|g| g.rig_index == rig_group) {
             g.enabled = on;
@@ -246,6 +267,7 @@ impl Physics {
             }
         }
         self.acc = 0.0;
+        self.quiet = SETTLE;
     }
 
     /// Advance by `dt` seconds against the current parameter values and
@@ -257,6 +279,30 @@ impl Physics {
         values: &mut [f32],
         meta_of: impl Fn(usize) -> (f32, f32, f32),
     ) -> bool {
+        // a changed input (a slider, playback stopping, the pose resetting)
+        // sets the strands going: that is motion now, not at the next step
+        let mut k = 0;
+        let mut changed = false;
+        for g in self.groups.iter().filter(|g| g.enabled) {
+            for i in &g.inputs {
+                let v = values.get(i.param).copied().unwrap_or(0.0);
+                match self.seen.get_mut(k) {
+                    Some(s) if (*s - v).abs() > 1e-6 => {
+                        *s = v;
+                        changed = true;
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.seen.push(v);
+                        changed = true;
+                    }
+                }
+                k += 1;
+            }
+        }
+        if changed {
+            self.quiet = 0;
+        }
         self.acc += dt.clamp(0.0, 0.25);
         let mut steps = 0;
         while self.acc >= self.step && steps < 8 {
@@ -287,6 +333,7 @@ impl Physics {
                         PhysicsIo::Angle => ta += v,
                     }
                 }
+                g.tilt = ta;
                 let rad = ta.to_radians();
                 let (sin, cos) = rad.sin_cos();
                 if let Some(anchor) = g.nodes.first_mut() {
@@ -418,6 +465,115 @@ impl Physics {
                 any |= (*slot - was).abs() > 1e-4;
             }
         }
-        any
+        // between steps, and at the turn of each swing, the outputs hold
+        // still without being at rest: keep reporting motion until enough
+        // quiet steps in a row, or nothing would ask for the next frame
+        for _ in 0..steps {
+            self.quiet = if any { 0 } else { self.quiet.saturating_add(1) };
+        }
+        any || self.quiet < SETTLE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ayatsuri_format::model::{
+        Model, Parameter, PhysicsGroup, PhysicsInput, PhysicsIo, PhysicsNode, PhysicsOutput,
+        PhysicsRange, PhysicsRig,
+    };
+
+    fn rig() -> Model {
+        let mut m = Model::new();
+        for id in ["ParamAngleZ", "ParamHair"] {
+            m.parameters.push(Parameter {
+                id: id.into(),
+                min: -30.0,
+                max: 30.0,
+                default: 0.0,
+                repeat: false,
+                decimals: 3,
+            });
+        }
+        let node = |y: f32| PhysicsNode {
+            x: 0.0,
+            y,
+            mobility: 0.95,
+            delay: 0.9,
+            acceleration: 1.5,
+            radius: 0.0,
+        };
+        m.physics = Some(PhysicsRig {
+            fps: 0.0,
+            gravity_x: 0.0,
+            gravity_y: -1.0,
+            wind_x: 0.0,
+            wind_y: 0.0,
+            groups: vec![PhysicsGroup {
+                id: "Hair".into(),
+                name: "Hair".into(),
+                inputs: vec![PhysicsInput {
+                    param: "ParamAngleZ".into(),
+                    weight: 100.0,
+                    kind: PhysicsIo::Angle,
+                    reflect: false,
+                }],
+                outputs: vec![PhysicsOutput {
+                    param: "ParamHair".into(),
+                    vertex: 1,
+                    scale: 1.0,
+                    weight: 100.0,
+                    kind: PhysicsIo::Angle,
+                    reflect: false,
+                }],
+                nodes: vec![node(0.0), node(10.0)],
+                norm_position: PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
+                norm_angle: PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
+            }],
+        });
+        m
+    }
+
+    /// A screen faster than the physics rate gets frames with no physics
+    /// step in them; those must still report a swing in progress, or the
+    /// editor stops drawing and the hair freezes mid-swing.
+    #[test]
+    fn short_frames_keep_reporting_a_swing_until_it_settles() {
+        let mut p = crate::Puppet::new(rig());
+        p.step_physics(0.1);
+        p.set_value(0, 30.0);
+        let frame = 1.0 / 240.0;
+        let mut quiet_mid_swing = 0;
+        let mut settled_at = None;
+        for f in 0..240 * 30 {
+            let before = p.value(1);
+            let moving = p.step_physics(frame);
+            if !moving {
+                settled_at.get_or_insert(f);
+            } else if settled_at.is_some() {
+                // it said "settled", then moved again: the frame loop would
+                // have stopped drawing in between
+                quiet_mid_swing += 1;
+            }
+            let _ = before;
+        }
+        assert_eq!(quiet_mid_swing, 0, "reported settled while still swinging");
+        let at = settled_at.expect("the swing settles within 30 s");
+        assert!(at > 240 / 10, "settled implausibly fast, after {at} frames");
+    }
+
+    /// The dialog's cross turns by what the angle inputs add up to.
+    #[test]
+    fn a_group_reports_how_far_its_angle_inputs_tilt_it() {
+        let mut p = crate::Puppet::new(rig());
+        p.step_physics(0.1);
+        assert!(p.physics_group_tilt(0).is_some_and(|t| t.abs() < 1e-4));
+        p.set_value(0, 30.0);
+        p.step_physics(0.1);
+        let t = p.physics_group_tilt(0).unwrap();
+        assert!((t - 10.0).abs() < 1e-3, "full tilt: {t}");
+        p.set_value(0, -15.0);
+        p.step_physics(0.1);
+        let t = p.physics_group_tilt(0).unwrap();
+        assert!((t + 5.0).abs() < 1e-3, "half the other way: {t}");
     }
 }

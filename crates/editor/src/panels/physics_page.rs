@@ -792,14 +792,6 @@ impl EditorUi {
             ui.add(egui::Slider::new(&mut rig.wind_x, -10.0..=10.0).text("X"));
             ui.add(egui::Slider::new(&mut rig.wind_y, -10.0..=10.0).text("Y"));
         });
-        ui.menu_button(crate::i18n::tr("Help"), |ui| {
-            if ui.button(crate::i18n::tr("About Physics (online manual)")).clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(
-                    "https://docs.live2d.com/en/cubism-editor-manual/physics-operation/",
-                ));
-                ui.close();
-            }
-        });
     }
 
     /// The left column: FPS, group, input or output settings, and the
@@ -988,10 +980,12 @@ impl EditorUi {
         let nodes_copy = g.nodes.clone();
         // the running sim's chain for this group, driven by the real inputs
         let live_chain = self.session.as_ref().and_then(|s| s.puppet.physics_group_nodes(sel));
+        let tilt =
+            self.session.as_ref().and_then(|s| s.puppet.physics_group_tilt(sel)).unwrap_or(0.0);
         let prev_size = vec2((r_prev.width() - 16.0).max(60.0), (r_prev.height() - 52.0).max(60.0));
         panel(ui, r_prev, "phys-p-prev", |ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Pendulum preview")).size(11.5));
-            self.pendulum_preview(ui, reach, &nodes_copy, prev_size, live_chain);
+            self.pendulum_preview(ui, reach, &nodes_copy, prev_size, live_chain, tilt);
         });
 
         // a separate-as-group request from the output menu
