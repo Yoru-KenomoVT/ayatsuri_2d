@@ -260,7 +260,7 @@ impl EditorUi {
         }
         if ui.button(crate::i18n::tr("API Settings…")).clicked() {
             self.show_settings = true;
-            self.settings_tab = 4;
+            self.settings_tab = crate::windows::settings::TAB_API;
             ui.close();
         }
     }

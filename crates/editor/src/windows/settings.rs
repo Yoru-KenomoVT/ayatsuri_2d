@@ -15,6 +15,12 @@ const H: f32 = 520.0;
 const RAIL: f32 = 170.0;
 const PAGES: [&str; 6] = ["General", "Appearance", "Performance", "Audio", "Keyboard", "API"];
 
+/// Settings tabs by name, for the menus that open one: their place in
+/// `PAGES`, so adding a tab cannot send a menu to the wrong one.
+pub(crate) const TAB_KEYBOARD: usize = 4;
+pub(crate) const TAB_API: usize = 5;
+const _: () = assert!(TAB_KEYBOARD < PAGES.len() && TAB_API < PAGES.len());
+
 /// Primary colour presets: the logo orange first.
 const SWATCHES: [(&str, [u8; 3]); 7] = [
     ("Ember (default)", [0xF0, 0x8E, 0x1E]),
@@ -170,7 +176,7 @@ impl EditorUi {
                             1 => self.settings_appearance(ui),
                             2 => self.settings_performance(ui),
                             3 => self.settings_audio(ui),
-                            4 => self.settings_keyboard(ui),
+                            TAB_KEYBOARD => self.settings_keyboard(ui),
                             _ => self.settings_api(ui),
                         }
                     });
@@ -809,7 +815,7 @@ impl EditorUi {
     fn settings_audio(&mut self, ui: &mut Ui) {
         let mut save = false;
         let mut reopen = false;
-        section(ui, crate::i18n::tr("Sound output"));
+        section(ui, crate::i18n::tr("SOUND OUTPUT"));
         if self.audio_devices.is_none() {
             self.audio_devices = Some(crate::audio::devices());
         }

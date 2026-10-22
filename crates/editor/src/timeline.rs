@@ -1621,9 +1621,9 @@ impl Timeline {
                         }
                         ui.separator();
                         if let Some(c) = &comp {
-                            ui.menu_button(tr("Add scene layer"), |ui| {
+                            ui.menu_button(tr("Add animation layer"), |ui| {
                                 if s.animations.is_empty() {
-                                    ui.weak(tr("No scenes yet"));
+                                    ui.weak(tr("No animations yet"));
                                 }
                                 for a in &s.animations {
                                     if ui.button(&a.name).clicked() {
@@ -1729,7 +1729,7 @@ impl Timeline {
                             }
                         }
                         ui.separator();
-                        if ui.button(tr("New Scene…")).clicked() {
+                        if ui.button(tr("New Animation…")).clicked() {
                             request = Some(Request::NewScene);
                             ui.close();
                         }

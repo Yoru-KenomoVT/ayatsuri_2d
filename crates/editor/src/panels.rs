@@ -2290,7 +2290,7 @@ impl EditorUi {
                             self.session.is_some(),
                             egui::Button::new(crate::i18n::tr("Import Motion…")),
                         )
-                        .on_hover_text(crate::i18n::tr("Add a .motion3.json as a scene"))
+                        .on_hover_text(crate::i18n::tr("Add a .motion3.json as an animation"))
                         .clicked()
                     {
                         ui.close();
@@ -2382,7 +2382,7 @@ impl EditorUi {
                     }
                     if ui.button(crate::i18n::tr("Keyboard Shortcuts…")).clicked() {
                         self.show_settings = true;
-                        self.settings_tab = 3;
+                        self.settings_tab = crate::windows::settings::TAB_KEYBOARD;
                         ui.close();
                     }
                     ui.separator();
@@ -2503,7 +2503,7 @@ impl EditorUi {
                     ui.menu_button(crate::i18n::tr("Guide Line"), |ui| {
                         ui.checkbox(&mut self.show_guides, crate::i18n::tr("Show Guide Lines"));
                         if ui
-                            .add_enabled(has, egui::Button::new(crate::i18n::tr("Add guide lines in the center")))
+                            .add_enabled(has, egui::Button::new(crate::i18n::tr("Add Guide Lines in the Center")))
                             .clicked()
                         {
                             self.pending_guide = Some(GuideCmd::Center);
@@ -2513,7 +2513,7 @@ impl EditorUi {
                             .add_enabled(
                                 has,
                                 egui::Button::new(crate::i18n::tr(
-                                    "Add a guide line to the coordinates of the selected vertex",
+                                    "Add a Guide Line at the Selected Vertex",
                                 )),
                             )
                             .clicked()
@@ -3111,10 +3111,10 @@ impl EditorUi {
                         }
                     }
                     ui.separator();
-                    if ui.button(crate::i18n::tr("Save as new workspace…")).clicked() {
+                    if ui.button(crate::i18n::tr("Save as New Workspace…")).clicked() {
                         self.show_ws_save = true;
                     }
-                    if ui.button(crate::i18n::tr("Manage workspaces…")).clicked() {
+                    if ui.button(crate::i18n::tr("Manage Workspaces…")).clicked() {
                         self.show_ws_manage = true;
                     }
                     if pick.is_some() || self.show_ws_save || self.show_ws_manage {
@@ -5746,7 +5746,7 @@ impl EditorUi {
             "export-moc3" if have => self.open_export(0),
             "shortcuts" => {
                 self.show_settings = true;
-                self.settings_tab = 3;
+                self.settings_tab = crate::windows::settings::TAB_KEYBOARD;
             }
             // in the Animation workspace the Timeline's key edits come
             // back first; the model's own history is behind them
@@ -6336,24 +6336,27 @@ impl EditorUi {
                         (g.name.clone(), g.open, g.params.clone())
                     };
                     if !name.is_empty() {
-                        let (rect, resp) = ui
-                            .allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
-                        ui.painter().rect_filled(rect, 2.0, theme::pal().header);
+                        let (rect, resp) = ui.allocate_exact_size(
+                            vec2(ui.available_width(), 18.0),
+                            if full { Sense::click_and_drag() } else { Sense::click() },
+                        );
+                        // a folder's colour fills its whole header, as in
+                        // Cubism; parameters keep the thin stripe
                         let color = s.groups.get(gi).and_then(|g| g.color);
-                        if let Some([r, g, b]) = color {
-                            ui.painter().rect_filled(
-                                Rect::from_min_size(rect.min, vec2(3.0, rect.height())),
-                                1.0,
-                                Color32::from_rgb(r, g, b),
-                            );
-                        }
+                        let (fill, ink) = match color {
+                            Some([r, g, b]) => {
+                                (Color32::from_rgb(r, g, b), crate::color_pick::text_on([r, g, b]))
+                            }
+                            None => (theme::pal().header, theme::pal().text),
+                        };
+                        ui.painter().rect_filled(rect, 2.0, fill);
                         let arrow = if open { "⏷" } else { "⏵" };
                         ui.painter().text(
                             rect.left_center() + vec2(6.0, 0.0),
                             Align2::LEFT_CENTER,
                             format!("{arrow} {name}"),
                             FontId::proportional(11.0),
-                            theme::pal().text,
+                            ink,
                         );
                         if full && resp.double_clicked() {
                             actions.push(ParamAction::Cmd(ParamCmd::RenameGroup(gi)));
@@ -6368,6 +6371,21 @@ impl EditorUi {
                                     actions.push(ParamAction::Cmd(c));
                                 }
                             });
+                            // drag a folder by its header; a parameter dropped
+                            // here goes into it, a folder lands before it
+                            let mut drop = None;
+                            let here = param_menu::Moving::Group(gi);
+                            param_menu::drag_target(
+                                ui,
+                                &resp,
+                                rect,
+                                here,
+                                |m| ParamCmd::DropOnGroup(m, gi),
+                                &mut drop,
+                            );
+                            if let Some(c) = drop {
+                                actions.push(ParamAction::Cmd(c));
+                            }
                         }
                         if !open {
                             continue;
@@ -6404,17 +6422,54 @@ impl EditorUi {
                         );
                     }
                 }
+                // what is being dragged follows the pointer
+                if let Some(m) = egui::DragAndDrop::payload::<param_menu::Moving>(ui.ctx())
+                    && let Some(at) = ui.ctx().pointer_latest_pos()
+                {
+                    let label = match *m {
+                        param_menu::Moving::Param(p) => s
+                            .param_names
+                            .get(p)
+                            .filter(|n| !n.is_empty())
+                            .cloned()
+                            .or_else(|| s.puppet.model().parameters.get(p).map(|x| x.id.clone()))
+                            .unwrap_or_default(),
+                        param_menu::Moving::Group(g) => {
+                            s.groups.get(g).map(|g| g.name.clone()).unwrap_or_default()
+                        }
+                    };
+                    egui::Area::new(egui::Id::new("param-drag-ghost"))
+                        .order(egui::Order::Tooltip)
+                        .interactable(false)
+                        .fixed_pos(at + vec2(14.0, 6.0))
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(label));
+                        });
+                }
                 // the empty space under the rows takes the palette's own
                 // right-click menu (create parameter or folder and so on)
                 if full {
                     let rest = ui.available_height().clamp(40.0, list_h.max(40.0));
-                    let (_, bg) =
+                    let (bg_rect, bg) =
                         ui.allocate_exact_size(vec2(ui.available_width(), rest), Sense::click());
                     bg.context_menu(|ui| {
                         if let Some(c) = param_menu::panel_menu(ui, &mut s, &sc) {
                             actions.push(ParamAction::Cmd(c));
                         }
                     });
+                    // the space under the last row is the end of the list: a
+                    // folder dropped here goes last, a parameter into the
+                    // last folder
+                    if bg.dnd_hover_payload::<param_menu::Moving>().is_some() {
+                        ui.painter().hline(
+                            bg_rect.x_range(),
+                            bg_rect.top(),
+                            Stroke::new(2.0, theme::pal().accent),
+                        );
+                    }
+                    if let Some(m) = bg.dnd_release_payload::<param_menu::Moving>() {
+                        actions.push(ParamAction::Cmd(ParamCmd::DropAtEnd(*m)));
+                    }
                 }
             },
         );
@@ -8462,22 +8517,17 @@ impl EditorUi {
                         ui.close();
                     }
                 }
-                if ui.button(crate::i18n::tr("Add guide lines in the center")).clicked() {
+                if ui.button(crate::i18n::tr("Add Guide Lines in the Center")).clicked() {
                     self.pending_guide = Some(GuideCmd::Center);
                     ui.close();
                 }
-                if ui
-                    .button(crate::i18n::tr(
-                        "Add a guide line to the coordinates of the selected vertex",
-                    ))
-                    .clicked()
-                {
+                if ui.button(crate::i18n::tr("Add a Guide Line at the Selected Vertex")).clicked() {
                     self.pending_guide = Some(GuideCmd::AtVertex);
                     ui.close();
                 }
                 ui.checkbox(&mut self.show_guides, crate::i18n::tr("Show Guide Lines"));
                 ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit"));
-                if ui.button(crate::i18n::tr("Open guide line settings")).clicked() {
+                if ui.button(crate::i18n::tr("Guide Line Settings…")).clicked() {
                     self.show_guide_settings = true;
                     ui.close();
                 }
@@ -12322,13 +12372,13 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
     const AS: M = M::ALT.plus(M::SHIFT);
     const N: M = M::NONE;
     &[
-        ("File", "new-model", "New model", C, K::N),
+        ("File", "new-model", "New project", C, K::N),
         ("File", "open", "Open", C, K::O),
         ("File", "save", "Save", C, K::S),
         ("File", "save-as", "Save as", CS, K::S),
         ("File", "close", "Close", C, K::W),
         ("File", "export-image", "Export image", C, K::I),
-        ("File", "export-moc3", "Export as moc3", CA, K::S),
+        ("File", "export-moc3", "Export model", CA, K::S),
         ("File", "shortcuts", "Keyboard shortcuts", CAS, K::K),
         ("Edit", "undo", "Undo", C, K::Z),
         ("Edit", "redo", "Redo", CS, K::Z),
@@ -12439,7 +12489,12 @@ pub(crate) fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
     if sc.modifiers.alt {
         out.push_str("Alt+");
     }
-    out.push_str(sc.logical_key.name());
+    // punctuation as its symbol ("[" rather than "OpenBracket"); letters,
+    // digits, arrows and named keys keep their names, which every font has
+    let key = sc.logical_key;
+    let symbol = key.symbol_or_name();
+    let punct = symbol.chars().count() == 1 && symbol.chars().all(|c| c.is_ascii_punctuation());
+    out.push_str(if punct { symbol } else { key.name() });
     out
 }
 
@@ -13407,12 +13462,16 @@ fn parameter_row(
                 actions.push(ParamAction::Cmd(ParamCmd::Combine(pi)));
             }
         }
-        let (nr, nresp) = ui.allocate_exact_size(vec2(92.0, 16.0), Sense::click());
+        let (nr, nresp) = ui.allocate_exact_size(
+            vec2(92.0, 16.0),
+            if full { Sense::click_and_drag() } else { Sense::click() },
+        );
         if *sel_param == Some(pi) || s.param_picked.contains(&pi) {
             ui.painter().rect_filled(nr, 2.0, theme::pal().select);
         }
+        // names start clear of where a label colour's stripe goes
         ui.painter().text(
-            nr.left_center(),
+            nr.left_center() + vec2(6.0, 0.0),
             Align2::LEFT_CENTER,
             truncate(&display, 13),
             FontId::proportional(11.5),
@@ -13439,6 +13498,21 @@ fn parameter_row(
                     actions.push(ParamAction::Cmd(c));
                 }
             });
+            // drag the name to reorder; a drop lands before this row
+            let mut drop = None;
+            let line = Rect::from_min_max(nr.min, pos2(ui.max_rect().max.x, nr.max.y));
+            let here = param_menu::Moving::Param(pi);
+            param_menu::drag_target(
+                ui,
+                &nresp,
+                line,
+                here,
+                |m| ParamCmd::DropOnParam(m, pi),
+                &mut drop,
+            );
+            if let Some(c) = drop {
+                actions.push(ParamAction::Cmd(c));
+            }
         }
         let slider_w = (ui.available_width() - 68.0).max(40.0);
         let (changed, slider_resp, on_key) =
@@ -13454,7 +13528,11 @@ fn parameter_row(
             log::debug!("parameter {display} dragged to {v:.3}");
         }
         let span = (max - min).max(1e-6);
-        let on = keys.iter().copied().find(|k| (v - k).abs() <= span * 1e-4);
+        let on = keys.iter().copied().find(|k| (v - k).abs() <= span * 1e-4).map(|k| {
+            let now =
+                s.key_colors.iter().find(|c| c.0 == pi && (c.1 - k).abs() < 1e-5).map(|c| c.2);
+            (k, now)
+        });
         if full && !on_key {
             slider_resp.context_menu(|ui| {
                 if let Some(c) = param_menu::slider_menu(ui, pi, v, on, can_edit) {
@@ -13532,7 +13610,11 @@ fn combined_pad(
     let edge = (side - 6.0) * 0.5 - 8.0;
     for (p, label, dy) in [(pa, &name_a, -edge), (pb, &name_b, edge)] {
         let nr = Rect::from_min_size(pos2(block.min.x + 14.0, cy + dy - 8.0), vec2(name_w, 16.0));
-        let nresp = ui.interact(nr, egui::Id::new(("pad-name", pa, p)), Sense::click());
+        let nresp = ui.interact(
+            nr,
+            egui::Id::new(("pad-name", pa, p)),
+            if menus { Sense::click_and_drag() } else { Sense::click() },
+        );
         if *sel_param == Some(p) || s.param_picked.contains(&p) {
             ui.painter().rect_filled(nr, 2.0, theme::pal().select);
         }
@@ -13552,6 +13634,19 @@ fn combined_pad(
                     actions.push(ParamAction::Cmd(c));
                 }
             });
+            let mut drop = None;
+            let here = param_menu::Moving::Param(p);
+            param_menu::drag_target(
+                ui,
+                &nresp,
+                nr,
+                here,
+                |m| ParamCmd::DropOnParam(m, p),
+                &mut drop,
+            );
+            if let Some(c) = drop {
+                actions.push(ParamAction::Cmd(c));
+            }
         }
     }
 
@@ -14224,6 +14319,60 @@ mod key_cmd_tests {
         let m = s.puppet.model();
         assert_eq!(m.art_meshes[1].binding.axes.len(), 1, "the second mesh got keys too");
         assert_eq!(m.art_meshes[1].opacities.len(), 2);
+    }
+
+    #[test]
+    fn shortcuts_show_punctuation_as_its_symbol_and_read_back() {
+        let sc = |m, k| egui::KeyboardShortcut::new(m, k);
+        assert_eq!(format_shortcut(&sc(egui::Modifiers::NONE, egui::Key::OpenBracket)), "[");
+        assert_eq!(
+            format_shortcut(&sc(egui::Modifiers::COMMAND, egui::Key::CloseBracket)),
+            "Ctrl+]"
+        );
+        assert_eq!(format_shortcut(&sc(egui::Modifiers::SHIFT, egui::Key::B)), "Shift+B");
+        assert_eq!(format_shortcut(&sc(egui::Modifiers::NONE, egui::Key::ArrowLeft)), "Left");
+        let back = parse_shortcut("Ctrl+]").map(|s| s.logical_key);
+        assert_eq!(back, Some(egui::Key::CloseBracket));
+    }
+
+    #[test]
+    fn dragging_reorders_parameters_and_folders() {
+        use crate::session::ParamGroup;
+        use param_menu::Moving;
+        let mut ed = editor();
+        let folder = |name: &str, params: Vec<usize>| ParamGroup {
+            name: name.into(),
+            params,
+            open: true,
+            color: None,
+        };
+        let s = ed.session.as_mut().unwrap();
+        s.groups = vec![folder("A", vec![0, 1, 2]), folder("B", vec![3])];
+        // parameter 2 dropped on parameter 0 lands before it
+        ed.run_param_cmd(ParamCmd::DropOnParam(Moving::Param(2), 0));
+        let s = ed.session.as_ref().unwrap();
+        assert_eq!(s.groups[0].params, vec![2, 0, 1]);
+        // parameter 1 dropped on folder B's header goes into B
+        ed.run_param_cmd(ParamCmd::DropOnGroup(Moving::Param(1), 1));
+        let s = ed.session.as_ref().unwrap();
+        assert_eq!(
+            (s.groups[0].params.clone(), s.groups[1].params.clone()),
+            (vec![2, 0], vec![3, 1])
+        );
+        // folder B dropped on folder A's header moves before it
+        ed.run_param_cmd(ParamCmd::DropOnGroup(Moving::Group(1), 0));
+        let names: Vec<String> =
+            ed.session.as_ref().unwrap().groups.iter().map(|g| g.name.clone()).collect();
+        assert_eq!(names, ["B", "A"]);
+        // folder B dropped under the last row goes last again
+        ed.run_param_cmd(ParamCmd::DropAtEnd(Moving::Group(0)));
+        let names: Vec<String> =
+            ed.session.as_ref().unwrap().groups.iter().map(|g| g.name.clone()).collect();
+        assert_eq!(names, ["A", "B"]);
+        // a parameter dropped there joins the last folder
+        ed.run_param_cmd(ParamCmd::DropAtEnd(Moving::Param(2)));
+        let s = ed.session.as_ref().unwrap();
+        assert_eq!(s.groups[1].params.last(), Some(&2));
     }
 
     #[test]

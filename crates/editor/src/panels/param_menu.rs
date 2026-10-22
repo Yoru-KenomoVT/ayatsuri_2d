@@ -5,6 +5,8 @@
 // command and the palette runs it afterwards.
 
 use ayatsuri_core::edit::Target;
+
+use crate::color_pick::Pick;
 use ayatsuri_core::keyform::{self, CornerRef};
 use egui::Ui;
 
@@ -24,6 +26,14 @@ pub(super) enum ParamCmd {
     MoveHere(usize),
     /// Move the subject to the end of this folder.
     MoveIntoGroup(usize),
+    /// A parameter or folder dragged onto a parameter: it lands before it.
+    DropOnParam(Moving, usize),
+    /// A parameter or folder dragged onto a folder's header: into the folder,
+    /// or before it for a folder.
+    DropOnGroup(Moving, usize),
+    /// Dropped under the last row: a folder goes last, a parameter to the
+    /// end of the last folder.
+    DropAtEnd(Moving),
     RenameGroup(usize),
     MoveGroupSubject(usize),
     /// Make a folder holding this parameter and everything picked with it.
@@ -41,6 +51,8 @@ pub(super) enum ParamCmd {
     Curve(usize),
     /// A colour for one key (None clears it).
     KeyColor(usize, f32, Option<[u8; 3]>),
+    /// The colour window for a label colour.
+    CustomColor(ColorTarget, Option<[u8; 3]>),
     ResetAll,
     DeleteEmptyParams,
     DeleteEmptyGroups,
@@ -96,11 +108,44 @@ fn depth(s: &Session, d: usize) -> usize {
     n
 }
 
-/// A parameter or a whole folder picked with Select for Movement.
+/// A parameter or a whole folder picked with Select for Movement, or
+/// dragged by its name.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Moving {
     Param(usize),
     Group(usize),
+}
+
+/// Whose label colour the custom colour window sets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum ColorTarget {
+    Param(usize),
+    Group(usize),
+    Key(usize, f32),
+}
+
+/// Set (or clear) a label colour.
+fn set_color(s: &mut Session, t: ColorTarget, c: Option<[u8; 3]>) {
+    log::debug!("label colour: {t:?} set to {}", c.map_or("none".into(), crate::color_pick::hex));
+    match t {
+        ColorTarget::Param(pi) => {
+            if let Some(slot) = s.param_colors.get_mut(pi) {
+                *slot = c;
+            }
+        }
+        ColorTarget::Group(gi) => {
+            if let Some(g) = s.groups.get_mut(gi) {
+                g.color = c;
+            }
+        }
+        ColorTarget::Key(pi, k) => {
+            s.key_colors.retain(|e| !(e.0 == pi && (e.1 - k).abs() < 1e-5));
+            if let Some(c) = c {
+                s.key_colors.push((pi, k, c));
+            }
+        }
+    }
+    s.modified = true;
 }
 
 /// The palette's small bits of state between frames.
@@ -114,6 +159,8 @@ pub(super) struct ParamMenuState {
     corners: Option<Corners>,
     mirror: Option<Mirror>,
     curve: Option<CurveDlg>,
+    /// The colour window: whose colour, and the colour now.
+    custom: Option<(ColorTarget, [u8; 3])>,
     /// Reflect waiting for the overwrite confirmation: (parameter, the
     /// key it mirrors from, the opposite key it overwrites).
     pub(super) reflect: Option<(usize, f32, Option<f32>)>,
@@ -124,40 +171,19 @@ pub(super) struct ParamMenuState {
     change: Option<(usize, usize)>,
 }
 
-const LABEL_COLORS: [[u8; 3]; 6] = [
-    [0xE5, 0x48, 0x48],
-    [0xF0, 0x8E, 0x1E],
-    [0xE8, 0xC6, 0x3B],
-    [0x5F, 0xB3, 0x5F],
-    [0x4E, 0x8F, 0xD9],
-    [0x9B, 0x6B, 0xD3],
-];
-
-/// The label colour picker shared by parameters and folders. Returns the
-/// pick: Some(Some(rgb)) for a colour, Some(None) for clear.
-fn color_menu(ui: &mut Ui) -> Option<Option<[u8; 3]>> {
-    color_menu_named(ui, crate::i18n::tr("Label color"))
-}
-
-fn color_menu_named(ui: &mut Ui, label: &str) -> Option<Option<[u8; 3]>> {
+/// The label colour picker shared by parameters, folders and keys: a
+/// submenu holding the full picker. Returns the pick: Some(Some(rgb)) for
+/// a colour, Some(None) for clear.
+fn color_menu(ui: &mut Ui, label: &str, current: Option<[u8; 3]>) -> Option<Pick> {
+    use egui::containers::menu::{MenuConfig, SubMenuButton};
     let mut out = None;
-    ui.menu_button(label, |ui| {
-        ui.horizontal(|ui| {
-            for c in LABEL_COLORS {
-                let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-                ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
-                if resp.clicked() {
-                    out = Some(Some(c));
-                    ui.close();
-                }
-            }
+    // a click inside must not close it, or the wheel tile could never open
+    // its picker; the presets and Clear close it themselves
+    SubMenuButton::new(label)
+        .config(MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+        .ui(ui, |ui| {
+            out = crate::color_pick::picker(ui, current);
         });
-        if ui.button(crate::i18n::tr("Clear")).clicked() {
-            out = Some(None);
-            ui.close();
-        }
-    });
     out
 }
 
@@ -238,11 +264,11 @@ pub(super) fn name_menu(
         s.dirty = true;
         ui.close();
     }
-    if let Some(pick) = color_menu(ui)
-        && let Some(slot) = s.param_colors.get_mut(pi)
-    {
-        *slot = pick;
-        s.modified = true;
+    let now = s.param_colors.get(pi).copied().flatten();
+    match color_menu(ui, crate::i18n::tr("Label color"), now) {
+        Some(Pick::Set(c)) => set_color(s, ColorTarget::Param(pi), c),
+        Some(Pick::Custom) => out = Some(ParamCmd::CustomColor(ColorTarget::Param(pi), now)),
+        None => {}
     }
     out
 }
@@ -253,15 +279,19 @@ pub(super) fn slider_menu(
     ui: &mut Ui,
     pi: usize,
     v: f32,
-    key: Option<f32>,
+    key: Option<(f32, Option<[u8; 3]>)>,
     can_edit: bool,
 ) -> Option<ParamCmd> {
     let mut out = None;
     // on a key: its own colour first
-    if let Some(k) = key
-        && let Some(pick) = color_menu_named(ui, crate::i18n::tr("Key color"))
-    {
-        out = Some(ParamCmd::KeyColor(pi, k, pick));
+    if let Some((k, now)) = key {
+        match color_menu(ui, crate::i18n::tr("Key color"), now) {
+            Some(Pick::Set(c)) => out = Some(ParamCmd::KeyColor(pi, k, c)),
+            Some(Pick::Custom) => {
+                out = Some(ParamCmd::CustomColor(ColorTarget::Key(pi, k), now));
+            }
+            None => {}
+        }
     }
     item(ui, can_edit, crate::i18n::tr("Add Single Keyform"), ParamCmd::AddSingle(pi, v), &mut out);
     item(ui, can_edit, crate::i18n::tr("Delete Keyform"), ParamCmd::DeleteKey(pi), &mut out);
@@ -285,11 +315,11 @@ pub(super) fn group_menu(
 ) -> Option<ParamCmd> {
     let mut out = None;
     // Cubism's folder menu first, then our extras
-    if let Some(pick) = color_menu(ui)
-        && let Some(g) = s.groups.get_mut(gi)
-    {
-        g.color = pick;
-        s.modified = true;
+    let now = s.groups.get(gi).and_then(|g| g.color);
+    match color_menu(ui, crate::i18n::tr("Label color"), now) {
+        Some(Pick::Set(c)) => set_color(s, ColorTarget::Group(gi), c),
+        Some(Pick::Custom) => out = Some(ParamCmd::CustomColor(ColorTarget::Group(gi), now)),
+        None => {}
     }
     item(ui, true, crate::i18n::tr("Create Parameter…"), ParamCmd::Create(Some(gi)), &mut out);
     item(ui, true, crate::i18n::tr("Replicate parameters"), ParamCmd::ReplicateGroup(gi), &mut out);
@@ -463,6 +493,16 @@ impl EditorUi {
             Some(k) => log::info!("reflected the key at {from} into the key at {k}"),
             None => log::warn!("reflect: nothing on the selection has both keys"),
         }
+    }
+
+    /// What a drag carries becomes the move's subject: a dragged parameter
+    /// brings everything picked with it, as Select for Movement does.
+    fn drop_subject(&mut self, moving: Moving) {
+        self.pmenu.subject_set = match moving {
+            Moving::Param(p) => self.picked_with(p),
+            Moving::Group(_) => Vec::new(),
+        };
+        self.pmenu.subject = Some(moving);
     }
 
     pub(super) fn run_param_cmd(&mut self, cmd: ParamCmd) {
@@ -661,6 +701,30 @@ impl EditorUi {
                     s.modified = true;
                 }
             }
+            ParamCmd::DropOnParam(moving, dest) => {
+                self.drop_subject(moving);
+                self.run_param_cmd(ParamCmd::MoveHere(dest));
+            }
+            ParamCmd::DropOnGroup(moving, gi) => {
+                self.drop_subject(moving);
+                self.run_param_cmd(ParamCmd::MoveIntoGroup(gi));
+            }
+            ParamCmd::DropAtEnd(moving) => {
+                let Some(s) = &mut self.session else { return };
+                let last = s.groups.len().saturating_sub(1);
+                match moving {
+                    Moving::Group(src) if src < s.groups.len() && src != last => {
+                        let g = s.groups.remove(src);
+                        s.groups.push(g);
+                        s.modified = true;
+                    }
+                    Moving::Group(_) => {}
+                    Moving::Param(_) => {
+                        self.drop_subject(moving);
+                        self.run_param_cmd(ParamCmd::MoveIntoGroup(last));
+                    }
+                }
+            }
             ParamCmd::MoveGroupSubject(gi) => {
                 self.pmenu.subject = Some(Moving::Group(gi));
                 log::info!("folder picked to move: right-click where it goes and choose Move Here");
@@ -752,11 +816,10 @@ impl EditorUi {
             ParamCmd::Change(pi) => self.pmenu.change = Some((pi, pi)),
             ParamCmd::KeyColor(pi, k, pick) => {
                 let Some(s) = &mut self.session else { return };
-                s.key_colors.retain(|e| !(e.0 == pi && (e.1 - k).abs() < 1e-5));
-                if let Some(c) = pick {
-                    s.key_colors.push((pi, k, c));
-                }
-                s.modified = true;
+                set_color(s, ColorTarget::Key(pi, k), pick);
+            }
+            ParamCmd::CustomColor(t, now) => {
+                self.pmenu.custom = Some((t, now.unwrap_or([0xE5, 0x48, 0x48])));
             }
         }
     }
@@ -1063,6 +1126,35 @@ impl EditorUi {
             }
         }
 
+        if let Some((t, mut rgb)) = self.pmenu.custom {
+            // the window holds Settings' own colour button
+            let mut open = true;
+            let mut done = false;
+            let mut changed = false;
+            let title = match t {
+                ColorTarget::Key(..) => crate::i18n::tr("Key color"),
+                _ => crate::i18n::tr("Label color"),
+            };
+            crate::windows::Dialog::new(title).open(&mut open).show(&ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(crate::i18n::tr("Colour"));
+                    changed = ui.color_edit_button_srgb(&mut rgb).changed();
+                    ui.weak(crate::color_pick::hex(rgb));
+                });
+                ui.add_space(6.0);
+                if ui.button(crate::i18n::tr("Done")).clicked() {
+                    done = true;
+                }
+            });
+            if changed {
+                log::debug!("colour window: {}", crate::color_pick::hex(rgb));
+                if let Some(s) = &mut self.session {
+                    set_color(s, t, Some(rgb));
+                }
+            }
+            self.pmenu.custom = if done || !open { None } else { Some((t, rgb)) };
+        }
+
         if let Some(cd) = &mut self.pmenu.curve {
             let mut open = true;
             let mut run = false;
@@ -1316,4 +1408,34 @@ pub(super) fn move_params_into(s: &mut Session, set: &[usize], gi: usize) {
         g.open = true;
     }
     s.modified = true;
+}
+
+/// A name that drags: the drag carries `what`, and a drop of another
+/// parameter or folder here pushes `drop(what_was_dropped)`. While one
+/// hovers, a line in the accent colour shows where it lands.
+pub(super) fn drag_target(
+    ui: &Ui,
+    resp: &egui::Response,
+    line: egui::Rect,
+    what: Moving,
+    drop: impl FnOnce(Moving) -> ParamCmd,
+    out: &mut Option<ParamCmd>,
+) {
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        resp.dnd_set_drag_payload(what);
+    }
+    if let Some(m) = resp.dnd_hover_payload::<Moving>()
+        && *m != what
+    {
+        ui.painter().hline(
+            line.x_range(),
+            line.top(),
+            egui::Stroke::new(2.0, crate::theme::pal().accent),
+        );
+    }
+    if let Some(m) = resp.dnd_release_payload::<Moving>()
+        && *m != what
+    {
+        *out = Some(drop(*m));
+    }
 }

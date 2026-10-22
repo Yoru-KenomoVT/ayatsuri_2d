@@ -130,11 +130,6 @@ fn grid(ui: &mut Ui, _id: &str, body: impl FnOnce(&mut Ui)) {
     });
 }
 
-fn greyed(ui: &mut Ui, label: &'static str) {
-    ui.add_enabled(false, egui::Checkbox::new(&mut false, crate::i18n::tr(label)))
-        .on_disabled_hover_text(crate::i18n::tr(NOT_YET));
-}
-
 impl EditorUi {
     pub(super) fn tool_details_panel(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {

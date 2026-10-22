@@ -1634,7 +1634,7 @@ impl EditorUi {
                     crate::windows::form(ui, "render-settings", |ui| {
                         match win.source {
                             Source::Animation => {
-                                ui.label(tr("Scene"));
+                                ui.label(tr("Animation"));
                                 let name = win.anim(s).map(|a| a.name.clone()).unwrap_or_default();
                                 let n_scenes = s.animations.len();
                                 let mut pick = None;

@@ -300,6 +300,11 @@
   more. A moc3 or cmo3 export adds Points keys between each pair so other
   apps follow the curve; keys added on a curved parameter take the curve's
   shape (#21).
+- **Colour picker** for every label colour (parameters, folders, keys): a
+  palette of presets, and a colour-wheel tile that opens the same colour
+  picker as Settings, in a small window. A folder's colour now fills its
+  whole header, as in Cubism; parameters keep the thin stripe, with their
+  names set clear of it.
 - **Key colours**: right-click the key the slider sits on for Key color, to
   tell keys apart; saved with the model (#19).
 - **Shift+drag moves straight**, horizontally, vertically or at 45°, for
