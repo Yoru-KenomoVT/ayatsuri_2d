@@ -137,29 +137,78 @@ impl EditorUi {
                 if let Some(e) = &win.error {
                     ui.colored_label(crate::theme::pal().accent, e);
                 }
-                // page tabs; a dragged piece dropped on a tab moves to that page
+                // the page stepper: arrows, the page number with a list to jump
+                // from, and a dragged piece dropped on an arrow moves to that page
+                let pages = win.layout.pages.max(1);
+                let count_on = |i: usize| win.layout.places.iter().filter(|p| p.page == i).count();
+                let mut go: Option<usize> = None;
+                let mut move_to: Option<usize> = None;
                 ui.horizontal(|ui| {
-                    for i in 0..win.layout.pages {
-                        let n = win.layout.places.iter().filter(|p| p.page == i).count();
-                        let resp = ui.selectable_label(
-                            win.page == i,
-                            trf("Page {n} ({count})", &[("n", &i), ("count", &n)]),
-                        );
-                        if resp.clicked() {
-                            win.page = i;
-                        }
-                        if let Some((pi, _)) = win.drag
-                            && resp.hovered()
-                            && ui.input(|inp| inp.pointer.any_released())
-                            && let Some(pl) = win.layout.places.get_mut(pi)
-                        {
-                            pl.page = i;
-                            pl.x = GAP;
-                            pl.y = GAP;
-                            win.page = i;
-                        }
+                    let dragging = win.drag.is_some();
+                    let released = ui.input(|inp| inp.pointer.any_released());
+                    // (clicked, a dragged piece dropped on it)
+                    let arrow = |ui: &mut egui::Ui, icon: &str, on: bool, hint: &'static str| {
+                        let resp = ui
+                            .add_enabled(on, egui::Button::new(icon).min_size(vec2(28.0, 22.0)))
+                            .on_hover_text(tr(hint));
+                        (resp.clicked(), on && dragging && resp.contains_pointer() && released)
+                    };
+                    let prev = win.page.checked_sub(1);
+                    let next = (win.page + 1 < pages).then_some(win.page + 1);
+                    let (clicked, dropped) = arrow(
+                        ui,
+                        egui_phosphor::regular::CARET_LEFT,
+                        prev.is_some(),
+                        "Previous page (drop a piece here to move it there)",
+                    );
+                    if clicked {
+                        go = prev;
                     }
+                    if dropped {
+                        move_to = prev;
+                    }
+                    egui::ComboBox::from_id_salt("atlas-page")
+                        .selected_text(trf(
+                            "Page {n} / {total}",
+                            &[("n", &(win.page + 1)), ("total", &pages)],
+                        ))
+                        .height(320.0)
+                        .show_ui(ui, |ui| {
+                            for i in 0..pages {
+                                let label = trf(
+                                    "Page {n} ({count})",
+                                    &[("n", &(i + 1)), ("count", &count_on(i))],
+                                );
+                                if ui.selectable_label(win.page == i, label).clicked() {
+                                    go = Some(i);
+                                }
+                            }
+                        });
+                    let (clicked, dropped) = arrow(
+                        ui,
+                        egui_phosphor::regular::CARET_RIGHT,
+                        next.is_some(),
+                        "Next page (drop a piece here to move it there)",
+                    );
+                    if clicked {
+                        go = next;
+                    }
+                    if dropped {
+                        move_to = next;
+                    }
+                    ui.weak(trf("{count} pieces", &[("count", &count_on(win.page))]));
                 });
+                if let Some(t) = move_to
+                    && let Some((pi, _)) = win.drag
+                    && let Some(pl) = win.layout.places.get_mut(pi)
+                {
+                    pl.page = t;
+                    pl.x = GAP;
+                    pl.y = GAP;
+                    win.page = t;
+                } else if let Some(t) = go {
+                    win.page = t;
+                }
                 ui.separator();
                 // the page: a square, pieces drawn from their old page's thumbnail
                 let side = ui.available_height().min(ui.available_width() - 220.0).max(300.0);
