@@ -281,7 +281,9 @@
 - The update banner and About show **What's new** for the release on
   offer: its changelog, folded away until opened.
 - The Clip by list has a search box and lists ArtPaths first.
-- **Key dots show the selection**, as in Cubism: green when every
+- **Key dots tell keys apart**: keys mirrored across the default share a
+  colour (the default key is white), so Motion Mirroring's pairs match up.
+  Their outline shows the selection, as in Cubism: green when every
   selected object has the key, yellow when only some do, a red border on
   the key the slider sits on, and a red glow on the key Motion Mirroring
   just wrote to. **Right-click near a key** and the slider sticks to its

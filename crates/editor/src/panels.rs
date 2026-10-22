@@ -12971,6 +12971,37 @@ impl EditorUi {
     }
 }
 
+/// Pair colours for key dots: keys the same distance either side of the
+/// default share one, so the pairs Motion Mirroring works on match up.
+const PAIR_COLORS: [Color32; 6] = [
+    Color32::from_rgb(0x4F, 0xC3, 0xF7),
+    Color32::from_rgb(0xBA, 0x68, 0xC8),
+    Color32::from_rgb(0xF0, 0x62, 0x92),
+    Color32::from_rgb(0x4D, 0xB6, 0xAC),
+    Color32::from_rgb(0xFF, 0xB7, 0x4D),
+    Color32::from_rgb(0x90, 0xA4, 0xAE),
+];
+
+/// Key `k`'s pair colour: white at the default, else by how far from it,
+/// nearest first.
+fn pair_color(keys: &[f32], default: f32, span: f32, k: f32) -> Color32 {
+    let tol = span * 1e-3;
+    let d = (k - default).abs();
+    if d <= tol {
+        return Color32::WHITE;
+    }
+    let mut dists: Vec<f32> = Vec::new();
+    for &e in keys {
+        let de = (e - default).abs();
+        if de > tol && !dists.iter().any(|&x| (x - de).abs() <= tol) {
+            dists.push(de);
+        }
+    }
+    dists.sort_by(f32::total_cmp);
+    let i = dists.iter().position(|&x| (x - d).abs() <= tol).unwrap_or(0);
+    PAIR_COLORS.get(i % PAIR_COLORS.len()).copied().unwrap_or(Color32::WHITE)
+}
+
 /// The Cubism parameter slider: a track, a dot on every key, and the
 /// filled handle at the current value. Returns whether the value moved,
 /// the response, and whether a right-click stuck the slider onto a key
@@ -13003,22 +13034,22 @@ fn param_slider(
             }
         }
         let held = look.keys.iter().find(|(e, _)| (*e - k).abs() < 1e-5).map_or(0, |e| e.1);
-        let fill = if held == 0 {
-            Color32::WHITE
-        } else if held < look.picked {
-            Color32::from_rgb(0xF4, 0xD0, 0x3F)
-        } else {
-            Color32::from_rgb(0x4C, 0xC0, 0x6A)
+        // the fill tells keys apart: a picked colour, else the key's pair
+        // colour (keys mirrored across the default share one)
+        let fill = match look.colors.iter().find(|c| (c.0 - k).abs() < 1e-5) {
+            Some(&(_, [r, g, b])) => Color32::from_rgb(r, g, b),
+            None => pair_color(keys, default, span, k),
         };
-        match look.colors.iter().find(|c| (c.0 - k).abs() < 1e-5) {
-            Some(&(_, [r, g, b])) => {
-                let ring = if held == 0 { theme::pal().key_ring } else { fill };
-                painter.circle(at, 3.2, Color32::from_rgb(r, g, b), Stroke::new(1.4, ring));
-            }
-            None => {
-                painter.circle(at, 3.0, fill, Stroke::new(1.0, theme::pal().key_ring));
-            }
-        }
+        // the outline is Cubism's: green when every selected object has the
+        // key, yellow when only some do
+        let ring = if held == 0 {
+            Stroke::new(1.0, theme::pal().key_ring)
+        } else if held < look.picked {
+            Stroke::new(1.6, Color32::from_rgb(0xF4, 0xD0, 0x3F))
+        } else {
+            Stroke::new(1.6, Color32::from_rgb(0x4C, 0xC0, 0x6A))
+        };
+        painter.circle(at, if held > 0 { 3.3 } else { 3.0 }, fill, ring);
         // the selected key: the slider sits on it
         if held > 0 && (*value - k).abs() <= span * 1e-4 {
             painter.circle_stroke(at, 4.6, Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35)));
@@ -13809,6 +13840,21 @@ fn show_in_folder(path: &Path) -> std::io::Result<()> {
     }
     let folder = path.parent().unwrap_or(path);
     Command::new("xdg-open").arg(folder).spawn().map(|_| ())
+}
+
+#[cfg(test)]
+mod pair_color_tests {
+    use super::*;
+
+    #[test]
+    fn mirrored_keys_share_a_colour() {
+        let keys = [-30.0, -15.0, 0.0, 15.0, 30.0];
+        let c = |k| pair_color(&keys, 0.0, 60.0, k);
+        assert_eq!(c(0.0), Color32::WHITE);
+        assert_eq!(c(-30.0), c(30.0));
+        assert_eq!(c(-15.0), c(15.0));
+        assert_ne!(c(15.0), c(30.0));
+    }
 }
 
 #[cfg(test)]
