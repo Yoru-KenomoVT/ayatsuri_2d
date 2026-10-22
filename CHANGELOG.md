@@ -133,6 +133,14 @@
   its default. Each parameter row drags its value with Add, Multiply or
   Overwrite, fades are optional, and the model shows the expression as
   its values change.
+- **Skinning** (Modeling > Skinning > Use Deform Path for Skinning), as
+  in Cubism: draw a deform path on a long mesh from root to tip and it
+  becomes a chain of rotation deformers, one per path point but the tip,
+  each the child of the last. The mesh is cut into a piece per deformer
+  midway between them, the pieces are glued at the cuts so they bend as
+  one, and every deformer gets a parameter (-45 to 45) in a folder named
+  after the mesh. The original mesh is hidden and kept. It is all plain
+  deformers, glue and parameters, so it exports to moc3 for any version.
 - **Blend modes from Cubism 5.3**: a mesh's colour blend can be Add,
   Add (Glow), Darken, Multiply, Color Burn, Linear Burn, Lighten, Screen,
   Color Dodge, Overlay, Soft Light, Hard Light, Linear Light, Hue or
