@@ -9,6 +9,93 @@ use ayatsuri_editor::EditorUi;
 
 struct App {
     editor: EditorUi,
+    trace: Option<RepaintTrace>,
+}
+
+/// AYATSURI_TRACE_REPAINT=1: once a second, print to stderr how many frames
+/// ran and which lines asked for them, to find what keeps an idle editor
+/// drawing.
+struct RepaintTrace {
+    since: std::time::Instant,
+    frames: u32,
+    /// Time spent building each frame (the editor's own work, before the
+    /// GPU draws it): the total and the slowest this second.
+    build: std::time::Duration,
+    slowest: std::time::Duration,
+    /// Start to start of frames (the whole frame: build, egui's paint, the
+    /// GPU and the wait for the screen), and eframe's CPU time per frame
+    /// (build plus tessellation), for where the rest of a frame goes.
+    last_start: Option<std::time::Instant>,
+    gaps: std::time::Duration,
+    gap_max: std::time::Duration,
+    gap_n: u32,
+    cpu: f32,
+    causes: std::collections::BTreeMap<(&'static str, u32), u32>,
+}
+
+impl RepaintTrace {
+    fn frame(
+        &mut self,
+        ctx: &egui::Context,
+        began: std::time::Instant,
+        took: std::time::Duration,
+        cpu: Option<f32>,
+    ) {
+        if let Some(prev) = self.last_start {
+            let gap = began.duration_since(prev);
+            // a gap over 100 ms is the editor resting, not a frame
+            if gap.as_millis() < 100 {
+                self.gaps += gap;
+                self.gap_max = self.gap_max.max(gap);
+                self.gap_n += 1;
+            }
+        }
+        self.last_start = Some(began);
+        self.cpu += cpu.unwrap_or(0.0);
+        self.frames += 1;
+        self.build += took;
+        self.slowest = self.slowest.max(took);
+        for c in ctx.repaint_causes() {
+            *self.causes.entry((c.file, c.line)).or_default() += 1;
+        }
+        if self.since.elapsed().as_secs_f32() >= 1.0 {
+            let mut top: Vec<_> = self.causes.iter().collect();
+            top.sort_by(|a, b| b.1.cmp(a.1));
+            let list: Vec<String> =
+                top.iter().take(6).map(|((f, l), n)| format!("{f}:{l} x{n}")).collect();
+            let n = self.frames.max(1) as f32;
+            let avg = self.build.as_secs_f32() * 1000.0 / n;
+            let frame = self.gaps.as_secs_f32() * 1000.0 / self.gap_n.max(1) as f32;
+            eprintln!(
+                "repaint: {} frames/s  frame avg {frame:.1} ms (max {:.1})  build avg {avg:.1} ms, slowest {:.1} ms  cpu+paint avg {:.1} ms  {}",
+                self.frames,
+                self.gap_max.as_secs_f32() * 1000.0,
+                self.slowest.as_secs_f32() * 1000.0,
+                self.cpu * 1000.0 / n,
+                list.join("  ")
+            );
+            let last = self.last_start;
+            *self = RepaintTrace::default();
+            self.last_start = last;
+        }
+    }
+}
+
+impl Default for RepaintTrace {
+    fn default() -> Self {
+        Self {
+            since: std::time::Instant::now(),
+            frames: 0,
+            build: std::time::Duration::ZERO,
+            slowest: std::time::Duration::ZERO,
+            last_start: None,
+            gaps: std::time::Duration::ZERO,
+            gap_max: std::time::Duration::ZERO,
+            gap_n: 0,
+            cpu: 0.0,
+            causes: Default::default(),
+        }
+    }
 }
 
 impl eframe::App for App {
@@ -16,6 +103,7 @@ impl eframe::App for App {
         // a bug in one frame must never take the whole editor down: the
         // panic hook has already logged it with a backtrace, the editor
         // rescues the work and shows what happened
+        let began = std::time::Instant::now();
         let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.editor.ui(ui);
         }));
@@ -24,6 +112,9 @@ impl eframe::App for App {
             ui.ctx().request_repaint();
         }
         self.editor.apply_gpu_drops(eframe_frame.wgpu_render_state());
+        if let Some(t) = &mut self.trace {
+            t.frame(ui.ctx(), began, began.elapsed(), eframe_frame.info().cpu_usage);
+        }
     }
 }
 
@@ -138,7 +229,11 @@ fn main() -> eframe::Result {
                 if let Some(path) = open {
                     editor.open_on_start(path);
                 }
-                Ok(Box::new(App { editor }))
+                Ok(Box::new(App {
+                    editor,
+                    trace: std::env::var_os("AYATSURI_TRACE_REPAINT")
+                        .map(|_| RepaintTrace::default()),
+                }))
             }),
         )
     }));

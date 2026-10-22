@@ -209,6 +209,9 @@ pub struct EditorUi {
     logged_sel: Option<Sel>,
     logged_param: Option<usize>,
     logged_tool: Tool,
+    /// The window title last sent: sending one every frame would keep an
+    /// idle editor drawing, as each window command asks for a frame.
+    sent_title: String,
     heartbeat: f32,
     /// Timeline state: playhead seconds, transport, auto-key, and the time
     /// the tracks were last written into the puppet.
@@ -289,6 +292,15 @@ pub struct EditorUi {
     def_rename: Option<(usize, String)>,
     /// Undo depth at the start of the frame; see `on_crash`.
     frame_undo_depth: usize,
+    /// When the last frame began, and the real time since the one before:
+    /// playback and physics step by it, not by egui's predicted frame time,
+    /// so uneven frames cannot make them fall behind the clock.
+    frame_at: Option<std::time::Instant>,
+    frame_dt: f32,
+    /// The frame limiter's beat: whether the last frame asked for another
+    /// animation frame, and when the last animation frame started.
+    anim_wanted: std::cell::Cell<bool>,
+    anim_slot: Option<std::time::Instant>,
     /// The Ayatsuri API server and its editor-side state.
     pub(crate) api: api_bar::ApiState,
     pub(crate) recovery: crate::windows::recovery::RecoveryState,
@@ -593,6 +605,13 @@ fn brush_falloff(t: f32, hardness: f32) -> f32 {
         let u = (1.0 - t) / (1.0 - hardness).max(1e-4);
         u * u * (3.0 - 2.0 * u)
     }
+}
+
+/// Ask for the next animation frame straight away; under an FPS cap the
+/// frame limiter at the top of that frame holds it to its slot.
+fn pace_anim(wanted: &std::cell::Cell<bool>, ctx: &egui::Context) {
+    wanted.set(true);
+    ctx.request_repaint();
 }
 
 /// A point dropped near a guide lands on it (canvas pixels).
@@ -1016,6 +1035,7 @@ impl Default for EditorUi {
             logged_sel: None,
             logged_param: None,
             logged_tool: Tool::Arrow,
+            sent_title: String::new(),
             heartbeat: 0.0,
             anim_time: 0.0,
             anim_playing: false,
@@ -1057,6 +1077,10 @@ impl Default for EditorUi {
             settings_tab: 0,
             settings_pos: None,
             frame_undo_depth: 0,
+            frame_at: None,
+            frame_dt: 1.0 / 60.0,
+            anim_wanted: std::cell::Cell::new(false),
+            anim_slot: None,
             def_rename: None,
             toolbar_reset: false,
             live_drag: None,
@@ -1806,6 +1830,13 @@ impl EditorUi {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
+        self.limit_frame();
+        // the real time since the last frame; after a pause (the editor was
+        // asleep) one ordinary frame, so play and physics pick up smoothly
+        let now = std::time::Instant::now();
+        let gap = self.frame_at.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
+        self.frame_dt = if gap > 0.0 && gap <= 0.1 { gap } else { 1.0 / 60.0 };
+        self.frame_at = Some(now);
         // where undo stood when this frame began, for the crash rollback
         self.frame_undo_depth = self.session.as_ref().map_or(0, |s| s.undo_depth());
         // overlay colours: saved choices, else the theme, so mesh lines follow
@@ -1977,7 +2008,10 @@ impl EditorUi {
                 Some(s) => format!("Ayatsuri2D · {}", s.name),
                 None => "Ayatsuri2D".into(),
             };
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title));
+            if title != self.sent_title {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+                self.sent_title = title;
+            }
         }
         // closing with unsaved work stops at a dialog first
         if ui.ctx().input(|i| i.viewport().close_requested())
@@ -3232,7 +3266,7 @@ impl EditorUi {
                 .map(|c| (c.duration, c.looped, c.work_area))
                 .or_else(|| scene.as_ref().map(|(_, a)| (a.duration, a.looped, a.work_area)));
             if let Some((duration, looped, work_area)) = clock {
-                let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+                let dt = self.frame_dt;
                 if self.anim_playing {
                     // play runs inside the work area when there is one
                     let (w0, w1) = work_area.unwrap_or((0.0, duration));
@@ -3249,7 +3283,8 @@ impl EditorUi {
                             self.anim_playing = false;
                         }
                     }
-                    ui.ctx().request_repaint();
+                    // paced like physics, so the FPS cap holds during playback
+                    pace_anim(&self.anim_wanted, ui.ctx());
                 }
                 let moved = self.anim_time != self.anim_applied;
                 if moved || self.anim_playing {
@@ -3400,7 +3435,7 @@ impl EditorUi {
                 .map(|c| crate::audio::comp_cues(c, &s.audio, self.anim_time));
             match want {
                 Some((cues, live)) => {
-                    let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+                    let dt = self.frame_dt;
                     let jumped =
                         self.audio_at.is_none_or(|at| (self.anim_time - (at + dt)).abs() > 0.12);
                     if jumped {
@@ -3480,7 +3515,7 @@ impl EditorUi {
             let scope =
                 ayatsuri_core::comp::Scope { scenes: &s.animations, comps: &s.compositions };
             let comp = ayatsuri_core::comp::playlist_comp(&scope, &pl, fps);
-            let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+            let dt = self.frame_dt;
             self.phys_page.pl_time += dt;
             if self.phys_page.pl_time > comp.duration {
                 if self.phys_page.pl_loop && comp.duration > 0.0 {
@@ -3514,7 +3549,7 @@ impl EditorUi {
         // cursor following and the pendulum rig both drive parameters, so
         // they run just ahead of the per-frame evaluate
         if let Some(s) = &mut self.session {
-            let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
+            let dt = self.frame_dt;
             let mut following = false;
             if self.follow_cursor {
                 let rect = ui.ctx().content_rect();
@@ -3845,7 +3880,7 @@ impl EditorUi {
 
         if live {
             // the same integrator the runtime uses, one step per frame
-            let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.001, 0.05);
+            let dt = self.frame_dt.clamp(0.001, 0.05);
             if let Some(anchor) = self.phys_prev.get_mut(0) {
                 anchor.2 = anchor.0;
                 anchor.3 = anchor.1;
@@ -4946,14 +4981,38 @@ impl EditorUi {
 
     /// Ask for the next animation frame, honouring the FPS cap from the
     /// performance settings on low end machines.
+    ///
+    /// Frames keep a steady beat: each is due one period after the last
+    /// one's slot, not after the last frame finished, so the build time and
+    /// the wait for the screen do not stack up and the rate holds at the
+    /// cap. A frame that runs late starts a new beat instead of rushing.
     fn request_anim(&self, ctx: &egui::Context) {
-        if self.prefs.fps_cap > 0 {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f32(
-                1.0 / self.prefs.fps_cap as f32,
-            ));
-        } else {
-            ctx.request_repaint();
+        pace_anim(&self.anim_wanted, ctx);
+    }
+
+    /// The frame limiter: while something animates under an FPS cap, a
+    /// frame that comes early sleeps to its slot, one period after the last
+    /// one's, so playback and physics run at a steady rate instead of
+    /// whenever a timer happens to fire. Frames a person causes (a click, a
+    /// drag) and an editor at rest never wait.
+    fn limit_frame(&mut self) {
+        // the beat lasts while each frame asks for the next
+        if !self.anim_wanted.replace(false) || self.prefs.fps_cap == 0 {
+            self.anim_slot = None;
+            return;
         }
+        let period = std::time::Duration::from_secs_f32(1.0 / self.prefs.fps_cap as f32);
+        let now = std::time::Instant::now();
+        let slot = match self.anim_slot {
+            Some(prev) if prev + period > now => {
+                std::thread::sleep(prev + period - now);
+                prev + period
+            }
+            // the first frame of a beat, or a late one: a new beat from now
+            // rather than rushing to catch up
+            _ => now,
+        };
+        self.anim_slot = Some(slot);
     }
 
     /// The shortcut for an action: the user's remap when one is saved, the
@@ -6723,7 +6782,10 @@ impl EditorUi {
                     });
                     s.part_previews.insert(i, handle);
                 }
-                if !s.part_previews.contains_key(&i) {
+                // another frame only for a row on screen still waiting for its
+                // preview (a few are made per frame); rows scrolled out of
+                // view wait until they are shown, or the editor never rests
+                if !s.part_previews.contains_key(&i) && ui.is_rect_visible(thumb) {
                     ctx.request_repaint();
                 }
                 ui.painter().rect_filled(thumb, 2.0, theme::pal().canvas_bg);
@@ -7419,7 +7481,10 @@ impl EditorUi {
                     });
                     s.deformer_previews.insert(i, handle);
                 }
-                if !s.deformer_previews.contains_key(&i) {
+                // another frame only for a row on screen still waiting for its
+                // preview (a few are made per frame); rows scrolled out of
+                // view wait until they are shown, or the editor never rests
+                if !s.deformer_previews.contains_key(&i) && ui.is_rect_visible(thumb) {
                     ctx.request_repaint();
                 }
                 ui.painter().rect_filled(thumb, 2.0, theme::pal().canvas_bg);
