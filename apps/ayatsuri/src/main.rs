@@ -12,7 +12,7 @@ struct App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, eframe_frame: &mut eframe::Frame) {
         // a bug in one frame must never take the whole editor down: the
         // panic hook has already logged it with a backtrace, the editor
         // rescues the work and shows what happened
@@ -23,6 +23,7 @@ impl eframe::App for App {
             self.editor.on_crash();
             ui.ctx().request_repaint();
         }
+        self.editor.apply_gpu_drops(eframe_frame.wgpu_render_state());
     }
 }
 

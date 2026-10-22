@@ -1788,6 +1788,23 @@ impl EditorUi {
         self.last_layout = self.layout.clone();
     }
 
+    /// Hand the GPU the full texture pages residency let go this frame.
+    /// The app calls it after every frame, painted or not, so a minimised
+    /// or idle window gives its video memory back.
+    pub fn apply_gpu_drops(&mut self, render: Option<&egui_wgpu::RenderState>) {
+        let Some(s) = &mut self.session else { return };
+        if s.gpu_drop.is_empty() {
+            return;
+        }
+        let Some(render) = render else { return };
+        let pages = std::mem::take(&mut s.gpu_drop);
+        let mut r = render.renderer.write();
+        if let Some(gpu) = r.callback_resources.get_mut::<ayatsuri_render::GpuRenderer>() {
+            gpu.drop_full_pages(&pages);
+            log::debug!("{} full texture page(s) given back", pages.len());
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut Ui) {
         // where undo stood when this frame began, for the crash rollback
         self.frame_undo_depth = self.session.as_ref().map_or(0, |s| s.undo_depth());
@@ -3400,8 +3417,10 @@ impl EditorUi {
                     self.audio_at = Some(self.anim_time);
                 }
                 None => {
+                    // playback stopped: close the output, so no thread keeps
+                    // streaming silence; the next play opens it again
                     if self.audio_at.take().is_some()
-                        && let Some(out) = &mut self.audio_out
+                        && let Some(mut out) = self.audio_out.take()
                     {
                         out.stop();
                     }
@@ -8571,6 +8590,11 @@ impl EditorUi {
                 s.gpu_pages_uploaded.store(false, std::sync::atomic::Ordering::Release);
             }
             s.gpu_drop.extend(plan.drop);
+            // nothing else wakes an idle editor: come back when the full
+            // pages are due to go
+            if let Some(wait) = s.residency.idle_wake() {
+                ui.ctx().request_repaint_after(wait);
+            }
             if s.residency.oom_count > 0 {
                 let note = crate::i18n::tr(
                     "Video memory ran out: textures beyond the budget draw at lower detail. Close other models or windows to give it back.",
@@ -8598,7 +8622,7 @@ impl EditorUi {
                 s.gpu_uploaded.clone(),
                 s.gpu_pages.clone(),
                 s.gpu_pages_uploaded.clone(),
-                if s.gpu_drop.is_empty() { None } else { Some(std::mem::take(&mut s.gpu_drop)) },
+                None,
                 pos2(origin.x, origin.y),
                 scale,
                 ui.ctx().pixels_per_point(),

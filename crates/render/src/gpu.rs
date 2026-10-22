@@ -818,6 +818,17 @@ impl GpuRenderer {
             .collect();
     }
 
+    /// Let these pages' full-size textures go; their proxies stay and draw.
+    /// Callable between frames, so a minimised window that paints nothing
+    /// still gives its video memory back.
+    pub fn drop_full_pages(&mut self, pages: &[usize]) {
+        for &i in pages {
+            if let Some(slot) = self.textures.get_mut(i) {
+                slot.full = None;
+            }
+        }
+    }
+
     /// Bytes of texture memory the full pages hold right now, mips included.
     pub fn resident_full(&self) -> usize {
         self.textures.iter().filter(|s| s.full.is_some()).count()
@@ -993,11 +1004,7 @@ impl GpuRenderer {
             }
         }
         if let Some(drop) = &packet.drop_pages {
-            for &i in drop {
-                if let Some(slot) = self.textures.get_mut(i) {
-                    slot.full = None;
-                }
-            }
+            self.drop_full_pages(drop);
         }
         if let Some(pages) = &packet.pages {
             for (i, t) in pages.iter() {

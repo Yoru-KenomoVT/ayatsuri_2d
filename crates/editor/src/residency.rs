@@ -87,6 +87,17 @@ impl Residency {
         self.pages.iter().filter(|p| p.resident).map(Page::bytes).sum()
     }
 
+    /// How long until an idle window's full pages are due to go, while
+    /// any are still held: the editor wakes once then, as nothing else
+    /// draws a frame while it sits idle.
+    pub fn idle_wake(&self) -> Option<Duration> {
+        let since = self.idle_since?;
+        if !self.pages.iter().any(|p| p.resident) {
+            return None;
+        }
+        Some(IDLE.saturating_sub(since.elapsed()) + Duration::from_millis(250))
+    }
+
     pub fn resident_count(&self) -> usize {
         self.pages.iter().filter(|p| p.resident).count()
     }
@@ -262,6 +273,21 @@ mod tests {
         let plan = settle(&mut r, &[(1, true)], &pngs);
         assert_eq!(plan.drop, vec![0]);
         assert!(r.is_resident(1) && !r.is_resident(0));
+    }
+
+    #[test]
+    fn an_idle_window_asks_to_be_woken_while_it_holds_full_pages() {
+        let pngs = vec![tiny_png()];
+        let mut r = Residency::new(&[(1, 1)], 512);
+        settle(&mut r, &[(0, true)], &pngs);
+        assert!(r.is_resident(0));
+        assert_eq!(r.idle_wake(), None, "not idle yet");
+        r.tick(&[], true, &pngs);
+        let wait = r.idle_wake().expect("idle with a page held");
+        assert!(wait <= IDLE + Duration::from_millis(250));
+        // once the pages are gone there is nothing to wake for
+        r.pages[0].resident = false;
+        assert_eq!(r.idle_wake(), None);
     }
 
     #[test]

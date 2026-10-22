@@ -119,7 +119,7 @@ impl Server {
     pub(crate) fn start(port: u16, remote: bool, clients: Vec<Client>) -> std::io::Result<Self> {
         let host = if remote { [0, 0, 0, 0] } else { [127, 0, 0, 1] };
         let listener = TcpListener::bind(SocketAddr::from((host, port)))?;
-        listener.set_nonblocking(true)?;
+        // accept blocks, so an idle server costs nothing; stop wakes it
         let addr = listener.local_addr()?;
         let shared = Arc::new(Shared { clients: Mutex::new(clients), ..Shared::default() });
         let s = shared.clone();
@@ -130,7 +130,13 @@ impl Server {
 
     /// Stop listening and drop every connection (they notice within ~0.1 s).
     pub(crate) fn stop(&self) {
-        self.shared.stop.store(true, Ordering::Relaxed);
+        if self.shared.stop.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        // the listener sleeps in accept: one connection of our own wakes it
+        // to see the flag
+        let wake = SocketAddr::from(([127, 0, 0, 1], self.addr.port()));
+        let _ = TcpStream::connect_timeout(&wake, Duration::from_millis(200));
         log::info!("Ayatsuri API stopped");
     }
 
@@ -152,6 +158,7 @@ impl Drop for Server {
 fn listen(listener: TcpListener, shared: Arc<Shared>) {
     while !shared.stop.load(Ordering::Relaxed) {
         match listener.accept() {
+            Ok(_) if shared.stop.load(Ordering::Relaxed) => break,
             Ok((stream, peer)) => {
                 if lock(&shared.live).len() >= MAX_CONNS {
                     log::warn!("api: refused {peer}, {MAX_CONNS} connections already open");
@@ -164,9 +171,6 @@ fn listen(listener: TcpListener, shared: Arc<Shared>) {
                 if let Err(e) = spawned {
                     log::error!("api: could not start a connection thread: {e}");
                 }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
                 log::warn!("api: accept failed: {e}");

@@ -327,6 +327,12 @@
 - Mesh Edit holds one full-size texture page at a time instead of keeping
   every page it showed (#5).
 - No CPU use while nothing moves with Follow or Physics on (#6).
+- The editor sleeps fully at rest again: the API server waits for a
+  connection instead of checking twenty times a second, and the sound
+  output closes when playback stops instead of streaming silence.
+- An idle or minimised window gives its full-size textures back after
+  ten seconds again; nothing woke the editor to do it, and a minimised
+  window never passed the drop to the GPU.
 - Ctrl+click toggles a mesh in and out of the selection in the Parts
   palette, the Deformer palette (which gets multi-select) and on the
   canvas (#7).
