@@ -332,6 +332,9 @@
   of view, the API server waits for a connection instead of checking
   twenty times a second, and the sound output closes when playback stops
   instead of streaming silence.
+- The Texture Atlas, Render, Timelapse and Guide Line Settings windows
+  use the same frame as every other dialog (title strip to move it, the
+  same close button) and can be resized from the corner.
 - An idle or minimised window gives its full-size textures back after
   ten seconds again; nothing woke the editor to do it, and a minimised
   window never passed the drop to the GPU.

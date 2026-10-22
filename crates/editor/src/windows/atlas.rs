@@ -74,10 +74,9 @@ impl EditorUi {
         };
         let mut open = true;
         let mut apply = false;
-        egui::Window::new(tr("Texture Atlas"))
-            .collapsible(false)
+        crate::windows::Dialog::new(tr("Texture Atlas"))
             .open(&mut open)
-            .default_size([900.0, 640.0])
+            .resizable(vec2(900.0, 680.0), vec2(560.0, 440.0))
             .show(ui.ctx(), |ui| {
                 // controls across the top, wrapping when the window is narrow
                 ui.horizontal_wrapped(|ui| {

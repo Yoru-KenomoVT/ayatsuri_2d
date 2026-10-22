@@ -1592,7 +1592,7 @@ impl EditorUi {
         let mut pick_folder = false;
         let has_timelapse =
             s.aom_path.as_ref().is_some_and(|p| crate::timelapse::Recorder::sidecar(p).exists());
-        egui::Window::new(tr("Render")).collapsible(false).open(&mut open).default_size([1180.0, 640.0]).min_width(860.0).show(ui.ctx(), |ui| {
+        crate::windows::Dialog::new(tr("Render")).open(&mut open).resizable(egui::vec2(1180.0, 680.0), egui::vec2(860.0, 480.0)).show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut win.source, Source::Animation, tr("Animation"));
                 ui.add_enabled_ui(has_timelapse, |ui| {

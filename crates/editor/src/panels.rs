@@ -11982,10 +11982,9 @@ impl EditorUi {
         }
         if self.show_guide_settings {
             let mut open = true;
-            egui::Window::new(crate::i18n::tr("Guide Line Settings"))
-                .collapsible(false)
+            crate::windows::Dialog::new(crate::i18n::tr("Guide Line Settings"))
                 .open(&mut open)
-                .default_width(460.0)
+                .resizable(vec2(460.0, 380.0), vec2(380.0, 240.0))
                 .show(ui.ctx(), |ui| {
                     let mut changed = false;
                     let mut remove = None;
