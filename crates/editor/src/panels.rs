@@ -177,6 +177,7 @@ pub struct EditorUi {
     pub(crate) render_win: Option<crate::windows::render::RenderWin>,
     /// Modeling > Texture Atlas, while open.
     pub(crate) atlas_win: Option<crate::windows::atlas::AtlasWin>,
+    skin_dlg: Option<skin_dialog::SkinDialog>,
     show_physics: bool,
     phys_sel: usize,
     phys_tab: usize,
@@ -1012,6 +1013,7 @@ impl Default for EditorUi {
             timelapse_view: None,
             render_win: None,
             atlas_win: None,
+            skin_dlg: None,
             show_physics: false,
             phys_sel: 0,
             phys_tab: 0,
@@ -2586,7 +2588,26 @@ impl EditorUi {
                         }
                     });
                     let skin_ready = self.skin_path().is_some();
+                    let mesh_picked = matches!(self.selected, Some(Sel::Mesh(_)));
                     ui.menu_button(crate::i18n::tr("Skinning"), |ui| {
+                        if ui
+                            .add_enabled(mesh_picked, egui::Button::new(crate::i18n::tr("Skinning…")))
+                            .on_disabled_hover_text(crate::i18n::tr(
+                                "Select the mesh, with rotation deformers placed along it",
+                            ))
+                            .clicked()
+                        {
+                            ui.close();
+                            self.open_skin_dialog(false);
+                        }
+                        if ui
+                            .button(crate::i18n::tr("Generate Parameters for Rotation Deformers…"))
+                            .clicked()
+                        {
+                            ui.close();
+                            self.open_skin_dialog(true);
+                        }
+                        ui.separator();
                         if ui
                             .add_enabled(
                                 skin_ready,
@@ -2785,12 +2806,6 @@ impl EditorUi {
                             ui.close();
                             self.run_mesh_action(MeshAction::Unbind);
                         }
-                    });
-                    ui.menu_button(crate::i18n::tr("Skinning"), |ui| {
-                        let _ = ui.add_enabled(
-                            false,
-                            egui::Button::new(crate::i18n::tr("Apply Skinning…")),
-                        );
                     });
                     ui.menu_button(crate::i18n::tr("Edit Form"), |ui| {
                         let flippable = self.edit_target().is_some();
@@ -3700,6 +3715,7 @@ impl EditorUi {
         self.export_window(ui);
         self.render_window(ui);
         self.atlas_window(ui);
+        self.skin_dialog(ui);
         self.export_overwrite_window(ui);
         self.close_confirm_window(ui);
         self.workspace_windows(ui);
@@ -4950,16 +4966,7 @@ impl EditorUi {
             }
         });
         if let Some(e) = failed {
-            log::warn!(
-                "skinning {name}: {}",
-                match e {
-                    ayatsuri_core::skin::SkinError::EmptyPiece =>
-                        "a piece came out empty; space the path points further apart or give the mesh more points",
-                    ayatsuri_core::skin::SkinError::TooFewPoints =>
-                        "the path needs a root and a tip",
-                    ayatsuri_core::skin::SkinError::NoMesh => "the mesh is gone",
-                }
-            );
+            log::warn!("skinning {name}: {}", skin_dialog::skin_error(e));
             return;
         }
         let Some(made) = made else { return };

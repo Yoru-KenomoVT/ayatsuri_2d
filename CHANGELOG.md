@@ -163,7 +163,22 @@
   one, and every deformer gets a parameter (-45 to 45) in a folder named
   after the mesh. The original mesh is hidden and kept. It is all plain
   deformers, glue and parameters, so it exports to moc3 for any version.
+- **Skinning onto rotation deformers you placed** (Modeling > Skinning >
+  Skinning…) and **Generate Parameters for Rotation Deformers…**, Cubism's
+  other way in: tick the rotation deformers along a mesh, root first, and
+  the mesh is cut midway between them and glued, each piece under its
+  deformer; then give each deformer an angle parameter (-30 to 30 by
+  default) in a Rotation folder.
+- **Temporary Deform Tool** (Modeling > Temporary Deform Tool), as in
+  Cubism: throwaway control points around the selected meshes or warp
+  deformer, gone once the tool is released. Enlarge/Reduce, Rotation, Free
+  Transform, Perspective and Distort put a box around the art, Temporary
+  Warp Deformation a grid (columns and rows in Tool Details), Temporary
+  Path Deformation a path you click out. Drag a control point to deform,
   Ctrl+drag to move the point only, Shift+drag to move straight; the
+  anchor is the centre for Rotation and Enlarge/Reduce. Each drag lands on
+  the current keyform as one undo step; the green check in the view, Unbind
+  or Esc lets go (#14).
 - **Blend modes from Cubism 5.3**: a mesh's colour blend can be Add,
   Add (Glow), Darken, Multiply, Color Burn, Linear Burn, Lighten, Screen,
   Color Dodge, Overlay, Soft Light, Hard Light, Linear Light, Hue or
@@ -182,16 +197,6 @@
   re-interpolate, delete and reset; a composition's rows add scene and
   composition layers and import audio.
 - **Website** button in About, beside GitHub, opens ayatsuri-2d.org.
-- **Temporary Deform Tool** (Modeling > Temporary Deform Tool), as in
-  Cubism: throwaway control points around the selected meshes or warp
-  deformer, gone once the tool is released. Enlarge/Reduce, Rotation, Free
-  Transform, Perspective and Distort put a box around the art, Temporary
-  Warp Deformation a grid (columns and rows in Tool Details), Temporary
-  Path Deformation a path you click out. Drag a control point to deform,
-  Ctrl+drag to move the point only, Shift+drag to move everything; the
-  anchor is the centre for Rotation and Enlarge/Reduce. Each drag lands on
-  the current keyform as one undo step; the green check in the view, Unbind
-  or Esc lets go (#14).
 - **Physics playlists** (Physics Settings > Playlist): groups of scenes
   played top to bottom with a crossfade, a group's scenes at once, each
   overwriting or adding at a weight, so the physics can be watched

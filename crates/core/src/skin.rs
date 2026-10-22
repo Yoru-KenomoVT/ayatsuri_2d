@@ -31,10 +31,13 @@ pub enum SkinError {
     /// A piece came out with no triangles: the path points are closer
     /// together than the mesh's triangles. Space them out or add points.
     EmptyPiece,
+    /// One of the deformers given is not a rotation deformer.
+    NotRotation,
 }
 
-/// Skin `mesh` along `path`, root to tip, in model units at the rest pose.
-/// Each parameter runs from `-range` to `range` degrees and is named
+/// Skin `mesh` along `path`, root to tip, in model units at the rest pose:
+/// a new rotation deformer at each point but the tip, chained. Each
+/// parameter runs from `-range` to `range` degrees and is named
 /// `<id_base>1`, `<id_base>2`, ... (an id already taken gets a number on).
 pub fn skin(
     model: &mut Model,
@@ -53,18 +56,109 @@ pub fn skin(
     if joints.len() < 2 {
         return Err(SkinError::TooFewPoints);
     }
-    let range = range.abs().max(1.0);
+    let n_def = joints.len() - 1;
+    let pieces = cut(model, mesh, &joints, n_def)?;
 
-    // where each joint sits along the path, and where the cuts go: midway
-    // between neighbouring deformers (one per joint but the tip)
+    // a rotation deformer at each joint but the tip, holding its piece,
+    // then chained root to tip
+    let rest = edit::rest_puppet(model);
+    let mut ids = Vec::with_capacity(n_def);
+    for (i, &piece) in pieces.iter().enumerate() {
+        let joint = joints.get(i).copied().unwrap_or([0.0; 2]);
+        let origin =
+            edit::to_local(&rest, orig.parent_deformer.map(|p| p as usize), (joint[0], joint[1]));
+        let id = unique_deformer_id(model, &format!("Rotation_{}_Skin{}", orig.id, i + 1));
+        edit::create_rotation_deformer(model, &[piece], Some(origin), id.clone())
+            .ok_or(SkinError::NoMesh)?;
+        ids.push(id);
+    }
+    for w in ids.windows(2) {
+        let (Some(parent), Some(child)) = (w.first(), w.get(1)) else { continue };
+        if let (Some(p), Some(c)) = (index_of(model, parent), index_of(model, child)) {
+            edit::set_parent(model, Child::Deformer(c), Some(p));
+        }
+    }
+    let params = key_angles(model, &ids, range, id_base)?;
+    glue_chain(model, &pieces);
+    let deformers = ids.iter().filter_map(|id| index_of(model, id)).collect();
+    Ok(Skin { pieces, deformers, params })
+}
+
+/// Skin `mesh` onto rotation deformers already placed along it, root to
+/// tip (Cubism's Modeling > Skinning > Skinning): the mesh is cut midway
+/// between their pivots, each piece goes under its deformer without moving,
+/// and the pieces are glued at the cuts. No parameters are made; see
+/// [`rotation_parameters`].
+pub fn skin_with_rotations(
+    model: &mut Model,
+    mesh: usize,
+    deformers: &[usize],
+) -> Result<Skin, SkinError> {
+    if deformers.len() < 2 {
+        return Err(SkinError::TooFewPoints);
+    }
+    let rest = edit::rest_puppet(model);
+    let mut ids = Vec::with_capacity(deformers.len());
+    let mut joints = Vec::with_capacity(deformers.len());
+    for &d in deformers {
+        let def = model.deformers.get(d).ok_or(SkinError::NotRotation)?;
+        let r = rest.rotation_state(d).ok_or(SkinError::NotRotation)?;
+        ids.push(def.id.clone());
+        joints.push([r.origin.x, r.origin.y]);
+    }
+    let pieces = cut(model, mesh, &joints, joints.len())?;
+    for (&piece, id) in pieces.iter().zip(&ids) {
+        if let Some(d) = index_of(model, id) {
+            edit::set_parent(model, Child::Mesh(piece), Some(d));
+        }
+    }
+    glue_chain(model, &pieces);
+    let deformers = ids.iter().filter_map(|id| index_of(model, id)).collect();
+    Ok(Skin { pieces, deformers, params: Vec::new() })
+}
+
+/// A parameter for each rotation deformer, keyed at `-range`, 0 and `range`
+/// to its angle (Cubism's Generate Parameters for Rotation Deformer), named
+/// `<id_base>1`, `<id_base>2`, ... in the order given.
+pub fn rotation_parameters(
+    model: &mut Model,
+    deformers: &[usize],
+    range: f32,
+    id_base: &str,
+) -> Result<Vec<usize>, SkinError> {
+    let mut ids = Vec::with_capacity(deformers.len());
+    for &d in deformers {
+        let def = model.deformers.get(d).ok_or(SkinError::NotRotation)?;
+        if !matches!(def.kind, DeformerKind::Rotation(_)) {
+            return Err(SkinError::NotRotation);
+        }
+        ids.push(def.id.clone());
+    }
+    key_angles(model, &ids, range, id_base)
+}
+
+fn index_of(model: &Model, id: &str) -> Option<usize> {
+    model.deformers.iter().position(|d| d.id == id)
+}
+
+/// Cut `mesh` into `n` pieces along `joints` (the first `n` of them are
+/// what the pieces gather round), midway between neighbours; the pieces
+/// take the original's place in the draw order and in other meshes' masks,
+/// and the original is hidden.
+fn cut(
+    model: &mut Model,
+    mesh: usize,
+    joints: &[[f32; 2]],
+    n: usize,
+) -> Result<Vec<usize>, SkinError> {
+    let orig = model.art_meshes.get(mesh).cloned().ok_or(SkinError::NoMesh)?;
     let mut along = vec![0.0f32];
     for w in joints.windows(2) {
         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
         let last = along.last().copied().unwrap_or(0.0);
         along.push(last + dist(*a, *b));
     }
-    let n_def = joints.len() - 1;
-    let cuts: Vec<f32> = (0..n_def.saturating_sub(1))
+    let cuts: Vec<f32> = (0..n.saturating_sub(1))
         .map(|i| {
             let a = along.get(i).copied().unwrap_or(0.0);
             let b = along.get(i + 1).copied().unwrap_or(0.0);
@@ -78,12 +172,12 @@ pub fn skin(
         .mesh_geometry(mesh)
         .map(|g| g.positions.as_chunks::<2>().0.to_vec())
         .ok_or(SkinError::NoMesh)?;
-    let mut tris: Vec<Vec<[u16; 3]>> = vec![Vec::new(); n_def];
+    let mut tris: Vec<Vec<[u16; 3]>> = vec![Vec::new(); n];
     for t in orig.indices.as_chunks::<3>().0 {
         let at = |i: u16| world.get(i as usize).copied().unwrap_or([0.0; 2]);
         let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));
         let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0];
-        let s = position_along(&joints, &along, centre);
+        let s = position_along(joints, &along, centre);
         let piece = cuts.iter().filter(|&&c| s >= c).count();
         if let Some(list) = tris.get_mut(piece) {
             list.push(*t);
@@ -97,7 +191,7 @@ pub fn skin(
     // triangles; a vertex on a cut goes into both pieces it borders
     let keyforms = orig.opacities.len().max(1);
     let vc = orig.vertex_count as usize;
-    let mut pieces = Vec::with_capacity(n_def);
+    let mut pieces = Vec::with_capacity(n);
     for (pi, list) in tris.iter().enumerate() {
         let mut used: Vec<u16> = list.iter().flatten().copied().collect();
         used.sort_unstable();
@@ -145,30 +239,33 @@ pub fn skin(
     if let Some(m) = model.art_meshes.get_mut(mesh) {
         m.visible = false;
     }
+    Ok(pieces)
+}
 
-    // a rotation deformer at each joint but the tip, holding its piece,
-    // then chained root to tip
+/// Glue each cut: the shared vertices sit on top of each other.
+fn glue_chain(model: &mut Model, pieces: &[usize]) {
     let rest = edit::rest_puppet(model);
-    let mut ids = Vec::with_capacity(n_def);
-    for (i, &piece) in pieces.iter().enumerate() {
-        let joint = joints.get(i).copied().unwrap_or([0.0; 2]);
-        let origin =
-            edit::to_local(&rest, orig.parent_deformer.map(|p| p as usize), (joint[0], joint[1]));
-        let id = unique_deformer_id(model, &format!("Rotation_{}_Skin{}", orig.id, i + 1));
-        edit::create_rotation_deformer(model, &[piece], Some(origin), id.clone())
-            .ok_or(SkinError::NoMesh)?;
-        ids.push(id);
+    let geo = |p: usize| rest.mesh_geometry(p).map(|g| g.positions.to_vec()).unwrap_or_default();
+    let worlds: Vec<Vec<f32>> = pieces.iter().map(|&p| geo(p)).collect();
+    for (w, g) in pieces.windows(2).zip(worlds.windows(2)) {
+        let (Some(&a), Some(&b), Some(wa), Some(wb)) = (w.first(), w.get(1), g.first(), g.get(1))
+        else {
+            continue;
+        };
+        edit::bind_glue(model, a, b, wa, wb, 1e-3);
     }
-    let index_of = |model: &Model, id: &str| model.deformers.iter().position(|d| d.id == id);
-    for w in ids.windows(2) {
-        let (Some(parent), Some(child)) = (w.first(), w.get(1)) else { continue };
-        if let (Some(p), Some(c)) = (index_of(model, parent), index_of(model, child)) {
-            edit::set_parent(model, Child::Deformer(c), Some(p));
-        }
-    }
+}
 
-    // a parameter per deformer, keyed at -range, 0 and range to the angle
-    let mut params = Vec::with_capacity(n_def);
+/// A parameter per deformer (by id), keyed at -range, 0 and range to its
+/// angle.
+fn key_angles(
+    model: &mut Model,
+    ids: &[String],
+    range: f32,
+    id_base: &str,
+) -> Result<Vec<usize>, SkinError> {
+    let range = range.abs().max(1.0);
+    let mut params = Vec::with_capacity(ids.len());
     for (i, id) in ids.iter().enumerate() {
         let pid = unique_param_id(model, &format!("{id_base}{}", i + 1));
         let p = edit::create_parameter(model, pid, -range, 0.0, range).ok_or(SkinError::NoMesh)?;
@@ -186,18 +283,7 @@ pub fn skin(
             }
         }
     }
-
-    // glue each cut: the shared vertices sit on top of each other
-    let rest = edit::rest_puppet(model);
-    let geo = |p: usize| rest.mesh_geometry(p).map(|g| g.positions.to_vec()).unwrap_or_default();
-    for w in pieces.windows(2) {
-        let (Some(&a), Some(&b)) = (w.first(), w.get(1)) else { continue };
-        let (wa, wb) = (geo(a), geo(b));
-        edit::bind_glue(model, a, b, &wa, &wb, 1e-3);
-    }
-
-    let deformers = ids.iter().filter_map(|id| index_of(model, id)).collect();
-    Ok(Skin { pieces, deformers, params })
+    Ok(params)
 }
 
 /// Skin `mesh` along path points pinned to its triangles (a triangle and
@@ -420,6 +506,81 @@ mod tests {
             .map(|(a, b)| (a[1] - b[1]).abs())
             .fold(0.0, f32::max);
         assert!(far > 0.5, "the tip swings: {far}");
+    }
+
+    /// Two rotation deformers placed by hand along the strip, root to tip.
+    fn with_rotations() -> Model {
+        use ayatsuri_format::model::{Deformer, RotationData};
+        let mut m = strip();
+        for (i, x) in [0.0f32, 3.0].into_iter().enumerate() {
+            m.deformers.push(Deformer {
+                id: format!("Rot{i}"),
+                parent_part: None,
+                parent_deformer: (i > 0).then_some(0),
+                visible: true,
+                enabled: true,
+                binding: Binding::default(),
+                kind: DeformerKind::Rotation(RotationData {
+                    base_angle: 0.0,
+                    opacities: vec![1.0],
+                    angles: vec![0.0],
+                    // the second sits under the first, in its space
+                    origins_x: vec![if i == 0 { x } else { x - 0.0 }],
+                    origins_y: vec![if i == 0 { 0.25 } else { 0.0 }],
+                    scales: vec![1.0],
+                    reflect_x: vec![false],
+                    reflect_y: vec![false],
+                }),
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn a_mesh_skins_onto_rotation_deformers_placed_by_hand() {
+        let mut m = with_rotations();
+        let before = edit::rest_puppet(&m).mesh_geometry(0).unwrap().positions.to_vec();
+        let s = skin_with_rotations(&mut m, 0, &[0, 1]).unwrap();
+        assert_eq!(s.pieces.len(), 2);
+        assert!(s.params.is_empty());
+        assert!(!m.art_meshes[0].visible);
+        assert_eq!(m.glues.len(), 1);
+        for (p, d) in s.pieces.iter().zip(&s.deformers) {
+            assert_eq!(m.art_meshes[*p].parent_deformer, Some(*d as u32));
+        }
+        // nothing moved
+        let rest = edit::rest_puppet(&m);
+        for &p in &s.pieces {
+            for q in rest.mesh_geometry(p).unwrap().positions.as_chunks::<2>().0 {
+                let hit = before
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .any(|o| (o[0] - q[0]).abs() < 1e-3 && (o[1] - q[1]).abs() < 1e-3);
+                assert!(hit, "{q:?} moved");
+            }
+        }
+        // then a parameter each, keyed to the angle
+        let params = rotation_parameters(&mut m, &s.deformers, 30.0, "ParamHairRot").unwrap();
+        assert_eq!(params.len(), 2);
+        assert_eq!(m.parameters[params[0]].min, -30.0);
+        let mut puppet = crate::Puppet::new(m.clone());
+        puppet.set_value(params[1], 30.0);
+        puppet.update();
+        let tip = puppet.mesh_geometry(s.pieces[1]).unwrap().positions.to_vec();
+        let far = tip
+            .chunks(2)
+            .zip(before.chunks(2))
+            .map(|(a, b)| (a[1] - b[1]).abs())
+            .fold(0.0, f32::max);
+        assert!(far > 0.3, "the tip swings: {far}");
+    }
+
+    #[test]
+    fn skinning_onto_a_warp_is_refused() {
+        let mut m = with_rotations();
+        assert_eq!(rotation_parameters(&mut m, &[5], 30.0, "P"), Err(SkinError::NotRotation));
+        assert_eq!(skin_with_rotations(&mut m, 0, &[0]), Err(SkinError::TooFewPoints));
     }
 
     #[test]

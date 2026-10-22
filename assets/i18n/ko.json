@@ -1207,6 +1207,19 @@
   "Previous page (drop a piece here to move it there)": "이전 페이지(조각을 여기에 놓으면 그 페이지로 이동합니다)",
   "Next page (drop a piece here to move it there)": "다음 페이지(조각을 여기에 놓으면 그 페이지로 이동합니다)",
   "Scroll to zoom, drag empty space to pan": "스크롤로 확대/축소, 빈 곳을 드래그해 이동",
+  "Skinning…": "스키닝…",
+  "Generate Parameters for Rotation Deformers…": "회전 디포머 파라미터 생성…",
+  "Select the mesh, with rotation deformers placed along it": "메시를 선택하세요(회전 디포머를 메시를 따라 배치해 두세요)",
+  "Generate Parameters for Rotation Deformers": "회전 디포머 파라미터 생성",
+  "Cut {mesh} onto these rotation deformers, root first:": "{mesh}를 이 회전 디포머들에 나눕니다(뿌리부터):",
+  "A parameter for each of these rotation deformers:": "이 회전 디포머마다 파라미터를 만듭니다:",
+  "This model has no rotation deformers yet.": "이 모델에는 아직 회전 디포머가 없습니다.",
+  "Angle range": "각도 범위",
+  "(-{r} to {r})": "(-{r} ~ {r})",
+  "Skin": "스키닝",
+  "Generate": "생성",
+  "Tick two rotation deformers or more": "회전 디포머를 두 개 이상 선택하세요",
+  "Tick a rotation deformer": "회전 디포머를 선택하세요",
   "Enlarge/Reduce": "확대/축소",
   "Free Transform": "자유 변형",
   "Perspective": "원근",
@@ -1242,6 +1255,5 @@
   "SNS Interpolation": "SNS 보간",
   "Keyforms blend along a curve instead of a straight line, so a sway made of turned keys keeps its size. Needs three keys or more; applies to the selected objects. Points is how many keys a moc3 export adds between each pair so other apps follow the curve.": "키폼을 직선이 아닌 곡선을 따라 보간하므로 회전한 키로 만든 흔들림도 크기가 유지됩니다. 키가 3개 이상 필요하며 선택한 오브젝트에 적용됩니다. 점 수는 moc3 내보내기 때 각 키 사이에 추가하는 키의 수로, 다른 앱에서도 곡선대로 움직입니다.",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves straight: horizontally, vertically or at 45°. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "컨트롤 포인트를 드래그하여 변형합니다. Ctrl+드래그는 컨트롤 포인트만 이동합니다. Shift+드래그는 수평, 수직 또는 45° 방향으로 곧게 이동합니다. 앵커를 드래그하면 회전과 확대/축소의 중심이 이동합니다.\n\n임시 패스: 클릭하여 컨트롤 포인트 추가, 패스를 클릭하여 삽입, Alt+클릭으로 삭제합니다.\n\n각 드래그는 파라미터가 있는 키폼에 실행 취소 한 단계로 적용됩니다.",
-  "Key color": "키 색상",
-  "Apply Skinning…": "스키닝 적용…"
+  "Key color": "키 색상"
 }

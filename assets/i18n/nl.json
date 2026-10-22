@@ -1207,6 +1207,19 @@
   "Previous page (drop a piece here to move it there)": "Vorige pagina (zet hier een stuk neer om het daarheen te verplaatsen)",
   "Next page (drop a piece here to move it there)": "Volgende pagina (zet hier een stuk neer om het daarheen te verplaatsen)",
   "Scroll to zoom, drag empty space to pan": "Scroll om te zoomen, sleep een lege plek om te verschuiven",
+  "Skinning…": "Skinning…",
+  "Generate Parameters for Rotation Deformers…": "Parameters maken voor rotatievervormers…",
+  "Select the mesh, with rotation deformers placed along it": "Selecteer de mesh, met rotatievervormers erlangs geplaatst",
+  "Generate Parameters for Rotation Deformers": "Parameters maken voor rotatievervormers",
+  "Cut {mesh} onto these rotation deformers, root first:": "{mesh} opdelen over deze rotatievervormers, vanaf de wortel:",
+  "A parameter for each of these rotation deformers:": "Een parameter voor elk van deze rotatievervormers:",
+  "This model has no rotation deformers yet.": "Dit model heeft nog geen rotatievervormers.",
+  "Angle range": "Hoekbereik",
+  "(-{r} to {r})": "(-{r} tot {r})",
+  "Skin": "Skinnen",
+  "Generate": "Maken",
+  "Tick two rotation deformers or more": "Vink twee of meer rotatievervormers aan",
+  "Tick a rotation deformer": "Vink een rotatievervormer aan",
   "Enlarge/Reduce": "Vergroten/Verkleinen",
   "Free Transform": "Vrije transformatie",
   "Perspective": "Perspectief",
@@ -1242,6 +1255,5 @@
   "SNS Interpolation": "SNS-interpolatie",
   "Keyforms blend along a curve instead of a straight line, so a sway made of turned keys keeps its size. Needs three keys or more; applies to the selected objects. Points is how many keys a moc3 export adds between each pair so other apps follow the curve.": "Keyforms mengen langs een curve in plaats van een rechte lijn, zodat een zwaai van gedraaide sleutels zijn grootte houdt. Vereist drie of meer sleutels; geldt voor de geselecteerde objecten. Punten is hoeveel sleutels een moc3-export tussen elk paar toevoegt zodat andere apps de curve volgen.",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves straight: horizontally, vertically or at 45°. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "Sleep een controlepunt om te vervormen. Ctrl+slepen verplaatst alleen het controlepunt. Shift+slepen verplaatst recht: horizontaal, verticaal of onder 45°. Sleep het anker om het midden van Rotatie en Vergroten/Verkleinen te verplaatsen.\n\nTijdelijk pad: klik om een controlepunt toe te voegen, klik op het pad om er een in te voegen, Alt+klik verwijdert.\n\nElke sleepbeweging komt op de keyform waar de parameters op staan, als één ongedaan-maakstap.",
-  "Key color": "Sleutelkleur",
-  "Apply Skinning…": "Skinning toepassen…"
+  "Key color": "Sleutelkleur"
 }
