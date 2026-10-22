@@ -37,6 +37,8 @@ pub(super) enum ParamCmd {
     FourCorners,
     /// Motion Mirroring for a parameter.
     Mirror(usize),
+    /// Extended Interpolation for a parameter on the selected objects.
+    Curve(usize),
     ResetAll,
     DeleteEmptyParams,
     DeleteEmptyGroups,
@@ -66,6 +68,15 @@ struct Mirror {
     param: usize,
     horizontal: bool,
     vertical: bool,
+}
+
+/// The Extended Interpolation dialog's settings: method 0 linear, 1
+/// ellipse, 2 SNS, as Cubism lists them.
+struct CurveDlg {
+    param: usize,
+    method: usize,
+    points: u8,
+    scale: f32,
 }
 
 /// How deep a deformer sits, so mirroring can go parents first.
@@ -100,6 +111,7 @@ pub(super) struct ParamMenuState {
     rename: Option<(usize, String)>,
     corners: Option<Corners>,
     mirror: Option<Mirror>,
+    curve: Option<CurveDlg>,
     /// Reflect waiting for the overwrite confirmation: (parameter, the
     /// key it mirrors from, the opposite key it overwrites).
     pub(super) reflect: Option<(usize, f32, Option<f32>)>,
@@ -242,6 +254,7 @@ pub(super) fn slider_menu(ui: &mut Ui, pi: usize, v: f32, can_edit: bool) -> Opt
     item(ui, can_edit, crate::i18n::tr("Change…"), ParamCmd::Change(pi), &mut out);
     ui.separator();
     item(ui, can_edit, crate::i18n::tr("Motion Mirroring…"), ParamCmd::Mirror(pi), &mut out);
+    item(ui, can_edit, crate::i18n::tr("Extended Interpolation…"), ParamCmd::Curve(pi), &mut out);
     out
 }
 
@@ -540,6 +553,30 @@ impl EditorUi {
             ParamCmd::ResetAll => self.reset_parameters(),
             ParamCmd::Mirror(pi) => {
                 self.pmenu.mirror = Some(Mirror { param: pi, horizontal: true, vertical: false });
+            }
+            ParamCmd::Curve(pi) => {
+                // start from what the first selected object has
+                use ayatsuri_format::model::CurveKind;
+                let have = self.session.as_ref().and_then(|s| {
+                    let m = s.puppet.model();
+                    self.param_targets().into_iter().find_map(|t| {
+                        let b = match t {
+                            Target::ArtMesh(i) => m.art_meshes.get(i).map(|x| &x.binding),
+                            Target::Deformer(i) => m.deformers.get(i).map(|x| &x.binding),
+                            Target::Part(i) => m.parts.get(i).map(|x| &x.binding),
+                        };
+                        b.and_then(|b| b.curve(pi as u32))
+                    })
+                });
+                self.pmenu.curve = Some(match have {
+                    Some(CurveKind::Ellipse { points, scale }) => {
+                        CurveDlg { param: pi, method: 1, points, scale }
+                    }
+                    Some(CurveKind::Sns { points }) => {
+                        CurveDlg { param: pi, method: 2, points, scale: 1.0 }
+                    }
+                    None => CurveDlg { param: pi, method: 2, points: 5, scale: 1.0 },
+                });
             }
             ParamCmd::FourCorners => {
                 let Some(s) = &self.session else { return };
@@ -997,6 +1034,92 @@ impl EditorUi {
                 self.reflect_into_opposite(p, from);
             } else if !open {
                 self.pmenu.reflect = None;
+            }
+        }
+
+        if let Some(cd) = &mut self.pmenu.curve {
+            let mut open = true;
+            let mut run = false;
+            crate::windows::Dialog::new(crate::i18n::tr("Extended Interpolation")).open(&mut open).show(
+                &ctx,
+                |ui| {
+                    crate::windows::form(ui, "curve", |ui| {
+                        ui.label(crate::i18n::tr("Parameter"));
+                        pick(ui, "c-p", &mut cd.param);
+                        ui.end_row();
+                        ui.label(crate::i18n::tr("Interpolation method"));
+                        ui.vertical(|ui| {
+                            ui.radio_value(&mut cd.method, 0, crate::i18n::tr("Linear Interpolation"));
+                            ui.radio_value(&mut cd.method, 1, crate::i18n::tr("Ellipse Interpolation"));
+                            ui.radio_value(&mut cd.method, 2, crate::i18n::tr("SNS Interpolation"));
+                        });
+                        ui.end_row();
+                        if cd.method != 0 {
+                            ui.label(crate::i18n::tr("Points"));
+                            ui.add(egui::DragValue::new(&mut cd.points).range(1..=20));
+                            ui.end_row();
+                        }
+                        if cd.method == 1 {
+                            ui.label(crate::i18n::tr("Scale"));
+                            ui.add(egui::DragValue::new(&mut cd.scale).range(0.1..=3.0).speed(0.01));
+                            ui.end_row();
+                        }
+                    });
+                    ui.weak(crate::i18n::tr("Keyforms blend along a curve instead of a straight line, so a sway made of turned keys keeps its size. Needs three keys or more; applies to the selected objects. Points is how many keys a moc3 export adds between each pair so other apps follow the curve."));
+                    if ui.button(crate::i18n::tr("OK")).clicked() {
+                        run = true;
+                    }
+                },
+            );
+            if run {
+                use ayatsuri_format::model::CurveKind;
+                let (p, kind) = (
+                    cd.param,
+                    match cd.method {
+                        1 => Some(CurveKind::Ellipse { points: cd.points, scale: cd.scale }),
+                        2 => Some(CurveKind::Sns { points: cd.points }),
+                        _ => None,
+                    },
+                );
+                self.pmenu.curve = None;
+                let targets = self.param_targets();
+                if let Some(s) = &mut self.session {
+                    let few = targets
+                        .iter()
+                        .filter(|&&t| {
+                            let m = s.puppet.model();
+                            let b = match t {
+                                Target::ArtMesh(i) => m.art_meshes.get(i).map(|x| &x.binding),
+                                Target::Deformer(i) => m.deformers.get(i).map(|x| &x.binding),
+                                Target::Part(i) => m.parts.get(i).map(|x| &x.binding),
+                            };
+                            b.and_then(|b| b.axes.iter().find(|a| a.parameter as usize == p))
+                                .is_some_and(|a| a.keys.len() < 3)
+                        })
+                        .count();
+                    let mut n = 0;
+                    s.edit(|m| {
+                        for &t in &targets {
+                            n += usize::from(ayatsuri_core::edit::set_curve(m, t, p, kind));
+                        }
+                        n > 0
+                    });
+                    s.dirty = true;
+                    if n == 0 {
+                        log::warn!(
+                            "extended interpolation: select objects keyed on this parameter"
+                        );
+                    } else {
+                        log::info!("extended interpolation set on {n} object(s)");
+                    }
+                    if few > 0 && kind.is_some() {
+                        log::warn!(
+                            "extended interpolation needs three keys: {few} object(s) stay straight until they have them"
+                        );
+                    }
+                }
+            } else if !open {
+                self.pmenu.curve = None;
             }
         }
 

@@ -1227,6 +1227,13 @@
   "Temporary deform: Temporary Path": "Tijdelijk vervormen: Tijdelijk pad",
   "Not set": "Niet ingesteld",
   "Put a parameter slider exactly on a key": "Zet een parameterschuif precies op een sleutel",
+  "Extended Interpolation…": "Uitgebreide interpolatie…",
+  "Extended Interpolation": "Uitgebreide interpolatie",
+  "Interpolation method": "Interpolatiemethode",
+  "Linear Interpolation": "Lineaire interpolatie",
+  "Ellipse Interpolation": "Ellipsinterpolatie",
+  "SNS Interpolation": "SNS-interpolatie",
+  "Keyforms blend along a curve instead of a straight line, so a sway made of turned keys keeps its size. Needs three keys or more; applies to the selected objects. Points is how many keys a moc3 export adds between each pair so other apps follow the curve.": "Keyforms mengen langs een curve in plaats van een rechte lijn, zodat een zwaai van gedraaide sleutels zijn grootte houdt. Vereist drie of meer sleutels; geldt voor de geselecteerde objecten. Punten is hoeveel sleutels een moc3-export tussen elk paar toevoegt zodat andere apps de curve volgen.",
   "About Physics (online manual)": "Over fysica (online handleiding)",
   "Apply Skinning…": "Skinning toepassen…",
   "Drag a control point to deform. Ctrl+drag moves the control point only. Shift+drag moves everything in parallel. Drag the anchor to move the centre of Rotation and Enlarge/Reduce.\n\nTemporary Path: click to add a control point, click on the path to insert one, Alt+click deletes.\n\nEach drag lands on the keyform the parameters sit on, as one undo step.": "Sleep een controlepunt om te vervormen. Ctrl+slepen verplaatst alleen het controlepunt. Shift+slepen verplaatst alles parallel. Sleep het anker om het midden van Rotatie en Vergroten/Verkleinen te verplaatsen.\n\nTijdelijk pad: klik om een controlepunt toe te voegen, klik op het pad om er een in te voegen, Alt+klik verwijdert.\n\nElke sleepbeweging komt op de keyform waar de parameters op staan, als één ongedaan-maakstap."

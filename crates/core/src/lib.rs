@@ -1022,7 +1022,10 @@ mod tests {
                 uvs: vec![0.0; 6],
                 indices: vec![0, 1, 2],
                 masks: vec![],
-                binding: Binding { axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }] },
+                binding: Binding {
+                    curves: Vec::new(),
+                    axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }],
+                },
                 opacities: vec![1.0, 0.5],
                 draw_orders: vec![500.0, 500.0],
                 positions: vec![

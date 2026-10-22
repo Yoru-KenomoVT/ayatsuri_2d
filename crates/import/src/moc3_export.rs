@@ -278,6 +278,17 @@ impl Bindings {
 
 /// Serialize the model as a `.moc3` of the chosen revision.
 pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportError> {
+    // extended interpolation goes out as plain keys along its curve, the
+    // way Cubism hands it to the runtime
+    let baked;
+    let model = if ayatsuri_core::edit::has_curves(model) {
+        let mut m = model.clone();
+        ayatsuri_core::edit::bake_curves(&mut m);
+        baked = m;
+        &baked
+    } else {
+        model
+    };
     let n_params = model.parameters.len();
     let n_parts = model.parts.len();
     let n_deformers = model.deformers.len();

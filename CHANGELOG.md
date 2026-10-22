@@ -255,6 +255,13 @@
 - **Shortcuts for the Temporary Deform Tool** in Settings > Keyboard: one
   per method and one to deselect it, not set until you pick keys, as in
   Cubism. The Built in list now has right-click to put a slider on a key.
+- **Extended interpolation** (Parameter palette > Extended Interpolation…,
+  or Modeling > Parameter), as in Cubism: keyforms blend along a curve
+  instead of a straight line, so a sway made of turned keys keeps its size.
+  Ellipse (with Scale) or SNS, on the selected objects, with three keys or
+  more. A moc3 or cmo3 export adds Points keys between each pair so other
+  apps follow the curve; keys added on a curved parameter take the curve's
+  shape (#21).
 - Every new string of this release is in all six languages.
 
 ### Fixed

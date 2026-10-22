@@ -571,6 +571,7 @@ mod tests {
                 indices: vec![0, 1, 2],
                 masks: vec![],
                 binding: Binding {
+                    curves: Vec::new(),
                     axes: vec![
                         BindingAxis { parameter: 0, keys: vec![-1.0, 0.0, 1.0] },
                         BindingAxis { parameter: 1, keys: vec![-1.0, 0.0, 1.0] },

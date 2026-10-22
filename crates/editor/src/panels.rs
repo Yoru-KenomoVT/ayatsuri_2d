@@ -2616,6 +2616,18 @@ impl EditorUi {
                             ui.close();
                             self.run_param_cmd(ParamCmd::Mirror(pi));
                         }
+                        if ui
+                            .add_enabled(
+                                self.session.is_some() && self.sel_param.is_some(),
+                                egui::Button::new(crate::i18n::tr("Extended Interpolation…")),
+                            )
+                            .on_disabled_hover_text(crate::i18n::tr("Select a parameter first"))
+                            .clicked()
+                            && let Some(pi) = self.sel_param
+                        {
+                            ui.close();
+                            self.run_param_cmd(ParamCmd::Curve(pi));
+                        }
                     });
                     let mesh_sel = matches!(self.selected, Some(Sel::Mesh(_)));
                     ui.menu_button(crate::i18n::tr("ArtMesh"), |ui| {
@@ -13904,6 +13916,7 @@ mod key_cmd_tests {
             indices: vec![0, 0, 0],
             masks: vec![],
             binding: Binding {
+                curves: Vec::new(),
                 axes: vec![BindingAxis { parameter: 0, keys: vec![-1.0, 0.0, 1.0] }],
             },
             opacities: vec![1.0; 3],

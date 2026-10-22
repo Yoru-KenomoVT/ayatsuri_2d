@@ -77,7 +77,7 @@ fn binding_of(
             idx
         })
         .collect();
-    Ok((Binding { axes }, slots))
+    Ok((Binding { axes, curves: Vec::new() }, slots))
 }
 
 pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {

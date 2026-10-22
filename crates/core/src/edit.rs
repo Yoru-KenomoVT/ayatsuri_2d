@@ -18,6 +18,8 @@ pub enum Target {
 pub(crate) enum KeySrc {
     Copy(usize),
     Lerp(usize, usize, f32),
+    /// Up to four keys, weighted (extended interpolation's baked keys).
+    Mix([(usize, f32); 4]),
 }
 
 pub(crate) enum Channel<'a> {
@@ -74,6 +76,20 @@ pub(crate) fn remap(old_lens: &[usize], axis: usize, map: &[KeySrc], channel: &m
                             out.push(va + (vb - va) * t);
                         }
                     }
+                    KeySrc::Mix(ws) => {
+                        let at: Vec<(usize, f32)> = ws
+                            .iter()
+                            .filter(|w| w.1 != 0.0)
+                            .map(|&(k, w)| (src_index(&coords, k) * elems, w))
+                            .collect();
+                        for e in 0..elems {
+                            out.push(
+                                at.iter()
+                                    .map(|&(p, w)| data.get(p + e).copied().unwrap_or(0.0) * w)
+                                    .sum(),
+                            );
+                        }
+                    }
                 }
                 advance(&mut coords, &new_lens);
             }
@@ -91,6 +107,9 @@ pub(crate) fn remap(old_lens: &[usize], axis: usize, map: &[KeySrc], channel: &m
                         } else {
                             b
                         }
+                    }
+                    KeySrc::Mix(ws) => {
+                        ws.iter().max_by(|x, y| x.1.total_cmp(&y.1)).map_or(0, |w| w.0)
                     }
                 };
                 out.push(data.get(src_index(&coords, sc)).copied().unwrap_or(false));
@@ -179,6 +198,91 @@ pub(crate) fn with_object<R>(
     }
 }
 
+/// Set (or with `None` clear) extended interpolation on `target`'s
+/// parameter `param`. Needs the object to be keyed on it. Returns true on
+/// change.
+pub fn set_curve(
+    model: &mut Model,
+    target: Target,
+    param: usize,
+    kind: Option<ayatsuri_format::model::CurveKind>,
+) -> bool {
+    with_object(model, target, |binding, _| {
+        if !binding.axes.iter().any(|a| a.parameter as usize == param) {
+            return false;
+        }
+        let before = binding.curve(param as u32);
+        binding.curves.retain(|c| c.parameter as usize != param);
+        if let Some(kind) = kind {
+            binding
+                .curves
+                .push(ayatsuri_format::model::AxisCurve { parameter: param as u32, kind });
+        }
+        before != kind
+    })
+    .unwrap_or(false)
+}
+
+/// Whether any object uses extended interpolation.
+pub fn has_curves(model: &Model) -> bool {
+    model.parts.iter().any(|p| !p.binding.curves.is_empty())
+        || model.deformers.iter().any(|d| !d.binding.curves.is_empty())
+        || model.art_meshes.iter().any(|m| !m.binding.curves.is_empty())
+}
+
+/// Turn every extended interpolation into plain keys, the way Cubism hands
+/// it to the runtime: `points` keys between each pair, their keyforms taken
+/// from the curve, so linear blending between them follows it. For moc3
+/// and cmo3 export; the curves themselves are dropped.
+pub fn bake_curves(model: &mut Model) {
+    let targets: Vec<Target> = (0..model.parts.len())
+        .map(Target::Part)
+        .chain((0..model.deformers.len()).map(Target::Deformer))
+        .chain((0..model.art_meshes.len()).map(Target::ArtMesh))
+        .collect();
+    for t in targets {
+        with_object(model, t, |binding, mut channels| {
+            let curves = std::mem::take(&mut binding.curves);
+            for c in curves {
+                let Some(axis_at) = binding.axes.iter().position(|a| a.parameter == c.parameter)
+                else {
+                    continue;
+                };
+                let lens = axis_lens(binding);
+                let Some(axis) = binding.axes.get_mut(axis_at) else { continue };
+                if axis.keys.len() < 3 {
+                    continue;
+                }
+                let steps = usize::from(c.kind.points().clamp(1, 20)) + 1;
+                let mut keys = Vec::new();
+                let mut map = Vec::new();
+                let mut ws = Vec::with_capacity(4);
+                for i in 0..axis.keys.len() {
+                    keys.push(axis.keys.get(i).copied().unwrap_or(0.0));
+                    map.push(KeySrc::Copy(i));
+                    let (Some(&lo), Some(&hi)) = (axis.keys.get(i), axis.keys.get(i + 1)) else {
+                        continue;
+                    };
+                    for s in 1..steps {
+                        let t = s as f32 / steps as f32;
+                        crate::blend::curve_weights(&axis.keys, i, t, c.kind, &mut ws);
+                        let mut mix = [(0usize, 0.0f32); 4];
+                        for (slot, w) in mix.iter_mut().zip(&ws) {
+                            *slot = *w;
+                        }
+                        keys.push(lo + (hi - lo) * t);
+                        map.push(KeySrc::Mix(mix));
+                    }
+                }
+                axis.keys = keys;
+                for ch in &mut channels {
+                    remap(&lens, axis_at, &map, ch);
+                }
+            }
+        });
+    }
+}
+
 /// Add keys at `values` to `target`'s binding on `param`. Objects not yet
 /// bound on the parameter gain a new axis; existing shapes are preserved
 /// exactly (new keys take the interpolated form). Returns true on change.
@@ -207,6 +311,7 @@ pub fn add_keys(model: &mut Model, target: Target, param: usize, values: &[f32])
                 return true;
             }
         };
+        let curve = binding.curve(param as u32);
         for &v in values {
             let lens = axis_lens(binding);
             let Some(axis) = binding.axes.get_mut(axis_at) else { break };
@@ -228,7 +333,20 @@ pub fn add_keys(model: &mut Model, target: Target, param: usize, values: &[f32])
                         let a = axis.keys.get(pos - 1).copied().unwrap_or(0.0);
                         let b = axis.keys.get(pos).copied().unwrap_or(1.0);
                         let t = if (b - a).abs() > 1e-9 { (v - a) / (b - a) } else { 0.0 };
-                        map.push(KeySrc::Lerp(pos - 1, pos, t));
+                        match curve.filter(|_| old_len >= 3) {
+                            // on a curved axis the new key takes the curve's
+                            // shape, so adding it changes nothing on screen
+                            Some(kind) => {
+                                let mut ws = Vec::with_capacity(4);
+                                crate::blend::curve_weights(&axis.keys, pos - 1, t, kind, &mut ws);
+                                let mut mix = [(0usize, 0.0f32); 4];
+                                for (slot, w) in mix.iter_mut().zip(&ws) {
+                                    *slot = *w;
+                                }
+                                map.push(KeySrc::Mix(mix));
+                            }
+                            None => map.push(KeySrc::Lerp(pos - 1, pos, t)),
+                        }
                     }
                 } else {
                     map.push(KeySrc::Copy(i - 1));
@@ -2640,7 +2758,7 @@ fn alloc_one() -> Vec<f32> {
 mod tests {
     use super::*;
     use crate::Puppet;
-    use ayatsuri_format::model::{ArtMesh, Canvas, Parameter};
+    use ayatsuri_format::model::{ArtMesh, Canvas, CurveKind, Parameter};
 
     fn square_path() -> ayatsuri_format::model::ArtPath {
         ayatsuri_format::model::ArtPath {
@@ -2739,7 +2857,10 @@ mod tests {
                 uvs: vec![0.0, 0.0],
                 indices: vec![0, 0, 0],
                 masks: vec![],
-                binding: Binding { axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }] },
+                binding: Binding {
+                    curves: Vec::new(),
+                    axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }],
+                },
                 opacities: vec![1.0, 1.0],
                 draw_orders: vec![500.0, 500.0],
                 // the single vertex slides from x=0 to x=2
@@ -2845,6 +2966,100 @@ mod tests {
         m
     }
 
+    /// The triangle turned -30, 0 and 30 degrees about the origin on
+    /// parameter A (-1 to 1): a sway made of keyforms, no rotation deformer.
+    fn swaying_mesh() -> Model {
+        let mut m = tri_mesh();
+        if let Some(p) = m.parameters.get_mut(0) {
+            p.min = -1.0;
+            p.max = 1.0;
+        }
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.opacities = vec![1.0; 3];
+            am.draw_orders = vec![500.0; 3];
+            am.positions.clear();
+            for deg in [-30.0f32, 0.0, 30.0] {
+                let (s, c) = deg.to_radians().sin_cos();
+                for (x, y) in [(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)] {
+                    am.positions.push(c * x - s * y);
+                    am.positions.push(s * x + c * y);
+                }
+            }
+            am.binding = Binding {
+                axes: vec![BindingAxis { parameter: 0, keys: vec![-1.0, 0.0, 1.0] }],
+                curves: Vec::new(),
+            };
+        }
+        m
+    }
+
+    fn eval_mesh(m: &Model, a: f32) -> Vec<f32> {
+        let mut p = Puppet::new(m.clone());
+        p.set_value(0, a);
+        p.update();
+        p.drawables().next().map(|d| d.positions.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn extended_interpolation_keeps_the_size() {
+        let mut m = swaying_mesh();
+        let radius = |m: &Model| {
+            let pos = eval_mesh(m, 0.5);
+            (pos[2] * pos[2] + pos[3] * pos[3]).sqrt()
+        };
+        // a straight line between turned keys shrinks the art mid-way
+        let linear = radius(&m);
+        assert!(linear < 1.94, "{linear}");
+        assert!(set_curve(&mut m, Target::ArtMesh(0), 0, Some(CurveKind::Sns { points: 5 })));
+        let curved = radius(&m);
+        assert!((curved - 2.0).abs() < 0.01, "{curved}");
+        // on a key nothing changes
+        let on_key = eval_mesh(&m, 1.0);
+        assert!((on_key[2] - 2.0 * 30f32.to_radians().cos()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn baked_curve_matches_the_live_one() {
+        let mut m = swaying_mesh();
+        set_curve(
+            &mut m,
+            Target::ArtMesh(0),
+            0,
+            Some(CurveKind::Ellipse { points: 4, scale: 1.0 }),
+        );
+        let mut baked = m.clone();
+        bake_curves(&mut baked);
+        let am = baked.art_meshes.first().unwrap();
+        assert!(am.binding.curves.is_empty());
+        let keys = am.binding.axes[0].keys.clone();
+        // two spans, four extra keys in each
+        assert_eq!(keys.len(), 11);
+        for &k in &keys {
+            let (live, flat) = (eval_mesh(&m, k), eval_mesh(&baked, k));
+            for (a, b) in live.iter().zip(&flat) {
+                assert!((a - b).abs() < 1e-4, "at {k}: {a} vs {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_added_on_a_curve_keeps_the_shape() {
+        let mut m = swaying_mesh();
+        set_curve(&mut m, Target::ArtMesh(0), 0, Some(CurveKind::Sns { points: 5 }));
+        let before = eval_mesh(&m, 0.3);
+        assert!(add_keys(&mut m, Target::ArtMesh(0), 0, &[0.5]));
+        let after = eval_mesh(&m, 0.5);
+        let live = {
+            let mut c = swaying_mesh();
+            set_curve(&mut c, Target::ArtMesh(0), 0, Some(CurveKind::Sns { points: 5 }));
+            eval_mesh(&c, 0.5)
+        };
+        for (a, b) in after.iter().zip(&live) {
+            assert!((a - b).abs() < 1e-4);
+        }
+        assert_eq!(before.len(), after.len());
+    }
+
     #[test]
     fn add_vertex_keeps_every_keyform() {
         let mut m = tri_mesh();
@@ -2893,6 +3108,7 @@ mod tests {
         let mut m = tri_mesh();
         if let Some(am) = m.art_meshes.get_mut(0) {
             am.binding = Binding {
+                curves: Vec::new(),
                 axes: vec![
                     BindingAxis { parameter: 0, keys: vec![0.0, 1.0] },
                     BindingAxis { parameter: 1, keys: vec![0.0, 1.0] },
@@ -3154,8 +3370,10 @@ mod tests {
         rot.reflect_x = vec![false, false];
         rot.reflect_y = vec![false, false];
         rot.opacities = vec![1.0, 1.0];
-        m.deformers[r].binding =
-            Binding { axes: vec![BindingAxis { parameter: 1, keys: vec![0.0, 1.0] }] };
+        m.deformers[r].binding = Binding {
+            curves: Vec::new(),
+            axes: vec![BindingAxis { parameter: 1, keys: vec![0.0, 1.0] }],
+        };
         let xy = |m: &Model, a: f32, b: f32| {
             let mut p = Puppet::new(m.clone());
             p.set_value(0, a);

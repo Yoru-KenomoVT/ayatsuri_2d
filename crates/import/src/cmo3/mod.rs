@@ -101,7 +101,10 @@ mod tests {
         let mut bulged = grid.clone();
         bulged[8] += 0.1;
         bulged[9] -= 0.05;
-        let axis = Binding { axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }] };
+        let axis = Binding {
+            curves: Vec::new(),
+            axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }],
+        };
         model.deformers.push(Deformer {
             id: "Warp".into(),
             parent_part: Some(0),

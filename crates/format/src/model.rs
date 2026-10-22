@@ -99,6 +99,41 @@ pub struct BindingAxis {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Binding {
     pub axes: Vec<BindingAxis>,
+    /// Extended interpolation on some of the axes (Cubism 4.0): keyforms
+    /// blend along a curve instead of a straight line. Empty for most.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curves: Vec<AxisCurve>,
+}
+
+/// Extended interpolation on one parameter of a binding.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AxisCurve {
+    pub parameter: u32,
+    pub kind: CurveKind,
+}
+
+/// How the keyforms between keys follow a curve. `points` is how many keys
+/// a moc3 export adds between two keys to carry the curve; `scale` bends
+/// an ellipse's orbit further out (1 is the plain curve through the keys).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum CurveKind {
+    Ellipse { points: u8, scale: f32 },
+    Sns { points: u8 },
+}
+
+impl CurveKind {
+    pub fn points(self) -> u8 {
+        match self {
+            CurveKind::Ellipse { points, .. } | CurveKind::Sns { points } => points,
+        }
+    }
+}
+
+impl Binding {
+    /// The curve set on `parameter`, if any.
+    pub fn curve(&self, parameter: u32) -> Option<CurveKind> {
+        self.curves.iter().find(|c| c.parameter == parameter).map(|c| c.kind)
+    }
 }
 
 impl Binding {

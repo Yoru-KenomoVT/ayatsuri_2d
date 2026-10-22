@@ -776,7 +776,17 @@ impl W {
 
 /// The project as archive bytes.
 pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
-    let model = x.model;
+    // the project gets the curves as plain keys too (Cubism's own setting
+    // is not written yet)
+    let baked;
+    let model = if ayatsuri_core::edit::has_curves(x.model) {
+        let mut m = x.model.clone();
+        ayatsuri_core::edit::bake_curves(&mut m);
+        baked = m;
+        &baked
+    } else {
+        x.model
+    };
     let c = model.canvas;
     let (cw, ch) = (c.width.round() as i64, c.height.round() as i64);
     if !(1..=65536).contains(&cw) || !(1..=65536).contains(&ch) {
