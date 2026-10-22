@@ -761,7 +761,11 @@ pub fn create_deformer(
 /// canvas itself for None). Newton steps on the forward map with a finite
 /// difference jacobian; rotations are affine and land in one step, warps in
 /// a handful.
-fn to_local(puppet: &crate::Puppet, deformer: Option<usize>, world: (f32, f32)) -> (f32, f32) {
+pub(crate) fn to_local(
+    puppet: &crate::Puppet,
+    deformer: Option<usize>,
+    world: (f32, f32),
+) -> (f32, f32) {
     let Some(d) = deformer else { return world };
     let fwd = |x: f32, y: f32| puppet.deformer_point(d, x, y);
     // a warp's local space is its unit square; a rotation's is canvas-like
@@ -791,7 +795,7 @@ fn to_local(puppet: &crate::Puppet, deformer: Option<usize>, world: (f32, f32)) 
 }
 
 /// A puppet of `model` evaluated at every parameter's default.
-fn rest_puppet(model: &Model) -> crate::Puppet {
+pub(crate) fn rest_puppet(model: &Model) -> crate::Puppet {
     let mut puppet = crate::Puppet::new(model.clone());
     for (i, p) in model.parameters.iter().enumerate() {
         puppet.set_value(i, p.default);

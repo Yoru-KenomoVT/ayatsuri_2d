@@ -1020,6 +1020,65 @@ mod tests {
     }
 
     #[test]
+    fn a_skinned_strip_survives_moc3() {
+        use ayatsuri_format::model::{ArtMesh, DrawGroup, DrawItem};
+        let mut model = Model::new();
+        let cols = 6u16;
+        let mut positions = Vec::new();
+        let mut uvs = Vec::new();
+        for c in 0..=cols {
+            for r in 0..2u16 {
+                positions.extend_from_slice(&[f32::from(c) * 0.1, f32::from(r) * 0.05]);
+                uvs.extend_from_slice(&[f32::from(c) / f32::from(cols), f32::from(r)]);
+            }
+        }
+        let indices: Vec<u16> = (0..cols)
+            .flat_map(|c| [c * 2, c * 2 + 1, c * 2 + 2, c * 2 + 1, c * 2 + 3, c * 2 + 2])
+            .collect();
+        model.art_meshes.push(ArtMesh {
+            id: "Hair".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: u32::from(cols + 1) * 2,
+            uvs,
+            indices,
+            masks: vec![],
+            binding: Default::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions,
+        });
+        model.draw_groups.push(DrawGroup {
+            total: 1,
+            min_order: 500,
+            max_order: 500,
+            items: vec![DrawItem { part: false, object: 0, child_group: None }],
+        });
+        let skin = ayatsuri_core::skin::skin(
+            &mut model,
+            0,
+            &[[0.0, 0.025], [0.2, 0.025], [0.4, 0.025], [0.6, 0.025]],
+            45.0,
+            "ParamHairSkin",
+        )
+        .unwrap();
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_00).unwrap()).unwrap();
+        assert_eq!(back.art_meshes.len(), 4);
+        assert_eq!(back.deformers.len(), 3);
+        assert_eq!(back.glues.len(), 2);
+        assert_eq!(back.parameters.len(), skin.params.len());
+        assert!(!back.art_meshes[0].visible);
+        for w in skin.deformers.windows(2) {
+            assert_eq!(back.deformers[w[1]].parent_deformer, Some(w[0] as u32));
+        }
+    }
+
+    #[test]
     fn default_is_readable_by_common_apps() {
         // 5.3's offset table runs to 0x16C0, past what OpenVT will skip
         assert!(ExportVersion::DEFAULT.sot_entries() * 4 + HEADER <= 0x2a0 + 0x1000);

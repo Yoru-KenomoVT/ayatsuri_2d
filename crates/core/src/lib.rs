@@ -19,6 +19,7 @@ pub mod deform;
 pub mod edit;
 pub mod keyform;
 pub mod physics;
+pub mod skin;
 
 use ayatsuri_format::model::{Blend, DeformerKind, Model};
 use deform::{Rotation, Vec2, rotation_transform, signed_angle, v2, warp_transform};
