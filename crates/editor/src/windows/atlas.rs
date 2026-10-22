@@ -79,8 +79,8 @@ impl EditorUi {
             .open(&mut open)
             .default_size([900.0, 640.0])
             .show(ui.ctx(), |ui| {
-                // controls across the top
-                ui.horizontal(|ui| {
+                // controls across the top, wrapping when the window is narrow
+                ui.horizontal_wrapped(|ui| {
                     ui.label(tr("Page size"));
                     egui::ComboBox::from_id_salt("atlas-size")
                         .selected_text(format!("{} px", win.layout.page_size))
@@ -124,14 +124,17 @@ impl EditorUi {
                         }
                         win.page = win.page.min(win.layout.pages - 1);
                     }
+                });
+                // what it adds up to, and Apply, on a line of their own
+                ui.horizontal(|ui| {
+                    ui.weak(trf(
+                        "{pieces} pieces on {pages} page(s)",
+                        &[("pieces", &win.pieces.len()), ("pages", &win.layout.pages)],
+                    ));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(egui::RichText::new(tr("Apply")).strong()).clicked() {
                             apply = true;
                         }
-                        ui.weak(trf(
-                            "{pieces} pieces on {pages} page(s)",
-                            &[("pieces", &win.pieces.len()), ("pages", &win.layout.pages)],
-                        ));
                     });
                 });
                 if let Some(e) = &win.error {
@@ -143,59 +146,94 @@ impl EditorUi {
                 let count_on = |i: usize| win.layout.places.iter().filter(|p| p.page == i).count();
                 let mut go: Option<usize> = None;
                 let mut move_to: Option<usize> = None;
+                let prev = win.page.checked_sub(1);
+                let next = (win.page + 1 < pages).then_some(win.page + 1);
+                let dragging = win.drag.is_some();
+                let released = ui.input(|inp| inp.pointer.any_released());
+                let label = trf("Page {n} / {total}", &[("n", &(win.page + 1)), ("total", &pages)]);
+                // one joined control: arrow, page with its list, arrow; centred
+                // on the window, the piece count beside it
+                const ARROW: f32 = 28.0;
+                const PAGE_W: f32 = 132.0;
                 ui.horizontal(|ui| {
-                    let dragging = win.drag.is_some();
-                    let released = ui.input(|inp| inp.pointer.any_released());
-                    // (clicked, a dragged piece dropped on it)
-                    let arrow = |ui: &mut egui::Ui, icon: &str, on: bool, hint: &'static str| {
-                        let resp = ui
-                            .add_enabled(on, egui::Button::new(icon).min_size(vec2(28.0, 22.0)))
-                            .on_hover_text(tr(hint));
-                        (resp.clicked(), on && dragging && resp.contains_pointer() && released)
-                    };
-                    let prev = win.page.checked_sub(1);
-                    let next = (win.page + 1 < pages).then_some(win.page + 1);
-                    let (clicked, dropped) = arrow(
-                        ui,
-                        egui_phosphor::regular::CARET_LEFT,
-                        prev.is_some(),
-                        "Previous page (drop a piece here to move it there)",
-                    );
-                    if clicked {
-                        go = prev;
-                    }
-                    if dropped {
-                        move_to = prev;
-                    }
-                    egui::ComboBox::from_id_salt("atlas-page")
-                        .selected_text(trf(
-                            "Page {n} / {total}",
-                            &[("n", &(win.page + 1)), ("total", &pages)],
-                        ))
-                        .height(320.0)
-                        .show_ui(ui, |ui| {
-                            for i in 0..pages {
-                                let label = trf(
-                                    "Page {n} ({count})",
-                                    &[("n", &(i + 1)), ("count", &count_on(i))],
-                                );
-                                if ui.selectable_label(win.page == i, label).clicked() {
-                                    go = Some(i);
-                                }
+                    let whole = ARROW * 2.0 + PAGE_W + 2.0;
+                    ui.add_space(((ui.available_width() - whole) / 2.0).max(0.0));
+                    let stroke = ui.visuals().widgets.inactive.bg_stroke;
+                    egui::Frame::new()
+                        .stroke(stroke)
+                        .corner_radius(4.0)
+                        .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let divider = |ui: &mut egui::Ui| {
+                                let (r, _) =
+                                    ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
+                                ui.painter().rect_filled(r, 0.0, stroke.color);
+                            };
+                            // (clicked, a dragged piece dropped on it)
+                            let arrow =
+                                |ui: &mut egui::Ui, icon: &str, on: bool, hint: &'static str| {
+                                    let resp = ui
+                                        .add_enabled(
+                                            on,
+                                            egui::Button::new(icon)
+                                                .frame(false)
+                                                .min_size(vec2(ARROW, 22.0)),
+                                        )
+                                        .on_hover_text(tr(hint));
+                                    (
+                                        resp.clicked(),
+                                        on && dragging && resp.contains_pointer() && released,
+                                    )
+                                };
+                            let (c, d) = arrow(
+                                ui,
+                                egui_phosphor::regular::CARET_LEFT,
+                                prev.is_some(),
+                                "Previous page (drop a piece here to move it there)",
+                            );
+                            if c {
+                                go = prev;
+                            }
+                            if d {
+                                move_to = prev;
+                            }
+                            divider(ui);
+                            let page_btn = ui.add_sized(
+                                [PAGE_W, 22.0],
+                                egui::Button::new(format!(
+                                    "{label}  {}",
+                                    egui_phosphor::regular::CARET_DOWN
+                                ))
+                                .frame(false),
+                            );
+                            egui::Popup::menu(&page_btn).show(|ui| {
+                                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                                    for i in 0..pages {
+                                        let item = trf(
+                                            "Page {n} ({count})",
+                                            &[("n", &(i + 1)), ("count", &count_on(i))],
+                                        );
+                                        if ui.selectable_label(win.page == i, item).clicked() {
+                                            go = Some(i);
+                                        }
+                                    }
+                                });
+                            });
+                            divider(ui);
+                            let (c, d) = arrow(
+                                ui,
+                                egui_phosphor::regular::CARET_RIGHT,
+                                next.is_some(),
+                                "Next page (drop a piece here to move it there)",
+                            );
+                            if c {
+                                go = next;
+                            }
+                            if d {
+                                move_to = next;
                             }
                         });
-                    let (clicked, dropped) = arrow(
-                        ui,
-                        egui_phosphor::regular::CARET_RIGHT,
-                        next.is_some(),
-                        "Next page (drop a piece here to move it there)",
-                    );
-                    if clicked {
-                        go = next;
-                    }
-                    if dropped {
-                        move_to = next;
-                    }
                     ui.weak(trf("{count} pieces", &[("count", &count_on(win.page))]));
                 });
                 if let Some(t) = move_to
