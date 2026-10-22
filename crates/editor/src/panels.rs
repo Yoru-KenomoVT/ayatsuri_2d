@@ -729,6 +729,10 @@ fn live_for(
     }
 }
 
+/// A deform path point as skinning takes it: a triangle and the weights
+/// of its corners.
+type SkinPin = (usize, [f32; 3]);
+
 /// A deform path control point, pinned to a triangle of its mesh so the
 /// path rides along as the mesh deforms between poses.
 #[derive(Clone, Copy)]
@@ -2528,6 +2532,22 @@ impl EditorUi {
                         {
                             self.pending_create = Some((false, None));
                             ui.close();
+                        }
+                    });
+                    let skin_ready = self.skin_path().is_some();
+                    ui.menu_button(crate::i18n::tr("Skinning"), |ui| {
+                        if ui
+                            .add_enabled(
+                                skin_ready,
+                                egui::Button::new(crate::i18n::tr("Use Deform Path for Skinning")),
+                            )
+                            .on_disabled_hover_text(crate::i18n::tr(
+                                "Select a mesh and draw a deform path on it from root to tip (Deform Path tool, edit level 2 or 3)",
+                            ))
+                            .clicked()
+                        {
+                            ui.close();
+                            self.apply_skin();
                         }
                     });
                     let can_keys = self.edit_target().is_some() && self.sel_param.is_some();
@@ -4827,6 +4847,74 @@ impl EditorUi {
     }
 
     /// Meshes the next deformer wraps: the lasso set, or the single pick.
+    /// The selected mesh and its deform path at the current edit level
+    /// (or the other one), root to tip, when it has two points or more.
+    fn skin_path(&self) -> Option<(usize, Vec<SkinPin>)> {
+        let Some(Sel::Mesh(mi)) = self.selected else { return None };
+        let level = self.edit_level.max(2);
+        let pins = [level, 5 - level]
+            .iter()
+            .filter_map(|&l| self.deform_paths.get(&(mi, l)))
+            .find(|p| p.len() >= 2)?;
+        Some((mi, pins.iter().map(|p| (p.tri, p.w)).collect()))
+    }
+
+    /// Modeling > Skinning > Use Deform Path for Skinning: the selected
+    /// mesh becomes a glued chain of pieces on rotation deformers, one per
+    /// path point but the tip, with a parameter each (-45 to 45) in a
+    /// folder named after the mesh, as Cubism does it.
+    fn apply_skin(&mut self) {
+        let Some((mi, pins)) = self.skin_path() else { return };
+        let Some(s) = &mut self.session else { return };
+        let name = s.mesh_name(mi);
+        let base: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        let base = format!("Param{}Skin", if base.is_empty() { "Mesh".into() } else { base });
+        let mut made = None;
+        let mut failed = None;
+        s.edit(|m| match ayatsuri_core::skin::skin_from_pins(m, mi, &pins, 45.0, &base) {
+            Ok(r) => {
+                made = Some(r);
+                true
+            }
+            Err(e) => {
+                failed = Some(e);
+                false
+            }
+        });
+        if let Some(e) = failed {
+            log::warn!(
+                "skinning {name}: {}",
+                match e {
+                    ayatsuri_core::skin::SkinError::EmptyPiece =>
+                        "a piece came out empty; space the path points further apart or give the mesh more points",
+                    ayatsuri_core::skin::SkinError::TooFewPoints =>
+                        "the path needs a root and a tip",
+                    ayatsuri_core::skin::SkinError::NoMesh => "the mesh is gone",
+                }
+            );
+            return;
+        }
+        let Some(made) = made else { return };
+        for (k, _) in made.params.iter().enumerate() {
+            s.param_names.push(format!("{name} {}", k + 1));
+        }
+        s.groups.push(crate::session::ParamGroup {
+            name: name.clone(),
+            params: made.params.clone(),
+            open: true,
+            color: None,
+        });
+        // the path became the deformers
+        self.deform_paths.retain(|(m, _), _| *m != mi);
+        self.selected = made.deformers.first().map(|&d| Sel::Deformer(d));
+        log::info!(
+            "skinned {name}: {} pieces on {} rotation deformers, {} parameters",
+            made.pieces.len(),
+            made.deformers.len(),
+            made.params.len()
+        );
+    }
+
     fn selection_meshes(&self) -> Vec<usize> {
         if !self.multi_sel.is_empty() {
             self.multi_sel.clone()
