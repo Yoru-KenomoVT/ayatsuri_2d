@@ -54,6 +54,7 @@ pub fn small_aom() -> Vec<u8> {
         enabled: true,
         texture: 0,
         flags: flags::DOUBLE_SIDED,
+        blend: Default::default(),
         vertex_count: 4,
         uvs: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
         indices: vec![0, 1, 2, 0, 2, 3],
