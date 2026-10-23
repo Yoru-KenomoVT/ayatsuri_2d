@@ -18,8 +18,9 @@ runs in VTube Studio. On Windows, macOS and Linux.
 ![moc3](https://img.shields.io/badge/moc3-3.0%20to%205.3-brightgreen)
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Website](https://img.shields.io/badge/ayatsuri--2d.org-website-f08e1e)](https://ayatsuri-2d.org)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/WyzDsXzdnh)
 
-[**Website**](https://ayatsuri-2d.org) · [**Download**](#download) · [Features](#features) · [Status](#status) · [Build from source](#build-from-source) · [Docs](#documentation) · [Support the project](#support-the-project)
+[**Website**](https://ayatsuri-2d.org) · [**Discord**](https://discord.gg/WyzDsXzdnh) · [**Download**](#download) · [Features](#features) · [Status](#status) · [Build from source](#build-from-source) · [Docs](#documentation) · [Support the project](#support-the-project)
 
 </div>
 
@@ -334,6 +335,10 @@ The technical documents live in this repo:
 Bug reports, ideas, test results and translations are as welcome as code.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how, and the
 [code of conduct](CODE_OF_CONDUCT.md) for how we treat each other.
+
+For ideas, questions and showing off what you rig, come talk on
+[Discord](https://discord.gg/WyzDsXzdnh). Bugs still go to
+[Issues](https://github.com/Yoru-KenomoVT/ayatsuri_2d/issues), with your log attached.
 
 ## Support the project
 
