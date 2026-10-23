@@ -342,7 +342,6 @@ help keep it going:
 
 <p>
   <a href="https://buymeacoffee.com/ChaceBerry"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
-  <a href="https://ko-fi.com/chaceberry"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
 </p>
 
 Reporting bugs, sharing what you rig with it, and starring the repo help too.
@@ -374,9 +373,7 @@ terms. See [`docs/provenance.md`](docs/provenance.md).
 Standing on the shoulders of
 [Sakura Motion / PurismCore](https://github.com/SakuraMotion/PurismCore) and
 [OpenL2D](https://github.com/OpenL2D/moc3ingbird), both of which corrected our
-own findings more than once. The Timeline's layout and key glyphs follow
-[EffectCraft](https://getartcraft.com/apps/effectcraft)'s timeline and graph
-editor (MIT or Apache-2.0).
+own findings more than once.
 
 ---
 

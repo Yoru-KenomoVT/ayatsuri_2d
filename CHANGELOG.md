@@ -140,8 +140,7 @@ Fixes and requests from @seoriboi's feedback in #29.
   over a fitted axis with a grid, square keys that drag in time and
   value, handles on every selected key (a drag turns the segment into a
   bezier; the other handle swings with it unless Alt is held), and pills
-  for the interpolation. The layout and the key
-  glyphs follow EffectCraft's timeline (MIT or Apache-2.0). Auto smooth
+  for the interpolation. Auto smooth
   keys draw as diamonds, like Live2D; a hold is a square and a free
   bezier an hourglass. The top row folds everything under it.
 - **Compositions.** `Animation > New Composition…` makes a timeline of
