@@ -72,6 +72,40 @@ pub struct Puppet {
     scratch: Vec<f32>,
     /// The pendulum rig's live state, when the model carries one.
     physics: Option<physics::Physics>,
+    /// Work skipped when nothing changed. Each deformer and mesh remembers
+    /// the keyform weights its geometry was last made from; when they match
+    /// this frame's bit for bit, its parent did not move and the cache is
+    /// valid, last frame's geometry stands. Glued meshes are always redone
+    /// (glue moves their points after they are made), and any in-place edit
+    /// of the model's keyforms invalidates everything.
+    cache: Cache,
+}
+
+impl Cache {
+    fn remember_mesh(&mut self, mi: usize, corners: &[blend::Corner]) {
+        if let Some(c) = self.mesh_corners.get_mut(mi) {
+            c.clear();
+            c.extend_from_slice(corners);
+        }
+        if let Some(m) = self.mesh_made.get_mut(mi) {
+            *m = true;
+        }
+    }
+}
+
+#[derive(Default)]
+struct Cache {
+    /// False after an in-place keyform edit, until the next full update.
+    valid: bool,
+    def_corners: Vec<Vec<blend::Corner>>,
+    /// Made from `def_corners` and still standing.
+    def_made: Vec<bool>,
+    /// Changed this frame: children redo theirs.
+    def_moved: Vec<bool>,
+    mesh_corners: Vec<Vec<blend::Corner>>,
+    mesh_made: Vec<bool>,
+    /// Held by glue: always redone.
+    mesh_glued: Vec<bool>,
 }
 
 impl Puppet {
@@ -162,6 +196,25 @@ impl Puppet {
             dog_next: vec![-1; max_items],
             dog_cursor: vec![0; model.draw_groups.len()],
             dog_order: vec![500.0; max_items],
+            cache: Cache {
+                valid: false,
+                def_corners: vec![Vec::new(); n_defs],
+                def_made: vec![false; n_defs],
+                def_moved: vec![true; n_defs],
+                mesh_corners: vec![Vec::new(); n_meshes],
+                mesh_made: vec![false; n_meshes],
+                mesh_glued: {
+                    let mut g = vec![false; n_meshes];
+                    for glue in &model.glues {
+                        for m in [glue.art_mesh_a, glue.art_mesh_b] {
+                            if let Some(x) = g.get_mut(m as usize) {
+                                *x = true;
+                            }
+                        }
+                    }
+                    g
+                },
+            },
             def_enabled: vec![true; n_defs],
             def_user_visible: vec![true; n_defs],
             def_opacity: vec![1.0; n_defs],
@@ -275,6 +328,7 @@ impl Puppet {
     /// the data, so nothing derived from the model needs rebuilding; the
     /// next `update` shows it. Callers restore and commit through an edit.
     pub fn mesh_keyform_mut(&mut self, mesh: usize, keyform: usize) -> Option<&mut [f32]> {
+        self.cache.valid = false;
         let m = self.model.art_meshes.get_mut(mesh)?;
         let stride = (m.vertex_count as usize).checked_mul(2)?;
         let start = keyform.checked_mul(stride)?;
@@ -284,6 +338,7 @@ impl Puppet {
     /// One keyform's opacity of an art mesh or deformer, editable in place
     /// for a live slider preview, the same way.
     pub fn opacity_mut(&mut self, target: edit::Target, keyform: usize) -> Option<&mut f32> {
+        self.cache.valid = false;
         match target {
             edit::Target::ArtMesh(i) => {
                 self.model.art_meshes.get_mut(i)?.opacities.get_mut(keyform)
@@ -299,6 +354,7 @@ impl Puppet {
     /// A rotation deformer's keyform angles, editable in place for a live
     /// turn preview, the same way.
     pub fn rotation_angles_mut(&mut self, deformer: usize) -> Option<&mut [f32]> {
+        self.cache.valid = false;
         let d = self.model.deformers.get_mut(deformer)?;
         let DeformerKind::Rotation(r) = &mut d.kind else { return None };
         Some(r.angles.as_mut_slice())
@@ -306,6 +362,7 @@ impl Puppet {
 
     /// One keyform's warp grid, editable in place the same way.
     pub fn warp_keyform_mut(&mut self, deformer: usize, keyform: usize) -> Option<&mut [f32]> {
+        self.cache.valid = false;
         let d = self.model.deformers.get_mut(deformer)?;
         let DeformerKind::Warp(w) = &mut d.kind else { return None };
         let points = (w.rows as usize + 1).checked_mul(w.cols as usize + 1)?;
@@ -358,6 +415,14 @@ impl Puppet {
         self.update_meshes();
         self.apply_glues();
         self.sort_render_order();
+        self.cache.valid = true;
+    }
+
+    /// Forget what the last update made, so the next one recomputes every
+    /// deformer and mesh. Never needed for correctness; tests use it to
+    /// check skipped work against a full pass.
+    pub fn invalidate_cache(&mut self) {
+        self.cache.valid = false;
     }
 
     fn resolve_params(&mut self) {
@@ -486,6 +551,12 @@ impl Puppet {
                 if let Some(o) = self.def_opacity.get_mut(di) {
                     *o = 0.0;
                 }
+                if let Some(m) = self.cache.def_made.get_mut(di) {
+                    *m = false;
+                }
+                if let Some(m) = self.cache.def_moved.get_mut(di) {
+                    *m = true;
+                }
                 continue;
             }
 
@@ -493,21 +564,42 @@ impl Puppet {
             let parent = d.parent_deformer.map(|p| p as usize);
             let parent_opacity =
                 parent.map_or(1.0, |p| self.def_opacity.get(p).copied().unwrap_or(1.0));
+            // the same weights over the same parent: last frame's geometry stands
+            let parent_moved =
+                parent.is_some_and(|p| self.cache.def_moved.get(p).copied().unwrap_or(true));
+            let same = self.cache.valid
+                && !parent_moved
+                && self.cache.def_made.get(di).copied().unwrap_or(false)
+                && self.cache.def_corners.get(di).is_some_and(|c| *c == corners);
+            if let Some(m) = self.cache.def_moved.get_mut(di) {
+                *m = !same;
+            }
+            if !same {
+                if let Some(c) = self.cache.def_corners.get_mut(di) {
+                    c.clone_from(&corners);
+                }
+                if let Some(m) = self.cache.def_made.get_mut(di) {
+                    *m = true;
+                }
+            }
 
             match &d.kind {
                 DeformerKind::Warp(w) => {
-                    let len = self.warp_grid_len.get(local).copied().unwrap_or(0);
-                    Self::blend_positions(&corners, &w.positions, len, &mut scratch);
-                    if let Some(p) = parent
-                        && let Some(io) = scratch.get_mut(..len)
-                    {
-                        self.apply_deformer(p, io);
-                    }
-                    let off = self.warp_grid_off.get(local).copied().unwrap_or(0);
-                    if let (Some(dst), Some(src)) =
-                        (self.warp_grid.get_mut(off..off.saturating_add(len)), scratch.get(..len))
-                    {
-                        dst.copy_from_slice(src);
+                    if !same {
+                        let len = self.warp_grid_len.get(local).copied().unwrap_or(0);
+                        Self::blend_positions(&corners, &w.positions, len, &mut scratch);
+                        if let Some(p) = parent
+                            && let Some(io) = scratch.get_mut(..len)
+                        {
+                            self.apply_deformer(p, io);
+                        }
+                        let off = self.warp_grid_off.get(local).copied().unwrap_or(0);
+                        if let (Some(dst), Some(src)) = (
+                            self.warp_grid.get_mut(off..off.saturating_add(len)),
+                            scratch.get(..len),
+                        ) {
+                            dst.copy_from_slice(src);
+                        }
                     }
                     let opacity = Self::blend_scalar(&corners, &w.opacities);
                     if let Some(o) = self.def_opacity.get_mut(di) {
@@ -517,6 +609,17 @@ impl Puppet {
                         parent.map_or(1.0, |p| self.def_scale.get(p).copied().unwrap_or(1.0));
                     if let Some(s) = self.def_scale.get_mut(di) {
                         *s = scale;
+                    }
+                }
+                DeformerKind::Rotation(r) if same => {
+                    // the resolved rotation stands; opacity can still fade
+                    let opacity = Self::blend_scalar(&corners, &r.opacities);
+                    let scale = self.rot.get(local).map_or(1.0, |r| r.scale);
+                    if let Some(s) = self.def_scale.get_mut(di) {
+                        *s = scale;
+                    }
+                    if let Some(o) = self.def_opacity.get_mut(di) {
+                        *o = opacity * parent_opacity;
                     }
                 }
                 DeformerKind::Rotation(r) => {
@@ -622,6 +725,16 @@ impl Puppet {
             if let Some(v) = self.mesh_visible.get_mut(mi) {
                 *v = enabled;
             }
+            // the same weights over a parent that did not move: last frame's
+            // points stand (never for glued meshes, which glue moves after)
+            let parent_moved = m
+                .parent_deformer
+                .is_some_and(|p| self.cache.def_moved.get(p as usize).copied().unwrap_or(true));
+            let same = self.cache.valid
+                && !parent_moved
+                && !self.cache.mesh_glued.get(mi).copied().unwrap_or(true)
+                && self.cache.mesh_made.get(mi).copied().unwrap_or(false)
+                && self.cache.mesh_corners.get(mi).is_some_and(|c| *c == corners);
             if !enabled {
                 if let Some(o) = self.mesh_opacity.get_mut(mi) {
                     *o = 0.0;
@@ -631,8 +744,26 @@ impl Puppet {
                 let needed =
                     self.mask_source.get(mi).copied().unwrap_or(false) && !corners.is_empty();
                 if !needed {
+                    if let Some(made) = self.cache.mesh_made.get_mut(mi) {
+                        *made = false;
+                    }
                     continue;
                 }
+                if !same {
+                    let len = (m.vertex_count as usize).saturating_mul(2);
+                    let off = self.mesh_pos_off.get(mi).copied().unwrap_or(0);
+                    if let Some(out) = mesh_pos.get_mut(off..off.saturating_add(len)) {
+                        Self::blend_positions(&corners, &m.positions, len, out);
+                        if let Some(pd) = m.parent_deformer {
+                            self.apply_deformer(pd as usize, out);
+                        }
+                    }
+                    self.cache.remember_mesh(mi, &corners);
+                }
+                continue;
+            }
+
+            if !same {
                 let len = (m.vertex_count as usize).saturating_mul(2);
                 let off = self.mesh_pos_off.get(mi).copied().unwrap_or(0);
                 if let Some(out) = mesh_pos.get_mut(off..off.saturating_add(len)) {
@@ -641,16 +772,7 @@ impl Puppet {
                         self.apply_deformer(pd as usize, out);
                     }
                 }
-                continue;
-            }
-
-            let len = (m.vertex_count as usize).saturating_mul(2);
-            let off = self.mesh_pos_off.get(mi).copied().unwrap_or(0);
-            if let Some(out) = mesh_pos.get_mut(off..off.saturating_add(len)) {
-                Self::blend_positions(&corners, &m.positions, len, out);
-                if let Some(pd) = m.parent_deformer {
-                    self.apply_deformer(pd as usize, out);
-                }
+                self.cache.remember_mesh(mi, &corners);
             }
 
             let mut opacity = Self::blend_scalar(&corners, &m.opacities);
@@ -1075,5 +1197,38 @@ mod tests {
         p.set_value(0, 7.0);
         p.update();
         assert_eq!(p.value(0), 1.0);
+    }
+
+    #[test]
+    fn skipped_work_matches_a_full_pass() {
+        let positions = |p: &Puppet| -> Vec<u32> {
+            p.drawables().flat_map(|d| d.positions.iter().map(|x| x.to_bits())).collect()
+        };
+        let mut cached = Puppet::new(one_param_model());
+        let mut full = Puppet::new(one_param_model());
+        let check = |cached: &mut Puppet, full: &mut Puppet| {
+            cached.update();
+            full.invalidate_cache();
+            full.update();
+            assert_eq!(positions(cached), positions(full));
+        };
+        for v in [0.25, 0.25, 0.25, 0.75, 0.75] {
+            cached.set_value(0, v);
+            full.set_value(0, v);
+            check(&mut cached, &mut full);
+        }
+        // an in-place keyform edit shows on the next update, values held
+        for p in [&mut cached, &mut full] {
+            if let Some(k) = p.mesh_keyform_mut(0, 1) {
+                k[0] = 3.0;
+            }
+        }
+        check(&mut cached, &mut full);
+        // hidden then shown again: made afresh
+        for on in [false, true] {
+            cached.set_mesh_visible(0, on);
+            full.set_mesh_visible(0, on);
+            check(&mut cached, &mut full);
+        }
     }
 }

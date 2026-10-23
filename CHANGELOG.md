@@ -298,6 +298,10 @@
 - **Shift+drag moves straight**, horizontally, vertically or at 45°, for
   mesh points, warp points and boxes, and the Temporary Deform Tool's
   points (#15).
+- **Faster playback.** A deformer or mesh whose keyforms blend the same
+  as last frame, under a parent that did not move, keeps its points
+  instead of making them again, and warp deformers carry points faster.
+  What is drawn is the same to the bit.
 - Every new string of this release is in all six languages.
 
 ### Fixed
