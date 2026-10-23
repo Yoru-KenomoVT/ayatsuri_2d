@@ -136,6 +136,9 @@ pub struct EditorUi {
     workspace: Workspace,
     pub(crate) session: Option<Session>,
     selected: Option<Sel>,
+    /// The last click picked a parameter: Delete leaves the selected mesh
+    /// alone until the next click elsewhere.
+    param_focus: bool,
     log_view: log::Level,
     pending_import: Option<PathBuf>,
     /// View zoom relative to fit-to-panel, and pan in screen points.
@@ -987,6 +990,7 @@ impl Default for EditorUi {
             workspace: Workspace::Modeling,
             session: None,
             selected: None,
+            param_focus: false,
             log_view: log::Level::Info,
             pending_import,
             view_zoom: 1.0,
@@ -2169,6 +2173,11 @@ impl EditorUi {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
         let timeline_has_keys = self.workspace == Workspace::Animation && self.timeline.focused;
+        // a press anywhere ends the parameter list's hold on Delete; a
+        // click on a parameter takes it again when it is released
+        if ui.ctx().input(|i| i.pointer.primary_pressed()) {
+            self.param_focus = false;
+        }
         if let Some(gi) = self.selected_glue
             && self.mesh_edit.is_none()
             && !timeline_has_keys
@@ -2187,6 +2196,7 @@ impl EditorUi {
             && self.tool == Tool::Arrow
             && self.pts.picked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
+            && !self.param_focus
             && let Some(Sel::Mesh(mi)) = self.selected
             && ui.ctx().input(|i| i.key_pressed(egui::Key::Delete) && !i.modifiers.command)
         {
@@ -5690,7 +5700,12 @@ impl EditorUi {
         if !mods.shift {
             self.sel_param = Some(pi);
         }
-        self.selected = Some(Sel::Parameter(pi));
+        // a selected object stays selected, so its keys can be made on
+        // parameter after parameter; with none, the parameter is shown
+        if !matches!(self.selected, Some(Sel::Mesh(_) | Sel::Deformer(_) | Sel::Part(_))) {
+            self.selected = Some(Sel::Parameter(pi));
+        }
+        self.param_focus = true;
     }
 
     /// The parameters a menu command on `pi` covers: the whole pick, in
