@@ -94,8 +94,9 @@ These badges always show the newest version, betas included.
 | **CPU** | 2 cores, 64-bit | 4 cores or more |
 | **Memory** | 1 GB free | 2 GB or more for very large models |
 | **Graphics** | integrated graphics with OpenGL 3.3, Vulkan, DirectX 12 or Metal | any dedicated GPU |
-| **Disk** | 50 MB for the app, plus your models | |
+| **Disk** | 100 MB for the app, plus your models | more if you record timelapses, which grow with a model's history |
 | **Screen** | 1280×720 | 1920×1080 |
+| **Video export** | none for GIF and PNG frames | [ffmpeg](https://ffmpeg.org) for MP4, WebM and MOV: the editor and installers download it for you, no PATH setup |
 
 Measured, not guessed: a full VTuber model (356 meshes, 19,405 points,
 28,385 triangles, 229 deformers, 114 parameters) on **2 CPU cores and
