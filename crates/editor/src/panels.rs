@@ -6904,6 +6904,7 @@ impl EditorUi {
         let part_rows: Vec<usize> = order.iter().map(|o| o.0).collect();
         let mut mesh_rows: Vec<usize> = Vec::new();
         let mut part_click: Option<usize> = None;
+        let mut part_double = false;
         ScrollArea::vertical().id_salt("parts").show(ui, |ui| {
             for (i, depth) in order {
                 let Some((id, parent)) =
@@ -6916,7 +6917,7 @@ impl EditorUi {
                 let row_w = ui.available_width();
                 let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 18.0), Sense::click());
                 if self.selected == Some(Sel::Part(i)) || self.part_pick.contains(&i) {
-                    ui.painter().rect_filled(rect, 0.0, theme::pal().select);
+                    paint_picked_row(ui, rect);
                 }
                 let effective = shown && ancestors_shown(s, parent);
                 let eye = Rect::from_min_size(rect.min, vec2(18.0, 18.0));
@@ -7016,7 +7017,9 @@ impl EditorUi {
                         ui.image((h.id(), sz * k));
                     });
                 }
-                if resp.clicked() {
+                if resp.double_clicked() {
+                    part_double = true;
+                } else if resp.clicked() {
                     part_click = Some(i);
                 }
                 if resp.hovered() {
@@ -7169,7 +7172,9 @@ impl EditorUi {
             }
         });
         let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
-        if let Some(i) = part_click {
+        if part_double {
+            self.deselect_all();
+        } else if let Some(i) = part_click {
             self.pick_rows(i, shift, ctrl, &part_rows, true);
             self.selected = Some(Sel::Part(i));
             if !ctrl && !shift {
@@ -7191,6 +7196,20 @@ impl EditorUi {
             Some(MeshRowCmd::ClipBy(mi)) => self.start_clip_pick(mi),
             None => {}
         }
+    }
+
+    /// Nothing selected: no part, deformer, mesh or glue, and no pick, so
+    /// no key can be made on an object by mistake. A double-click on a
+    /// Parts or Deformer row does this (the first click selects the row,
+    /// the second lets everything go).
+    fn deselect_all(&mut self) {
+        self.selected = None;
+        self.selected_glue = None;
+        self.part_pick.clear();
+        self.part_anchor = None;
+        self.multi_sel.clear();
+        self.mesh_anchor = None;
+        log::info!("selection cleared from the palette");
     }
 
     /// After a mesh row was clicked (and `pick_rows` updated the pick): the
@@ -7560,6 +7579,7 @@ impl EditorUi {
         };
         let mut budget = 2usize;
         let ctx = ui.ctx().clone();
+        let mut def_double = false;
         ScrollArea::vertical().id_salt("deformers").show(ui, |ui| {
             if egui::DragAndDrop::has_payload_of_type::<Child>(ui.ctx())
                 && let Some(p) = ui.ctx().pointer_latest_pos()
@@ -7582,7 +7602,7 @@ impl EditorUi {
                 let (rect, resp) = ui
                     .allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click_and_drag());
                 if self.selected == Some(Sel::Deformer(i)) {
-                    ui.painter().rect_filled(rect, 0.0, theme::pal().select);
+                    paint_picked_row(ui, rect);
                 }
                 // drag a row onto a deformer to make it the parent
                 if resp.drag_started() && !self.def_locked.contains(&i) {
@@ -7713,7 +7733,9 @@ impl EditorUi {
                         ui.image((h.id(), sz * k));
                     });
                 }
-                if resp.clicked() {
+                if resp.double_clicked() {
+                    def_double = true;
+                } else if resp.clicked() {
                     self.selected = Some(Sel::Deformer(i));
                 }
                 resp.context_menu(|ui| {
@@ -7796,7 +7818,7 @@ impl EditorUi {
                     }
                     def_mesh_rows.push(mi);
                     if self.selected == Some(Sel::Mesh(mi)) || self.multi_sel.contains(&mi) {
-                        ui.painter().rect_filled(rect, 0.0, theme::pal().select);
+                        paint_picked_row(ui, rect);
                     }
                     let x = rect.min.x + 62.0 + dep as f32 * 14.0;
                     ui.painter().circle_filled(
@@ -7911,6 +7933,9 @@ impl EditorUi {
                 }
             });
         });
+        if def_double {
+            self.deselect_all();
+        }
         // what is being dragged follows the pointer
         if let Some(p) = egui::DragAndDrop::payload::<Child>(&ctx)
             && let Some(at) = ctx.pointer_latest_pos()
@@ -12979,7 +13004,7 @@ fn parts_mesh_row(
 ) {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
     if *selected == Some(Sel::Mesh(mi)) || picked.contains(&mi) {
-        ui.painter().rect_filled(rect, 0.0, theme::pal().select);
+        paint_picked_row(ui, rect);
     }
     let mesh_on = s.mesh_shown.get(mi).copied().unwrap_or(true);
     let eye = Rect::from_min_size(rect.min, vec2(18.0, 16.0));
@@ -14741,4 +14766,13 @@ fn alpha_blend_name(a: ayatsuri_format::model::AlphaBlend) -> &'static str {
         Conjoint => "blend|Conjoint",
         Disjoint => "blend|Disjoint",
     }
+}
+
+/// A selected palette row: the selection fill and an accent bar down its
+/// left edge, so what is selected (one row or many) reads at a glance.
+fn paint_picked_row(ui: &Ui, rect: Rect) {
+    let pal = theme::pal();
+    ui.painter().rect_filled(rect, 0.0, pal.select);
+    let bar = Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
+    ui.painter().rect_filled(bar, 0.0, pal.accent);
 }
