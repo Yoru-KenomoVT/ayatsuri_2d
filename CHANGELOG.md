@@ -367,6 +367,22 @@
 - Undo history is capped by memory (256 MB) as well as by steps, so big
   rigs can't fill RAM with undo.
 
+### Contributing
+
+- **CONTRIBUTING.md** and a **code of conduct** are in the repository: how
+  to report bugs (and security problems, privately), ask for features,
+  try test builds, fix translations and send code, plus the rules the code
+  keeps. Contributions must be your own work: pull requests, issues and
+  comments written with AI tools are not accepted.
+
+### Thanks
+
+- **[@seoriboi](https://github.com/seoriboi)** asked for the Temporary
+  Deform Tool (#14), tried the test builds on Windows before release, and
+  sent the feedback that became #15 to #21: Shift moving straight,
+  middle-button panning, keys you can tell apart, right-click onto a key,
+  key colours, the canvas colour and extended interpolation. Thank you!
+
 ## 0.5.5 beta (2026-10-14)
 
 ### Added
