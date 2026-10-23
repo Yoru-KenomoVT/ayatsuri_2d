@@ -108,7 +108,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 ### From artwork to mesh
 
 <p align="center">
-  <img src="docs/media/mesh-edit.png" alt="Mesh Edit on a cheek blush: an automatic mesh over the art, with the Edit Mesh tools beside it" width="860">
+  <img src="docs/media/mesh-edit.png" alt="Mesh Edit on a face line: the mesh over the art, with the Edit Mesh popup beside it (manual tools, Mirror Edit and the Automatic mesh presets)" width="860">
 </p>
 <p align="center">Model art by <a href="https://www.pixiv.net/users/99163365"><b>マパ*MAPA</b></a> (pixiv ID 99163365), used with permission. Thank you!</p>
 
@@ -149,7 +149,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
   <img src="docs/media/physics.png" alt="The Physics page mid-swing: input and output settings, the pendulum preview and the model blinking" width="860">
 </p>
 <p align="center">
-  <img src="docs/media/animation.png" alt="The Animation workspace: a scene's keys on the timeline and the posed model" width="860">
+  <img src="docs/media/animation.png" alt="The Animation workspace: an animation's keys on the Timeline, its parameters in folders and the posed model" width="860">
 </p>
 
 - **Physics page** laid out like Cubism's, with a live pendulum preview that
@@ -157,7 +157,13 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 - **Animation scenes** with curves: auto smooth, linear, stepped, inverse
   stepped and free Bezier keys, events and fades. Reads and writes
   `motion3.json` key for key.
+- **Compositions and sound**: animations and other compositions layered on
+  one clock (start, trim, speed, weight, fades), with WAV, MP3, FLAC or Ogg
+  sound layers and an **Audio Mixer** with a bus per audio source. Baked to
+  one `motion3.json` on export.
 - **Expressions**: reads and writes `exp3.json` (Add, Multiply, Overwrite).
+- **Render**: animations, compositions and timelapses to GIF, PNG frames,
+  MP4, WebM or MOV, drawn on the GPU, with the composition's sound mixed in.
 
 ### Built to work with what you already use
 
