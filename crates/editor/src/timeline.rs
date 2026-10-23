@@ -3078,10 +3078,19 @@ impl Timeline {
                             if r_h.dragged()
                                 && let Some(ptr) = r_h.interact_pointer_pos()
                             {
-                                let dt = tm.t(ptr.x) - k.time;
+                                let mut dt = tm.t(ptr.x) - k.time;
+                                let mut dv = vmap(ptr.y) - k.value;
+                                // Shift keeps the handle level or upright,
+                                // whichever is nearer on screen
+                                if mods.shift {
+                                    if (dt * pps).abs() >= (dv * ys).abs() {
+                                        dv = 0.0;
+                                    } else {
+                                        dt = 0.0;
+                                    }
+                                }
                                 let dt =
                                     if out { dt.clamp(0.0, span) } else { dt.clamp(-span, 0.0) };
-                                let dv = vmap(ptr.y) - k.value;
                                 edits.push(Edit::SetHandle(kref.clone(), out, (dt, dv)));
                                 // the other handle swings round to stay in line
                                 // (on screen), keeping its length; Alt breaks them
