@@ -176,21 +176,49 @@ impl Prefs {
     }
 
     pub fn load() -> Self {
-        path()
-            .and_then(|p| std::fs::read(p).ok())
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        let Some(p) = path() else {
+            log::warn!("settings: no config folder, using the defaults");
+            return Self::default();
+        };
+        let bytes = match std::fs::read(&p) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                log::debug!("settings: none saved yet, using the defaults");
+                return Self::default();
+            }
+            Err(e) => {
+                log::warn!("settings: could not read {}: {e}; using the defaults", p.display());
+                return Self::default();
+            }
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(prefs) => prefs,
+            Err(e) => {
+                // the file stays as it is until the next save replaces it
+                log::warn!("settings: {} is not valid ({e}); using the defaults", p.display());
+                Self::default()
+            }
+        }
     }
 
     pub fn save(&self) {
         let Some(p) = path() else { return };
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        if let Some(dir) = p.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            log::warn!("settings: could not make {}: {e}", dir.display());
         }
-        let Ok(bytes) = serde_json::to_vec_pretty(self) else { return };
+        let bytes = match serde_json::to_vec_pretty(self) {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("settings: could not encode them: {e}");
+                return;
+            }
+        };
+        log_changes(&p, &bytes);
         let tmp = p.with_extension("json.tmp");
-        if std::fs::write(&tmp, bytes).is_ok() {
-            let _ = std::fs::rename(tmp, p);
+        if let Err(e) = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &p)) {
+            log::warn!("settings: could not save {}: {e}", p.display());
         }
     }
 
@@ -200,4 +228,62 @@ impl Prefs {
         self.recents.truncate(8);
         self.save();
     }
+}
+
+/// Settings that move on their own (layouts, recent files, last folders):
+/// a change in them is not something the user set, so it is not logged.
+const QUIET: &[&str] = &[
+    "recents",
+    "toolbar_pos",
+    "workspace_modeling",
+    "workspace_animation",
+    "custom_workspaces",
+    "physics_layout",
+    "export_folder",
+];
+
+/// Logged by name only: the API clients hold their tokens.
+const NAME_ONLY: &[&str] = &["api_clients", "discord_app_id", "keybinds", "render"];
+
+/// The last saved settings, and which ones the last log line named and
+/// when: a slider saves on every frame of a drag, which logs once.
+static LAST_SAVED: std::sync::Mutex<Option<(serde_json::Value, String, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+/// Log which settings a save changes, against the last save (the saved file
+/// the first time).
+fn log_changes(path: &std::path::Path, new: &[u8]) {
+    let Ok(new) = serde_json::from_slice::<serde_json::Value>(new) else { return };
+    let Ok(mut last) = LAST_SAVED.lock() else { return };
+    let (old, logged, at) = last.take().unwrap_or_else(|| {
+        let old = std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(serde_json::Value::Null);
+        (old, String::new(), std::time::Instant::now())
+    });
+    let mut keys = Vec::new();
+    let mut shown = Vec::new();
+    if let (Some(old), Some(obj)) = (old.as_object(), new.as_object()) {
+        for (k, v) in obj {
+            if QUIET.contains(&k.as_str()) || old.get(k) == Some(v) {
+                continue;
+            }
+            keys.push(k.as_str());
+            let value = v.to_string();
+            shown.push(if NAME_ONLY.contains(&k.as_str()) || value.len() > 40 {
+                k.clone()
+            } else {
+                format!("{k} = {value}")
+            });
+        }
+    }
+    let keys = keys.join(",");
+    let repeat = !keys.is_empty() && keys == logged && at.elapsed().as_secs_f32() < 1.0;
+    if !shown.is_empty() && !repeat {
+        log::info!("settings changed: {}", shown.join(", "));
+    }
+    let (logged, at) =
+        if keys.is_empty() { (logged, at) } else { (keys, std::time::Instant::now()) };
+    *last = Some((new, logged, at));
 }

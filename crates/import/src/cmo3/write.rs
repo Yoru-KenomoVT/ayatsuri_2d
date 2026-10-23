@@ -837,8 +837,16 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
 
     // 2. the art of each mesh, back out of the texture
     let mut pages: Vec<Option<image::RgbaImage>> = Vec::with_capacity(x.textures.len());
-    for t in x.textures {
-        pages.push(image::load_from_memory(t).ok().map(|i| i.to_rgba8()));
+    for (i, t) in x.textures.iter().enumerate() {
+        match image::load_from_memory(t) {
+            Ok(img) => pages.push(Some(img.to_rgba8())),
+            Err(e) => {
+                log::warn!(
+                    "cmo3: texture page {i} could not be decoded ({e}); its meshes get no art"
+                );
+                pages.push(None);
+            }
+        }
     }
     let mut materials = Vec::with_capacity(model.art_meshes.len());
     let mut points: Vec<Vec<f32>> = Vec::with_capacity(model.art_meshes.len());

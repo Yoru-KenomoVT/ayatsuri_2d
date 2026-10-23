@@ -98,7 +98,12 @@ pub fn clear_previous(dir: &Path) -> Result<usize, String> {
         }
         for rel in listed {
             let Some(path) = inside(dir, &rel) else { continue };
-            if path.is_file() && std::fs::remove_file(&path).is_ok() {
+            if !path.is_file() {
+                continue;
+            }
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("could not remove {} of the previous export: {e}", path.display());
+            } else {
                 removed += 1;
                 if let Some(parent) = path.parent()
                     && parent != dir
@@ -114,7 +119,10 @@ pub fn clear_previous(dir: &Path) -> Result<usize, String> {
     // folders the old export made, deepest first, once they are empty
     folders.sort_by_key(|f| std::cmp::Reverse(f.components().count()));
     for f in folders {
-        let _ = std::fs::remove_dir(f);
+        // a folder that still holds the user's own files stays
+        if let Err(e) = std::fs::remove_dir(&f) {
+            log::debug!("kept {}: {e}", f.display());
+        }
     }
     Ok(removed)
 }

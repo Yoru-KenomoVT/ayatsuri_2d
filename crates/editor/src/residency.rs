@@ -52,6 +52,9 @@ pub struct Residency {
     idle_since: Option<Instant>,
     /// How many times the GPU ran out of memory on this model.
     pub oom_count: u32,
+    /// Pages whose decode failed: it is tried again each frame, and logged
+    /// only the first time.
+    failed: std::collections::HashSet<usize>,
 }
 
 impl Residency {
@@ -66,6 +69,7 @@ impl Residency {
             loading: None,
             idle_since: None,
             oom_count: 0,
+            failed: Default::default(),
         }
     }
 
@@ -136,6 +140,12 @@ impl Residency {
             match rx.try_recv() {
                 Ok(Some(data)) => {
                     let i = *i;
+                    log::debug!(
+                        "texture page {i} loaded at full size ({}x{})",
+                        data.width,
+                        data.height
+                    );
+                    self.failed.remove(&i);
                     if let Some(p) = self.pages.get_mut(i) {
                         p.resident = true;
                         p.last_used = now;
@@ -143,7 +153,18 @@ impl Residency {
                     plan.upload = Some((i, data));
                     self.loading = None;
                 }
-                Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => self.loading = None,
+                Ok(None) => {
+                    if self.failed.insert(*i) {
+                        log::warn!("texture page {i} could not be decoded; it stays a proxy");
+                    }
+                    self.loading = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if self.failed.insert(*i) {
+                        log::warn!("texture page {i}: the decode thread ended without an answer");
+                    }
+                    self.loading = None;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -163,6 +184,10 @@ impl Residency {
                 plan.drop.push(i);
             }
         }
+        if !plan.drop.is_empty() {
+            let why = if drop_all { "the editor is idle" } else { "not drawn lately" };
+            log::debug!("texture page(s) {:?} back to proxies: {why}", plan.drop);
+        }
         if idle || self.loading.is_some() {
             return plan;
         }
@@ -178,6 +203,7 @@ impl Residency {
         let Some(need) = self.pages.get(want).map(Page::bytes) else { return plan };
         let Some(png) = pngs.get(want).filter(|p| !p.is_empty()).cloned() else { return plan };
         // make room: the pages nobody drew this frame go first, oldest first
+        let lingered = plan.drop.len();
         let used_now: std::collections::HashSet<usize> = used.iter().map(|&(i, _)| i).collect();
         while self.resident_bytes() + need > self.budget {
             let victim = self
@@ -195,8 +221,22 @@ impl Residency {
                     plan.drop.push(i);
                 }
                 // everything resident is on screen: this page stays a proxy
-                None => return plan,
+                None => {
+                    if plan.drop.len() > lingered {
+                        log::debug!(
+                            "texture page(s) {:?} dropped to make room; page {want} stays a proxy",
+                            plan.drop.get(lingered..).unwrap_or(&[])
+                        );
+                    }
+                    return plan;
+                }
             }
+        }
+        if plan.drop.len() > lingered {
+            log::debug!(
+                "texture page(s) {:?} dropped to make room for {want}",
+                plan.drop.get(lingered..).unwrap_or(&[])
+            );
         }
         let (tx, rx) = channel();
         let spawned = std::thread::Builder::new().name("texture-decode".into()).spawn(move || {
@@ -206,8 +246,18 @@ impl Residency {
             });
             let _ = tx.send(data);
         });
-        if spawned.is_ok() {
-            self.loading = Some((want, rx));
+        match spawned {
+            Ok(_) => {
+                if !self.failed.contains(&want) {
+                    log::debug!("texture page {want}: decoding at full size");
+                }
+                self.loading = Some((want, rx));
+            }
+            Err(e) => {
+                if self.failed.insert(want) {
+                    log::warn!("texture page {want}: could not start decoding: {e}");
+                }
+            }
         }
         plan
     }

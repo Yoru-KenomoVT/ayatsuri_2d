@@ -399,11 +399,17 @@ pub fn ensure(puppet: &Puppet, textures: &[TexData], source: &Path) -> Option<Pa
     if path.exists() {
         return Some(path);
     }
-    std::fs::create_dir_all(path.parent()?).ok()?;
+    if let Err(e) = std::fs::create_dir_all(path.parent()?) {
+        log::warn!("thumbnail: could not make the cache folder: {e}");
+        return None;
+    }
     let started = std::time::Instant::now();
     let (w, h, rgba) = render(puppet, textures, 160);
     let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)?;
-    img.save(&path).ok()?;
+    if let Err(e) = img.save(&path) {
+        log::warn!("thumbnail: could not save {}: {e}", path.display());
+        return None;
+    }
     log::debug!(
         "thumbnail rendered in {:.0} ms -> {}",
         started.elapsed().as_secs_f32() * 1000.0,

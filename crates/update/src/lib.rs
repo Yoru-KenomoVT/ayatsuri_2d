@@ -198,11 +198,18 @@ pub fn cached() -> Option<Latest> {
 /// Save an answer for the editor to find.
 pub fn remember(latest: &Latest) {
     let Some(path) = cache_path() else { return };
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        log::warn!("update check: could not make {}: {e}", dir.display());
     }
-    if let Ok(bytes) = serde_json::to_vec_pretty(latest) {
-        let _ = std::fs::write(path, bytes);
+    match serde_json::to_vec_pretty(latest) {
+        Ok(bytes) => {
+            if let Err(e) = std::fs::write(&path, bytes) {
+                log::warn!("update check: could not save the answer to {}: {e}", path.display());
+            }
+        }
+        Err(e) => log::warn!("update check: could not encode the answer: {e}"),
     }
 }
 

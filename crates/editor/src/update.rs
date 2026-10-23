@@ -77,8 +77,14 @@ impl UpdateState {
             let _ = tx.send(answer);
         });
         match spawned {
-            Ok(_) => self.pending = Some(rx),
-            Err(e) => self.status = Some(Err(e.to_string())),
+            Ok(_) => {
+                log::info!("update check: asking GitHub for the newest release");
+                self.pending = Some(rx);
+            }
+            Err(e) => {
+                log::warn!("update check: could not start: {e}");
+                self.status = Some(Err(e.to_string()));
+            }
         }
     }
 
@@ -109,10 +115,14 @@ impl UpdateState {
         });
         match spawned {
             Ok(_) => {
+                log::info!("update: downloading the newest release");
                 self.installed = None;
                 self.installing = Some(rx);
             }
-            Err(e) => self.installed = Some(Err(e.to_string())),
+            Err(e) => {
+                log::warn!("update: could not start the download: {e}");
+                self.installed = Some(Err(e.to_string()));
+            }
         }
     }
 

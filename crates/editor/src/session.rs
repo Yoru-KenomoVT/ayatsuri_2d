@@ -1091,8 +1091,20 @@ impl Session {
         let cdi: Option<Cdi3> = bundle
             .display_info
             .as_deref()
-            .and_then(|p| std::fs::read(p).ok())
-            .and_then(|b| serde_json::from_slice(&b).ok());
+            .and_then(|p| match std::fs::read(p) {
+                Ok(b) => Some((p, b)),
+                Err(e) => {
+                    warn!("display names: could not read {}: {e}", p.display());
+                    None
+                }
+            })
+            .and_then(|(p, b)| match serde_json::from_slice(&b) {
+                Ok(cdi) => Some(cdi),
+                Err(e) => {
+                    warn!("display names: {} is not valid ({e}); using the ids", p.display());
+                    None
+                }
+            });
 
         let name = bundle
             .moc
@@ -1541,6 +1553,7 @@ impl Session {
         if !f(&mut after) {
             return false;
         }
+        log_edit(&before, &after);
         self.push_undo(before);
         self.redo.clear();
         self.rebuild_from(after);
@@ -1826,8 +1839,11 @@ impl Session {
     /// The work is safe (saved, or knowingly discarded): its autosave is
     /// stale and must not be offered for recovery next time.
     pub fn discard_autosave(&self) {
-        if let Some(p) = self.autosave_path() {
-            let _ = std::fs::remove_file(p);
+        if let Some(p) = self.autosave_path()
+            && let Err(e) = std::fs::remove_file(&p)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!("could not remove the stale autosave {}: {e}", p.display());
         }
     }
 
@@ -1835,17 +1851,17 @@ impl Session {
         let Some(path) = self.autosave_path() else { return };
         let payload = self.payload();
         std::thread::spawn(move || {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
+            if let Some(dir) = path.parent()
+                && let Err(e) = std::fs::create_dir_all(dir)
+            {
+                warn!("autosave: could not make {}: {e}", dir.display());
             }
             let tmp = path.with_extension("aom.tmp");
             match ayatsuri_format::write(&payload) {
                 Ok(bytes) => {
-                    if std::fs::write(&tmp, bytes)
-                        .and_then(|_| std::fs::rename(&tmp, &path))
-                        .is_ok()
-                    {
-                        debug!("autosaved to {}", path.display());
+                    match std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &path)) {
+                        Ok(()) => debug!("autosaved to {}", path.display()),
+                        Err(e) => warn!("autosave to {} failed: {e}", path.display()),
                     }
                 }
                 Err(e) => warn!("autosave failed: {e}"),
@@ -1856,8 +1872,14 @@ impl Session {
     /// Write a recovery copy without touching the session's own path, so a
     /// crash never costs the user their work. Returns where it went.
     pub fn write_recovery(&self) -> Option<PathBuf> {
-        let dir = crate::recovery::dir()?;
-        std::fs::create_dir_all(&dir).ok()?;
+        let Some(dir) = crate::recovery::dir() else {
+            warn!("recovery copy: no folder to keep it in");
+            return None;
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("recovery copy: could not make {}: {e}", dir.display());
+            return None;
+        }
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -1868,8 +1890,17 @@ impl Session {
             .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
             .collect();
         let path = dir.join(format!("{safe}-{secs}.aom"));
-        let bytes = ayatsuri_format::write(&self.payload()).ok()?;
-        std::fs::write(&path, bytes).ok()?;
+        let bytes = match ayatsuri_format::write(&self.payload()) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("recovery copy: could not encode the model: {e}");
+                return None;
+            }
+        };
+        if let Err(e) = std::fs::write(&path, bytes) {
+            warn!("recovery copy: could not write {}: {e}", path.display());
+            return None;
+        }
         Some(path)
     }
 
@@ -2425,5 +2456,47 @@ mod import_paint_tests {
         let mut p = Puppet::new(base);
         p.update();
         assert_eq!(p.drawables().count(), 2);
+    }
+}
+
+/// One line per model edit, in the words the timelapse player uses.
+fn log_edit(before: &Model, after: &Model) {
+    use crate::model_diff::{Kind, What};
+    let changes = crate::model_diff::diff(before, after);
+    if changes.is_empty() {
+        debug!("model edit with no visible change");
+        return;
+    }
+    let words: Vec<String> = changes
+        .iter()
+        .take(4)
+        .map(|c| {
+            let what = match c.what {
+                What::Canvas => "canvas",
+                What::Parameter => "parameter",
+                What::Part => "part",
+                What::Warp => "warp deformer",
+                What::Rotation => "rotation deformer",
+                What::Mesh => "mesh",
+                What::Glue => "glue",
+                What::Physics => "physics",
+                What::ArtPath => "ArtPath",
+            };
+            let how = match c.kind {
+                Kind::Added => "added",
+                Kind::Removed => "removed",
+                Kind::Edited => c.detail,
+            };
+            match c.what {
+                What::Canvas | What::Physics => format!("{what}: {how}"),
+                _ => format!("{what} {}: {how}", c.name),
+            }
+        })
+        .collect();
+    let more = changes.len().saturating_sub(words.len());
+    if more > 0 {
+        info!("edit: {} and {more} more", words.join(", "));
+    } else {
+        info!("edit: {}", words.join(", "));
     }
 }

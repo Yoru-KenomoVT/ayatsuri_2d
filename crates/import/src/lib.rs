@@ -33,11 +33,21 @@ pub use layers::{AlphaBlend, Blend, ColorBlend, Document, Imported, Layer};
 /// while reading. Anything else is read as a PSD.
 #[cfg(feature = "documents")]
 pub fn read_document(bytes: &[u8], ext: &str) -> Result<(Document, usize), ImportError> {
-    match ext {
+    let read = match ext {
         "kra" => kra::read_kra(bytes),
         "clip" => clip::read_clip(bytes),
         _ => psd_doc::read_psd(bytes).map(|d| (d, 0)),
+    };
+    match &read {
+        Ok((doc, skipped)) => log::debug!(
+            "{ext}: {} x {} document, {} layer(s), {skipped} skipped",
+            doc.width,
+            doc.height,
+            doc.layers.len()
+        ),
+        Err(e) => log::debug!("{ext}: could not read the document: {e}"),
     }
+    read
 }
 
 /// Whether a file extension names a paint document this crate opens.

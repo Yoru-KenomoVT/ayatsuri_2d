@@ -730,6 +730,7 @@ impl EditorUi {
         }
         match TempDeform::bind(s, method, &targets, cols, rows, prev) {
             Ok(t) => {
+                log::info!("Temporary Deform Tool: {method:?} on {} object(s)", targets.len());
                 self.tdeform = Some(t);
                 self.tool = Tool::TempDeform;
             }
@@ -754,6 +755,7 @@ impl EditorUi {
     pub(super) fn set_temp_method(&mut self, method: Method) {
         let (Some(t), Some(s)) = (&mut self.tdeform, &mut self.session) else { return };
         if t.method != method {
+            log::info!("Temporary Deform Tool: {method:?}");
             t.method = method;
             t.rebuild(s);
         }

@@ -67,6 +67,55 @@ fn fract(seed: f32) -> f32 {
     x - x.floor()
 }
 
+/// The launcher's lines go to the end of the editor's log file, so a
+/// failed start is in the same place as everything else.
+struct LauncherLog(std::sync::Mutex<Option<std::fs::File>>);
+
+impl log::Log for LauncherLog {
+    fn enabled(&self, meta: &log::Metadata<'_>) -> bool {
+        meta.target().starts_with("ayatsuri") && meta.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        use std::io::Write as _;
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
+        let line = format!("{h:02}:{m:02}:{s:02} {:5} launcher: {}", record.level(), record.args());
+        eprintln!("{line}");
+        if let Ok(mut f) = self.0.lock()
+            && let Some(f) = f.as_mut()
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn init_log() {
+    let file = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .map(|b| b.join("ayatsuri2d"))
+        .and_then(|dir| {
+            std::fs::create_dir_all(&dir).ok()?;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("ayatsuri.log"))
+                .ok()
+        });
+    let logger = Box::leak(Box::new(LauncherLog(std::sync::Mutex::new(file))));
+    if log::set_logger(logger).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+}
+
 fn start_editor(open_arg: Option<String>, ready_file: Option<&PathBuf>) -> Result<(), String> {
     // prefer the sibling binary, fall back to PATH
     let sibling = std::env::current_exe()
@@ -86,7 +135,10 @@ fn start_editor(open_arg: Option<String>, ready_file: Option<&PathBuf>) -> Resul
     if let Some(ready) = ready_file {
         cmd.env("AYATSURI_READY_FILE", ready);
     }
-    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+    let program = cmd.get_program().to_string_lossy().to_string();
+    cmd.spawn().map_err(|e| e.to_string())?;
+    log::info!("launcher {}: started {program}", env!("CARGO_PKG_VERSION"));
+    Ok(())
 }
 
 impl Launcher {
@@ -379,7 +431,10 @@ impl Launcher {
     }
 
     fn release_editor(&self) {
-        let _ = std::fs::write(self.go_file(), b"go");
+        if let Err(e) = std::fs::write(self.go_file(), b"go") {
+            // the editor stops waiting on its own after 30 seconds
+            log::warn!("could not tell the editor to show its window: {e}");
+        }
     }
 }
 
@@ -434,6 +489,7 @@ fn get_ffmpeg(dir: Option<String>) -> ! {
 }
 
 fn main() -> eframe::Result {
+    init_log();
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some("--get-ffmpeg") {
         get_ffmpeg(args.next());
@@ -465,12 +521,18 @@ fn main() -> eframe::Result {
     // ask GitHub for a newer release while the splash shows; the editor
     // finds the answer next to its preferences. Only ever reports.
     if !pref_on(&prefs, "update_check_off") {
-        let _ = std::thread::Builder::new().name("update-check".into()).spawn(|| {
+        let spawned = std::thread::Builder::new().name("update-check".into()).spawn(|| {
             match ayatsuri_update::fetch(env!("CARGO_PKG_VERSION")) {
-                Ok(latest) => ayatsuri_update::remember(&latest),
+                Ok(latest) => {
+                    log::info!("update check: newest release is {}", latest.version);
+                    ayatsuri_update::remember(&latest);
+                }
                 Err(e) => log::debug!("update check: {e}"),
             }
         });
+        if let Err(e) = spawned {
+            log::warn!("update check: could not start: {e}");
+        }
     }
     eframe::run_native(
         "ayatsuri2d-launcher",

@@ -101,14 +101,22 @@ impl EditorUi {
             && i < self.recovery.found.len()
         {
             let f = self.recovery.found.remove(i);
-            let _ = std::fs::remove_file(&f.path);
-            log::info!("deleted recovery file {}", f.path.display());
+            match std::fs::remove_file(&f.path) {
+                Ok(()) => log::info!("deleted recovery file {}", f.path.display()),
+                Err(e) => log::warn!("could not delete recovery file {}: {e}", f.path.display()),
+            }
         }
         if delete_all {
+            let mut kept = 0;
             for f in self.recovery.found.drain(..) {
-                let _ = std::fs::remove_file(&f.path);
+                if let Err(e) = std::fs::remove_file(&f.path) {
+                    log::warn!("could not delete recovery file {}: {e}", f.path.display());
+                    kept += 1;
+                }
             }
-            log::info!("deleted all recovery files");
+            if kept == 0 {
+                log::info!("deleted all recovery files");
+            }
         }
         if later {
             self.recovery.found.clear();

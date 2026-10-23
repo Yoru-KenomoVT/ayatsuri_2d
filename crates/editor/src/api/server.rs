@@ -196,7 +196,10 @@ fn serve(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
         }
     };
     // from here, short read timeouts so events, stop and kick get a turn
-    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(50)));
+    if let Err(e) = ws.get_ref().set_read_timeout(Some(Duration::from_millis(50))) {
+        // without it the thread waits on reads and misses stop and kick
+        log::warn!("api: {peer}: could not set the read timeout: {e}");
+    }
     let (tx, rx): (Sender<EventMsg>, Receiver<EventMsg>) = channel();
     lock(&shared.events).push((id, tx));
     lock(&shared.live).push(LiveConn { id, peer: peer.to_string(), token: None });

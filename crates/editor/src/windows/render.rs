@@ -1121,14 +1121,14 @@ impl Sink {
             Sink::Png(..) => {}
             Sink::Gif(gif, _) => {
                 drop(gif);
-                let _ = std::fs::remove_file(path);
+                remove_partial(path);
             }
             Sink::Pipe(mut child, stdin, said) => {
                 drop(stdin);
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = said.join();
-                let _ = std::fs::remove_file(path);
+                remove_partial(path);
             }
         }
     }
@@ -1287,8 +1287,10 @@ fn run(
     let mut draw = Drawer::new(&spec, width);
     let result = frames(&spec, &mut draw, &mut out);
     // the mix was only ever for ffmpeg
-    if let Some(a) = &spec.audio {
-        let _ = std::fs::remove_file(a);
+    if let Some(a) = &spec.audio
+        && let Err(e) = std::fs::remove_file(a)
+    {
+        log::debug!("render: the temporary audio mix {} stays: {e}", a.display());
     }
     match result {
         Ok(()) => {
@@ -2894,6 +2896,15 @@ fn value_row(
     p.circle_filled(pos2(fx(value), ty), 4.0, if live { pal.accent } else { pal.text_faint });
     p.circle_stroke(pos2(fx(value), ty), 4.0, egui::Stroke::new(1.0, pal.panel_bg));
     resp.on_hover_text(format!("{name}: {min} to {max}, {default} at rest"));
+}
+
+/// The half-written file of a stopped render.
+fn remove_partial(path: &std::path::Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => log::info!("render: removed the unfinished {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("render: the unfinished {} stays: {e}", path.display()),
+    }
 }
 
 #[cfg(test)]

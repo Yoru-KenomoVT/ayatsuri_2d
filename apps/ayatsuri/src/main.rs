@@ -139,7 +139,13 @@ fn relaunch_after_crash() {
         log::error!("crashed again after {restarts} restarts; not restarting");
         return;
     }
-    let Ok(exe) = std::env::current_exe() else { return };
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            log::error!("could not restart after the crash: {e}");
+            return;
+        }
+    };
     let mut cmd = std::process::Command::new(exe);
     cmd.env("AYATSURI_RESTARTS", (restarts + 1).to_string());
     // the relaunch asks before recovering, through the startup dialog
@@ -184,7 +190,10 @@ fn main() -> eframe::Result {
     // the dashboard never covers the splash
     let mut editor = Some(EditorUi::new());
     if let Some(ready) = std::env::var_os("AYATSURI_READY_FILE").map(std::path::PathBuf::from) {
-        let _ = std::fs::write(&ready, b"ready");
+        if let Err(e) = std::fs::write(&ready, b"ready") {
+            // the splash closes on its own timeout instead
+            log::warn!("could not tell the splash the editor is ready: {e}");
+        }
         let mut go = ready.into_os_string();
         go.push(".go");
         let go = std::path::PathBuf::from(go);
@@ -192,7 +201,10 @@ fn main() -> eframe::Result {
         while !go.exists() && started.elapsed() < std::time::Duration::from_secs(30) {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let _ = std::fs::remove_file(&go);
+        match std::fs::remove_file(&go) {
+            Ok(()) => log::debug!("the splash let the window open after {:?}", started.elapsed()),
+            Err(_) => log::warn!("the splash never answered; opening the window after 30 seconds"),
+        }
     }
     // every frame is already guarded; this catches eframe itself
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {

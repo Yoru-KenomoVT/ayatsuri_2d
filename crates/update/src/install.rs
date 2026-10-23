@@ -293,7 +293,9 @@ fn stage_then_rename(target: &Path, bytes: &[u8]) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
+        if let Err(e) = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)) {
+            log::warn!("update: could not mark {} as a program: {e}", staged.display());
+        }
     }
     let _ = std::fs::remove_file(&kept);
     if let Err(e) = std::fs::copy(target, &kept) {
@@ -314,14 +316,24 @@ pub fn sweep_previous() {
     if let Some(dir) = exe.parent() {
         for name in ["ayatsuri", "ayatsuri-launcher", "ayatsuri.exe", "ayatsuri-launcher.exe"] {
             if let Some(old) = previous_beside(&dir.join(name)) {
-                let _ = std::fs::remove_file(old);
+                remove_previous(&old);
             }
         }
     }
     if let Some(file) = std::env::var_os("APPIMAGE").map(PathBuf::from)
         && let Some(old) = previous_beside(&file)
     {
-        let _ = std::fs::remove_file(old);
+        remove_previous(&old);
+    }
+}
+
+fn remove_previous(old: &Path) {
+    match std::fs::remove_file(old) {
+        Ok(()) => log::info!("update: removed the previous version {}", old.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            log::warn!("update: could not remove the previous version {}: {e}", old.display())
+        }
     }
 }
 

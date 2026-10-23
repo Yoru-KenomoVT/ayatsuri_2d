@@ -100,6 +100,7 @@ impl Expressions {
                 });
                 self.sel = Some(s.expressions.len() - 1);
                 s.modified = true;
+                log::info!("expression{n}: new expression");
             }
             let has = self.sel.is_some();
             if ui
@@ -114,6 +115,7 @@ impl Expressions {
             {
                 let mut e = e;
                 e.name = format!("{} copy", e.name);
+                log::info!("{}: duplicated", e.name);
                 s.expressions.insert(i + 1, e);
                 self.sel = Some(i + 1);
                 s.modified = true;
@@ -128,7 +130,8 @@ impl Expressions {
                 && let Some(i) = self.sel
                 && i < s.expressions.len()
             {
-                s.expressions.remove(i);
+                let gone = s.expressions.remove(i);
+                log::info!("{}: expression deleted", gone.name);
                 self.sel = if s.expressions.is_empty() {
                     None
                 } else {
@@ -235,6 +238,7 @@ impl Expressions {
                 .clicked()
             {
                 next.params = Self::from_pose(s);
+                log::info!("{}: set from the pose, {} parameter(s)", next.name, next.params.len());
                 edited = Some(false);
             }
             // add one parameter, through the popup
@@ -339,6 +343,8 @@ impl Expressions {
         {
             if merge {
                 self.preview = true;
+            } else {
+                log::info!("{}: expression edited", next.name);
             }
             if let Some(slot) = s.expressions.get_mut(i) {
                 *slot = next;

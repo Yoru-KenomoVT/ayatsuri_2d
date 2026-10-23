@@ -254,6 +254,9 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
     let w_rows = moc.i32s(23)?;
     let w_cols = moc.i32s(24)?;
     let w_quad = moc.i32s(101).ok();
+    if w_quad.is_none() {
+        log::debug!("moc3: no quad transform section; every warp reads as not quad");
+    }
     let w_opacities = moc.f32s(59)?;
     let w_pos_begin = moc.i32s(60)?;
 
@@ -380,6 +383,9 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
     let m_flags = moc.u8s(42)?;
     // 5.3 gives every mesh a colour and alpha blend of its own
     let m_blend = moc.i32s(153).ok();
+    if m_blend.is_none() {
+        log::debug!("moc3: no per-mesh blend section (before 5.3)");
+    }
     let m_vertex_counts = moc.i32s(43)?;
     let m_uv_begin = moc.i32s(44)?;
     let m_idx_begin = moc.i32s(45)?;

@@ -94,18 +94,30 @@ pub fn log_path() -> Option<PathBuf> {
 }
 
 pub fn init(level: LevelFilter) {
+    // the logger is not up yet, so a failure here is told once it is
+    let mut problem = None;
     if let Some(path) = log_path() {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         // one rotation keeps the file bounded without losing the last run
-        if std::fs::metadata(&path).map(|m| m.len() > ROTATE_BYTES).unwrap_or(false) {
-            let _ = std::fs::rename(&path, path.with_extension("log.old"));
-        }
-        if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&path)
-            && let Ok(mut slot) = FILE.lock()
+        if std::fs::metadata(&path).map(|m| m.len() > ROTATE_BYTES).unwrap_or(false)
+            && let Err(e) = std::fs::rename(&path, path.with_extension("log.old"))
         {
-            *slot = Some(f);
+            problem = Some(format!("could not rotate {}: {e}", path.display()));
+        }
+        match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(f) => {
+                if let Ok(mut slot) = FILE.lock() {
+                    *slot = Some(f);
+                }
+            }
+            Err(e) => {
+                problem = Some(format!(
+                    "could not open the log file {}: {e}; logging to the Log panel only",
+                    path.display()
+                ));
+            }
         }
     }
     if log::set_logger(&LOGGER).is_ok() {
@@ -117,6 +129,9 @@ pub fn init(level: LevelFilter) {
             std::env::consts::ARCH,
             level.max(FILE_FLOOR)
         );
+        if let Some(problem) = problem {
+            log::warn!("{problem}");
+        }
     }
     // a crash should never be silent: whatever panics, from our code or a
     // dependency, lands in the log with where it happened and how we got

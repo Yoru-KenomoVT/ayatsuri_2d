@@ -210,6 +210,9 @@ pub struct EditorUi {
     logged_sel: Option<Sel>,
     logged_param: Option<usize>,
     logged_tool: Tool,
+    /// Windows, dialogs and modes open last frame, one bit each (see
+    /// `log_state_changes`), so the log says what the user opened.
+    logged_open: u64,
     /// The window title last sent: sending one every frame would keep an
     /// idle editor drawing, as each window command asks for a frame.
     sent_title: String,
@@ -1037,6 +1040,7 @@ impl Default for EditorUi {
             logged_sel: None,
             logged_param: None,
             logged_tool: Tool::Arrow,
+            logged_open: 0,
             sent_title: String::new(),
             heartbeat: 0.0,
             anim_time: 0.0,
@@ -1201,8 +1205,11 @@ impl EditorUi {
             s.discard_autosave();
         }
         for p in crate::take_crash_copies() {
-            let _ = std::fs::remove_file(p);
+            if let Err(e) = std::fs::remove_file(&p) {
+                log::warn!("could not remove the crash copy {}: {e}", p.display());
+            }
         }
+        log::info!("closing normally");
         crate::update::finish(&self.update);
     }
 
@@ -1338,7 +1345,9 @@ impl EditorUi {
             } else {
                 "xdg-open"
             };
-            let _ = std::process::Command::new(opener).arg(dir).spawn();
+            if let Err(e) = std::process::Command::new(opener).arg(&dir).spawn() {
+                log::warn!("could not open the log folder with {opener}: {e}");
+            }
         }
         if !keep {
             log::debug!("crash dialog dismissed, editing continues");
@@ -1467,10 +1476,28 @@ impl EditorUi {
                     self.recovering = None;
                     s.aom_path = None;
                     s.modified = true;
-                    let _ = std::fs::remove_file(&path);
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        log::warn!(
+                            "recovered, but the recovery copy {} stays: {e}",
+                            path.display()
+                        );
+                    }
                     log::info!("recovered {}", s.name);
                 } else {
                     self.prefs.remember(path);
+                }
+                {
+                    let m = s.puppet.model();
+                    log::info!(
+                        "opened {}: {} meshes, {} deformers, {} parameters, {} parts, {} texture page(s), {} animation(s)",
+                        s.name,
+                        m.art_meshes.len(),
+                        m.deformers.len(),
+                        m.parameters.len(),
+                        m.parts.len(),
+                        s.texture_pngs.len(),
+                        s.animations.len()
+                    );
                 }
                 self.session = Some(s);
                 self.selected = None;
@@ -1511,6 +1538,64 @@ impl EditorUi {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
 
+    /// Log the windows, dialogs and modes that opened or closed since last
+    /// frame. One comparison a frame and a line only on a change, so the
+    /// log says what the user did without a line per frame.
+    fn log_state_changes(&mut self) {
+        let states: [(&str, bool); 26] = [
+            ("Settings", self.show_settings),
+            ("API window", self.show_api_window),
+            ("Model Statistics", self.show_stats),
+            ("Timelapse", self.timelapse_view.is_some()),
+            ("Render", self.render_win.is_some()),
+            ("Texture Atlas", self.atlas_win.is_some()),
+            ("Skinning", self.skin_dlg.is_some()),
+            ("Physics Settings", self.show_physics),
+            ("New Animation", self.new_anim.is_some()),
+            ("Animation Details", self.anim_details.is_some()),
+            ("Export Model", self.export_dlg.is_some()),
+            ("New Parameter", self.new_param.is_some()),
+            ("New Folder", self.new_folder.is_some()),
+            ("New Project", self.new_model.is_some()),
+            ("Project", self.show_model_info),
+            ("Save Workspace", self.show_ws_save),
+            ("Manage Workspaces", self.show_ws_manage),
+            ("Guide Line Settings", self.show_guide_settings),
+            ("New Deformer", self.deformer_dialog.is_some()),
+            ("Edit Parameter", self.param_edit.is_some()),
+            ("Mesh Edit", self.mesh_edit.is_some()),
+            ("Physics", self.physics_on),
+            ("Follow", self.follow_cursor),
+            ("Temporary Deform Tool", self.tdeform.is_some()),
+            ("Playlist playback", self.phys_page.pl_playing),
+            ("Mirror Edit", self.mirror_edit),
+        ];
+        let mut now = 0u64;
+        for (i, &(_, on)) in states.iter().enumerate() {
+            if on {
+                now |= 1 << i;
+            }
+        }
+        let changed = now ^ self.logged_open;
+        if changed == 0 {
+            return;
+        }
+        // the last six are modes turned on and off, the rest windows
+        let modes = states.len() - 6;
+        for (i, &(name, on)) in states.iter().enumerate() {
+            if changed & (1 << i) == 0 {
+                continue;
+            }
+            match (i >= modes, on) {
+                (true, true) => log::info!("{name}: on"),
+                (true, false) => log::info!("{name}: off"),
+                (false, true) => log::info!("{name}: opened"),
+                (false, false) => log::debug!("{name}: closed"),
+            }
+        }
+        self.logged_open = now;
+    }
+
     fn save_session(&mut self, save_as: bool) {
         self.save_session_then(save_as, None);
     }
@@ -1541,6 +1626,7 @@ impl EditorUi {
         let Some(s) = &mut self.session else { return false };
         match s.save_aom(&path) {
             Ok(()) => {
+                log::info!("saved {}", path.display());
                 // saved, so the safety copy is stale
                 s.discard_autosave();
                 self.prefs.remember(path);
@@ -1762,6 +1848,14 @@ impl EditorUi {
     }
 
     fn set_workspace(&mut self, w: Workspace) {
+        match &w {
+            Workspace::Modeling => log::info!("workspace: Modeling"),
+            Workspace::Animation => log::info!("workspace: Animation"),
+            Workspace::Custom(i) => match self.prefs.custom_workspaces.get(*i) {
+                Some((name, _)) => log::info!("workspace: {name}"),
+                None => log::warn!("workspace {i} is gone; using the default layout"),
+            },
+        }
         self.save_layout();
         self.layout = match &w {
             Workspace::Modeling => {
@@ -1793,6 +1887,7 @@ impl EditorUi {
     }
 
     fn reset_workspace(&mut self) {
+        log::info!("workspace layout reset");
         self.layout = match self.workspace {
             Workspace::Modeling | Workspace::Custom(_) => dock::default_workspace(),
             Workspace::Animation => dock::animation_workspace(),
@@ -1998,8 +2093,9 @@ impl EditorUi {
             }
             self.logged_param = self.sel_param;
         }
+        self.log_state_changes();
         if self.tool != self.logged_tool {
-            log::debug!("tool: {}", self.tool.label());
+            log::info!("tool: {}", self.tool.label());
             self.logged_tool = self.tool;
         }
 
@@ -2552,6 +2648,7 @@ impl EditorUi {
                         if ui.add_enabled(any, egui::Button::new(crate::i18n::tr("Clear guide lines"))).clicked() {
                             if let Some(s) = &mut self.session {
                                 s.guides.clear();
+                                log::info!("guide lines cleared");
                                 s.modified = true;
                             }
                             ui.close();
@@ -4052,6 +4149,7 @@ impl EditorUi {
                     let idx = self.prefs.custom_workspaces.len() - 1;
                     self.workspace = Workspace::Custom(idx);
                     self.prefs.save();
+                    log::info!("workspace saved as {name}", name = self.ws_name.trim());
                     self.ws_name.clear();
                     saved = true;
                 }
@@ -4076,7 +4174,8 @@ impl EditorUi {
                     });
                 }
                 if let Some(i) = delete {
-                    self.prefs.custom_workspaces.remove(i);
+                    let (name, _) = self.prefs.custom_workspaces.remove(i);
+                    log::info!("workspace {name} deleted");
                     if self.workspace == Workspace::Custom(i) {
                         self.workspace = Workspace::Modeling;
                         self.layout = self
@@ -4738,6 +4837,7 @@ impl EditorUi {
         }
         if apply && let (Some(d), Some(s)) = (self.anim_details.take(), &mut self.session) {
             let name = if d.name.trim().is_empty() { "motion".to_string() } else { d.name.clone() };
+            log::info!("{name}: {} fps, {:.2} s, looped {}", d.fps, d.duration, d.looped);
             if let Some(ci) = s.current_comp {
                 if let Some(c) = s.compositions.get(ci).cloned() {
                     self.timeline.remember_comp(ci, &c, None);
@@ -5729,6 +5829,7 @@ impl EditorUi {
     }
 
     fn run_key_action(&mut self, ctx: &egui::Context, id: &str) {
+        log::debug!("shortcut: {id}");
         let have = self.session.is_some();
         match id {
             "new-model" => self.new_model = Some(ModelNew::default()),
@@ -5954,6 +6055,11 @@ impl EditorUi {
             s.puppet.set_mesh_visible(mi, on);
         }
         s.dirty = true;
+        if show_all {
+            log::info!("all meshes shown");
+        } else {
+            log::info!("meshes hidden but the {} selected", keep.len());
+        }
     }
 
     /// Edit Form > Flip on the selected mesh(es) or warp, one undo step.
@@ -6179,6 +6285,7 @@ impl EditorUi {
     fn toggle_selected_visibility(&mut self) {
         let meshes = self.selection_meshes();
         if let Some(s) = &mut self.session {
+            log::info!("visibility toggled on {} mesh(es)", meshes.len());
             for mi in meshes {
                 if let Some(f) = s.mesh_shown.get_mut(mi) {
                     *f = !*f;
@@ -11874,6 +11981,9 @@ impl EditorUi {
                     }
                 }
             }
+            if !lines.is_empty() {
+                log::info!("{} guide line(s) added", lines.len());
+            }
             for (vertical, at) in lines {
                 s.guides.push(ayatsuri_format::GuideLine::new(vertical, at.round()));
                 s.modified = true;
@@ -12009,6 +12119,7 @@ impl EditorUi {
                         self.guide_drag = match marker_at(&s.guides, p, on_top) {
                             Some(i) => Some(i),
                             None => {
+                                log::info!("guide line added from the ruler");
                                 s.guides.push(ayatsuri_format::GuideLine::new(
                                     !on_top,
                                     if on_top { canvas_y(p.y) } else { canvas_x(p.x) },

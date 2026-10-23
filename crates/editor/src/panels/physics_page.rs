@@ -480,12 +480,14 @@ impl EditorUi {
         self.phys_page.pl_group = None;
         self.phys_page.tab = 1;
         s.modified = true;
+        log::info!("physics: new playlist playlist{n}");
     }
 
     fn delete_playlist(&mut self) {
         let Some(s) = &mut self.session else { return };
         if self.phys_page.pl_sel < s.playlists.len() {
-            s.playlists.remove(self.phys_page.pl_sel);
+            let gone = s.playlists.remove(self.phys_page.pl_sel);
+            log::info!("physics: deleted playlist {}", gone.name);
             self.phys_page.pl_sel = self.phys_page.pl_sel.min(s.playlists.len().saturating_sub(1));
             self.phys_page.pl_group = None;
             self.phys_page.pl_playing = false;
@@ -1021,6 +1023,11 @@ impl EditorUi {
         if toggle_enable && let Some(s) = &mut self.session {
             s.puppet.set_physics_group_enabled(self.phys_sel, !group_on);
             s.dirty = true;
+            log::info!(
+                "physics: group {} {}",
+                self.phys_sel,
+                if group_on { "turned off" } else { "turned on" }
+            );
         }
         if reset_peaks && let Some(s) = &mut self.session {
             s.puppet.reset_physics_output_peaks();

@@ -549,7 +549,38 @@ enum Edit {
     LayerMoveTo(usize, usize),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// The log line for an edit made with one click. Drags (moving keys or
+/// handles, sliders, trimming) arrive every frame, so they are not logged.
+fn describe(e: &Edit) -> Option<String> {
+    Some(match e {
+        Edit::ToggleKey(_, id) => format!("toggled a key on {id}"),
+        Edit::AddKey(_, id) => format!("keyed {id}"),
+        Edit::SetInterp(interp) => format!("selected keys set to {interp:?}"),
+        Edit::Delete => "deleted the selected keys".into(),
+        Edit::InsertFrames(n) => format!("inserted {n} frame(s)"),
+        Edit::RemoveFrames(n) => format!("removed {n} frame(s)"),
+        Edit::LayerAdd(source) => format!("added a layer of {source:?}"),
+        Edit::LayerRemove(i) => format!("removed layer {i}"),
+        Edit::LayerOrder(i, up) => format!("moved layer {i} {}", if *up { "up" } else { "down" }),
+        Edit::LayerDup(i) => format!("duplicated layer {i}"),
+        Edit::LayerSplit(i) => format!("split layer {i} at the playhead"),
+        Edit::LayerSnap(i, snap) => format!("layer {i}: {snap:?} at the playhead"),
+        Edit::Seek(_)
+        | Edit::Value(..)
+        | Edit::PartValue(..)
+        | Edit::Duration(_)
+        | Edit::WorkArea(_)
+        | Edit::JumpKey(..)
+        | Edit::Move(_)
+        | Edit::Offset(_)
+        | Edit::SetHandle(..)
+        | Edit::LayerSpan(..)
+        | Edit::LayerSet(..)
+        | Edit::LayerMoveTo(..) => return None,
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum LayerSnap {
     StartHere,
     EndHere,
@@ -689,6 +720,7 @@ impl Timeline {
         s.modified = true;
         self.merge = None;
         self.selected.clear();
+        log::info!("timeline undo ({} left)", self.undo.len());
         true
     }
 
@@ -699,6 +731,7 @@ impl Timeline {
         s.modified = true;
         self.merge = None;
         self.selected.clear();
+        log::info!("timeline redo");
         true
     }
 
@@ -3590,6 +3623,9 @@ impl Timeline {
         }
 
         for e in edits {
+            if let Some(words) = describe(&e) {
+                log::info!("timeline: {words}");
+            }
             match view {
                 View::Scene(ai) => self.apply(s, ai, e, tp, fps),
                 View::Comp(ci) => self.apply_comp(s, ci, e, tp, fps),
