@@ -4,6 +4,8 @@ accesskit	0.24.1	MIT OR Apache-2.0	https://github.com/AccessKit/accesskit
 adler2	2.0.1	0BSD OR MIT OR Apache-2.0	https://github.com/oyvindln/adler2
 ahash	0.8.12	MIT OR Apache-2.0	https://github.com/tkaitchuck/ahash
 allocator-api2	0.2.21	MIT OR Apache-2.0	https://github.com/zakarumych/allocator-api2
+alsa	0.11.0	Apache-2.0/MIT	https://github.com/diwic/alsa-rs
+alsa-sys	0.4.0	MIT	https://github.com/diwic/alsa-sys
 android-activity	0.6.1	MIT OR Apache-2.0	https://github.com/rust-mobile/android-activity
 android-properties	0.2.2	MIT	https://github.com/miklelappo/android-properties
 android_system_properties	0.1.6	MIT OR Apache-2.0	https://github.com/nical/android_system_properties
@@ -24,6 +26,7 @@ block2	0.6.2	MIT	https://github.com/madsmtm/objc2
 bumpalo	3.20.3	MIT OR Apache-2.0	https://github.com/fitzgen/bumpalo
 bytemuck	1.25.2	Zlib OR Apache-2.0 OR MIT	https://github.com/Lokathor/bytemuck
 bytemuck_derive	1.12.1	Zlib OR Apache-2.0 OR MIT	https://github.com/Lokathor/bytemuck
+byteorder	1.5.0	Unlicense OR MIT	https://github.com/BurntSushi/byteorder
 byteorder-lite	0.1.0	Unlicense OR MIT	https://github.com/image-rs/byteorder-lite
 bytes	1.12.1	MIT	https://github.com/tokio-rs/bytes
 calloop	0.13.0	MIT	https://github.com/Smithay/calloop
@@ -44,6 +47,9 @@ core-foundation	0.9.4	MIT OR Apache-2.0	https://github.com/servo/core-foundation
 core-foundation-sys	0.8.7	MIT OR Apache-2.0	https://github.com/servo/core-foundation-rs
 core-graphics	0.23.2	MIT OR Apache-2.0	https://github.com/servo/core-foundation-rs
 core-graphics-types	0.1.3	MIT OR Apache-2.0	https://github.com/servo/core-foundation-rs
+core_detect	1.0.0	MIT/Apache-2.0	https://github.com/thomcc/core_detect
+coreaudio-rs	0.14.2	MIT/Apache-2.0	https://github.com/RustAudio/coreaudio-rs.git
+cpal	0.18.2	Apache-2.0	https://github.com/RustAudio/cpal
 cpufeatures	0.2.17	MIT OR Apache-2.0	https://github.com/RustCrypto/utils
 cpufeatures	0.3.1	MIT OR Apache-2.0	https://github.com/RustCrypto/utils
 crc32fast	1.5.2	MIT OR Apache-2.0	https://github.com/srijs/rust-crc32fast
@@ -52,6 +58,7 @@ crunchy	0.2.4	MIT	https://github.com/eira-fransham/crunchy
 crypto-common	0.1.7	MIT OR Apache-2.0	https://github.com/RustCrypto/traits
 crypto-common	0.2.2	MIT OR Apache-2.0	https://github.com/RustCrypto/traits
 cursor-icon	1.2.0	MIT OR Apache-2.0 OR Zlib	https://github.com/rust-windowing/cursor-icon
+dasp_sample	0.11.0	MIT OR Apache-2.0	https://github.com/rustaudio/sample.git
 data-encoding	2.11.1	MIT	https://github.com/ia0/data-encoding
 digest	0.10.7	MIT OR Apache-2.0	https://github.com/RustCrypto/traits
 digest	0.11.3	MIT OR Apache-2.0	https://github.com/RustCrypto/traits
@@ -72,12 +79,15 @@ egui-winit	0.36.2	MIT OR Apache-2.0	https://github.com/emilk/egui/tree/main/crat
 egui_glow	0.36.2	MIT OR Apache-2.0	https://github.com/emilk/egui/tree/main/crates/egui_glow
 either	1.19.0	MIT OR Apache-2.0	https://github.com/rayon-rs/either
 emath	0.36.2	MIT OR Apache-2.0	https://github.com/emilk/egui/tree/main/crates/emath
+encoding_rs	0.8.42	(Apache-2.0 OR MIT) AND BSD-3-Clause	https://github.com/hsivonen/encoding_rs
+enum-primitive-derive	0.3.0	MIT	https://gitlab.com/cardoe/enum-primitive-derive.git
 epaint	0.36.2	MIT OR Apache-2.0	https://github.com/emilk/egui/tree/main/crates/epaint
 epaint_default_fonts	0.36.2	(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0	https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts
 equivalent	1.0.2	Apache-2.0 OR MIT	https://github.com/indexmap-rs/equivalent
 errno	0.3.14	MIT OR Apache-2.0	https://github.com/lambda-fairy/rust-errno
 error-code	3.4.0	BSL-1.0	https://github.com/DoumanAsh/error-code
 euclid	0.22.14	MIT OR Apache-2.0	https://github.com/servo/euclid
+extended	0.1.0	MIT	https://github.com/depp/extended-rs
 fax	0.2.7	MIT	https://github.com/pdf-rs/fax
 fdeflate	0.3.7	MIT OR Apache-2.0	https://github.com/image-rs/fdeflate
 fearless_simd	0.4.1	Apache-2.0 OR MIT	https://github.com/linebender/fearless_simd
@@ -88,7 +98,13 @@ foreign-types	0.5.0	MIT/Apache-2.0	https://github.com/sfackler/foreign-types
 foreign-types-macros	0.2.4	MIT/Apache-2.0	https://github.com/sfackler/foreign-types
 foreign-types-shared	0.3.1	MIT/Apache-2.0	https://github.com/sfackler/foreign-types
 form_urlencoded	1.2.2	MIT OR Apache-2.0	https://github.com/servo/rust-url
+futures	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
+futures-channel	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
 futures-core	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
+futures-executor	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
+futures-io	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
+futures-macro	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
+futures-sink	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
 futures-task	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
 futures-util	0.3.34	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
 generic-array	0.14.7	MIT	https://github.com/fizyk20/generic-array.git
@@ -135,6 +151,7 @@ jni-sys-macros	0.4.1	MIT OR Apache-2.0	https://github.com/jni-rs/jni-sys
 js-sys	0.3.106	MIT OR Apache-2.0	https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys
 khronos-egl	6.0.0	MIT/Apache-2.0	https://github.com/timothee-haudebourg/khronos-egl
 kurbo	0.13.1	Apache-2.0 OR MIT	https://github.com/linebender/kurbo
+lazy_static	1.5.1	MIT OR Apache-2.0	https://github.com/rust-lang-nursery/lazy-static.rs
 libc	0.2.190	MIT OR Apache-2.0	https://github.com/rust-lang/libc
 libloading	0.8.9	ISC	https://github.com/nagisa/rust_libloading/
 libm	0.2.16	MIT	https://github.com/rust-lang/compiler-builtins
@@ -146,11 +163,14 @@ litemap	0.8.3	Unicode-3.0	https://github.com/unicode-org/icu4x
 litrs	1.0.0	MIT OR Apache-2.0	https://github.com/LukasKalbertodt/litrs
 lock_api	0.4.14	MIT OR Apache-2.0	https://github.com/Amanieu/parking_lot
 log	0.4.34	MIT OR Apache-2.0	https://github.com/rust-lang/log
+mach2	0.6.0	BSD-2-Clause OR MIT OR Apache-2.0	https://github.com/JohnTitor/mach2
 memchr	2.8.3	Unlicense OR MIT	https://github.com/BurntSushi/memchr
 memmap2	0.9.11	MIT OR Apache-2.0	https://github.com/RazrFalcon/memmap2-rs
 miniz_oxide	0.8.9	MIT OR Zlib OR Apache-2.0	https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
 miniz_oxide	0.9.1	MIT OR Zlib OR Apache-2.0	https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
+mio	1.2.4	MIT	https://github.com/tokio-rs/mio
 moxcms	0.8.1	BSD-3-Clause OR Apache-2.0	https://github.com/awxkee/moxcms.git
+multiversion_no_op	1.0.0	Apache-2.0 OR MIT	https://github.com/hsivonen/multiversion_no_op
 naga	30.0.1	MIT OR Apache-2.0	https://github.com/gfx-rs/wgpu
 naga-types	30.0.1	MIT OR Apache-2.0	https://github.com/gfx-rs/wgpu
 ndk	0.9.0	MIT OR Apache-2.0	https://github.com/rust-mobile/ndk
@@ -158,6 +178,10 @@ ndk-context	0.1.1	MIT OR Apache-2.0	https://github.com/rust-windowing/android-nd
 ndk-sys	0.6.0+11769913	MIT OR Apache-2.0	https://github.com/rust-mobile/ndk
 nix	0.31.3	MIT	https://github.com/nix-rust/nix
 nohash-hasher	0.2.0	Apache-2.0 OR MIT	https://github.com/paritytech/nohash-hasher
+num-bigint	0.4.8	MIT OR Apache-2.0	https://github.com/rust-num/num-bigint
+num-derive	0.4.2	MIT OR Apache-2.0	https://github.com/rust-num/num-derive
+num-integer	0.1.47	MIT OR Apache-2.0	https://github.com/rust-num/num-integer
+num-rational	0.4.2	MIT OR Apache-2.0	https://github.com/rust-num/num-rational
 num-traits	0.2.19	MIT OR Apache-2.0	https://github.com/rust-num/num-traits
 num_enum	0.7.6	BSD-3-Clause OR MIT OR Apache-2.0	https://github.com/illicitonion/num_enum
 num_enum_derive	0.7.6	BSD-3-Clause OR MIT OR Apache-2.0	https://github.com/illicitonion/num_enum
@@ -166,8 +190,12 @@ objc2	0.5.3	MIT	https://github.com/madsmtm/objc2
 objc2	0.6.5	MIT	https://github.com/madsmtm/objc2
 objc2-app-kit	0.2.2	MIT	https://github.com/madsmtm/objc2
 objc2-app-kit	0.3.2	Zlib OR Apache-2.0 OR MIT	https://github.com/madsmtm/objc2
+objc2-audio-toolbox	0.3.2	Zlib OR Apache-2.0 OR MIT	https://github.com/madsmtm/objc2
+objc2-avf-audio	0.3.2	Zlib OR Apache-2.0 OR MIT	https://github.com/madsmtm/objc2
 objc2-cloud-kit	0.2.2	MIT	https://github.com/madsmtm/objc2
 objc2-contacts	0.2.2	MIT	https://github.com/madsmtm/objc2
+objc2-core-audio	0.3.2	Zlib OR Apache-2.0 OR MIT	https://github.com/madsmtm/objc2
+objc2-core-audio-types	0.3.2	Zlib OR Apache-2.0 OR MIT	https://github.com/madsmtm/objc2
 objc2-core-data	0.2.2	MIT	https://github.com/madsmtm/objc2
 objc2-core-foundation	0.3.2	Zlib OR Apache-2.0 OR MIT	https://github.com/madsmtm/objc2
 objc2-core-graphics	0.3.2	Zlib OR Apache-2.0 OR MIT	https://github.com/madsmtm/objc2
@@ -211,6 +239,7 @@ proc-macro-crate	3.5.0	MIT OR Apache-2.0	https://github.com/bkchr/proc-macro-cra
 proc-macro2	1.0.107	MIT OR Apache-2.0	https://github.com/dtolnay/proc-macro2
 profiling	1.0.18	MIT OR Apache-2.0	https://github.com/aclysma/profiling
 psd	0.3.5	MIT/Apache-2.0	https://github.com/chinedufn/psd
+pulseaudio	0.3.1	MIT	https://github.com/colinmarc/pulseaudio-rs
 pxfm	0.1.30	BSD-3-Clause OR Apache-2.0	https://github.com/awxkee/pxfm
 quick-error	2.0.1	MIT/Apache-2.0	http://github.com/tailhook/quick-error
 quick-xml	0.41.0	MIT	https://github.com/tafia/quick-xml
@@ -231,6 +260,7 @@ rfd	0.17.2	MIT	https://github.com/PolyMeilex/rfd
 ring	0.17.14	Apache-2.0 AND ISC	https://github.com/briansmith/ring
 rmp	0.8.15	MIT	https://github.com/3Hren/msgpack-rust
 rmp-serde	1.3.1	MIT	https://github.com/3Hren/msgpack-rust
+rodio	0.23.0	MIT OR Apache-2.0	https://github.com/RustAudio/rodio
 rustc-hash	1.1.0	Apache-2.0/MIT	https://github.com/rust-lang-nursery/rustc-hash
 rustc-hash	2.1.3	Apache-2.0 OR MIT	https://github.com/rust-lang/rustc-hash
 rustix	0.38.44	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	https://github.com/bytecodealliance/rustix
@@ -265,6 +295,16 @@ spirv	0.4.0+sdk-1.4.341.0	Apache-2.0	https://github.com/gfx-rs/rspirv
 stable_deref_trait	1.2.1	MIT OR Apache-2.0	https://github.com/storyyeller/stable_deref_trait
 static_assertions	1.1.0	MIT OR Apache-2.0	https://github.com/nvzqz/static-assertions-rs
 subtle	2.6.1	BSD-3-Clause	https://github.com/dalek-cryptography/subtle
+symphonia	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-bundle-flac	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-bundle-mp3	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-codec-pcm	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-codec-vorbis	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-core	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-format-ogg	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-format-riff	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-metadata	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
+symphonia-utils-xiph	0.5.5	MPL-2.0	https://github.com/pdeljanov/Symphonia
 syn	2.0.119	MIT OR Apache-2.0	https://github.com/dtolnay/syn
 syn	3.0.7	MIT OR Apache-2.0	https://github.com/dtolnay/syn
 synstructure	0.14.0	MIT	https://github.com/mystor/synstructure
