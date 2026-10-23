@@ -9924,6 +9924,8 @@ impl EditorUi {
                             let k_unit = 1.0 / (scale * c.pixels_per_unit);
                             let at = d.lattice.net.get(d.idx).copied().unwrap_or((0.0, 0.0));
                             let sd = d.ptr - d.start;
+                            let sd =
+                                if inp.shift { crate::point_edit::axis_locked(sd) } else { sd };
                             let (dx, dy) = parent_delta(
                                 &s.puppet,
                                 parent,
@@ -11014,6 +11016,12 @@ impl EditorUi {
             {
                 let now = to_px(p);
                 let (dx, dy) = (now[0] - g.start[0], now[1] - g.start[1]);
+                let (dx, dy) = if inp.shift {
+                    let d = crate::point_edit::axis_locked(vec2(dx, dy));
+                    (d.x, d.y)
+                } else {
+                    (dx, dy)
+                };
                 let [x, y, ix, iy, ox, oy] = g.orig;
                 let moved = match g.part {
                     0 => {

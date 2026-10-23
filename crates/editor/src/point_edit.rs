@@ -119,6 +119,12 @@ pub fn straight(d: Vec2) -> Vec2 {
     dir * d.dot(dir)
 }
 
+/// Shift-drag on a Bezier point or handle: the move keeps to whichever of
+/// horizontal or vertical it is nearer, as in drawing apps.
+pub fn axis_locked(d: Vec2) -> Vec2 {
+    if d.x.abs() >= d.y.abs() { Vec2::new(d.x, 0.0) } else { Vec2::new(0.0, d.y) }
+}
+
 pub fn xform(d: &PtDrag, shift: bool, alt: bool) -> Xform {
     let id = Xform { o: d.bbox.center(), m: [1.0, 0.0, 0.0, 1.0], t: Vec2::ZERO };
     match d.grab {
@@ -678,6 +684,13 @@ pub fn point_in_polygon(p: Pos2, poly: &[Pos2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shift_keeps_a_handle_level_or_upright() {
+        assert_eq!(axis_locked(Vec2::new(10.0, 3.0)), Vec2::new(10.0, 0.0));
+        assert_eq!(axis_locked(Vec2::new(-2.0, 7.0)), Vec2::new(0.0, 7.0));
+        assert_eq!(axis_locked(Vec2::ZERO), Vec2::ZERO);
+    }
 
     fn drag(grab: Grab, start: Pos2, ptr: Pos2) -> PtDrag {
         PtDrag {
