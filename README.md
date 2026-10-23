@@ -198,7 +198,7 @@ Save often, keep backups of models you care about, and please
 
 Not built yet:
 
-- model templates and blend shapes (blend shapes are next, in 0.5.7);
+- model templates and blend shapes (blend shapes are next, in 0.6.0);
 - language bindings over the C ABI (the header is there; Unity, Godot and
   Python wrappers are not yet).
 

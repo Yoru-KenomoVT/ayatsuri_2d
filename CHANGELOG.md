@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.7 beta (2026-10-23)
+
+Fixes and requests from @seoriboi's feedback in #29.
+
+### Added
+
+- **Deformer names apart from their IDs** (#35), as in Cubism. Rename
+  Deformer (right-click a deformer) edits both after it is made: the name
+  is free text shown in the palette, the ID is what exports and the
+  runtime use and must be unique. The inspector lists both. Names are
+  saved in `.aom` (older files show the IDs, as before) and come in and
+  go out with `.cmo3` projects.
+
+### Fixed
+
+- **Settings are kept on Windows** (#31). The editor looked for its
+  settings folder only through `HOME` or the XDG folders, which Windows
+  does not set, so nothing set in Settings (or anywhere else that is
+  remembered: workspaces, recent files, export folders) survived a
+  restart, and no log file was written. Settings now live in
+  `%APPDATA%\ayatsuri2d`, the log and thumbnails in
+  `%LOCALAPPDATA%\ayatsuri2d`. Linux and macOS keep their folders.
+- **Picking a parameter keeps the selected deformer** (#32), mesh or
+  part, so keys can be made on one parameter after another without
+  selecting the object again. Delete leaves a selected mesh alone until
+  the next click outside the parameter list.
+
+### Changed
+
+- **Double-click a row in the Parts or Deformer palette to deselect**
+  (#30): nothing stays selected, so no key is made on an object by
+  mistake. Selected rows now have an accent bar down their left edge,
+  one row or many.
+- **Shift keeps a Bezier point or handle level or upright** while it is
+  dragged (#33): in the graph editor, on ArtPaths and on a warp
+  deformer's Bezier lattice.
+
 ## 0.5.6 beta (2026-10-23)
 
 ### Added
