@@ -35,6 +35,7 @@ pub struct Cmo3Export<'a> {
     pub param_names: &'a [String],
     pub part_names: &'a [String],
     pub mesh_names: &'a [String],
+    pub deformer_names: &'a [String],
     /// Parameter folders in palette order: name and member indices.
     pub param_groups: &'a [(String, Vec<u32>)],
 }
@@ -1077,7 +1078,8 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
             DeformerKind::Rotation(r) => (&r.opacities, r.angles.len().max(1)),
         };
         let (grid, form_guids) = w.grid(&axes, &param_guids, slots);
-        let ctrl = w.controllable(&d.id, d.visible, Some(part_guid(d.parent_part)), grid, &[]);
+        let name = name_or(x.deformer_names, i, &d.id);
+        let ctrl = w.controllable(&name, d.visible, Some(part_guid(d.parent_part)), grid, &[]);
         let dsrc = w.t.obj("ACDeformerSource");
         w.t.set(dsrc, "super", ctrl);
         if let Some(&g) = deformer_guids.get(i) {

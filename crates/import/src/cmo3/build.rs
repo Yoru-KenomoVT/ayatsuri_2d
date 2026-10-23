@@ -43,6 +43,8 @@ pub struct Cmo3 {
     pub param_names: Vec<String>,
     /// Parameter folders in palette order: name and member indices.
     pub param_groups: Vec<(String, Vec<u32>)>,
+    /// Deformer names, parallel to the model's deformers.
+    pub deformer_names: Vec<String>,
     /// Meshes within a pixel of the project at rest, and meshes checked.
     pub within: (usize, usize),
     /// The meshes that landed elsewhere, worst first: pixels off and id.
@@ -453,6 +455,7 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
         },
         param_names,
         param_groups,
+        deformer_names: ex.deformers.iter().map(|d| d.name.clone()).collect(),
         within: (within, checked),
         off: worst,
     })

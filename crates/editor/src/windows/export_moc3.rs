@@ -289,6 +289,7 @@ impl EditorUi {
             textures: &s.texture_pngs,
             param_names: &s.param_names,
             part_names: &s.part_names,
+            deformer_names: &s.deformer_names,
             mesh_names: &s.mesh_names,
             param_groups: &param_groups,
         });

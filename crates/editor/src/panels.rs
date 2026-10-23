@@ -296,7 +296,9 @@ pub struct EditorUi {
     /// Set by "Reset Toolbar Position": put the floating bar back next frame.
     toolbar_reset: bool,
     /// The Rename Deformer dialog: which deformer and the name typed.
-    def_rename: Option<(usize, String)>,
+    /// The Rename Deformer dialog: deformer, name and ID being typed, and
+    /// whether the last ID was refused.
+    def_rename: Option<(usize, String, String, bool)>,
     /// Undo depth at the start of the frame; see `on_crash`.
     frame_undo_depth: usize,
     /// When the last frame began, and the real time since the one before:
@@ -7598,7 +7600,7 @@ impl EditorUi {
                     ui.ctx().request_repaint();
                 }
             }
-            for (i, dep, id, is_warp, has_kids) in rows {
+            for (i, dep, _, is_warp, has_kids) in rows {
                 let (rect, resp) = ui
                     .allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click_and_drag());
                 if self.selected == Some(Sel::Deformer(i)) {
@@ -7720,7 +7722,7 @@ impl EditorUi {
                 ui.painter().text(
                     pos2(x + 34.0, rect.center().y),
                     Align2::LEFT_CENTER,
-                    truncate(&id, 22),
+                    truncate(&s.deformer_name(i), 22),
                     FontId::proportional(11.5),
                     theme::pal().text,
                 );
@@ -7999,15 +8001,7 @@ impl EditorUi {
                 self.pending_create = Some((warp, None));
             }
             DefCmd::CreateForSelection(warp) => self.pending_create = Some((warp, None)),
-            DefCmd::Rename(i) => {
-                let id = self
-                    .session
-                    .as_ref()
-                    .and_then(|s| s.puppet.model().deformers.get(i))
-                    .map(|d| d.id.clone())
-                    .unwrap_or_default();
-                self.def_rename = Some((i, id));
-            }
+            DefCmd::Rename(i) => self.open_def_rename(i),
             DefCmd::Reparent(child, parent) => {
                 let Some(s) = &mut self.session else { return };
                 // the palette's per-row state is by index, and a re-parent
@@ -8094,29 +8088,67 @@ impl EditorUi {
         }
     }
 
+    /// Open Rename Deformer on a deformer's current name and ID.
+    fn open_def_rename(&mut self, i: usize) {
+        let Some(s) = &self.session else { return };
+        let Some(d) = s.puppet.model().deformers.get(i) else { return };
+        let name = s.deformer_names.get(i).cloned().unwrap_or_default();
+        self.def_rename = Some((i, name, d.id.clone(), false));
+    }
+
+    /// Rename Deformer: its name (shown in the palette, free text, as in
+    /// Cubism) and its ID (what exports and the runtime use: unique and
+    /// not empty), both editable after the deformer was made.
     fn def_rename_window(&mut self, ctx: &egui::Context) {
-        let Some((i, name)) = &mut self.def_rename else { return };
+        let Some((i, name, id, refused)) = &mut self.def_rename else { return };
         let (i, mut open, mut ok) = (*i, true, false);
         crate::windows::Dialog::new(crate::i18n::tr("Rename Deformer")).open(&mut open).show(
             ctx,
             |ui| {
-                let edit = ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
-                if !edit.has_focus() && !edit.lost_focus() {
-                    edit.request_focus();
+                crate::windows::form(ui, "def-rename", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    let edit = ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
+                    // the name takes the keyboard when the dialog opens
+                    if ui.memory(|m| m.focused().is_none()) {
+                        edit.request_focus();
+                    }
+                    ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("ID"));
+                    let edit = ui.add(egui::TextEdit::singleline(id).desired_width(240.0));
+                    ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
+                    ui.end_row();
+                });
+                if *refused {
+                    ui.colored_label(
+                        theme::pal().rotation_red,
+                        crate::i18n::tr("That ID is empty or already used."),
+                    );
                 }
-                ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
                 ui.add_space(6.0);
                 ok |= ui.button(crate::i18n::tr("Rename")).clicked();
             },
         );
         if ok {
-            let name = name.clone();
-            if let Some(s) = &mut self.session {
-                if s.edit(|m| ayatsuri_core::edit::rename_deformer(m, i, &name)) {
-                    log::info!("deformer {i} renamed to {}", name.trim());
-                } else {
-                    log::warn!("rename refused: the name is empty or already used");
+            let (name, id) = (name.trim().to_string(), id.trim().to_string());
+            let Some(s) = &mut self.session else { return };
+            let same_id = s.puppet.model().deformers.get(i).is_some_and(|d| d.id == id);
+            if !same_id && !s.edit(|m| ayatsuri_core::edit::rename_deformer(m, i, &id)) {
+                log::warn!("deformer {i}: the ID {id:?} is empty or already used");
+                if let Some(r) = &mut self.def_rename {
+                    r.3 = true;
                 }
+                return;
+            }
+            if !same_id {
+                log::info!("deformer {i}: ID changed to {id}");
+            }
+            if s.deformer_names.get(i).is_some_and(|n| *n != name) {
+                if let Some(n) = s.deformer_names.get_mut(i) {
+                    *n = name.clone();
+                }
+                s.modified = true;
+                log::info!("deformer {i}: renamed to {name:?}");
             }
             self.def_rename = None;
         } else if !open {
@@ -8441,7 +8473,9 @@ impl EditorUi {
                 }
             }
             Some(Sel::Deformer(i)) => {
+                let name = s.deformer_names.get(i).cloned().unwrap_or_default();
                 let Some(d) = s.puppet.model().deformers.get(i) else { return };
+                row(ui, crate::i18n::tr("Name"), if name.is_empty() { "-".into() } else { name });
                 row(ui, crate::i18n::tr("ID"), d.id.clone());
                 row(
                     ui,

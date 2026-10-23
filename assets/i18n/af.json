@@ -1288,5 +1288,6 @@
   "Guide Line Settings…": "Gidslyninstellings…",
   "Add animation layer": "Voeg animasielaag by",
   "No animations yet": "Nog geen animasies nie",
-  "Add a .motion3.json as an animation": "Voeg 'n .motion3.json as animasie by"
+  "Add a .motion3.json as an animation": "Voeg 'n .motion3.json as animasie by",
+  "That ID is empty or already used.": "Daardie ID is leeg of reeds in gebruik."
 }

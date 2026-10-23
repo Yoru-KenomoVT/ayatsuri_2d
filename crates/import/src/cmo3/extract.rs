@@ -93,6 +93,8 @@ pub enum DeformerKind {
 pub struct Deformer {
     pub uuid: String,
     pub id: String,
+    /// The name the rigger gave it (Cubism's localName), apart from the ID.
+    pub name: String,
     pub parent: Option<String>,
     pub kind: DeformerKind,
     pub bindings: Vec<Binding>,
@@ -442,7 +444,16 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
             } else {
                 DeformerKind::Rotation
             };
-            deformers.push(Deformer { uuid, id, parent: parent_uuid(dsrc), kind, bindings, forms });
+            let name = doc.str_field(ctrl, "localName");
+            deformers.push(Deformer {
+                uuid,
+                id,
+                name,
+                parent: parent_uuid(dsrc),
+                kind,
+                bindings,
+                forms,
+            });
         }
     }
     // parents before children
