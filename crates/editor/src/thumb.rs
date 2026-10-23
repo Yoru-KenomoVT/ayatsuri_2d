@@ -9,10 +9,7 @@ use ayatsuri_format::model::flags;
 use ayatsuri_render::TexData;
 
 pub fn cache_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(base.join("ayatsuri2d").join("thumbs"))
+    Some(ayatsuri_update::cache_dir()?.join("thumbs"))
 }
 
 pub fn cache_path(source: &Path) -> Option<PathBuf> {

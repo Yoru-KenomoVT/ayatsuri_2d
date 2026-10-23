@@ -178,11 +178,41 @@ pub fn fetch_with_assets(current: &str) -> Result<(Latest, Vec<install::Asset>),
 
 /// The folder the editor keeps its preferences in.
 pub fn config_dir() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
-        .map(|b| b.join("ayatsuri2d"))
+    app_dir("XDG_CONFIG_HOME", ".config", "APPDATA")
+}
+
+/// The folder for the log: kept, but not settings.
+pub fn state_dir() -> Option<PathBuf> {
+    app_dir("XDG_STATE_HOME", ".local/state", "LOCALAPPDATA")
+}
+
+/// The folder for what can be made again, such as thumbnails.
+pub fn cache_dir() -> Option<PathBuf> {
+    app_dir("XDG_CACHE_HOME", ".cache", "LOCALAPPDATA")
+}
+
+/// Our folder under one of the user's base folders. Windows sets neither the
+/// XDG variables nor HOME, so it takes its own folder first: without it
+/// settings were never saved and no log was written there.
+fn app_dir(xdg: &str, under_home: &str, windows: &str) -> Option<PathBuf> {
+    app_dir_in(|k| std::env::var_os(k), cfg!(windows), xdg, under_home, windows)
+}
+
+fn app_dir_in(
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+    on_windows: bool,
+    xdg: &str,
+    under_home: &str,
+    windows: &str,
+) -> Option<PathBuf> {
+    let windows = || var(windows).map(PathBuf::from);
+    let unix = || {
+        var(xdg)
+            .map(PathBuf::from)
+            .or_else(|| var("HOME").map(|h| PathBuf::from(h).join(under_home)))
+    };
+    let base = if on_windows { windows().or_else(unix) } else { unix().or_else(windows) };
+    base.map(|b| b.join("ayatsuri2d"))
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -251,5 +281,47 @@ mod live {
         let latest = super::fetch("0.0.0").unwrap();
         assert!(latest.newer_than("0.0.0"), "{latest:?}");
         println!("{latest:?}");
+    }
+}
+
+#[cfg(test)]
+mod dir_tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+        let pairs: Vec<(String, String)> =
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        move |k| pairs.iter().find(|(n, _)| n == k).map(|(_, v)| v.into())
+    }
+
+    #[test]
+    fn windows_without_home_still_has_folders() {
+        // what a Windows user has: no HOME, no XDG
+        let v = env(&[("APPDATA", r"C:\Users\a\AppData\Roaming"), ("LOCALAPPDATA", r"C:\L")]);
+        let config = app_dir_in(&v, true, "XDG_CONFIG_HOME", ".config", "APPDATA");
+        assert_eq!(config, Some(PathBuf::from(r"C:\Users\a\AppData\Roaming").join("ayatsuri2d")));
+        let state = app_dir_in(&v, true, "XDG_STATE_HOME", ".local/state", "LOCALAPPDATA");
+        assert_eq!(state, Some(PathBuf::from(r"C:\L").join("ayatsuri2d")));
+    }
+
+    #[test]
+    fn windows_prefers_its_own_folder_over_home() {
+        let v = env(&[("HOME", "/h"), ("APPDATA", "/roaming")]);
+        let config = app_dir_in(&v, true, "XDG_CONFIG_HOME", ".config", "APPDATA");
+        assert_eq!(config, Some(PathBuf::from("/roaming/ayatsuri2d")));
+    }
+
+    #[test]
+    fn unix_keeps_xdg_then_home() {
+        let v = env(&[("HOME", "/h")]);
+        assert_eq!(
+            app_dir_in(&v, false, "XDG_CONFIG_HOME", ".config", "APPDATA"),
+            Some(PathBuf::from("/h/.config/ayatsuri2d"))
+        );
+        let v = env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/x")]);
+        assert_eq!(
+            app_dir_in(&v, false, "XDG_CONFIG_HOME", ".config", "APPDATA"),
+            Some(PathBuf::from("/x/ayatsuri2d"))
+        );
     }
 }

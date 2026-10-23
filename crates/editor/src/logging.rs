@@ -87,10 +87,7 @@ impl Log for EditorLogger {
 }
 
 pub fn log_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(base.join("ayatsuri2d").join("ayatsuri.log"))
+    Some(ayatsuri_update::state_dir()?.join("ayatsuri.log"))
 }
 
 pub fn init(level: LevelFilter) {

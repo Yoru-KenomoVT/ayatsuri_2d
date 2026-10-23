@@ -98,18 +98,10 @@ impl log::Log for LauncherLog {
 }
 
 fn init_log() {
-    let file = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .map(|b| b.join("ayatsuri2d"))
-        .and_then(|dir| {
-            std::fs::create_dir_all(&dir).ok()?;
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("ayatsuri.log"))
-                .ok()
-        });
+    let file = ayatsuri_update::state_dir().and_then(|dir| {
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::OpenOptions::new().create(true).append(true).open(dir.join("ayatsuri.log")).ok()
+    });
     let logger = Box::leak(Box::new(LauncherLog(std::sync::Mutex::new(file))));
     if log::set_logger(logger).is_ok() {
         log::set_max_level(log::LevelFilter::Info);
@@ -220,10 +212,8 @@ impl Launcher {
 
 /// The editor's saved preferences, or null when missing or unreadable.
 fn editor_prefs() -> serde_json::Value {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .map(|b| b.join("ayatsuri2d").join("preferences.json"))
+    ayatsuri_update::config_dir()
+        .map(|d| d.join("preferences.json"))
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
