@@ -340,6 +340,10 @@
   presets are now a dropdown, which reads Custom once a number is edited.
 - **Mirror Edit** can be switched from Mesh Edit's own panel, and the main
   tool strip greys out in Mesh Edit to point at that panel.
+- **Faster playback.** A deformer or mesh whose keyforms blend the same
+  as last frame, under a parent that did not move, keeps its points
+  instead of making them again, and warp deformers carry points faster.
+  What is drawn is the same to the bit.
 - Every new string of this release is in all six languages.
 
 ### Fixed
