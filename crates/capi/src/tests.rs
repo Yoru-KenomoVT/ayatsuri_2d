@@ -580,11 +580,14 @@ fn set_update_and_draw_on_three_threads() {
     };
     let mut moved = false;
     let mut updates = 0;
-    while updates < 200 || sets.load(Relaxed) < 200 || reads.load(Relaxed) < 200 {
+    // run until every thread has had its turn and a tracked value has come
+    // through; on a busy machine that can take more than the first 200
+    while updates < 200 || sets.load(Relaxed) < 200 || reads.load(Relaxed) < 200 || !moved {
         assert_eq!(ay2d_update(m, 1.0 / 60.0), Status::Ok);
         let mut p = [0.0f32; 2];
-        ay2d_get_parameters(m, p.as_mut_ptr(), 2);
-        moved |= p[0] > 0.0;
+        if ay2d_get_parameters(m, p.as_mut_ptr(), 2) == Status::Ok {
+            moved |= p[0] > 0.0;
+        }
         updates += 1;
         assert!(updates < 2_000_000, "the other threads never ran");
     }
