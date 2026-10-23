@@ -91,7 +91,7 @@
   The scene row's bar drags to change the length. S keys the selected
   parameter, Alt with an arrow nudges the selected keys a frame (ten
   with Shift), Delete removes them and Ctrl+Alt+A takes them all; every
-  Timeline key sits in Settings > Shortcuts > Animation and can be
+  Timeline key sits in Settings > Keyboard, under Animation, and can be
   rebound, and none of the defaults clashes with an editor binding. `Animation > Edit Animation Details…` edits the name,
   frame rate, length in seconds and loop, and inserts or removes frames
   at the playhead. Space (a tap, not a pan) or Enter plays and pauses.
@@ -246,7 +246,7 @@
   image exports remember their folder, and every file dialog opens
   there.
 - **Export Model** replaces Export Image and Export as moc3: one window
-  with moc3, cmo3 (coming) and Image tabs. Image exports PNG or JPEG at
+  with moc3, cmo3 and Image tabs. Image exports PNG or JPEG at
   any width, transparent or on white, of the model as it stands.
 - **Project** replaces Model Info, and New Model is New Project. Both
   carry a **Record timelapse** switch saved with the project; Settings
@@ -310,9 +310,54 @@
 - **Shift+drag moves straight**, horizontally, vertically or at 45°, for
   mesh points, warp points and boxes, and the Temporary Deform Tool's
   points (#15).
+- **ffmpeg installs itself**: MP4, WebM and MOV no longer need ffmpeg on
+  PATH. When none is found, the editor asks at start and the Render window
+  offers **Install ffmpeg**; the Windows installer and the Linux
+  `install.sh` offer it too. It comes from its builders (BtbN's GitHub
+  builds on Windows, martin-riedl.de on Linux and macOS), is checked
+  against their published checksum, and stays with your settings: no admin
+  rights, nothing added to PATH. An ffmpeg already on PATH is used first;
+  **Offer ffmpeg** under Settings > Updates turns the question off.
+- **Render sound**: the Render window's player plays a composition's
+  sound, and a **Sound** row sets whether the mix goes into the video and
+  its bitrate (AAC for MP4, Opus for WebM, 96 to 320 kbps; MOV keeps it
+  uncompressed).
+- **Downloads show their progress**: the ffmpeg download and Update now
+  draw the Render queue's bar, with megabytes, time left and a percentage.
+- **Copy, cut and paste art meshes**: Ctrl+C, Ctrl+X and Ctrl+V (and
+  Edit > Cut, Copy, Paste outside Mesh Edit) carry the selected meshes with
+  every keyform. A copy lands right above its original as "<name> copy",
+  and a cut and paste is a move. They paste into another project too:
+  parameters are matched by ID (a missing one is created with the same
+  range), parents by ID, and the artwork comes along as a texture page of
+  its own.
+- **Reorder parameters by dragging**: drag a parameter's name onto another
+  to put it before it, onto a folder header to move it in, or below the
+  last row to send it to the end; drag a folder by its header. Parameters
+  picked with Ctrl move together.
+- **Face standard** in Automatic mesh: a face laid out the way riggers
+  build one, two rings along the edge and two hubs on the centre line. The
+  presets are now a dropdown, which reads Custom once a number is edited.
+- **Mirror Edit** can be switched from Mesh Edit's own panel, and the main
+  tool strip greys out in Mesh Edit to point at that panel.
 - Every new string of this release is in all six languages.
 
 ### Fixed
+
+- A right-click on a parameter slider, the 2D pad or a mixer fader no
+  longer moves it, so Reflect, Delete Keyform and Motion Mirroring act on
+  the key the slider was on. Delete Keyform says why when it finds nothing.
+- Motion Mirroring pairs each point of a mesh with the point across its
+  middle, so a turn mirrors into a true mirror image.
+- API > API Settings… opens the API tab and File > Keyboard Shortcuts…
+  the Keyboard tab; both opened the tab before it.
+- Ctrl+V pastes points copied in Mesh Edit; it did nothing, since the
+  system clipboard was empty.
+- Interface wording: the Keyboard tab names New project and Export model as
+  the menus do and shows [ and ] for the bracket keys; the Guide Line menus
+  and the workspace dropdown are in Title Case; Settings > Audio's heading
+  is in capitals; and the Timeline, Render window and File menu say
+  animation where they said scene.
 
 - A middle-button drag only pans the view; it used to move the mesh or
   points under the pointer as well.
