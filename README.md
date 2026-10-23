@@ -191,7 +191,7 @@ Save often, keep backups of models you care about, and please
 
 Not built yet:
 
-- skinning, model templates and the temporary deform tool;
+- model templates and blend shapes (blend shapes are next, in 0.5.7);
 - language bindings over the C ABI (the header is there; Unity, Godot and
   Python wrappers are not yet).
 
@@ -321,6 +321,12 @@ The technical documents live in this repo:
 | [`docs/physics.md`](docs/physics.md) | how hair, cloth and accessories move |
 | [`docs/integration.md`](docs/integration.md) | embedding the runtime, and the plugin protocol |
 | [`docs/provenance.md`](docs/provenance.md) | where the format knowledge came from |
+
+## Contributing
+
+Bug reports, ideas, test results and translations are as welcome as code.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how, and the
+[code of conduct](CODE_OF_CONDUCT.md) for how we treat each other.
 
 ## Support the project
 
