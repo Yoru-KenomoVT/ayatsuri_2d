@@ -191,27 +191,37 @@ fn extrap_cell(
 /// Map points through a warp grid. `pos` is the deformed control grid
 /// ((rows+1) x (cols+1) points, row-major, in the parent's space); inputs are
 /// normalized grid coordinates. In place: `io` holds xy pairs.
+///
+/// The hot path, a point inside the grid, reads its cell as two 2-point
+/// slices of the grid (one bounds check per row instead of one per float),
+/// so the loop stays branch-light; a cell that would read past the grid,
+/// which load-time validation makes unreachable, falls back to the checked
+/// reads. Outside the grid nothing changed.
 pub fn warp_transform(pos: &[f32], rows: usize, cols: usize, quad: bool, io: &mut [f32]) {
     let stride = cols.saturating_add(1);
     let (fr, fc) = (rows as f32, cols as f32);
+    let (grid, _) = pos.as_chunks::<2>();
+    let (pts, _) = io.as_chunks_mut::<2>();
+    let (last_col, last_row) = (cols.saturating_sub(1), rows.saturating_sub(1));
     let mut basis: Option<Basis> = None;
-
-    let count = io.len() / 2;
-    for i in 0..count {
-        let at = i * 2;
-        let u = io.get(at).copied().unwrap_or(0.0);
-        let v = io.get(at + 1).copied().unwrap_or(0.0);
+    for p in pts {
+        let [u, v] = *p;
         let (gu, gv) = (u * fc, v * fr);
-
         let r = if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
-            let cu = (gu as usize).min(cols.saturating_sub(1));
-            let cv = (gv as usize).min(rows.saturating_sub(1));
+            let cu = (gu as usize).min(last_col);
+            let cv = (gv as usize).min(last_row);
             let (fu, fv) = (gu - cu as f32, gv - cv as f32);
             let bi = cv.saturating_mul(stride).saturating_add(cu);
-            let p00 = load(pos, bi);
-            let p10 = load(pos, bi + 1);
-            let p01 = load(pos, bi + stride);
-            let p11 = load(pos, bi + stride + 1);
+            let below = bi.saturating_add(stride);
+            let (p00, p10, p01, p11) = match (
+                grid.get(bi..bi.saturating_add(2)),
+                grid.get(below..below.saturating_add(2)),
+            ) {
+                (Some(&[a, b]), Some(&[c, d])) => {
+                    (v2(a[0], a[1]), v2(b[0], b[1]), v2(c[0], c[1]), v2(d[0], d[1]))
+                }
+                _ => (load(pos, bi), load(pos, bi + 1), load(pos, below), load(pos, below + 1)),
+            };
             if quad {
                 bilinear(p00, p10, p01, p11, fu, fv)
             } else {
@@ -228,12 +238,7 @@ pub fn warp_transform(pos: &[f32], rows: usize, cols: usize, quad: bool, io: &mu
                 )
             }
         };
-        if let Some(s) = io.get_mut(at) {
-            *s = r.x;
-        }
-        if let Some(s) = io.get_mut(at + 1) {
-            *s = r.y;
-        }
+        *p = [r.x, r.y];
     }
 }
 
@@ -284,6 +289,85 @@ pub fn signed_angle(a: Vec2, b: Vec2) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The previous implementation, kept to check the fast path against.
+    /// Map points through a warp grid. `pos` is the deformed control grid
+    /// ((rows+1) x (cols+1) points, row-major, in the parent's space); inputs are
+    /// normalized grid coordinates. In place: `io` holds xy pairs.
+    fn warp_transform_reference(pos: &[f32], rows: usize, cols: usize, quad: bool, io: &mut [f32]) {
+        let stride = cols.saturating_add(1);
+        let (fr, fc) = (rows as f32, cols as f32);
+        let mut basis: Option<Basis> = None;
+
+        let count = io.len() / 2;
+        for i in 0..count {
+            let at = i * 2;
+            let u = io.get(at).copied().unwrap_or(0.0);
+            let v = io.get(at + 1).copied().unwrap_or(0.0);
+            let (gu, gv) = (u * fc, v * fr);
+
+            let r = if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+                let cu = (gu as usize).min(cols.saturating_sub(1));
+                let cv = (gv as usize).min(rows.saturating_sub(1));
+                let (fu, fv) = (gu - cu as f32, gv - cv as f32);
+                let bi = cv.saturating_mul(stride).saturating_add(cu);
+                let p00 = load(pos, bi);
+                let p10 = load(pos, bi + 1);
+                let p01 = load(pos, bi + stride);
+                let p11 = load(pos, bi + stride + 1);
+                if quad {
+                    bilinear(p00, p10, p01, p11, fu, fv)
+                } else {
+                    interp_triangle(&Cell { fu, fv, p00, p10, p01, p11 })
+                }
+            } else {
+                let b = basis.get_or_insert_with(|| extrap_basis(pos, rows, cols, stride));
+                if u > -2.0 && u < 3.0 && v > -2.0 && v < 3.0 {
+                    interp_triangle(&extrap_cell(u, v, gu, gv, rows, cols, stride, pos, b))
+                } else {
+                    v2(
+                        b.dpdu.x * u + b.center.x + b.dpdv.x * v,
+                        b.dpdu.y * u + b.center.y + b.dpdv.y * v,
+                    )
+                }
+            };
+            if let Some(s) = io.get_mut(at) {
+                *s = r.x;
+            }
+            if let Some(s) = io.get_mut(at + 1) {
+                *s = r.y;
+            }
+        }
+    }
+
+    /// A small pseudo-random generator, so the test needs no crate.
+    fn rng(seed: &mut u64) -> f32 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        (*seed >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    #[test]
+    fn the_fast_path_matches_the_old_warp_exactly() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for (rows, cols) in [(1, 1), (2, 3), (5, 5), (4, 7), (9, 2)] {
+            for quad in [true, false] {
+                let grid: Vec<f32> =
+                    (0..(rows + 1) * (cols + 1) * 2).map(|_| rng(&mut seed) * 4.0 - 2.0).collect();
+                // inside, on the edges, near outside and far outside
+                let io: Vec<f32> = (0..4000).map(|_| rng(&mut seed) * 7.0 - 3.0).collect();
+                let mut a = io.clone();
+                let mut b = io.clone();
+                warp_transform(&grid, rows, cols, quad, &mut a);
+                warp_transform_reference(&grid, rows, cols, quad, &mut b);
+                assert!(
+                    a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()),
+                    "{rows}x{cols} quad {quad}"
+                );
+            }
+        }
+    }
 
     /// An identity grid: control points at their rest positions over [0,1]^2.
     fn identity_grid(rows: usize, cols: usize) -> Vec<f32> {
