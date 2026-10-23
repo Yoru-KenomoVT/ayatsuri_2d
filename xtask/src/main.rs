@@ -280,8 +280,12 @@ fn host_check(out: &Path) -> Result<()> {
     let exe = out.join(if cfg!(windows) { "host.exe" } else { "host" });
     let exe_s = exe.to_string_lossy().into_owned();
     // the archive by path, so the link is static and the linker's
-    // gc-sections keeps only what the host's calls reach
-    let archive = if cfg!(windows) {
+    // gc-sections keeps only what the host's calls reach. On an MSVC build
+    // a GNU cc (MinGW on the runners) cannot take the MSVC archive, which
+    // wants MSVC's runtime: it links the DLL beside the host instead.
+    let archive = if cfg!(target_env = "msvc") {
+        "target/capi/ayatsuri_capi.dll"
+    } else if cfg!(windows) {
         "target/capi-release/ayatsuri_capi.lib"
     } else {
         "target/capi-release/libayatsuri_capi.a"
@@ -296,7 +300,8 @@ fn host_check(out: &Path) -> Result<()> {
     run(&cc, &args)?;
     run(&exe_s, &[&model_s])?;
     if let Ok(meta) = std::fs::metadata(&exe) {
-        println!("host linked statically: {} KB", meta.len() / 1024);
+        let how = if cfg!(target_env = "msvc") { "against the DLL" } else { "statically" };
+        println!("host linked {how}: {} KB", meta.len() / 1024);
     }
     Ok(())
 }
