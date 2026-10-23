@@ -1288,5 +1288,6 @@
   "Guide Line Settings…": "Hulplijninstellingen…",
   "Add animation layer": "Animatielaag toevoegen",
   "No animations yet": "Nog geen animaties",
-  "Add a .motion3.json as an animation": "Een .motion3.json als animatie toevoegen"
+  "Add a .motion3.json as an animation": "Een .motion3.json als animatie toevoegen",
+  "That ID is empty or already used.": "Die ID is leeg of al in gebruik."
 }

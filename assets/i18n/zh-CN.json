@@ -1288,5 +1288,6 @@
   "Guide Line Settings…": "参考线设置…",
   "Add animation layer": "添加动画图层",
   "No animations yet": "还没有动画",
-  "Add a .motion3.json as an animation": "将 .motion3.json 添加为动画"
+  "Add a .motion3.json as an animation": "将 .motion3.json 添加为动画",
+  "That ID is empty or already used.": "该 ID 为空或已被使用。"
 }

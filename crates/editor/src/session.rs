@@ -178,6 +178,8 @@ pub struct Session {
     pub part_names: Vec<String>,
     /// Display names per art mesh (the PSD layer names); IDs stay ASCII.
     pub mesh_names: Vec<String>,
+    /// Deformer names, apart from their IDs; empty shows the ID.
+    pub deformer_names: Vec<String>,
     /// Parameters the user is dragging this frame; physics stays off them.
     pub params_held: Vec<usize>,
     /// Parameters picked in the palette (Ctrl/Shift+click), in pick order.
@@ -706,6 +708,7 @@ impl Session {
                 });
             }
         }
+        let deformer_names = out.deformer_names;
         let imported = out.imported;
         let tex_names = (0..imported.textures.len()).map(|i| format!("texture_{i:02}")).collect();
         let part_names = imported.part_names.clone();
@@ -724,6 +727,9 @@ impl Session {
         }
         if mesh_names.len() == s.mesh_names.len() {
             s.mesh_names = mesh_names;
+        }
+        if deformer_names.len() == s.deformer_names.len() {
+            s.deformer_names = deformer_names;
         }
         s.modified = true;
         Ok(s)
@@ -794,6 +800,8 @@ impl Session {
             self.aom_path.clone().unwrap_or_else(|| PathBuf::from(format!("{}.aom", self.name)));
         let next = Self::from_parts(ctx, self.name.clone(), model, pngs, tex_names, None, &source)?;
         let old = std::mem::replace(self, next);
+        self.deformer_names =
+            follow_deformer_names(&old.deformer_names, &before, self.puppet.model());
         self.part_names = old.part_names;
         self.mesh_names = old.mesh_names;
         self.part_shown = old.part_shown;
@@ -878,6 +886,8 @@ impl Session {
                 .skip(old.original_meshes.len())
                 .map(|m| (m.uvs.clone(), m.indices.clone())),
         );
+        self.deformer_names =
+            follow_deformer_names(&old.deformer_names, old.puppet.model(), self.puppet.model());
         self.part_names = part_names;
         self.mesh_names = mesh_names;
         self.part_shown = part_shown;
@@ -982,6 +992,9 @@ impl Session {
             }
             if !d.mesh_names.is_empty() && d.mesh_names.len() == s.mesh_names.len() {
                 s.mesh_names = d.mesh_names.clone();
+            }
+            if d.deformer_names.len() == s.deformer_names.len() {
+                s.deformer_names = d.deformer_names.clone();
             }
             if let Some(pairs) = &d.combined {
                 s.combined = pairs
@@ -1281,6 +1294,7 @@ impl Session {
             model.art_meshes.iter().map(|m| (m.uvs.clone(), m.indices.clone())).collect();
         let n_params = model.parameters.len();
         let n_tex = texture_names.len();
+        let n_deformers = model.deformers.len();
         let mut puppet = Puppet::new(model);
         puppet.update();
         crate::thumb::ensure(&puppet, &preview_tex, source);
@@ -1301,6 +1315,7 @@ impl Session {
             last_update_ms: 0.0,
             param_names,
             mesh_names: model_mesh_ids,
+            deformer_names: vec![String::new(); n_deformers],
             params_held: Vec::new(),
             param_picked: Vec::new(),
             part_names,
@@ -1656,6 +1671,8 @@ impl Session {
             (0..self.puppet.model().parameters.len()).map(|i| self.puppet.value(i)).collect();
         self.param_keys = keys_of(&model);
         self.follow_mesh_ids(&model);
+        self.deformer_names =
+            follow_deformer_names(&self.deformer_names, self.puppet.model(), &model);
         let mut puppet = Puppet::new(model);
         for (i, v) in values.iter().enumerate() {
             puppet.set_value(i, *v);
@@ -1802,6 +1819,7 @@ impl Session {
                 group_colors: self.groups.iter().map(|g| pack_rgb(g.color)).collect(),
                 part_names: self.part_names.clone(),
                 mesh_names: self.mesh_names.clone(),
+                deformer_names: self.deformer_names.clone(),
                 combined: Some(self.combined.iter().map(|&(a, b)| (a as u32, b as u32)).collect()),
                 model_groups: self.model_groups.clone(),
                 guides: self.guides.clone(),
@@ -2143,6 +2161,36 @@ fn keys_of(model: &Model) -> Vec<Vec<f32>> {
 
 // models load on a worker thread so the window keeps answering; that
 // needs a Session to be movable between threads
+
+/// Deformer names beside an edited model. The same count keeps them by
+/// index, so changing a deformer's ID (or undoing that) keeps its name;
+/// when deformers were added or removed they follow by ID, and a new one
+/// starts without a name.
+fn follow_deformer_names(names: &[String], now: &Model, next: &Model) -> Vec<String> {
+    if now.deformers.len() == next.deformers.len() {
+        let mut out = names.to_vec();
+        out.resize(next.deformers.len(), String::new());
+        return out;
+    }
+    let by_id: HashMap<&str, &String> =
+        now.deformers.iter().zip(names).map(|(d, n)| (d.id.as_str(), n)).collect();
+    next.deformers
+        .iter()
+        .map(|d| by_id.get(d.id.as_str()).map_or_else(String::new, |n| (*n).clone()))
+        .collect()
+}
+
+impl Session {
+    /// What a deformer is called on screen: its name, or its ID when it has
+    /// none.
+    pub fn deformer_name(&self, i: usize) -> String {
+        match self.deformer_names.get(i).filter(|n| !n.trim().is_empty()) {
+            Some(n) => n.clone(),
+            None => self.puppet.model().deformers.get(i).map(|d| d.id.clone()).unwrap_or_default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod send_check {
     fn is_send<T: Send>() {}
@@ -2498,5 +2546,58 @@ fn log_edit(before: &Model, after: &Model) {
         info!("edit: {} and {more} more", words.join(", "));
     } else {
         info!("edit: {}", words.join(", "));
+    }
+}
+
+#[cfg(test)]
+mod deformer_name_tests {
+    use super::*;
+    use ayatsuri_format::model::{Deformer, DeformerKind, WarpData};
+
+    fn with(ids: &[&str]) -> Model {
+        let mut m = Model::new();
+        m.deformers = ids
+            .iter()
+            .map(|id| Deformer {
+                id: (*id).to_string(),
+                parent_part: None,
+                parent_deformer: None,
+                visible: true,
+                enabled: true,
+                binding: Default::default(),
+                kind: DeformerKind::Warp(WarpData {
+                    rows: 1,
+                    cols: 1,
+                    quad: false,
+                    opacities: vec![1.0],
+                    positions: vec![0.0; 8],
+                }),
+            })
+            .collect();
+        m
+    }
+
+    fn names(n: &[&str]) -> Vec<String> {
+        n.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn a_new_id_keeps_the_name() {
+        let out = follow_deformer_names(
+            &names(&["Hair", "Face"]),
+            &with(&["A", "B"]),
+            &with(&["A", "X"]),
+        );
+        assert_eq!(out, names(&["Hair", "Face"]));
+    }
+
+    #[test]
+    fn names_follow_their_deformer_when_one_is_added_or_removed() {
+        let now = with(&["A", "B", "C"]);
+        let gone = follow_deformer_names(&names(&["a", "b", "c"]), &now, &with(&["A", "C"]));
+        assert_eq!(gone, names(&["a", "c"]));
+        let added =
+            follow_deformer_names(&names(&["a", "b", "c"]), &now, &with(&["N", "A", "B", "C"]));
+        assert_eq!(added, names(&["", "a", "b", "c"]));
     }
 }

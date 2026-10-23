@@ -206,6 +206,11 @@ mod tests {
             param_names: &["Sway amount".to_string()],
             part_names: &imported.part_names,
             mesh_names: &imported.mesh_names,
+            deformer_names: &model
+                .deformers
+                .iter()
+                .map(|d| if d.id == "Warp" { "Hair sway".to_string() } else { String::new() })
+                .collect::<Vec<_>>(),
             param_groups: &[("Motion".to_string(), vec![0])],
         })
         .unwrap();
@@ -223,6 +228,10 @@ mod tests {
         assert_eq!(back.imported.mesh_names, vec!["red".to_string(), "blue".to_string()]);
         assert_eq!(back.imported.part_names, vec!["Body".to_string()]);
         assert_eq!(back.within, (2, 2), "meshes rest where they did: {:?}", back.off);
+        let at = m.deformers.iter().position(|d| d.id == "Warp").unwrap();
+        assert_eq!(back.deformer_names[at], "Hair sway", "the name comes back, apart from the ID");
+        let other = m.deformers.iter().position(|d| d.id != "Warp").unwrap();
+        assert_eq!(back.deformer_names[other], m.deformers[other].id, "no name: the ID stands in");
         let warp = m.deformers.iter().find(|d| d.id == "Warp").unwrap();
         assert_eq!(warp.binding.axes[0].keys, vec![0.0, 1.0]);
         let DeformerKind::Warp(w) = &warp.kind else { panic!("warp") };
@@ -288,6 +297,7 @@ mod tests {
             param_names: &first.param_names,
             part_names: &first.imported.part_names,
             mesh_names: &first.imported.mesh_names,
+            deformer_names: &[],
             param_groups: &first.param_groups,
         })
         .unwrap();
@@ -355,6 +365,7 @@ mod tests {
             param_names: &first.param_names,
             part_names: &first.imported.part_names,
             mesh_names: &first.imported.mesh_names,
+            deformer_names: &[],
             param_groups: &first.param_groups,
         })
         .unwrap();

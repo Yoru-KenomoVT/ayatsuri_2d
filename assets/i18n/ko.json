@@ -1288,5 +1288,6 @@
   "Guide Line Settings…": "가이드 선 설정…",
   "Add animation layer": "애니메이션 레이어 추가",
   "No animations yet": "아직 애니메이션이 없습니다",
-  "Add a .motion3.json as an animation": ".motion3.json을 애니메이션으로 추가"
+  "Add a .motion3.json as an animation": ".motion3.json을 애니메이션으로 추가",
+  "That ID is empty or already used.": "그 ID는 비어 있거나 이미 사용 중입니다."
 }

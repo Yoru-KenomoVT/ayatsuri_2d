@@ -1288,5 +1288,6 @@
   "Guide Line Settings…": "ガイド線の設定…",
   "Add animation layer": "アニメーションレイヤーを追加",
   "No animations yet": "アニメーションはまだありません",
-  "Add a .motion3.json as an animation": ".motion3.jsonをアニメーションとして追加"
+  "Add a .motion3.json as an animation": ".motion3.jsonをアニメーションとして追加",
+  "That ID is empty or already used.": "そのIDは空か、すでに使われています。"
 }
