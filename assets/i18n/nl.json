@@ -1307,5 +1307,7 @@
   "Ask again the next time Ayatsuri2D starts": "Opnieuw vragen wanneer Ayatsuri2D de volgende keer start",
   "What's New": "Wat is er nieuw",
   "Check for Updates": "Controleren op updates",
-  "What changed in this version": "Wat er in deze versie veranderd is"
+  "What changed in this version": "Wat er in deze versie veranderd is",
+  "Mirrored top to bottom, as an up and down parameter.": "Van boven naar onder gespiegeld, als een op-en-neer-parameter.",
+  "Mirrored left to right.": "Van links naar rechts gespiegeld."
 }

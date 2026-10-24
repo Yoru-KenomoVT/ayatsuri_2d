@@ -1307,5 +1307,7 @@
   "Ask again the next time Ayatsuri2D starts": "下次启动 Ayatsuri2D 时再询问",
   "What's New": "新功能",
   "Check for Updates": "检查更新",
-  "What changed in this version": "此版本的更改"
+  "What changed in this version": "此版本的更改",
+  "Mirrored top to bottom, as an up and down parameter.": "这是上下参数，因此上下翻转。",
+  "Mirrored left to right.": "左右翻转。"
 }

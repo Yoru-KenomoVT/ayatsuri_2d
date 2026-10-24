@@ -1307,5 +1307,7 @@
   "Ask again the next time Ayatsuri2D starts": "다음에 Ayatsuri2D를 시작할 때 다시 묻습니다",
   "What's New": "새로운 기능",
   "Check for Updates": "업데이트 확인",
-  "What changed in this version": "이 버전에서 바뀐 점"
+  "What changed in this version": "이 버전에서 바뀐 점",
+  "Mirrored top to bottom, as an up and down parameter.": "상하 파라미터이므로 위아래로 반전합니다.",
+  "Mirrored left to right.": "좌우로 반전합니다."
 }

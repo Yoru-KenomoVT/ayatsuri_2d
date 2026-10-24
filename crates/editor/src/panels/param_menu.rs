@@ -469,8 +469,10 @@ impl EditorUi {
         out
     }
 
-    /// Mirror the key at `from` horizontally into its opposite key on the
-    /// selected objects, parents first, as one undo step.
+    /// Mirror the key at `from` into its opposite key on the selected
+    /// objects, parents first, as one undo step: top to bottom for an up and
+    /// down parameter (Angle Y), left to right otherwise. The slider moves
+    /// to the key written, so the result is on screen.
     pub(super) fn reflect_into_opposite(&mut self, param: usize, from: f32) {
         let mut targets = self.param_targets();
         if let Some(s) = &self.session {
@@ -480,17 +482,21 @@ impl EditorUi {
             });
         }
         let Some(s) = &mut self.session else { return };
+        let vertical = up_and_down(s.puppet.model(), param);
         let mut wrote = None;
         s.edit(|m| {
             for &t in &targets {
-                if let Some(k) = keyform::mirror_motion(m, t, param, from, true, false) {
+                if let Some(k) = keyform::mirror_motion(m, t, param, from, !vertical, vertical) {
                     wrote = Some(k);
                 }
             }
             wrote.is_some()
         });
         match wrote {
-            Some(k) => log::info!("reflected the key at {from} into the key at {k}"),
+            Some(k) => {
+                s.puppet.set_value(param, k);
+                log::info!("reflected the key at {from} into the key at {k}");
+            }
             None => log::warn!("reflect: nothing on the selection has both keys"),
         }
     }
@@ -610,7 +616,9 @@ impl EditorUi {
             }
             ParamCmd::ResetAll => self.reset_parameters(),
             ParamCmd::Mirror(pi) => {
-                self.pmenu.mirror = Some(Mirror { param: pi, horizontal: true, vertical: false });
+                let vertical =
+                    self.session.as_ref().is_some_and(|s| up_and_down(s.puppet.model(), pi));
+                self.pmenu.mirror = Some(Mirror { param: pi, horizontal: !vertical, vertical });
             }
             ParamCmd::Curve(pi) => {
                 // start from what the first selected object has
@@ -1094,6 +1102,13 @@ impl EditorUi {
                              image of the keyform at {from}.",
                             &[("to", &to), ("name", &name), ("from", &from)],
                         ));
+                        let vertical =
+                            self.session.as_ref().is_some_and(|s| up_and_down(s.puppet.model(), p));
+                        ui.label(crate::i18n::tr(if vertical {
+                            "Mirrored top to bottom, as an up and down parameter."
+                        } else {
+                            "Mirrored left to right."
+                        }));
                         ui.weak(crate::i18n::tr(
                             "This applies to the selected objects. Undo brings it back.",
                         ));
@@ -1438,4 +1453,14 @@ pub(super) fn drag_target(
     {
         *out = Some(drop(*m));
     }
+}
+
+/// An up and down parameter: its id ends in Y, as Angle Y, Body Angle Y,
+/// Eye Ball Y and Brow L Y do in the standard set. Reflect and Motion
+/// Mirroring flip these top to bottom instead of left to right.
+pub(super) fn up_and_down(model: &ayatsuri_format::model::Model, param: usize) -> bool {
+    model.parameters.get(param).is_some_and(|p| {
+        let id = p.id.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
+        id.ends_with('Y') && id.len() > 1
+    })
 }
