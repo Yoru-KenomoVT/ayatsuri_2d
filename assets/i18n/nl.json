@@ -1311,5 +1311,6 @@
   "Mirrored top to bottom, as an up and down parameter.": "Van boven naar onder gespiegeld, als een op-en-neer-parameter.",
   "Mirrored left to right.": "Van links naar rechts gespiegeld.",
   "The selection sits between keys. Move the parameters onto a key (a dot on the slider) first, then start the tool again.": "De selectie staat tussen sleutels. Zet de parameters eerst op een sleutel (een punt op de schuifregelaar) en start het gereedschap opnieuw.",
-  "Select one or more meshes, or a warp deformer, first.": "Selecteer eerst een of meer meshes, of een warp-deformer."
+  "Select one or more meshes, or a warp deformer, first.": "Selecteer eerst een of meer meshes, of een warp-deformer.",
+  "Motion Mirroring on the selected parameter": "Bewegingsspiegeling op de geselecteerde parameter"
 }
