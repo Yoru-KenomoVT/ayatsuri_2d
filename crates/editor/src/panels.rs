@@ -8839,30 +8839,32 @@ impl EditorUi {
         let layers: Vec<(usize, String)> =
             self.ctx_layers.iter().map(|&mi| (mi, s.mesh_name(mi).to_string())).collect();
         let mut pick_layer = None;
+        let mut hover_layer = None;
+        let current = self.selected;
+        // a row: its picture, a click picks it, a hover outlines it on the
+        // canvas so the right one is easy to tell apart
+        let mut list = |ui: &mut Ui, s: &mut Session| {
+            for (mi, name) in &layers {
+                let r = layer_row(ui, s, *mi, name, current == Some(Sel::Mesh(*mi)));
+                if r.hovered() {
+                    hover_layer = Some(*mi);
+                }
+                if r.clicked() {
+                    pick_layer = Some(*mi);
+                    ui.close();
+                }
+            }
+        };
         resp.context_menu(|ui| {
             if self.ctx_mesh_list {
                 if layers.is_empty() {
                     ui.weak(crate::i18n::tr("No art mesh here"));
                 }
-                for (mi, name) in &layers {
-                    let on = self.selected == Some(Sel::Mesh(*mi));
-                    if ui.selectable_label(on, name).clicked() {
-                        pick_layer = Some(*mi);
-                        ui.close();
-                    }
-                }
+                list(ui, s);
                 return;
             }
             if !layers.is_empty() {
-                ui.menu_button(crate::i18n::tr("Select Layer"), |ui| {
-                    for (mi, name) in &layers {
-                        let on = self.selected == Some(Sel::Mesh(*mi));
-                        if ui.selectable_label(on, name).clicked() {
-                            pick_layer = Some(*mi);
-                            ui.close();
-                        }
-                    }
-                });
+                ui.menu_button(crate::i18n::tr("Select Layer"), |ui| list(ui, s));
                 ui.separator();
             }
             ui.menu_button(crate::i18n::tr("Guide Line"), |ui| {
@@ -8906,6 +8908,9 @@ impl EditorUi {
                 ui.close();
             }
         });
+        if let Some(mi) = hover_layer {
+            self.palette_hover = Some(Sel::Mesh(mi));
+        }
         if let Some(mi) = pick_layer {
             log::info!("selection: {} from the canvas menu", s.mesh_name(mi));
             self.selected = Some(Sel::Mesh(mi));
@@ -13335,6 +13340,43 @@ fn matches_search(query: &str, names: &[&str]) -> bool {
     names.iter().any(|n| n.to_lowercase().contains(query))
 }
 
+/// A mesh's own art, cropped to it: rendered on first use and kept until
+/// the model changes. Parts palette rows and the canvas's mesh lists show it.
+fn mesh_preview(ctx: &egui::Context, s: &mut Session, mi: usize) -> Option<egui::TextureHandle> {
+    if !s.mesh_previews.contains_key(&mi) {
+        let handle = crate::thumb::render_filtered(&s.puppet, &s.preview_tex, &|m| m == mi, 96)
+            .map(|(w, h, px)| {
+                let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
+                ctx.load_texture(format!("mesh-prev-{mi}"), img, egui::TextureOptions::LINEAR)
+            });
+        s.mesh_previews.insert(mi, handle);
+    }
+    s.mesh_previews.get(&mi).cloned().flatten()
+}
+
+/// The hover preview: the art at up to 160 by 200 points.
+fn big_preview(ui: &mut Ui, h: &egui::TextureHandle) {
+    let sz = h.size_vec2();
+    let k = (160.0 / sz.x).min(200.0 / sz.y);
+    ui.image((h.id(), sz * k));
+}
+
+/// One mesh in a canvas pick list: a small picture of its art beside its
+/// name, the art big on hover. Returns the row's response.
+fn layer_row(ui: &mut Ui, s: &mut Session, mi: usize, name: &str, on: bool) -> egui::Response {
+    match mesh_preview(ui.ctx(), s, mi) {
+        Some(h) => {
+            let sz = h.size_vec2();
+            let k = (24.0 / sz.x).min(24.0 / sz.y);
+            let resp = ui.add(
+                egui::Button::image_and_text((h.id(), sz * k), name).selected(on).frame(false),
+            );
+            resp.on_hover_ui(|ui| big_preview(ui, &h))
+        }
+        None => ui.add(egui::Button::new(name).selected(on).frame(false)),
+    }
+}
+
 fn parts_mesh_row(
     ui: &mut Ui,
     s: &mut Session,
@@ -13406,21 +13448,8 @@ fn parts_mesh_row(
     // first hover and kept until the model changes
     if resp.hovered() {
         *hover = Some(Sel::Mesh(mi));
-        if !s.mesh_previews.contains_key(&mi) {
-            let ctx = ui.ctx().clone();
-            let handle = crate::thumb::render_filtered(&s.puppet, &s.preview_tex, &|m| m == mi, 96)
-                .map(|(w, h, px)| {
-                    let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &px);
-                    ctx.load_texture(format!("mesh-prev-{mi}"), img, egui::TextureOptions::LINEAR)
-                });
-            s.mesh_previews.insert(mi, handle);
-        }
-        if let Some(h) = s.mesh_previews.get(&mi).cloned().flatten() {
-            resp.clone().on_hover_ui(|ui| {
-                let sz = h.size_vec2();
-                let k = (160.0 / sz.x).min(200.0 / sz.y);
-                ui.image((h.id(), sz * k));
-            });
+        if let Some(h) = mesh_preview(ui.ctx(), s, mi) {
+            resp.clone().on_hover_ui(|ui| big_preview(ui, &h));
         }
     }
     resp.context_menu(|ui| {
