@@ -954,15 +954,19 @@ impl EditorUi {
     }
 
     fn settings_keyboard(&mut self, ui: &mut Ui) {
-        // an armed row eats the next real key press
+        // an armed row eats the next real key press; Ctrl, Shift and Alt
+        // only gather until a key comes with them
         if let Some(action) = self.rebind {
             let captured = ui.ctx().input(|i| {
-                i.events.iter().find_map(|e| {
-                    if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-                        Some((*key, *modifiers))
-                    } else {
-                        None
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+                        crate::panels::captured_key(*key, *physical_key, *modifiers)
                     }
+                    // egui turns Ctrl+C, X and V into these instead of keys
+                    egui::Event::Copy => Some((egui::Key::C, i.modifiers)),
+                    egui::Event::Cut => Some((egui::Key::X, i.modifiers)),
+                    egui::Event::Paste(_) => Some((egui::Key::V, i.modifiers)),
+                    _ => None,
                 })
             });
             if let Some((key, modifiers)) = captured {
@@ -1046,7 +1050,24 @@ impl EditorUi {
                     self.prefs.save();
                 }
                 let shown = if armed {
-                    crate::i18n::tr("press keys…").to_string()
+                    // the modifiers held so far, so a combination shows as
+                    // it is built
+                    let held = ui.input(|i| i.modifiers);
+                    let mut s = String::new();
+                    for (on, name) in [
+                        (held.command || held.ctrl, "Ctrl+"),
+                        (held.shift, "Shift+"),
+                        (held.alt, "Alt+"),
+                    ] {
+                        if on {
+                            s.push_str(name);
+                        }
+                    }
+                    if s.is_empty() {
+                        crate::i18n::tr("press keys…").to_string()
+                    } else {
+                        s + "…"
+                    }
                 } else if text.is_empty() {
                     crate::i18n::tr("Not set").to_string()
                 } else {
