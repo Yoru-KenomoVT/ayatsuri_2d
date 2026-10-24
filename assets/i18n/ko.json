@@ -1316,5 +1316,6 @@
   "A mesh needs at least three points. Add points, or Cancel to undo the edit.": "메시에는 점이 3개 이상 필요합니다. 점을 추가하거나 취소로 편집을 되돌리세요.",
   "This mesh has no triangles, so nothing would be drawn. Connect points, or Cancel to undo the edit.": "이 메시에는 삼각형이 없어 아무것도 그려지지 않습니다. 점을 연결하거나 취소로 편집을 되돌리세요.",
   "A mesh keeps at least three points.": "메시는 최소 3개의 점을 유지합니다.",
-  "Click an art mesh to edit it.": "편집할 아트메시를 클릭하세요."
+  "Click an art mesh to edit it.": "편집할 아트메시를 클릭하세요.",
+  "Select Layer": "레이어 선택"
 }

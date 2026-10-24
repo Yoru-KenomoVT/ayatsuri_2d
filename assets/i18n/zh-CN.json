@@ -1316,5 +1316,6 @@
   "A mesh needs at least three points. Add points, or Cancel to undo the edit.": "网格至少需要三个点。请添加点，或点击“取消”撤销编辑。",
   "This mesh has no triangles, so nothing would be drawn. Connect points, or Cancel to undo the edit.": "此网格没有三角形，因此不会绘制任何内容。请连接点，或点击“取消”撤销编辑。",
   "A mesh keeps at least three points.": "网格至少保留三个点。",
-  "Click an art mesh to edit it.": "点击要编辑的图形网格。"
+  "Click an art mesh to edit it.": "点击要编辑的图形网格。",
+  "Select Layer": "选择图层"
 }

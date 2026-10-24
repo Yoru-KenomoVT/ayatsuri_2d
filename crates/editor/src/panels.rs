@@ -351,6 +351,9 @@ pub struct EditorUi {
     pending_guide: Option<GuideCmd>,
     /// Where the canvas was last right-clicked, for "add a guide here".
     ctx_click: Option<Pos2>,
+    /// The meshes drawn where the canvas was right-clicked, front first,
+    /// for its Select Layer menu.
+    ctx_layers: Vec<usize>,
     show_guide_settings: bool,
     /// F: frame the selection once the canvas size is known.
     focus_request: bool,
@@ -1149,6 +1152,7 @@ impl Default for EditorUi {
             pending_create: None,
             pending_guide: None,
             ctx_click: None,
+            ctx_layers: Vec::new(),
             show_guide_settings: false,
             focus_request: false,
             focus_search: false,
@@ -8797,8 +8801,37 @@ impl EditorUi {
         let space = space || middle || resp.dragged_by(egui::PointerButton::Middle);
         if resp.secondary_clicked() {
             self.ctx_click = resp.interact_pointer_pos();
+            self.ctx_layers = match self.ctx_click {
+                Some(p) if self.mesh_edit.is_none() => {
+                    let c = s.puppet.model().canvas;
+                    let (origin, scale) = view_origin_scale(view, c, self.view_zoom, self.view_pan);
+                    let ux = ((p.x - origin.x) / scale - c.origin_x) / c.pixels_per_unit;
+                    let uy = ((p.y - origin.y) / scale - c.origin_y) / c.pixels_per_unit;
+                    hits_visible(s, &mut self.pick_alpha, ux, uy, &|m| {
+                        self.mesh_locked.contains(&m)
+                    })
+                }
+                _ => Vec::new(),
+            };
         }
+        // every layer drawn under the right-click, front first, so a mesh
+        // under another one can be picked without the Part tree
+        let layers: Vec<(usize, String)> =
+            self.ctx_layers.iter().map(|&mi| (mi, s.mesh_name(mi).to_string())).collect();
+        let mut pick_layer = None;
         resp.context_menu(|ui| {
+            if !layers.is_empty() {
+                ui.menu_button(crate::i18n::tr("Select Layer"), |ui| {
+                    for (mi, name) in &layers {
+                        let on = self.selected == Some(Sel::Mesh(*mi));
+                        if ui.selectable_label(on, name).clicked() {
+                            pick_layer = Some(*mi);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+            }
             ui.menu_button(crate::i18n::tr("Guide Line"), |ui| {
                 let at = self.ctx_click;
                 for (label, which) in [
@@ -8840,6 +8873,11 @@ impl EditorUi {
                 ui.close();
             }
         });
+        if let Some(mi) = pick_layer {
+            log::info!("selection: {} from the canvas menu", s.mesh_name(mi));
+            self.selected = Some(Sel::Mesh(mi));
+            self.multi_sel = vec![mi];
+        }
         let scroll = ui.ctx().input(|i| if resp.hovered() { i.smooth_scroll_delta.y } else { 0.0 });
         if scroll != 0.0 {
             let factor = (scroll * 0.0015).exp();
@@ -8851,7 +8889,7 @@ impl EditorUi {
 
         let c = s.puppet.model().canvas;
         let (cw, ch) = (c.width.max(1.0), c.height.max(1.0));
-        let fit = ((view.width() / cw).min(view.height() / ch) * 0.92).max(1e-4);
+        let fit = fit_scale(view, c);
         if std::mem::take(&mut self.focus_request) {
             let mut pts: Vec<[f32; 2]> = Vec::new();
             let mut add = |pos: &[f32]| {
@@ -8900,8 +8938,7 @@ impl EditorUi {
                 self.view_pan = vec2(cw / 2.0 - (x0 + x1) / 2.0, ch / 2.0 - (y0 + y1) / 2.0) * sc;
             }
         }
-        let scale = fit * self.view_zoom;
-        let origin = view.center() + self.view_pan - vec2(cw, ch) * scale * 0.5;
+        let (origin, scale) = view_origin_scale(view, c, self.view_zoom, self.view_pan);
         // the mirror axis on screen, when Mirror Edit is on
         let mirror_x = self.mirror_edit.then(|| {
             let at = s
@@ -13949,6 +13986,25 @@ fn cycle_pick(
         Some(i) if again => hits.get((i + 1) % hits.len()).copied(),
         _ => hits.first().copied(),
     }
+}
+
+/// The scale that fits the canvas in the view, at zoom 1.
+fn fit_scale(view: Rect, c: ayatsuri_format::model::Canvas) -> f32 {
+    let (cw, ch) = (c.width.max(1.0), c.height.max(1.0));
+    ((view.width() / cw).min(view.height() / ch) * 0.92).max(1e-4)
+}
+
+/// Where the canvas's top-left corner sits on screen, and screen points per
+/// canvas pixel, at this zoom and pan.
+fn view_origin_scale(
+    view: Rect,
+    c: ayatsuri_format::model::Canvas,
+    zoom: f32,
+    pan: Vec2,
+) -> (Pos2, f32) {
+    let (cw, ch) = (c.width.max(1.0), c.height.max(1.0));
+    let scale = fit_scale(view, c) * zoom;
+    (view.center() + pan - vec2(cw, ch) * scale * 0.5, scale)
 }
 
 /// Say something over the canvas for a few seconds (EditorUi::notice; a
