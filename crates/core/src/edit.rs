@@ -1468,6 +1468,44 @@ pub fn rename_deformer(model: &mut Model, deformer: usize, id: &str) -> bool {
     }
 }
 
+/// Change a warp deformer's division to `cols` x `rows` after it was
+/// made: every keyform's grid is sampled again at the new division, so
+/// what the warp holds keeps its shape (exactly when the division gets
+/// finer). Its children are placed by the warp's 0 to 1 space and need no
+/// change. False when it is not a warp, the division is out of range
+/// (1 to 64) or already that.
+pub fn set_warp_division(model: &mut Model, deformer: usize, cols: u32, rows: u32) -> bool {
+    if !(1..=64).contains(&cols) || !(1..=64).contains(&rows) {
+        return false;
+    }
+    let Some(DeformerKind::Warp(w)) = model.deformers.get_mut(deformer).map(|d| &mut d.kind) else {
+        return false;
+    };
+    if (w.cols, w.rows) == (cols, rows) {
+        return false;
+    }
+    let stride = w.grid_points() * 2;
+    if stride == 0 || w.positions.len() % stride != 0 {
+        return false;
+    }
+    let positions = w
+        .positions
+        .chunks(stride)
+        .flat_map(|k| {
+            crate::bezier::resample_grid(
+                k,
+                w.cols as usize,
+                w.rows as usize,
+                cols as usize,
+                rows as usize,
+            )
+        })
+        .collect();
+    w.positions = positions;
+    (w.cols, w.rows) = (cols, rows);
+    true
+}
+
 /// Mesh Edit's vertex move: shift it by (dx, dy) in the parent's space on
 /// every keyform and give it the texture coordinate `uv` that was under its
 /// new spot, so the vertex slides over the art instead of dragging it.
@@ -3795,6 +3833,42 @@ mod tests {
         assert!((w.positions[stride] - w.positions[0] - 0.5).abs() < 1e-6);
         // None moves every keyform
         assert!(move_warp_points(&mut m, di, None, &[(1, 0.0, 0.25)]));
+    }
+
+    #[test]
+    fn warp_division_changes_and_keeps_the_shape() {
+        let mut m = test_model();
+        let di = create_warp_deformer(&mut m, &[0], 2, 2, "W".into()).unwrap();
+        assert!(add_keys(&mut m, Target::Deformer(di), 0, &[0.0, 1.0]));
+        // bend the middle point in one keyform only
+        assert!(move_warp_points(&mut m, di, Some(1), &[(4, 0.3, -0.2)]));
+        let DeformerKind::Warp(before) = m.deformers[di].kind.clone() else { panic!() };
+        assert!(set_warp_division(&mut m, di, 4, 4));
+        let DeformerKind::Warp(w) = &m.deformers[di].kind else { panic!() };
+        assert_eq!((w.cols, w.rows), (4, 4));
+        assert_eq!(w.positions.len(), 2 * 25 * 2);
+        // every old point is still there, at twice the index
+        for k in 0..2 {
+            for r in 0..=2 {
+                for c in 0..=2 {
+                    let old = (k * 9 + r * 3 + c) * 2;
+                    let new = (k * 25 + r * 2 * 5 + c * 2) * 2;
+                    assert!((w.positions[new] - before.positions[old]).abs() < 1e-5);
+                    assert!((w.positions[new + 1] - before.positions[old + 1]).abs() < 1e-5);
+                }
+            }
+        }
+        // and back again gives the same grid
+        assert!(set_warp_division(&mut m, di, 2, 2));
+        let DeformerKind::Warp(w) = &m.deformers[di].kind else { panic!() };
+        for (a, b) in w.positions.iter().zip(&before.positions) {
+            assert!((a - b).abs() < 1e-5);
+        }
+        // the same division, out of range, or not a warp: refused
+        assert!(!set_warp_division(&mut m, di, 2, 2));
+        assert!(!set_warp_division(&mut m, di, 0, 3));
+        assert!(!set_warp_division(&mut m, di, 65, 3));
+        assert!(!set_warp_division(&mut m, 99, 3, 3));
     }
 
     #[test]

@@ -295,10 +295,12 @@ pub struct EditorUi {
     rot_live: Option<(usize, Vec<f32>)>,
     /// Set by "Reset Toolbar Position": put the floating bar back next frame.
     toolbar_reset: bool,
-    /// The Rename Deformer dialog: which deformer and the name typed.
     /// The Rename Deformer dialog: deformer, name and ID being typed, and
     /// whether the last ID was refused.
     def_rename: Option<(usize, String, String, bool)>,
+    /// The Conversion Divisions dialog: the warp and the columns and rows
+    /// being set.
+    def_division: Option<(usize, u32, u32)>,
     /// Undo depth at the start of the frame; see `on_crash`.
     frame_undo_depth: usize,
     /// When the last frame began, and the real time since the one before:
@@ -784,6 +786,8 @@ enum DefCmd {
     Create(bool, Sel),
     CreateForSelection(bool),
     Rename(usize),
+    /// Change this warp's conversion divisions.
+    Division(usize),
     Delete(usize),
     /// Delete this art mesh (with the rest of the pick when it is in it).
     DeleteMesh(usize),
@@ -1094,6 +1098,7 @@ impl Default for EditorUi {
             anim_wanted: std::cell::Cell::new(false),
             anim_slot: None,
             def_rename: None,
+            def_division: None,
             toolbar_reset: false,
             live_drag: None,
             dev_mesh_done: false,
@@ -2025,6 +2030,7 @@ impl EditorUi {
         self.api_prompt_window(&ui.ctx().clone());
         self.api_window(ui);
         self.def_rename_window(&ui.ctx().clone());
+        self.def_division_window(&ui.ctx().clone());
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
         if self.last_autosave.elapsed().as_secs() >= 120 {
@@ -7762,6 +7768,17 @@ impl EditorUi {
                         def_cmd = Some(DefCmd::Rename(i));
                         ui.close();
                     }
+                    if is_warp
+                        && ui
+                            .button(crate::i18n::tr("Conversion Divisions…"))
+                            .on_hover_text(crate::i18n::tr(
+                                "Change its columns and rows; its shape is kept",
+                            ))
+                            .clicked()
+                    {
+                        def_cmd = Some(DefCmd::Division(i));
+                        ui.close();
+                    }
                     if ui
                         .button(crate::i18n::tr("Delete"))
                         .on_hover_text(crate::i18n::tr(
@@ -8002,6 +8019,7 @@ impl EditorUi {
             }
             DefCmd::CreateForSelection(warp) => self.pending_create = Some((warp, None)),
             DefCmd::Rename(i) => self.open_def_rename(i),
+            DefCmd::Division(i) => self.open_def_division(i),
             DefCmd::Reparent(child, parent) => {
                 let Some(s) = &mut self.session else { return };
                 // the palette's per-row state is by index, and a re-parent
@@ -8155,6 +8173,72 @@ impl EditorUi {
             self.def_rename = None;
         }
     }
+    /// Open Conversion Divisions on a warp's current columns and rows.
+    fn open_def_division(&mut self, i: usize) {
+        let Some(s) = &self.session else { return };
+        if let Some(DeformerKind::Warp(w)) = s.puppet.model().deformers.get(i).map(|d| &d.kind) {
+            self.def_division = Some((i, w.cols, w.rows));
+        }
+    }
+
+    /// Conversion Divisions: a warp's columns and rows after it was made.
+    /// Every keyform's grid is sampled again, so what the warp holds keeps
+    /// its shape; a coarser grid loses the bends between the points it
+    /// keeps, which the dialog says.
+    fn def_division_window(&mut self, ctx: &egui::Context) {
+        let Some((i, cols, rows)) = &mut self.def_division else { return };
+        let (i, mut open, mut ok) = (*i, true, false);
+        let was = self.session.as_ref().and_then(|s| match s.puppet.model().deformers.get(i) {
+            Some(d) => match &d.kind {
+                DeformerKind::Warp(w) => Some((w.cols, w.rows)),
+                DeformerKind::Rotation(_) => None,
+            },
+            None => None,
+        });
+        let Some((was_cols, was_rows)) = was else {
+            self.def_division = None;
+            return;
+        };
+        crate::windows::Dialog::new(crate::i18n::tr("Conversion Divisions")).open(&mut open).show(
+            ctx,
+            |ui| {
+                crate::windows::form(ui, "def-division", |ui| {
+                    ui.label(crate::i18n::tr("Conversion divisions"));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(cols).range(1..=64).prefix("W "));
+                        ui.add(egui::DragValue::new(rows).range(1..=64).prefix("H "));
+                    });
+                    ui.end_row();
+                });
+                if *cols < was_cols || *rows < was_rows {
+                    ui.weak(crate::i18n::tr(
+                        "Fewer divisions keep the shape only at the points that remain.",
+                    ));
+                }
+                ui.add_space(6.0);
+                ok = ui
+                    .add_enabled(
+                        (*cols, *rows) != (was_cols, was_rows),
+                        egui::Button::new(crate::i18n::tr("Apply")),
+                    )
+                    .clicked();
+            },
+        );
+        if ok {
+            let (cols, rows) = (*cols, *rows);
+            let Some(s) = &mut self.session else { return };
+            if s.edit(|m| ayatsuri_core::edit::set_warp_division(m, i, cols, rows)) {
+                // the Bezier handles and picked points were for the old grid
+                s.bezier_nets.retain(|&(d, _), _| d != i);
+                self.pts = point_edit::PointState::default();
+                log::info!("deformer {i}: divisions {was_cols}x{was_rows} to {cols}x{rows}");
+            }
+            self.def_division = None;
+        } else if !open {
+            self.def_division = None;
+        }
+    }
+
     fn inspector_panel(&mut self, ui: &mut Ui) {
         ScrollArea::vertical().id_salt("props").show(ui, |ui| self.inspector_contents(ui));
     }

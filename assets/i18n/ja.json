@@ -1289,5 +1289,9 @@
   "Add animation layer": "アニメーションレイヤーを追加",
   "No animations yet": "アニメーションはまだありません",
   "Add a .motion3.json as an animation": ".motion3.jsonをアニメーションとして追加",
-  "That ID is empty or already used.": "そのIDは空か、すでに使われています。"
+  "That ID is empty or already used.": "そのIDは空か、すでに使われています。",
+  "Conversion Divisions…": "変換分割数…",
+  "Conversion Divisions": "変換分割数",
+  "Change its columns and rows; its shape is kept": "列と行の数を変えます。形はそのまま保たれます",
+  "Fewer divisions keep the shape only at the points that remain.": "分割数を減らすと、形が保たれるのは残る点だけです。"
 }
