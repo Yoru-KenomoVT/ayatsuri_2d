@@ -13315,7 +13315,16 @@ fn parts_mesh_row(
     picked: &[usize],
     hover: &mut Option<Sel>,
 ) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
+    let (rect, resp) =
+        ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click_and_drag());
+    // drag a mesh (or the picked meshes it is one of) onto a row of the
+    // Deformer palette to put it under that deformer
+    if resp.drag_started() {
+        resp.dnd_set_drag_payload(Child::Mesh(mi));
+    }
+    if resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     if *selected == Some(Sel::Mesh(mi)) || picked.contains(&mi) {
         paint_picked_row(ui, rect);
     }
