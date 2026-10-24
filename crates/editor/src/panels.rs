@@ -5877,6 +5877,10 @@ impl EditorUi {
                 };
                 s.puppet.set_value(i, d);
             }
+            // evaluate again: without it the meshes and boxes kept the old
+            // pose while the warp lattice, read from the values, showed the
+            // new one
+            s.dirty = true;
             log::info!("parameters reset to defaults");
         }
     }
@@ -15129,6 +15133,18 @@ mod key_cmd_tests {
         let m = mesh(&ed);
         assert_eq!(m.binding.axes[0].keys, vec![-1.0, 0.0]);
         assert_eq!(m.positions, vec![-1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn reset_all_evaluates_the_model_again() {
+        let mut ed = editor();
+        let s = ed.session.as_mut().unwrap();
+        s.puppet.set_value(0, 1.0);
+        s.dirty = false;
+        ed.run_param_cmd(ParamCmd::ResetAll);
+        let s = ed.session.as_ref().unwrap();
+        assert_eq!(s.puppet.value(0), 0.0);
+        assert!(s.dirty);
     }
 
     #[test]
