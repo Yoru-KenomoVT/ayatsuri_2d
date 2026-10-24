@@ -46,6 +46,36 @@ fn sample_grid(grid: &[f32], cols: usize, rows: usize, u: f32, v: f32) -> (f32, 
     lerp(lerp(a, b, s), lerp(c, d, s), t)
 }
 
+/// A warp grid of (cols + 1) x (rows + 1) points sampled again at a new
+/// division. A warp moves what it holds by bilinear interpolation inside
+/// each cell, so a finer division keeps the shape exactly; a coarser one
+/// keeps the points it still has.
+pub fn resample_grid(
+    grid: &[f32],
+    cols: usize,
+    rows: usize,
+    new_cols: usize,
+    new_rows: usize,
+) -> Vec<f32> {
+    let (cols, rows) = (cols.max(1), rows.max(1));
+    let (new_cols, new_rows) = (new_cols.max(1), new_rows.max(1));
+    let mut out = Vec::with_capacity((new_cols + 1) * (new_rows + 1) * 2);
+    for r in 0..=new_rows {
+        for c in 0..=new_cols {
+            let (x, y) = sample_grid(
+                grid,
+                cols,
+                rows,
+                c as f32 / new_cols as f32,
+                r as f32 / new_rows as f32,
+            );
+            out.push(x);
+            out.push(y);
+        }
+    }
+    out
+}
+
 impl Lattice {
     pub fn net_w(&self) -> usize {
         3 * self.bw + 1

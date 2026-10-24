@@ -1289,5 +1289,9 @@
   "Add animation layer": "Voeg animasielaag by",
   "No animations yet": "Nog geen animasies nie",
   "Add a .motion3.json as an animation": "Voeg 'n .motion3.json as animasie by",
-  "That ID is empty or already used.": "Daardie ID is leeg of reeds in gebruik."
+  "That ID is empty or already used.": "Daardie ID is leeg of reeds in gebruik.",
+  "Conversion Divisions…": "Omskakelingsverdelings…",
+  "Conversion Divisions": "Omskakelingsverdelings",
+  "Change its columns and rows; its shape is kept": "Verander die kolomme en rye; die vorm bly behoue",
+  "Fewer divisions keep the shape only at the points that remain.": "Met minder verdelings bly die vorm net behoue by die punte wat oorbly."
 }
