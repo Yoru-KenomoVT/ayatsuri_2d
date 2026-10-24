@@ -70,7 +70,7 @@ Grab the latest build from the
 [**releases page**](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases),
 or pick your system on [**ayatsuri-2d.org/download**](https://ayatsuri-2d.org/download/),
 which has first-launch notes for each one.
-These badges always show the newest version, betas included.
+These badges always show the newest version.
 
 | System | File | Notes |
 |---|---|---|
@@ -193,7 +193,7 @@ integrated graphics** opens in 1.6 seconds, uses 486 MB of memory and about
 
 ## Status
 
-**Beta.** Ayatsuri2D is usable for real rigging today, and it is moving fast.
+**Ready for real rigging.** Ayatsuri2D is used on real models today, and it is moving fast.
 Save often, keep backups of models you care about, and please
 [report what breaks](https://github.com/Yoru-KenomoVT/ayatsuri_2d/issues).
 

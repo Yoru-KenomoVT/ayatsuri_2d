@@ -98,6 +98,6 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else
-            gh release create "$TAG" dist/* --draft --prerelease \
-              --title "Ayatsuri2D ${TAG#v} beta" --generate-notes --target "$GITHUB_SHA"
+            gh release create "$TAG" dist/* --draft \
+              --title "Ayatsuri2D ${TAG#v}" --generate-notes --target "$GITHUB_SHA"
           fi
