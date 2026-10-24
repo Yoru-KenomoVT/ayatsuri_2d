@@ -114,14 +114,11 @@ impl Prompt {
             }
         }
         let mut close = false;
-        crate::windows::mark_shown(ctx);
-        egui::Window::new(tr("Video export needs ffmpeg"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .default_width(380.0)
-            .show(ctx, |ui| {
-                ui.set_max_width(380.0);
+        let mut open = true;
+        let dialog = crate::windows::Dialog::new(tr("Video export needs ffmpeg")).width(420.0);
+        // while it downloads there is no close button, only the bar
+        let dialog = if self.get.is_some() { dialog } else { dialog.open(&mut open) };
+        dialog.show(ctx, |ui| {
                 if self.ready {
                     ui.label(tr("ffmpeg is installed. MP4, WebM and MOV are ready in the Render window."));
                     ui.add_space(8.0);
@@ -166,7 +163,7 @@ impl Prompt {
                     }
                 });
             });
-        if close {
+        if close || !open {
             self.open = false;
         }
     }
