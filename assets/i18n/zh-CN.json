@@ -1320,5 +1320,6 @@
   "Batch Reflect": "批量反转",
   "Batch Reflect…": "批量反转…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "所勾选参数的关键值在其范围内反转，作用于在这些参数上有关键点的所有对象。",
-  "All": "全部"
+  "All": "全部",
+  "No art mesh here": "此处没有图形网格"
 }

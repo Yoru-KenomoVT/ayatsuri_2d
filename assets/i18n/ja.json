@@ -1320,5 +1320,6 @@
   "Batch Reflect": "一括反転",
   "Batch Reflect…": "一括反転…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "チェックしたパラメータのキー値を範囲内で反転します。そのパラメータにキーがあるすべてのオブジェクトが対象です。",
-  "All": "すべて"
+  "All": "すべて",
+  "No art mesh here": "ここにアートメッシュはありません"
 }
