@@ -11,6 +11,19 @@ use crate::theme;
 
 const HEADER: f32 = 40.0;
 
+/// Every dialog notes the frame it was drawn in, so a window that should
+/// not land on top of another (the update offer) can wait its turn.
+pub(crate) fn mark_shown(ctx: &egui::Context) {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| d.insert_temp(Id::new("dialog-shown"), frame));
+}
+
+/// A dialog was drawn this frame or the one before.
+pub(crate) fn dialog_shown_lately(ctx: &egui::Context) -> bool {
+    let last = ctx.data(|d| d.get_temp::<u64>(Id::new("dialog-shown")));
+    last.is_some_and(|f| f + 1 >= ctx.cumulative_frame_nr())
+}
+
 pub(crate) struct Dialog<'a> {
     title: String,
     open: Option<&'a mut bool>,
@@ -55,6 +68,7 @@ impl<'a> Dialog<'a> {
         if open.as_deref() == Some(&false) {
             return None;
         }
+        mark_shown(ctx);
         let id = Id::new(("dialog", title.as_str()));
         let pos_id = id.with("pos");
         let start = at.unwrap_or(ctx.content_rect().center());

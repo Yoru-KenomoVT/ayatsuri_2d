@@ -36,6 +36,7 @@ pub(crate) mod timelapse;
 mod timeline;
 mod tween;
 mod update;
+mod whats_new;
 mod windows;
 
 pub use panels::EditorUi;

@@ -107,8 +107,11 @@ pub struct Prefs {
     pub render: RenderPrefs,
     /// Where the last moc3 or image export went.
     pub export_folder: Option<PathBuf>,
-    /// The release the user said "Later" to; its banner stays hidden.
+    /// The release the user chose "Skip this version" for; the update
+    /// window does not offer it again.
     pub update_dismissed: Option<String>,
+    /// The version that last started, so What's new opens once per version.
+    pub last_seen_version: Option<String>,
     /// Physics page splitters as the user left them: settings column
     /// width, parameter rail width, tabs height, model panel width.
     pub physics_layout: Option<[f32; 4]>,

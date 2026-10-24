@@ -147,6 +147,9 @@ pub struct EditorUi {
     pub(crate) prefs: Prefs,
     tool: Tool,
     pub(crate) show_about: bool,
+    /// What's new: this version's changelog, once per version and from Help.
+    pub(crate) show_whats_new: bool,
+    pub(crate) update_win: crate::whats_new::UpdateWindow,
     /// The start-up offer to download ffmpeg when there is none.
     ffmpeg_prompt: crate::ffmpeg::Prompt,
     pub(crate) about: crate::windows::about::AboutState,
@@ -984,7 +987,9 @@ pub(crate) struct TextureHandleCache {
 
 impl Default for EditorUi {
     fn default() -> Self {
-        let prefs = Prefs::load();
+        let mut prefs = Prefs::load();
+        // tests never touch the saved preferences
+        let whats_new = !cfg!(test) && crate::whats_new::first_start(&mut prefs);
         let check_updates = !prefs.update_check_off;
         let ask_ffmpeg = !prefs.ffmpeg_prompt_off;
         crate::i18n::set_language(prefs.language.as_deref().unwrap_or("system"));
@@ -1004,6 +1009,8 @@ impl Default for EditorUi {
             prefs,
             tool: Tool::Arrow,
             show_about: false,
+            show_whats_new: whats_new,
+            update_win: crate::whats_new::UpdateWindow::default(),
             about: crate::windows::about::AboutState::default(),
             // tests never reach the network
             update: crate::update::UpdateState::new(check_updates && !cfg!(test)),
@@ -2031,6 +2038,8 @@ impl EditorUi {
         self.api_window(ui);
         self.def_rename_window(&ui.ctx().clone());
         self.def_division_window(&ui.ctx().clone());
+        self.whats_new_window(&ui.ctx().clone());
+        self.update_window(&ui.ctx().clone());
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
         if self.last_autosave.elapsed().as_secs() >= 120 {
@@ -3194,6 +3203,21 @@ impl EditorUi {
                 });
                 ui.menu_button(crate::i18n::tr("API"), |ui| self.api_menu(ui));
                 ui.menu_button(crate::i18n::tr("Help"), |ui| {
+                    if ui.button(crate::i18n::tr("What's New")).clicked() {
+                        self.show_whats_new = true;
+                        ui.close();
+                    }
+                    if ui.button(crate::i18n::tr("Check for Updates")).clicked() {
+                        self.update.start();
+                        self.update_win = crate::whats_new::UpdateWindow::default();
+                        self.prefs.update_dismissed = None;
+                        ui.close();
+                    }
+                    if ui.button(crate::i18n::tr("Join the Discord")).clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(crate::whats_new::DISCORD));
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button(crate::i18n::tr("About Ayatsuri2D")).clicked() {
                         self.show_about = true;
                         ui.close();
@@ -4298,45 +4322,6 @@ impl EditorUi {
 
         let body = Rect::from_min_max(pos2(rect.min.x + 36.0, band.max.y + 18.0), rect.max);
         let mut ui = ui.new_child(UiBuilder::new().max_rect(body));
-        // a newer release: a full-width strip above everything, text on the
-        // left, Later and the update buttons on the right; Later holds until the next
-        if let Some(latest) = self.update.available().cloned()
-            && self.prefs.update_dismissed.as_deref() != Some(latest.version.as_str())
-        {
-            let width = (ui.available_width() - 36.0).max(200.0);
-            egui::Frame::new()
-                .fill(theme::pal().accent.gamma_multiply(0.18))
-                .stroke(Stroke::new(1.0, theme::pal().accent.gamma_multiply(0.6)))
-                .corner_radius(6.0)
-                .inner_margin(egui::Margin::symmetric(14, 8))
-                .show(&mut ui, |ui| {
-                    ui.set_width(width - 28.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(egui_phosphor::regular::ARROW_CIRCLE_UP)
-                                .size(16.0)
-                                .color(theme::pal().accent),
-                        );
-                        ui.label(crate::i18n::trf(
-                            "Ayatsuri2D {version} is available (you have {current}).",
-                            &[("version", &latest.version), ("current", &crate::update::current())],
-                        ));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button(crate::i18n::tr("Later"))
-                                .on_hover_text(crate::i18n::tr("Hide this until the next release"))
-                                .clicked()
-                            {
-                                self.prefs.update_dismissed = Some(latest.version.clone());
-                                self.prefs.save();
-                            }
-                            crate::update::actions(ui, &mut self.update, &latest);
-                        });
-                    });
-                    crate::update::notes(ui, &latest);
-                });
-            ui.add_space(14.0);
-        }
         ui.horizontal(|ui| {
             if ui.add_sized([150.0, 34.0], egui::Button::new(crate::i18n::tr("Open…"))).clicked()
             {

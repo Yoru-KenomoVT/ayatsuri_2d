@@ -130,6 +130,7 @@ impl EditorUi {
             return;
         }
         let ctx = ui.ctx().clone();
+        crate::windows::mark_shown(&ctx);
         let logo = self.logo_texture(&ctx);
         let logo_size = self.logo.as_ref().map(|c| c.handle.size_vec2()).unwrap_or(vec2(1.0, 1.0));
         let gpu = self.gpu;
@@ -370,6 +371,7 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
         {
             ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{GITHUB}/issues")));
         }
+        crate::whats_new::discord_button(ui);
         if ui
             .button(format!("{}  {}", egui_phosphor::regular::COPY, crate::i18n::tr("Copy info")))
             .clicked()

@@ -261,26 +261,32 @@ pub(crate) fn notes(ui: &mut egui::Ui, latest: &Latest) {
     ))
     .id_salt(("update-notes", latest.version.as_str()))
     .show(ui, |ui| {
-        egui::ScrollArea::vertical().max_height(280.0).auto_shrink([false, true]).show(ui, |ui| {
-            for block in blocks(&latest.notes) {
-                match block {
-                    Block::Heading(text) => {
-                        ui.add_space(4.0);
-                        ui.label(egui::RichText::new(text).strong());
-                    }
-                    Block::Bullet(text) => {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("•");
-                            ui.label(text);
-                        });
-                    }
-                    Block::Text(text) => {
-                        ui.label(text);
-                    }
-                }
-            }
-        });
+        egui::ScrollArea::vertical()
+            .max_height(280.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| markdown(ui, &latest.notes));
     });
+}
+
+/// Changelog Markdown drawn as headings, bullets and paragraphs.
+pub(crate) fn markdown(ui: &mut egui::Ui, md: &str) {
+    for block in blocks(md) {
+        match block {
+            Block::Heading(text) => {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(text).strong());
+            }
+            Block::Bullet(text) => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("•");
+                    ui.label(text);
+                });
+            }
+            Block::Text(text) => {
+                ui.label(text);
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
