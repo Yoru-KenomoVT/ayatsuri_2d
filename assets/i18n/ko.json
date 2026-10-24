@@ -1293,5 +1293,8 @@
   "Conversion Divisions…": "변환 분할 수…",
   "Conversion Divisions": "변환 분할 수",
   "Change its columns and rows; its shape is kept": "열과 행 수를 바꿉니다. 모양은 그대로 유지됩니다",
-  "Fewer divisions keep the shape only at the points that remain.": "분할 수를 줄이면 남는 점에서만 모양이 유지됩니다."
+  "Fewer divisions keep the shape only at the points that remain.": "분할 수를 줄이면 남는 점에서만 모양이 유지됩니다.",
+  "Smooth movement": "부드러운 이동",
+  "Points and objects follow the pointer softly while dragged; they land where you let go": "드래그하는 동안 점과 오브젝트가 포인터를 부드럽게 따라갑니다. 놓은 곳에 정확히 놓입니다",
+  "Smoothing": "부드러움"
 }

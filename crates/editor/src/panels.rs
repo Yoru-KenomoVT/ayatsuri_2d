@@ -2651,6 +2651,15 @@ impl EditorUi {
                             self.prefs.guide_snap_off = !snap;
                             self.prefs.save();
                         }
+                        if ui
+                            .checkbox(&mut self.prefs.smooth_drag, crate::i18n::tr("Smooth movement"))
+                            .on_hover_text(crate::i18n::tr(
+                                "Points and objects follow the pointer softly while dragged; they land where you let go",
+                            ))
+                            .changed()
+                        {
+                            self.prefs.save();
+                        }
                         let mut rulers = !self.prefs.rulers_off;
                         if ui
                             .checkbox(&mut rulers, crate::i18n::tr("Rulers"))
@@ -8896,6 +8905,7 @@ impl EditorUi {
         {
             self.selected = self.multi_sel.last().copied().map(Sel::Mesh);
         }
+        self.pts.smooth = self.prefs.smooth_drag_seconds();
         self.pts.snap = if self.show_guides && !self.prefs.guide_snap_off {
             s.guides
                 .iter()
@@ -9555,6 +9565,9 @@ impl EditorUi {
                         pad: 0.0,
                     };
                     let mut out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                    if self.pts.settling {
+                        ui.ctx().request_repaint();
+                    }
                     if let (Some(ax), Some(m)) = (mirror_x, &mut out.commit) {
                         point_edit::mirror_moves(m, &pts, ax, mirror_tol);
                     }
@@ -9804,6 +9817,9 @@ impl EditorUi {
                             pad: 0.0,
                         };
                         let mut out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                        if self.pts.settling {
+                            ui.ctx().request_repaint();
+                        }
                         if let (Some(ax), Some(m)) = (mirror_x, &mut out.commit) {
                             point_edit::mirror_moves(m, &pts, ax, mirror_tol);
                         }
@@ -10119,6 +10135,9 @@ impl EditorUi {
                         };
                         let mut out =
                             point_edit::point_tool(&mut self.pts, &inp, &mut screen_pts, &opts);
+                        if self.pts.settling {
+                            ui.ctx().request_repaint();
+                        }
                         if let (Some(ax), Some(m)) = (mirror_x, &mut out.commit) {
                             point_edit::mirror_moves(m, &screen_pts, ax, mirror_tol);
                         }

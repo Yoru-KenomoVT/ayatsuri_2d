@@ -1293,5 +1293,8 @@
   "Conversion Divisions…": "Omskakelingsverdelings…",
   "Conversion Divisions": "Omskakelingsverdelings",
   "Change its columns and rows; its shape is kept": "Verander die kolomme en rye; die vorm bly behoue",
-  "Fewer divisions keep the shape only at the points that remain.": "Met minder verdelings bly die vorm net behoue by die punte wat oorbly."
+  "Fewer divisions keep the shape only at the points that remain.": "Met minder verdelings bly die vorm net behoue by die punte wat oorbly.",
+  "Smooth movement": "Gladde beweging",
+  "Points and objects follow the pointer softly while dragged; they land where you let go": "Punte en voorwerpe volg die wyser sag terwyl jy sleep; hulle land waar jy los",
+  "Smoothing": "Gladheid"
 }

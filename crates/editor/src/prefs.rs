@@ -97,6 +97,10 @@ pub struct Prefs {
     /// Hide the canvas rulers (guides still show).
     pub rulers_off: bool,
     pub guide_snap_off: bool,
+    /// Smooth movement while dragging points and objects, and how much
+    /// (1 to 100; 0 is the default, 40).
+    pub smooth_drag: bool,
+    pub smooth_drag_amount: u32,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
     /// The Render window as it was last used: folder, format and settings.
@@ -142,6 +146,17 @@ impl Prefs {
     pub fn view_bg_color(&self) -> Option<egui::Color32> {
         let a = self.view_bg_alpha.unwrap_or(255);
         self.view_bg.map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
+    }
+
+    /// Smooth movement's amount, 1 to 100.
+    pub fn smooth_drag_amount(&self) -> u32 {
+        if self.smooth_drag_amount == 0 { 40 } else { self.smooth_drag_amount.min(100) }
+    }
+
+    /// How long a smoothed drag takes to catch most of the way up, in
+    /// seconds; 0 when smooth movement is off. 100 is a fifth of a second.
+    pub fn smooth_drag_seconds(&self) -> f32 {
+        if self.smooth_drag { self.smooth_drag_amount() as f32 / 500.0 } else { 0.0 }
     }
 
     /// The saved colour of the canvas page, if one was picked.
