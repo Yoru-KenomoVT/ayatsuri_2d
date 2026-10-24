@@ -12779,6 +12779,46 @@ pub(crate) fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
     out
 }
 
+/// Ctrl, Shift, Alt and the Windows/Command key on their own: never a
+/// shortcut's key, only its modifiers.
+fn is_modifier(key: egui::Key) -> bool {
+    use egui::Key as K;
+    matches!(
+        key,
+        K::ShiftLeft
+            | K::ShiftRight
+            | K::ControlLeft
+            | K::ControlRight
+            | K::AltLeft
+            | K::AltRight
+            | K::SuperLeft
+            | K::SuperRight
+    )
+}
+
+/// What a key press binds to in Settings > Keyboard, or None while only
+/// modifiers are down. With Shift held a digit or punctuation key gives
+/// its own key (Ctrl+Shift+1, not Ctrl+Shift+!), as the shortcut is
+/// matched on.
+pub(crate) fn captured_key(
+    key: egui::Key,
+    physical: Option<egui::Key>,
+    modifiers: egui::Modifiers,
+) -> Option<(egui::Key, egui::Modifiers)> {
+    if is_modifier(key) {
+        return None;
+    }
+    let symbol = key.symbol_or_name();
+    let shifted = modifiers.shift
+        && symbol.chars().count() == 1
+        && symbol.chars().all(|c| c.is_ascii_punctuation());
+    let key = match physical {
+        Some(p) if shifted && !is_modifier(p) => p,
+        _ => key,
+    };
+    Some((key, modifiers))
+}
+
 fn parse_shortcut(text: &str) -> Option<egui::KeyboardShortcut> {
     let mut mods = egui::Modifiers::NONE;
     let mut key = None;
@@ -12787,10 +12827,13 @@ fn parse_shortcut(text: &str) -> Option<egui::KeyboardShortcut> {
             "Ctrl" | "Cmd" => mods = mods.plus(egui::Modifiers::COMMAND),
             "Shift" => mods = mods.plus(egui::Modifiers::SHIFT),
             "Alt" => mods = mods.plus(egui::Modifiers::ALT),
+            // "Ctrl++" splits into an empty last part: the Plus key
+            "" => key = Some(egui::Key::Plus),
             name => key = egui::Key::from_name(name),
         }
     }
-    key.map(|k| egui::KeyboardShortcut::new(mods, k))
+    // a lone modifier saved by an older version falls back to the default
+    key.filter(|k| !is_modifier(*k)).map(|k| egui::KeyboardShortcut::new(mods, k))
 }
 
 /// A fresh pendulum group with the manual's example-ish defaults.
@@ -14614,6 +14657,27 @@ mod key_cmd_tests {
         assert_eq!(format_shortcut(&sc(egui::Modifiers::NONE, egui::Key::ArrowLeft)), "Left");
         let back = parse_shortcut("Ctrl+]").map(|s| s.logical_key);
         assert_eq!(back, Some(egui::Key::CloseBracket));
+    }
+
+    #[test]
+    fn a_combination_is_captured_whole_and_reads_back() {
+        use egui::{Key as K, Modifiers as M};
+        let ctrl_shift = M::COMMAND.plus(M::SHIFT);
+        // holding Ctrl, then Shift, waits; S completes Ctrl+Shift+S
+        assert_eq!(captured_key(K::ControlLeft, Some(K::ControlLeft), M::COMMAND), None);
+        assert_eq!(captured_key(K::ShiftLeft, Some(K::ShiftLeft), ctrl_shift), None);
+        let (k, m) = captured_key(K::S, Some(K::S), ctrl_shift).unwrap();
+        let text = format_shortcut(&egui::KeyboardShortcut::new(m, k));
+        assert_eq!(text, "Ctrl+Shift+S");
+        assert_eq!(parse_shortcut(&text), Some(egui::KeyboardShortcut::new(ctrl_shift, K::S)));
+        // Shift+1 types "!": the key under the finger is what binds
+        assert_eq!(
+            captured_key(K::Exclamationmark, Some(K::Num1), M::SHIFT),
+            Some((K::Num1, M::SHIFT))
+        );
+        // Ctrl++ reads back as Plus; a lone modifier saved before does not bind
+        assert_eq!(parse_shortcut("Ctrl++").map(|s| s.logical_key), Some(K::Plus));
+        assert_eq!(parse_shortcut("Ctrl+ControlLeft"), None);
     }
 
     #[test]
