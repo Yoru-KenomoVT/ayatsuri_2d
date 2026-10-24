@@ -30,13 +30,34 @@ pub(crate) fn section<'a>(md: &'a str, version: &str) -> Option<&'a str> {
     md.get(at?..).map(str::trim)
 }
 
+/// Discord's own mark (Simple Icons, CC0), white so it takes the text colour.
+fn discord_icon(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new("discord-icon");
+    if let Some(handle) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(handle);
+    }
+    let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/discord.png"));
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+    let handle = ctx.load_texture("discord-icon", color, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, handle.clone()));
+    Some(handle)
+}
+
 /// The Discord invite as a button, for What's new, About and Help.
 pub(crate) fn discord_button(ui: &mut egui::Ui) {
-    if ui
-        .button(format!("{}  {}", egui_phosphor::regular::DISCORD_LOGO, tr("Join the Discord")))
-        .on_hover_text(tr("Ideas, questions and help from other riggers"))
-        .clicked()
-    {
+    let text = tr("Join the Discord");
+    let button = match discord_icon(ui.ctx()) {
+        Some(icon) => {
+            let image =
+                egui::Image::new(egui::load::SizedTexture::new(icon.id(), egui::vec2(14.0, 14.0)))
+                    .tint(ui.visuals().text_color());
+            egui::Button::image_and_text(image, text)
+        }
+        None => egui::Button::new(text),
+    };
+    if ui.add(button).on_hover_text(tr("Ideas, questions and help from other riggers")).clicked() {
         ui.ctx().open_url(egui::OpenUrl::new_tab(DISCORD));
     }
 }
