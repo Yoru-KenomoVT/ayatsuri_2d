@@ -28,10 +28,11 @@ pub enum Style {
     /// Standard, Deform and Light).
     #[default]
     Lattice,
-    /// A face as riggers build it: two rings along the edge, one outside
-    /// the art at the margin and one as far inside, so the drawn edge stays
-    /// in a narrow strip when warps bend it, and two hubs on the centre
-    /// line (at 32% and 76% of the height) the inner ring fans into.
+    /// A face as riggers build it: the outline ring outside the art at the
+    /// margin, a second ring hugging the drawn edge just inside it, set
+    /// between the outline points so the strip between them zigzags, and an
+    /// even lattice inside at the inner spacing. The drawn edge stays in
+    /// that narrow strip when warps bend the face.
     Face,
 }
 
@@ -88,7 +89,10 @@ impl Grid {
 }
 
 fn build_grid(alpha: &[u8], w: usize, h: usize, p: &Params) -> Grid {
-    let cell = (p.outline_spacing.min(p.inner_spacing) / 4.0).clamp(1.0, 32.0);
+    // a face's outline has to sit a set distance off the art, so its cells
+    // are finer: a quarter spacing would round the margin to a whole cell
+    let per = if p.style == Style::Face { 6.0 } else { 4.0 };
+    let cell = (p.outline_spacing.min(p.inner_spacing) / per).clamp(1.0, 32.0);
     let gw = (w as f32 / cell).ceil() as usize + 2;
     let gh = (h as f32 / cell).ceil() as usize + 2;
     let mut on = vec![false; gw * gh];
@@ -390,9 +394,10 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
         return Mesh::default();
     }
     if p.style == Style::Face {
-        face_inside(&mut points, &rings, &grid, &p);
+        face_inside(&mut points, &rings, &grid, alpha, w, &p);
+        lattice_inside(&mut points, &grid, w, h, &p, 0.7);
     } else {
-        lattice_inside(&mut points, &grid, w, h, &p);
+        lattice_inside(&mut points, &grid, w, h, &p, 0.6);
     }
     if points.len() >= u16::MAX as usize {
         points.truncate(u16::MAX as usize - 1);
@@ -400,10 +405,17 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
     triangulate(points, &grid)
 }
 
-/// Cubism's inside: points on a staggered grid, kept clear of the outline.
-fn lattice_inside(points: &mut Vec<(f32, f32)>, grid: &Grid, w: usize, h: usize, p: &Params) {
-    // inner points on a staggered grid, kept clear of the outline
-    let clear = p.outline_spacing * 0.6;
+/// Cubism's inside: points on a staggered grid, kept `clear` outline
+/// spacings away from the points already placed.
+fn lattice_inside(
+    points: &mut Vec<(f32, f32)>,
+    grid: &Grid,
+    w: usize,
+    h: usize,
+    p: &Params,
+    clear: f32,
+) {
+    let clear = p.outline_spacing * clear;
     let rows = (h as f32 / (p.inner_spacing * 0.866)).ceil() as usize + 1;
     let cols = (w as f32 / p.inner_spacing).ceil() as usize + 1;
     let outline: Vec<(f32, f32)> = points.clone();
@@ -424,20 +436,37 @@ fn lattice_inside(points: &mut Vec<(f32, f32)>, grid: &Grid, w: usize, h: usize,
     }
 }
 
-/// A face's inside: a second ring as far inside the art's edge as the
-/// first sits outside it, then two hubs on the centre line of the largest
-/// outline for the inner ring to fan into.
-fn face_inside(points: &mut Vec<(f32, f32)>, rings: &[Vec<(f32, f32)>], grid: &Grid, p: &Params) {
-    // the outer ring sits `margin` outside the art: the inner one as far in
-    let band = (p.margin * 2.0).max(p.outline_spacing * 0.25);
+/// A face's second ring, measured from a face mesh a rigger built by hand:
+/// one point between each two outline points, found by walking in from
+/// their midpoint to where the art starts and a little past it (a twentieth
+/// of the spacing). The outline sits about a quarter spacing outside the
+/// art, so the drawn edge runs through a thin zigzag strip.
+fn face_inside(
+    points: &mut Vec<(f32, f32)>,
+    rings: &[Vec<(f32, f32)>],
+    grid: &Grid,
+    alpha: &[u8],
+    w: usize,
+    p: &Params,
+) {
+    let h = alpha.len() / w.max(1);
+    let solid = |x: f32, y: f32| {
+        x >= 0.0
+            && y >= 0.0
+            && (x as usize) < w
+            && (y as usize) < h
+            && alpha.get(y as usize * w + x as usize).is_some_and(|&a| a > p.threshold)
+    };
+    let inset = (p.outline_spacing * 0.05).max(1.0);
+    // how far in to look for the art: past the margin and the grid's cells
+    let reach = p.margin + p.outline_spacing;
     for ring in rings {
         let n = ring.len();
-        for (i, &(x, y)) in ring.iter().enumerate() {
-            let (Some(&(ax, ay)), Some(&(bx, by))) =
-                (ring.get((i + n - 1) % n), ring.get((i + 1) % n))
-            else {
+        for i in 0..n {
+            let (Some(&(ax, ay)), Some(&(bx, by))) = (ring.get(i), ring.get((i + 1) % n)) else {
                 continue;
             };
+            let (mx, my) = ((ax + bx) / 2.0, (ay + by) / 2.0);
             let (tx, ty) = (bx - ax, by - ay);
             let len = (tx * tx + ty * ty).sqrt();
             if len < 1e-3 {
@@ -445,26 +474,24 @@ fn face_inside(points: &mut Vec<(f32, f32)>, rings: &[Vec<(f32, f32)>], grid: &G
             }
             // the normal that points into the shape
             let (nx, ny) = (-ty / len, tx / len);
-            let inside = [(nx, ny), (-nx, -ny)]
+            let probe = p.outline_spacing * 0.25;
+            let Some((dx, dy)) = [(nx, ny), (-nx, -ny)]
                 .into_iter()
-                .map(|(dx, dy)| (x + dx * band, y + dy * band))
-                .find(|&(qx, qy)| grid.contains(qx, qy));
-            if let Some(q) = inside {
-                points.push(q);
+                .find(|&(dx, dy)| grid.contains(mx + dx * probe, my + dy * probe))
+            else {
+                continue;
+            };
+            let mut t = 0.0;
+            while t <= reach {
+                if solid(mx + dx * t, my + dy * t) {
+                    let q = (mx + dx * (t + inset), my + dy * (t + inset));
+                    if grid.contains(q.0, q.1) {
+                        points.push(q);
+                    }
+                    break;
+                }
+                t += 0.5;
             }
-        }
-    }
-    // the hubs, on the centre line of the largest outline
-    let Some(big) = rings.iter().max_by_key(|r| r.len()) else { return };
-    let (x0, y0, x1, y1) =
-        big.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, &(x, y)| {
-            (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y))
-        });
-    let cx = (x0 + x1) / 2.0;
-    for f in [0.32f32, 0.76] {
-        let hub = (cx, y0 + (y1 - y0) * f);
-        if grid.contains(hub.0, hub.1) {
-            points.push(hub);
         }
     }
 }
@@ -575,46 +602,35 @@ mod tests {
     }
 
     #[test]
-    fn a_face_is_two_edge_rings_fanned_into_two_hubs() {
+    fn a_face_has_a_ring_hugging_the_edge_and_an_even_inside() {
         let (w, h) = (300, 380);
         let alpha = ellipse(w, h);
         let face = Params {
             outline_spacing: 18.0,
-            inner_spacing: 24.0,
-            margin: 4.0,
+            inner_spacing: 36.0,
+            margin: 3.0,
             style: Style::Face,
             ..Params::default()
         };
         let m = generate(&alpha, w, h, &face);
         assert!(!m.triangles.is_empty());
-        // the hubs: the two points most triangles meet at, on the centre line
-        let mut used = vec![0usize; m.points.len()];
-        for t in &m.triangles {
-            for &v in t {
-                used[v as usize] += 1;
-            }
-        }
-        let mut by_use: Vec<usize> = (0..m.points.len()).collect();
-        by_use.sort_by_key(|&i| std::cmp::Reverse(used[i]));
-        let hubs = [by_use[0], by_use[1]];
-        for hub in hubs {
-            let (x, _) = m.points[hub];
-            assert!((x - w as f32 / 2.0).abs() < 4.0, "a hub sits on the centre line");
-            assert!(used[hub] >= 8, "a hub fans out to many triangles");
-        }
-        // everything else lies near the edge: two rings, no lattice inside
+        // how far each point is from the drawn edge, in px: + inside
         let (cx, cy, rx, ry) = (w as f32 / 2.0, h as f32 / 2.0, w as f32 * 0.4, h as f32 * 0.42);
-        let inside = m
-            .points
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !hubs.contains(i))
-            .filter(|&(_, &(x, y))| ((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2) < 0.7)
-            .count();
-        assert_eq!(inside, 0, "no points deep inside but the hubs");
-        // Cubism's lattice fills the inside instead
-        let lattice = generate(&alpha, w, h, &Params { style: Style::Lattice, ..face });
-        assert!(lattice.points.len() > m.points.len());
+        let depth = |(x, y): (f32, f32)| {
+            let r = (((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2)).sqrt();
+            (1.0 - r) * rx.min(ry)
+        };
+        let outside = m.points.iter().filter(|&&p| depth(p) < -1.0).count();
+        let hugging = m.points.iter().filter(|&&p| (0.0..=4.0).contains(&depth(p))).count();
+        let deep = m.points.iter().filter(|&&p| depth(p) > 12.0).count();
+        assert!(outside > 30, "an outline ring outside the art: {outside}");
+        assert!(
+            hugging * 10 >= outside * 8,
+            "a second ring just inside the edge: {hugging} for {outside}"
+        );
+        // the inside is an even lattice at the inner spacing
+        let area = std::f32::consts::PI * rx * ry;
+        assert!(deep as f32 > 0.6 * area / (36.0 * 36.0 * 0.866), "an even inside: {deep}");
     }
 
     fn disc(size: usize, r: f32) -> Vec<u8> {

@@ -5315,15 +5315,15 @@ impl EditorUi {
 
     /// Auto mesh presets: outline spacing, inner spacing, margin. The first
     /// three are Cubism's. Face standard follows a face mesh a rigger built
-    /// by hand: the inside only a little sparser than the outline (about
-    /// 1.3 times, where Standard doubles it), so a warp turning the head
-    /// bends the cheeks smoothly instead of folding them between sparse
-    /// inner points.
+    /// by hand: the outline about a quarter spacing outside the art, a
+    /// second ring just inside the drawn edge, zigzagging with the outline,
+    /// so the edge stays in a thin strip when a warp turns the head, and an
+    /// even inside at twice the outline spacing.
     const AUTO_PRESETS: [(&'static str, f32, f32, f32, ayatsuri_core::automesh::Style); 4] = [
         ("Standard", 24.0, 48.0, 8.0, ayatsuri_core::automesh::Style::Lattice),
         ("Deform", 14.0, 28.0, 6.0, ayatsuri_core::automesh::Style::Lattice),
         ("Light", 40.0, 80.0, 10.0, ayatsuri_core::automesh::Style::Lattice),
-        ("Face standard", 36.0, 46.0, 6.0, ayatsuri_core::automesh::Style::Face),
+        ("Face standard", 36.0, 72.0, 6.0, ayatsuri_core::automesh::Style::Face),
     ];
 
     /// One mesh's new triangulation from its texture's alpha, or why not.
