@@ -186,6 +186,12 @@ pub fn state_dir() -> Option<PathBuf> {
     app_dir("XDG_STATE_HOME", ".local/state", "LOCALAPPDATA")
 }
 
+/// The folder for big downloads kept on this machine, such as ffmpeg:
+/// `%LOCALAPPDATA%` on Windows, so they don't roam with the profile.
+pub fn data_dir() -> Option<PathBuf> {
+    app_dir("XDG_DATA_HOME", ".local/share", "LOCALAPPDATA")
+}
+
 /// The folder for what can be made again, such as thumbnails.
 pub fn cache_dir() -> Option<PathBuf> {
     app_dir("XDG_CACHE_HOME", ".cache", "LOCALAPPDATA")
@@ -302,6 +308,8 @@ mod dir_tests {
         assert_eq!(config, Some(PathBuf::from(r"C:\Users\a\AppData\Roaming").join("ayatsuri2d")));
         let state = app_dir_in(&v, true, "XDG_STATE_HOME", ".local/state", "LOCALAPPDATA");
         assert_eq!(state, Some(PathBuf::from(r"C:\L").join("ayatsuri2d")));
+        let data = app_dir_in(&v, true, "XDG_DATA_HOME", ".local/share", "LOCALAPPDATA");
+        assert_eq!(data, Some(PathBuf::from(r"C:\L").join("ayatsuri2d")));
     }
 
     #[test]
