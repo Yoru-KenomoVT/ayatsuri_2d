@@ -7515,9 +7515,30 @@ impl EditorUi {
                     resp.on_hover_text(crate::i18n::tr(t.label()))
                 };
                 if resp.clicked() && !locked {
-                    self.tool = t;
+                    self.choose_tool(t);
                 }
             }
+        }
+    }
+
+    /// A tool picked on the toolbar. Warp and Rotation Deformer open their
+    /// creation dialog at once for what is selected, the way Edit Mesh goes
+    /// straight to work; with nothing selected they wait for a click on a
+    /// mesh, and say so.
+    fn choose_tool(&mut self, t: Tool) {
+        self.tool = t;
+        if !matches!(t, Tool::WarpCreate | Tool::RotationCreate) || self.session.is_none() {
+            return;
+        }
+        let picked = !self.multi_sel.is_empty()
+            || matches!(self.selected, Some(Sel::Mesh(_)) | Some(Sel::Deformer(_)));
+        if picked {
+            self.pending_create = Some((t == Tool::WarpCreate, None));
+        } else {
+            set_notice(
+                &mut self.notice,
+                crate::i18n::tr("Click a mesh to put the new deformer around it."),
+            );
         }
     }
 
@@ -14887,6 +14908,19 @@ mod mesh_delete_tests {
         let pick = ed.mesh_pick_with(2);
         ed.delete_meshes(pick);
         assert_eq!(names(&ed), ["B"]);
+    }
+
+    #[test]
+    fn a_deformer_tool_opens_its_dialog_for_the_selection() {
+        let mut ed = editor();
+        ed.choose_tool(Tool::WarpCreate);
+        // nothing picked: it waits for a click, and says so
+        assert_eq!(ed.pending_create, None);
+        assert!(ed.notice.is_some());
+        ed.selected = Some(Sel::Mesh(0));
+        ed.choose_tool(Tool::RotationCreate);
+        assert!(ed.tool == Tool::RotationCreate);
+        assert_eq!(ed.pending_create, Some((false, None)));
     }
 
     #[test]
