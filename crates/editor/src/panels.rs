@@ -434,6 +434,12 @@ pub struct EditorUi {
     clip_invert: bool,
     art_pending: Option<(usize, ayatsuri_format::model::ArtPath)>,
     pick_pages: std::collections::HashMap<usize, (usize, u32, u32, Vec<u8>)>,
+    /// Each texture page's alpha, a quarter size or less, so a click only
+    /// picks a mesh where its art is drawn.
+    pick_alpha: AlphaPages,
+    /// Where the last plain click picked, so a second click on the same
+    /// spot goes to the mesh under the one it picked.
+    last_pick: Option<Pos2>,
     /// Path width in canvas pixels (the red circle) and the share of it that
     /// keeps its shape fully (the blue circle).
     path_width: f32,
@@ -1192,6 +1198,8 @@ impl Default for EditorUi {
             guide_drag: None,
             art_pending: None,
             pick_pages: std::collections::HashMap::new(),
+            pick_alpha: AlphaPages::default(),
+            last_pick: None,
             path_width: 80.0,
             path_hardness: 0.5,
 
@@ -9097,10 +9105,7 @@ impl EditorUi {
             let hovered_mesh = if resp.hovered() && !resp.dragged() {
                 hover_ptr.and_then(|ptr| {
                     let (ux, uy) = unit_of(ptr);
-                    hit_mesh(&s.puppet, ux, uy, &|m| {
-                        self.mesh_locked.contains(&m)
-                            || !s.mesh_shown.get(m).copied().unwrap_or(true)
-                    })
+                    hit_visible(s, &mut self.pick_alpha, ux, uy, &|m| self.mesh_locked.contains(&m))
                 })
             } else {
                 None
@@ -9137,9 +9142,19 @@ impl EditorUi {
                 let (ux, uy) = unit_of(ptr);
                 let (alt, add) =
                     ui.ctx().input(|i| (i.modifiers.alt, i.modifiers.shift || i.modifiers.command));
-                let hit = hit_mesh(&s.puppet, ux, uy, &|m| {
-                    self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
+                let hits = hits_visible(s, &mut self.pick_alpha, ux, uy, &|m| {
+                    self.mesh_locked.contains(&m)
                 });
+                let hit = if add || self.clip_with.is_some() || self.clip_pick.is_some() {
+                    hits.first().copied()
+                } else {
+                    let cur = match self.selected {
+                        Some(Sel::Mesh(m)) => Some(m),
+                        _ => None,
+                    };
+                    cycle_pick(&hits, cur, ptr, self.last_pick)
+                };
+                self.last_pick = (!add).then_some(ptr);
                 if let Some(mask) = self.clip_with {
                     let hit = hit_mesh(&s.puppet, ux, uy, &|m| {
                         m == mask
@@ -9271,9 +9286,9 @@ impl EditorUi {
                 && let Some(ptr) = resp.interact_pointer_pos()
             {
                 let (ux, uy) = unit_of(ptr);
-                if let Some(mi) = hit_mesh(&s.puppet, ux, uy, &|m| {
-                    self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
-                }) {
+                if let Some(mi) =
+                    hit_visible(s, &mut self.pick_alpha, ux, uy, &|m| self.mesh_locked.contains(&m))
+                {
                     self.selected = Some(Sel::Mesh(mi));
                     self.mesh_edit = Some(mi);
                     self.mesh_drag = None;
@@ -9350,7 +9365,9 @@ impl EditorUi {
             }
         }
 
-        // the Edit Mesh tool: clicking a mesh jumps straight into edit mode
+        // the Edit Mesh tool: clicking a mesh jumps straight into edit mode,
+        // on the selected mesh when it is drawn there, else on the front one
+        // drawn there; a click where nothing is drawn does nothing
         if self.tool == Tool::MeshManual
             && !space
             && self.mesh_edit.is_none()
@@ -9359,9 +9376,13 @@ impl EditorUi {
         {
             let ux = ((ptr.x - origin.x) / scale - c.origin_x) / c.pixels_per_unit;
             let uy = ((ptr.y - origin.y) / scale - c.origin_y) / c.pixels_per_unit;
-            if let Some(mi) = hit_mesh(&s.puppet, ux, uy, &|m| {
-                self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
-            }) {
+            let hits =
+                hits_visible(s, &mut self.pick_alpha, ux, uy, &|m| self.mesh_locked.contains(&m));
+            let cur = match self.selected {
+                Some(Sel::Mesh(m)) if hits.contains(&m) => Some(m),
+                _ => None,
+            };
+            if let Some(mi) = cur.or(hits.first().copied()) {
                 self.selected = Some(Sel::Mesh(mi));
                 self.mesh_edit = Some(mi);
                 self.mesh_drag = None;
@@ -9384,9 +9405,8 @@ impl EditorUi {
             let nothing = self.multi_sel.is_empty()
                 && !matches!(self.selected, Some(Sel::Mesh(_)) | Some(Sel::Deformer(_)));
             if nothing
-                && let Some(mi) = hit_mesh(&s.puppet, ux, uy, &|m| {
-                    self.mesh_locked.contains(&m) || !s.mesh_shown.get(m).copied().unwrap_or(true)
-                })
+                && let Some(mi) =
+                    hit_visible(s, &mut self.pick_alpha, ux, uy, &|m| self.mesh_locked.contains(&m))
             {
                 self.selected = Some(Sel::Mesh(mi));
                 self.multi_sel = vec![mi];
@@ -10990,9 +11010,8 @@ impl EditorUi {
                     {
                         let ux = ((ptr.x - origin.x) / scale - c.origin_x) / c.pixels_per_unit;
                         let uy = ((ptr.y - origin.y) / scale - c.origin_y) / c.pixels_per_unit;
-                        if let Some(mi) = hit_mesh(&s.puppet, ux, uy, &|m| {
+                        if let Some(mi) = hit_visible(s, &mut self.pick_alpha, ux, uy, &|m| {
                             self.mesh_locked.contains(&m)
-                                || !s.mesh_shown.get(m).copied().unwrap_or(true)
                         }) {
                             self.selected = Some(Sel::Mesh(mi));
                         }
@@ -13729,6 +13748,137 @@ fn hit_mesh(
     None
 }
 
+/// Texture pages' alpha for picking, small enough to keep every page: the
+/// largest of each block of texels, so thin strokes still count.
+#[derive(Default)]
+pub(crate) struct AlphaPages {
+    pages: std::collections::HashMap<usize, (usize, u32, u32, Vec<u8>)>,
+}
+
+impl AlphaPages {
+    const MAX: u32 = 1024;
+
+    fn alpha(&mut self, pngs: &[Vec<u8>], page: usize, u: f32, v: f32) -> Option<f32> {
+        let png = pngs.get(page)?;
+        let fresh = self.pages.get(&page).is_some_and(|(len, ..)| *len == png.len());
+        if !fresh {
+            let img = image::load_from_memory(png).ok()?.into_rgba8();
+            let (w, h) = img.dimensions();
+            let step = w.max(h).div_ceil(Self::MAX).max(1);
+            let (sw, sh) = (w.div_ceil(step), h.div_ceil(step));
+            let mut small = vec![0u8; (sw * sh) as usize];
+            for (x, y, px) in img.enumerate_pixels() {
+                let at = ((y / step) * sw + x / step) as usize;
+                if let Some(a) = small.get_mut(at) {
+                    *a = (*a).max(px.0[3]);
+                }
+            }
+            self.pages.insert(page, (png.len(), sw, sh, small));
+        }
+        let (_, w, h, px) = self.pages.get(&page)?;
+        let x = ((u.clamp(0.0, 1.0) * *w as f32) as u32).min(w.saturating_sub(1));
+        let y = ((v.clamp(0.0, 1.0) * *h as f32) as u32).min(h.saturating_sub(1));
+        px.get((y * w + x) as usize).map(|&a| a as f32 / 255.0)
+    }
+}
+
+/// Where a point lands in a mesh: its texture page and UV, or None outside.
+fn uv_at(puppet: &ayatsuri_core::Puppet, mi: usize, ux: f32, uy: f32) -> Option<(usize, f32, f32)> {
+    let g = puppet.mesh_geometry(mi)?;
+    let (pos, _) = g.positions.as_chunks::<2>();
+    let (uv, _) = g.uvs.as_chunks::<2>();
+    let (tris, _) = g.indices.as_chunks::<3>();
+    let [a, b, c] = *tris.iter().find(|&&[a, b, c]| {
+        match (pos.get(a as usize), pos.get(b as usize), pos.get(c as usize)) {
+            (Some(p0), Some(p1), Some(p2)) => point_in_triangle(ux, uy, p0, p1, p2),
+            _ => false,
+        }
+    })?;
+    let (p0, p1, p2) = (pos.get(a as usize)?, pos.get(b as usize)?, pos.get(c as usize)?);
+    let det = (p1[1] - p2[1]) * (p0[0] - p2[0]) + (p2[0] - p1[0]) * (p0[1] - p2[1]);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let w0 = ((p1[1] - p2[1]) * (ux - p2[0]) + (p2[0] - p1[0]) * (uy - p2[1])) / det;
+    let w1 = ((p2[1] - p0[1]) * (ux - p2[0]) + (p0[0] - p2[0]) * (uy - p2[1])) / det;
+    let w2 = 1.0 - w0 - w1;
+    let (t0, t1, t2) = (uv.get(a as usize)?, uv.get(b as usize)?, uv.get(c as usize)?);
+    let u = w0 * t0[0] + w1 * t1[0] + w2 * t2[0];
+    let v = w0 * t0[1] + w1 * t1[1] + w2 * t2[1];
+    Some((g.texture as usize, u, v))
+}
+
+/// Every mesh drawn at a point, front first: shown with its parts, not
+/// skipped, not clipped away there, and with its art drawn there (a
+/// transparent margin of a mesh is not a hit). A model without its
+/// textures picks by the triangles alone.
+fn hits_visible(
+    s: &Session,
+    alpha: &mut AlphaPages,
+    ux: f32,
+    uy: f32,
+    skip: &dyn Fn(usize) -> bool,
+) -> Vec<usize> {
+    let order: Vec<(usize, f32, Vec<u32>, bool)> = s
+        .puppet
+        .drawables()
+        .filter(|d| d.opacity > 0.004)
+        .map(|d| {
+            let inverted = d.flags & ayatsuri_format::model::flags::INVERTED_MASK != 0;
+            (d.mesh, d.opacity, d.masks.to_vec(), inverted)
+        })
+        .collect();
+    let mut drawn = |mi: usize| -> Option<f32> {
+        let (page, u, v) = uv_at(&s.puppet, mi, ux, uy)?;
+        Some(alpha.alpha(&s.texture_pngs, page, u, v).unwrap_or(1.0))
+    };
+    let mut out = Vec::new();
+    for (mi, opacity, masks, inverted) in order.into_iter().rev() {
+        if skip(mi) || !mesh_pickable(s, mi) {
+            continue;
+        }
+        let Some(a) = drawn(mi) else { continue };
+        if a * opacity < 0.1 {
+            continue;
+        }
+        if !masks.is_empty() {
+            let in_mask = masks.iter().any(|&k| drawn(k as usize).is_some_and(|a| a > 0.1));
+            if in_mask == inverted {
+                continue;
+            }
+        }
+        out.push(mi);
+    }
+    out
+}
+
+/// The front mesh drawn at a point (see hits_visible).
+fn hit_visible(
+    s: &Session,
+    alpha: &mut AlphaPages,
+    ux: f32,
+    uy: f32,
+    skip: &dyn Fn(usize) -> bool,
+) -> Option<usize> {
+    hits_visible(s, alpha, ux, uy, skip).first().copied()
+}
+
+/// A plain click: the front mesh, or, clicked again within a few points of
+/// the last pick while the picked mesh is still under the pointer, the
+/// mesh under it (round to the front after the back one).
+fn cycle_pick(
+    hits: &[usize],
+    selected: Option<usize>,
+    at: Pos2,
+    last: Option<Pos2>,
+) -> Option<usize> {
+    let again = last.is_some_and(|l| l.distance(at) <= 4.0);
+    match selected.and_then(|cur| hits.iter().position(|&h| h == cur)) {
+        Some(i) if again => hits.get((i + 1) % hits.len()).copied(),
+        _ => hits.first().copied(),
+    }
+}
+
 /// A mesh the canvas may pick: shown, and every part above it shown.
 fn mesh_pickable(s: &Session, mi: usize) -> bool {
     s.mesh_shown.get(mi).copied().unwrap_or(true)
@@ -14579,6 +14729,28 @@ mod mesh_delete_tests {
         let pick = ed.mesh_pick_with(2);
         ed.delete_meshes(pick);
         assert_eq!(names(&ed), ["B"]);
+    }
+
+    #[test]
+    fn picking_skips_hidden_meshes_and_cycles_on_a_second_click() {
+        let mut ed = editor();
+        ed.session.as_mut().unwrap().puppet.update();
+        let s = ed.session.as_ref().unwrap();
+        let mut alpha = AlphaPages::default();
+        // three meshes on one spot, B hidden: only A and C are hits
+        let hits = hits_visible(s, &mut alpha, 0.2, 0.2, &|_| false);
+        assert_eq!(hits.len(), 2);
+        assert!(!hits.contains(&1));
+        assert!(hits_visible(s, &mut alpha, 5.0, 5.0, &|_| false).is_empty());
+        // a first click takes the front; again on the spot, the one under it
+        let at = pos2(10.0, 10.0);
+        let front = cycle_pick(&hits, None, at, None);
+        assert_eq!(front, hits.first().copied());
+        let next = cycle_pick(&hits, front, at + vec2(1.0, 0.0), Some(at));
+        assert_eq!(next, hits.get(1).copied());
+        assert_eq!(cycle_pick(&hits, next, at, Some(at)), front);
+        // a click somewhere else starts from the front again
+        assert_eq!(cycle_pick(&hits, next, at + vec2(30.0, 0.0), Some(at)), front);
     }
 }
 
