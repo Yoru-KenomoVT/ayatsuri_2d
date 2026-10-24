@@ -104,6 +104,12 @@ const REFERENCES: &[(&str, &str, &str, &str)] = &[
         "https://phosphoricons.com",
     ),
     (
+        "Simple Icons",
+        "the Discord logo on the Join the Discord button",
+        "CC0-1.0",
+        "https://simpleicons.org",
+    ),
+    (
         "Ubuntu font",
         "interface text, bundled by egui",
         "Ubuntu Font Licence",
@@ -351,7 +357,9 @@ fn about_page(
         }
     });
     ui.add_space(16.0);
-    ui.horizontal(|ui| {
+    // six buttons are wider than the page in some languages: wrap them
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
         if ui
             .button(format!("{}  {}", egui_phosphor::regular::GLOBE, crate::i18n::tr("Website")))
             .clicked()
