@@ -1309,5 +1309,7 @@
   "Check for Updates": "Kyk vir opdaterings",
   "What changed in this version": "Wat in hierdie weergawe verander het",
   "Mirrored top to bottom, as an up and down parameter.": "Van bo na onder gespieël, as 'n op-en-af-parameter.",
-  "Mirrored left to right.": "Van links na regs gespieël."
+  "Mirrored left to right.": "Van links na regs gespieël.",
+  "The selection sits between keys. Move the parameters onto a key (a dot on the slider) first, then start the tool again.": "Die keuse sit tussen sleutels. Skuif die parameters eers op 'n sleutel ('n kolletjie op die skuifbalk) en begin dan die gereedskap weer.",
+  "Select one or more meshes, or a warp deformer, first.": "Kies eers een of meer meshes, of 'n warp-vervormer."
 }

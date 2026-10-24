@@ -558,9 +558,10 @@ impl TempDeform {
         }
         if kept.is_empty() {
             return Err(if between > 0 {
-                "the parameters are between keys: put them on a key first"
+                "The selection sits between keys. Move the parameters onto a key (a \
+                 dot on the slider) first, then start the tool again."
             } else {
-                "select meshes or a warp deformer first"
+                "Select one or more meshes, or a warp deformer, first."
             });
         }
         if between > 0 {
@@ -721,6 +722,14 @@ impl EditorUi {
             None => self.tool,
         };
         let Some(s) = &mut self.session else { return };
+        // physics moves its parameters off their keys every frame, which
+        // would leave nothing to bind and let go of the tool at once
+        if self.physics_on && s.puppet.has_physics() && self.tdeform.is_none() {
+            self.physics_on = false;
+            super::physics_to_rest(s);
+            self.tdeform_paused_physics = true;
+            log::info!("Temporary Deform Tool: physics paused while it is bound");
+        }
         if let Some(mut old) = self.tdeform.take()
             && let Some(d) = old.drag.take()
         {
@@ -734,12 +743,46 @@ impl EditorUi {
                 self.tdeform = Some(t);
                 self.tool = Tool::TempDeform;
             }
-            Err(e) => log::warn!("Temporary Deform Tool: {e}"),
+            Err(e) => {
+                log::warn!("Temporary Deform Tool: {e}");
+                self.tdeform_error = Some(e);
+                self.resume_paused_physics();
+            }
+        }
+    }
+
+    /// Physics comes back on if the tool paused it.
+    fn resume_paused_physics(&mut self) {
+        if std::mem::take(&mut self.tdeform_paused_physics) {
+            self.physics_on = true;
+            if let Some(s) = &mut self.session {
+                s.puppet.reset_physics();
+            }
+        }
+    }
+
+    /// The reason the tool would not start, until it is read.
+    pub(crate) fn temp_deform_error_window(&mut self, ctx: &egui::Context) {
+        let Some(e) = self.tdeform_error else { return };
+        let mut open = true;
+        crate::windows::Dialog::new(tr("Temporary Deform Tool")).width(360.0).open(&mut open).show(
+            ctx,
+            |ui| {
+                ui.label(tr(e));
+                ui.add_space(8.0);
+                if ui.button(tr("OK")).clicked() {
+                    self.tdeform_error = None;
+                }
+            },
+        );
+        if !open {
+            self.tdeform_error = None;
         }
     }
 
     /// Release the tool (Deselect the Temporary Deform Tool).
     pub(super) fn end_temp_deform(&mut self) {
+        self.resume_paused_physics();
         let Some(mut t) = self.tdeform.take() else { return };
         if let (Some(s), Some(d)) = (&mut self.session, t.drag.take()) {
             for l in d.live.iter().flatten() {
