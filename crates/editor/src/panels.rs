@@ -418,6 +418,11 @@ pub struct EditorUi {
     tdeform: Option<temp_deform::TempDeform>,
     tdeform_cols: usize,
     tdeform_rows: usize,
+    /// Physics was on when the Temporary Deform Tool started: it pauses
+    /// while the tool is bound and comes back when it is let go.
+    tdeform_paused_physics: bool,
+    /// Why the Temporary Deform Tool would not start, shown in a window.
+    tdeform_error: Option<&'static str>,
     dbrush_hardness: f32,
     dbrush_strength: f32,
     show_guides: bool,
@@ -1178,6 +1183,8 @@ impl Default for EditorUi {
             tdeform: None,
             tdeform_cols: 3,
             tdeform_rows: 3,
+            tdeform_paused_physics: false,
+            tdeform_error: None,
             dbrush_hardness: 0.3,
             dbrush_strength: 0.7,
             show_guides: true,
@@ -2039,6 +2046,7 @@ impl EditorUi {
         self.def_rename_window(&ui.ctx().clone());
         self.def_division_window(&ui.ctx().clone());
         self.whats_new_window(&ui.ctx().clone());
+        self.temp_deform_error_window(&ui.ctx().clone());
         self.update_window(&ui.ctx().clone());
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
@@ -3298,30 +3306,7 @@ impl EditorUi {
                         if self.physics_on {
                             s.puppet.reset_physics();
                         } else {
-                            // off: the parameters physics drives go back to
-                            // rest, so they sit on their keys for editing
-                            let outputs: Vec<String> = s
-                                .puppet
-                                .model()
-                                .physics
-                                .iter()
-                                .flat_map(|rig| rig.groups.iter())
-                                .flat_map(|g| g.outputs.iter().map(|o| o.param.clone()))
-                                .collect();
-                            let rest: Vec<(usize, f32)> = s
-                                .puppet
-                                .model()
-                                .parameters
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, p)| outputs.contains(&p.id))
-                                .map(|(i, p)| (i, p.default))
-                                .collect();
-                            for (i, v) in &rest {
-                                s.puppet.set_value(*i, *v);
-                            }
-                            s.dirty = true;
-                            log::debug!("{} physics parameter(s) back to rest", rest.len());
+                            physics_to_rest(s);
                         }
                     }
                 }
@@ -12834,6 +12819,33 @@ fn parse_shortcut(text: &str) -> Option<egui::KeyboardShortcut> {
     }
     // a lone modifier saved by an older version falls back to the default
     key.filter(|k| !is_modifier(*k)).map(|k| egui::KeyboardShortcut::new(mods, k))
+}
+
+/// Physics off: the parameters it drives go back to rest, so they sit on
+/// their keys for editing.
+pub(crate) fn physics_to_rest(s: &mut Session) {
+    let outputs: Vec<String> = s
+        .puppet
+        .model()
+        .physics
+        .iter()
+        .flat_map(|rig| rig.groups.iter())
+        .flat_map(|g| g.outputs.iter().map(|o| o.param.clone()))
+        .collect();
+    let rest: Vec<(usize, f32)> = s
+        .puppet
+        .model()
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| outputs.contains(&p.id))
+        .map(|(i, p)| (i, p.default))
+        .collect();
+    for (i, v) in &rest {
+        s.puppet.set_value(*i, *v);
+    }
+    s.dirty = true;
+    log::debug!("{} physics parameter(s) back to rest", rest.len());
 }
 
 /// A fresh pendulum group with the manual's example-ish defaults.
