@@ -1308,8 +1308,6 @@
   "What's New": "Wat is nuut",
   "Check for Updates": "Kyk vir opdaterings",
   "What changed in this version": "Wat in hierdie weergawe verander het",
-  "Mirrored top to bottom, as an up and down parameter.": "Van bo na onder gespieël, as 'n op-en-af-parameter.",
-  "Mirrored left to right.": "Van links na regs gespieël.",
   "The selection sits between keys. Move the parameters onto a key (a dot on the slider) first, then start the tool again.": "Die keuse sit tussen sleutels. Skuif die parameters eers op 'n sleutel ('n kolletjie op die skuifbalk) en begin dan die gereedskap weer.",
   "Select one or more meshes, or a warp deformer, first.": "Kies eers een of meer meshes, of 'n warp-vervormer.",
   "Motion Mirroring on the selected parameter": "Bewegingspieëling op die gekose parameter",
@@ -1318,5 +1316,10 @@
   "A mesh keeps at least three points.": "'n Mesh hou ten minste drie punte.",
   "Click an art mesh to edit it.": "Klik op 'n art mesh om dit te wysig.",
   "Select Layer": "Kies laag",
-  "Click a mesh to put the new deformer around it.": "Klik op 'n mesh om die nuwe vervormer daarom te sit."
+  "Click a mesh to put the new deformer around it.": "Klik op 'n mesh om die nuwe vervormer daarom te sit.",
+  "Select the objects keyed on this parameter first.": "Kies eers die voorwerpe met sleutels op hierdie parameter.",
+  "Batch Reflect": "Groepsgewys omkeer",
+  "Batch Reflect…": "Groepsgewys omkeer…",
+  "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "Die sleutelwaardes van die gemerkte parameters draai om oor hul bereik, op elke voorwerp met sleutels daarop.",
+  "All": "Alles"
 }
