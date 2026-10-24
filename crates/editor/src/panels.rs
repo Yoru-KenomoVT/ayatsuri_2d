@@ -440,6 +440,9 @@ pub struct EditorUi {
     /// Where the last plain click picked, so a second click on the same
     /// spot goes to the mesh under the one it picked.
     last_pick: Option<Pos2>,
+    /// A short notice over the canvas (why a click did nothing), and when
+    /// it goes; the time is set the first frame it shows.
+    notice: Option<(String, Option<f64>)>,
     /// Path width in canvas pixels (the red circle) and the share of it that
     /// keeps its shape fully (the blue circle).
     path_width: f32,
@@ -1200,6 +1203,7 @@ impl Default for EditorUi {
             pick_pages: std::collections::HashMap::new(),
             pick_alpha: AlphaPages::default(),
             last_pick: None,
+            notice: None,
             path_width: 80.0,
             path_hardness: 0.5,
 
@@ -2055,6 +2059,7 @@ impl EditorUi {
         self.def_division_window(&ui.ctx().clone());
         self.whats_new_window(&ui.ctx().clone());
         self.temp_deform_error_window(&ui.ctx().clone());
+        self.notice_area(&ui.ctx().clone());
         self.update_window(&ui.ctx().clone());
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
@@ -3867,6 +3872,29 @@ impl EditorUi {
 
     /// Cubism's Edit Mesh dialog, shown while mesh edit mode is live: the
     /// manual modes, the auto mesher, and the way out.
+    fn notice_area(&mut self, ctx: &egui::Context) {
+        let Some((text, until)) = &mut self.notice else { return };
+        let now = ctx.input(|i| i.time);
+        let until = *until.get_or_insert(now + 3.0);
+        if now > until {
+            self.notice = None;
+            return;
+        }
+        egui::Area::new(egui::Id::new("canvas-notice"))
+            .anchor(Align2::CENTER_TOP, vec2(0.0, 110.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{}  {}", egui_phosphor::regular::INFO, text))
+                            .color(theme::pal().text),
+                    );
+                });
+            });
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64((until - now).max(0.05)));
+    }
+
     fn mesh_edit_window(&mut self, ui: &mut Ui) {
         let Some(mi) = self.mesh_edit else { return };
         let (verts, tris, id) =
@@ -3893,9 +3921,19 @@ impl EditorUi {
                     .max_height(460.0)
                     .show(ui, |ui| self.td_mesh(ui, &mut dialog_action));
                 ui.separator();
+                let why_not = mesh_unfinished(verts, tris);
+                if let Some(why) = why_not {
+                    ui.colored_label(theme::pal().rotation_red, crate::i18n::tr(why));
+                }
                 ui.horizontal(|ui| {
                     if ui
-                        .button(egui::RichText::new(crate::i18n::tr("Done")).color(Color32::WHITE))
+                        .add_enabled(
+                            why_not.is_none(),
+                            egui::Button::new(
+                                egui::RichText::new(crate::i18n::tr("Done")).color(Color32::WHITE),
+                            ),
+                        )
+                        .on_disabled_hover_text(crate::i18n::tr(why_not.unwrap_or_default()))
                         .clicked()
                     {
                         done = true;
@@ -9393,6 +9431,8 @@ impl EditorUi {
                 self.mesh_edit = Some(mi);
                 self.mesh_drag = None;
                 self.mesh_snapshot = Some(s.puppet.model().clone());
+            } else {
+                set_notice(&mut self.notice, crate::i18n::tr("Click an art mesh to edit it."));
             }
         }
 
@@ -11862,7 +11902,18 @@ impl EditorUi {
             let done =
                 Rect::from_min_size(pos2(bar.max.x - 56.0, bar.min.y + 4.0), vec2(48.0, 18.0));
             let dresp = ui.interact(done, egui::Id::new("mesh-edit-done"), Sense::click());
-            vp.rect_filled(done, 4.0, theme::pal().accent);
+            let why_not = s
+                .puppet
+                .model()
+                .art_meshes
+                .get(mi)
+                .and_then(|am| mesh_unfinished(am.vertex_count as usize, am.indices.len() / 3));
+            let fill = if why_not.is_some() {
+                theme::pal().accent.gamma_multiply(0.35)
+            } else {
+                theme::pal().accent
+            };
+            vp.rect_filled(done, 4.0, fill);
             vp.text(
                 done.center(),
                 Align2::CENTER_CENTER,
@@ -11871,7 +11922,11 @@ impl EditorUi {
                 Color32::WHITE,
             );
             let esc = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
-            if dresp.clicked() || esc {
+            if (dresp.clicked() || esc)
+                && let Some(why) = why_not
+            {
+                set_notice(&mut self.notice, crate::i18n::tr(why));
+            } else if dresp.clicked() || esc {
                 self.mesh_edit = None;
                 self.mesh_drag = None;
                 if self.tool == Tool::MeshManual {
@@ -11929,7 +11984,10 @@ impl EditorUi {
                     if done {
                         log::debug!("mesh {mi}: erase brush removed {n} point(s)");
                     } else {
-                        log::warn!("erase brush: a mesh keeps at least three points");
+                        set_notice(
+                            &mut self.notice,
+                            crate::i18n::tr("A mesh keeps at least three points."),
+                        );
                     }
                     done
                 }
@@ -11937,7 +11995,14 @@ impl EditorUi {
                     // indices shift on delete, so pending lines can't survive it
                     self.pending_edges.remove(&mi);
                     self.mesh_picked.clear();
-                    s.edit(|m| ayatsuri_core::edit::delete_vertex(m, mi, vi))
+                    let done = s.edit(|m| ayatsuri_core::edit::delete_vertex(m, mi, vi));
+                    if !done {
+                        set_notice(
+                            &mut self.notice,
+                            crate::i18n::tr("A mesh keeps at least three points."),
+                        );
+                    }
+                    done
                 }
                 MeshOp::Paste(mi, points, faces) => {
                     let mut got = None;
@@ -13886,6 +13951,27 @@ fn cycle_pick(
     }
 }
 
+/// Say something over the canvas for a few seconds (EditorUi::notice; a
+/// free function so code holding the session can still set it).
+fn set_notice(slot: &mut Option<(String, Option<f64>)>, text: &str) {
+    log::info!("notice: {text}");
+    *slot = Some((text.to_string(), None));
+}
+
+/// Why a mesh being edited cannot be finished yet: it needs three points and
+/// a triangle to be drawn at all. Cancel still puts it back.
+fn mesh_unfinished(verts: usize, tris: usize) -> Option<&'static str> {
+    if verts < 3 {
+        Some("A mesh needs at least three points. Add points, or Cancel to undo the edit.")
+    } else if tris == 0 {
+        Some(
+            "This mesh has no triangles, so nothing would be drawn. Connect points, or Cancel to undo the edit.",
+        )
+    } else {
+        None
+    }
+}
+
 /// A mesh the canvas may pick: shown, and every part above it shown.
 fn mesh_pickable(s: &Session, mi: usize) -> bool {
     s.mesh_shown.get(mi).copied().unwrap_or(true)
@@ -14736,6 +14822,13 @@ mod mesh_delete_tests {
         let pick = ed.mesh_pick_with(2);
         ed.delete_meshes(pick);
         assert_eq!(names(&ed), ["B"]);
+    }
+
+    #[test]
+    fn done_waits_for_three_points_and_a_triangle() {
+        assert!(mesh_unfinished(2, 0).is_some());
+        assert!(mesh_unfinished(4, 0).is_some());
+        assert_eq!(mesh_unfinished(3, 1), None);
     }
 
     #[test]
