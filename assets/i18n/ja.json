@@ -1307,5 +1307,7 @@
   "Ask again the next time Ayatsuri2D starts": "次にAyatsuri2Dを起動したときに再度確認します",
   "What's New": "新機能",
   "Check for Updates": "アップデートを確認",
-  "What changed in this version": "このバージョンの変更点"
+  "What changed in this version": "このバージョンの変更点",
+  "Mirrored top to bottom, as an up and down parameter.": "上下のパラメータなので、上下に反転します。",
+  "Mirrored left to right.": "左右に反転します。"
 }

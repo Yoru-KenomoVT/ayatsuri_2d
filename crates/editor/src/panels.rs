@@ -14699,6 +14699,25 @@ mod key_cmd_tests {
     }
 
     #[test]
+    fn reflect_on_an_up_and_down_parameter_flips_top_to_bottom() {
+        let mut ed = editor();
+        let s = ed.session.as_mut().unwrap();
+        s.edit(|m| {
+            m.parameters[0].id = "ParamAngleY".into();
+            true
+        });
+        assert!(param_menu::up_and_down(s.puppet.model(), 0));
+        s.puppet.set_value(0, 0.9);
+        ed.run_param_cmd(ParamCmd::Reflect(0));
+        assert_eq!(ed.pmenu.reflect, Some((0, 1.0, Some(-1.0))));
+        ed.reflect_into_opposite(0, 1.0);
+        // the move (x + 2) is kept, not turned around as left to right
+        // would, and the slider shows the key that was written
+        assert_eq!(mesh(&ed).positions, vec![2.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
+        assert_eq!(ed.session.as_ref().unwrap().puppet.value(0), -1.0);
+    }
+
+    #[test]
     fn reflect_on_the_default_key_has_nothing_to_overwrite() {
         let mut ed = editor();
         ed.run_param_cmd(ParamCmd::Reflect(0));
