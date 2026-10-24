@@ -13,7 +13,7 @@ const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 /// This version's section of the changelog, without its heading. A test
 /// build ("0.5.8-test.2") reads the section of the release it leads to.
 pub(crate) fn section<'a>(md: &'a str, version: &str) -> Option<&'a str> {
-    let want = version.split('-').next().unwrap_or(version).trim_start_matches('v');
+    let want = release(version);
     let mut at = None;
     let mut offset = 0;
     for line in md.split_inclusive('\n') {
@@ -48,17 +48,30 @@ pub(crate) struct UpdateWindow {
     shown: bool,
 }
 
-/// The first start of this version: note it, and say whether What's new
-/// should open (it has something to show).
+/// The release a version leads to: "0.5.8-test.3" is 0.5.8.
+fn release(version: &str) -> &str {
+    version.split('-').next().unwrap_or(version).trim_start_matches('v')
+}
+
+/// The first start of a newer release: note it, and say whether What's new
+/// should open (it has something to show). It opens once per release: test
+/// builds of it, starting an older copy in between, or a pretend version
+/// (AYATSURI_PRETEND_VERSION) do not bring it back.
 pub(crate) fn first_start(prefs: &mut crate::prefs::Prefs) -> bool {
-    let now = crate::update::current();
-    if prefs.last_seen_version.as_deref() == Some(now.as_str()) {
-        return false;
-    }
-    let show = section(CHANGELOG, &now).is_some();
-    prefs.last_seen_version = Some(now);
+    let Some(show) = note_start(prefs) else { return false };
     prefs.save();
     show
+}
+
+/// The choice itself, without saving: None when this release was seen.
+fn note_start(prefs: &mut crate::prefs::Prefs) -> Option<bool> {
+    let now = release(env!("CARGO_PKG_VERSION"));
+    let seen = prefs.last_seen_version.as_deref().map(release);
+    if seen.is_some_and(|seen| !ayatsuri_update::is_newer(now, seen)) {
+        return None;
+    }
+    prefs.last_seen_version = Some(now.to_string());
+    Some(section(CHANGELOG, now).is_some())
 }
 
 impl crate::panels::EditorUi {
@@ -66,13 +79,13 @@ impl crate::panels::EditorUi {
         if !self.show_whats_new {
             return;
         }
-        let version = crate::update::current();
+        let version = release(env!("CARGO_PKG_VERSION"));
         let mut open = true;
         crate::windows::Dialog::new(trf("What's new in {version}", &[("version", &version)]))
             .width(520.0)
             .open(&mut open)
             .show(ctx, |ui| {
-                match section(CHANGELOG, &version) {
+                match section(CHANGELOG, version) {
                     Some(md) => {
                         egui::ScrollArea::vertical()
                             .max_height(380.0)
@@ -184,6 +197,23 @@ mod tests {
         assert_eq!(section(MD, "0.5.8-test.3"), Some("New things.\n\n### Added\n\n- a"));
         assert_eq!(section(MD, "0.5.7"), Some("Old things."));
         assert_eq!(section(MD, "0.5.9"), None);
+    }
+
+    #[test]
+    fn it_opens_once_per_release() {
+        let mut prefs = crate::prefs::Prefs::default();
+        let now = release(env!("CARGO_PKG_VERSION")).to_string();
+        // never started, or an older copy saved without the field
+        assert_eq!(note_start(&mut prefs), Some(true));
+        assert_eq!(prefs.last_seen_version.as_deref(), Some(now.as_str()));
+        assert_eq!(note_start(&mut prefs), None);
+        // a test build of this release, or a newer one already seen
+        prefs.last_seen_version = Some(format!("{now}-test.3"));
+        assert_eq!(note_start(&mut prefs), None);
+        prefs.last_seen_version = Some("99.0.0".into());
+        assert_eq!(note_start(&mut prefs), None);
+        prefs.last_seen_version = Some("0.0.1".into());
+        assert_eq!(note_start(&mut prefs), Some(true));
     }
 
     #[test]
