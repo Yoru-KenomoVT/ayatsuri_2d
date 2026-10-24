@@ -1317,5 +1317,6 @@
   "This mesh has no triangles, so nothing would be drawn. Connect points, or Cancel to undo the edit.": "Deze mesh heeft geen driehoeken, dus er wordt niets getekend. Verbind punten, of kies Annuleren om de bewerking ongedaan te maken.",
   "A mesh keeps at least three points.": "Een mesh houdt minstens drie punten.",
   "Click an art mesh to edit it.": "Klik op een art mesh om die te bewerken.",
-  "Select Layer": "Laag selecteren"
+  "Select Layer": "Laag selecteren",
+  "Click a mesh to put the new deformer around it.": "Klik op een mesh om de nieuwe deformer eromheen te zetten."
 }
