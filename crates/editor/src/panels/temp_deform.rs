@@ -491,11 +491,13 @@ fn quad_drag(
                 let h = (q0[1] - q0[0]).normalized();
                 let v = (q0[3] - q0[0]).normalized();
                 let (dh, dv) = (d.dot(h), d.dot(v));
-                // the corner and its partner on the same side move apart
-                let (partner, m) =
-                    if dh.abs() >= dv.abs() { (i ^ 1, h * dh) } else { (3 - i, v * dv) };
-                bump(&mut q, i, m);
-                bump(&mut q, partner, -m);
+                // the corner follows the pointer on both axes; its partner
+                // across the top or bottom edge mirrors the sideways part
+                // and its partner down the side mirrors the up and down
+                // part, so a diagonal drag tilts both ways at once
+                bump(&mut q, i, h * dh + v * dv);
+                bump(&mut q, i ^ 1, -(h * dh));
+                bump(&mut q, 3 - i, -(v * dv));
             }
             _ => bump(&mut q, i, d),
         },
@@ -1231,12 +1233,33 @@ mod tests {
             Grab::Corner(0),
             Mode::Deform,
             vec2(0.0, 0.0),
-            vec2(1.0, 0.1),
+            vec2(1.0, 0.0),
             false,
         );
         assert!(close(n[0], vec2(1.0, 0.0)));
         assert!(close(n[1], vec2(3.0, 0.0)));
         assert!(close(n[2], q[2]) && close(n[3], q[3]));
+    }
+
+    #[test]
+    fn perspective_follows_a_diagonal_drag_on_both_axes() {
+        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        let (n, _) = quad_drag(
+            Method::Perspective,
+            &q,
+            vec2(2.0, 1.0),
+            Grab::Corner(0),
+            Mode::Deform,
+            vec2(0.0, 0.0),
+            vec2(1.0, 0.5),
+            false,
+        );
+        // the corner goes where the pointer went; the top partner mirrors
+        // the sideways part, the side partner the downward part
+        assert!(close(n[0], vec2(1.0, 0.5)));
+        assert!(close(n[1], vec2(3.0, 0.0)));
+        assert!(close(n[3], vec2(0.0, 1.5)));
+        assert!(close(n[2], q[2]));
     }
 
     #[test]
