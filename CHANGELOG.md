@@ -35,6 +35,8 @@ The rest of @seoriboi's requests from #29, and a window for updates.
   and macOS) instead of the roaming settings folder: 165 MB has no
   business roaming with a Windows profile. A copy an older version put in
   the settings folder is still found.
+- **The ffmpeg offer** uses the same window as Settings and About, with a
+  close button that hides while ffmpeg downloads.
 - No more "beta" on releases.
 
 ### Fixed
