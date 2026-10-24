@@ -1,6 +1,48 @@
 # Changelog
 
-## 0.5.7 beta (2026-10-23)
+## 0.5.8 (2026-10-24)
+
+The rest of @seoriboi's requests from #29, and a window for updates.
+
+### Added
+
+- **Change a warp's conversion divisions after it is made** (#34):
+  right-click a warp deformer and choose Conversion Divisions… Every
+  keyform's grid is sampled again at the new columns and rows, so what the
+  warp holds keeps its shape: exactly when the division gets finer, at the
+  points that remain when it gets coarser. Its children need no change.
+- **Smooth movement** (#36): dragged points and objects ease after the
+  pointer instead of jumping with it, and land where you let go. Turn it
+  on in View > Smooth movement; Settings > Canvas sets how much.
+- **What's new**: the first start of a new version shows its part of this
+  changelog. Help > What's New opens it again.
+- **Join the Discord**, in Help, About and What's new.
+
+### Changed
+
+- **Updates open a window** instead of the banner on the Home screen. It
+  comes up once per launch, wherever you are (never over another dialog
+  or in the middle of a drag), with the release's notes and Update now,
+  Later (asks again next launch) and Skip this version. Help > Check for
+  Updates asks GitHub again.
+- **Face standard automesh** now lays a face out the way a hand-built one
+  is: the outline about a quarter spacing outside the art, a second ring
+  just inside the drawn edge set between the outline points, so the edge
+  sits in a thin zigzag strip when a warp turns the head, and an even
+  inside at twice the outline spacing instead of two hubs.
+- **ffmpeg downloads go to `%LOCALAPPDATA%`** (`~/.local/share` on Linux
+  and macOS) instead of the roaming settings folder: 165 MB has no
+  business roaming with a Windows profile. A copy an older version put in
+  the settings folder is still found.
+- No more "beta" on releases.
+
+### Fixed
+
+- **Keyboard settings**: a shortcut waiting for its new key stopped every
+  other shortcut until a key was pressed, even after Settings was closed.
+  It now stops waiting when Settings closes or another page opens.
+
+## 0.5.7 (2026-10-23)
 
 Fixes and requests from @seoriboi's feedback in #29.
 
@@ -37,7 +79,7 @@ Fixes and requests from @seoriboi's feedback in #29.
   dragged (#33): in the graph editor, on ArtPaths and on a warp
   deformer's Bezier lattice.
 
-## 0.5.6 beta (2026-10-23)
+## 0.5.6 (2026-10-23)
 
 ### Added
 
@@ -468,7 +510,7 @@ Fixes and requests from @seoriboi's feedback in #29.
   middle-button panning, keys you can tell apart, right-click onto a key,
   key colours, the canvas colour and extended interpolation. Thank you!
 
-## 0.5.5 beta (2026-10-14)
+## 0.5.5 (2026-10-14)
 
 ### Added
 
@@ -519,7 +561,7 @@ Fixes and requests from @seoriboi's feedback in #29.
   ([pixiv](https://www.pixiv.net/users/99163365)), used with permission.
   Thank you!
 
-## 0.5.4 beta (2026-10-13)
+## 0.5.4 (2026-10-13)
 
 ### Fixed
 
@@ -535,7 +577,7 @@ Fixes and requests from @seoriboi's feedback in #29.
   deformers, the Physics page, the timeline and the home screen.
 - Ko-fi and Buy Me a Coffee links, and a Sponsor button on the repository.
 
-## 0.5.3 beta (2026-10-12)
+## 0.5.3 (2026-10-12)
 
 ### Added
 
@@ -562,7 +604,7 @@ Fixes and requests from @seoriboi's feedback in #29.
 - The Lasso in Tool Details now works (it was a placeholder), and the
   unbuilt "Add more vertices" paint button is gone.
 
-## 0.5.2 beta (2026-10-12)
+## 0.5.2 (2026-10-12)
 
 ### Added
 
@@ -589,7 +631,7 @@ Fixes and requests from @seoriboi's feedback in #29.
   not saved or exported. To fade a part by a parameter, key the Opacity of
   a deformer that holds it.
 
-## 0.5.1 beta (2026-10-12)
+## 0.5.1 (2026-10-12)
 
 The first public build of Ayatsuri2D: a free, open-source 2D rigging editor
 that reads and writes Live2D Cubism models. It is a beta. Save often, and
