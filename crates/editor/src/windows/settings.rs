@@ -69,6 +69,7 @@ fn segmented<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, options: &[(&str
 impl EditorUi {
     pub(crate) fn settings_window(&mut self, ui: &mut Ui) {
         if !self.show_settings {
+            self.rebind = None;
             return;
         }
         let ctx = ui.ctx().clone();
@@ -184,6 +185,11 @@ impl EditorUi {
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.rebind.is_none() {
             open = false;
+        }
+        // a rebind waiting for a key holds every shortcut back, so it ends
+        // with the Keyboard page: closed by the x or left for another tab
+        if !open || self.settings_tab != TAB_KEYBOARD {
+            self.rebind = None;
         }
         self.show_settings = open;
     }
