@@ -2,7 +2,9 @@
 
 ## 0.5.8 (2026-10-24)
 
-The rest of @seoriboi's requests from #29, and a window for updates.
+The rest of @seoriboi's requests from #29, their round of testing on
+Discord, a window for updates, and a few tools brought closer to how
+Cubism does them.
 
 ### Added
 
@@ -18,6 +20,16 @@ The rest of @seoriboi's requests from #29, and a window for updates.
   changelog, once (test builds of it don't bring it back). Help > What's New
   and the What's New button in About open it again.
 - **Join the Discord**, in Help, About and What's new.
+- **A list of the meshes under the cursor**: Ctrl+right-click the canvas,
+  as in Cubism, or right-click > Select Layer. Each row shows the mesh's
+  own art, big on hover, and the hovered mesh is outlined on the canvas.
+- **Drag meshes from the Part palette onto a deformer** in the Deformer
+  palette to put them under it; dragging one of several picked meshes
+  moves them all. They stay where they are on screen.
+- **Batch Reflect…** in the Parameter palette's menu: Reflect on every
+  object keyed on the ticked parameters.
+- **Motion Mirroring has a shortcut slot** in Settings > Keyboard (no key
+  until one is set).
 
 ### Changed
 
@@ -37,6 +49,18 @@ The rest of @seoriboi's requests from #29, and a window for updates.
   the settings folder is still found.
 - **The ffmpeg offer** uses the same window as Settings and About, with a
   close button that hides while ffmpeg downloads.
+- **The Warp and Rotation Deformer buttons open the creation dialog** at
+  once, as Cubism's do. It follows the selection while it is open, so
+  picking what goes inside can come before or after.
+- **A click on the canvas picks the mesh whose art is drawn there.**
+  Transparent margins, hidden parts and clipped-away areas no longer catch
+  it, and a second click on the same spot picks the mesh underneath.
+- **Edit Mesh keeps to the selected mesh** when it is under the click, and
+  a click where nothing is drawn says to click an art mesh instead of
+  opening a mesh you can't see.
+- **The Temporary Deform Tool pauses physics** while it is bound (physics
+  kept the parameters between keys, so the tool would not start) and says
+  in a window why it can't start.
 - No more "beta" on releases.
 
 ### Fixed
@@ -44,6 +68,19 @@ The rest of @seoriboi's requests from #29, and a window for updates.
 - **Keyboard settings**: a shortcut waiting for its new key stopped every
   other shortcut until a key was pressed, even after Settings was closed.
   It now stops waiting when Settings closes or another page opens.
+- **Shortcuts with modifiers** (Ctrl+Shift+S): pressing Ctrl or Shift no
+  longer ended the capture. It waits for the key that completes the
+  combination and shows the modifiers held so far. Ctrl+C, X and V can be
+  bound, and a shifted digit binds as the digit.
+- **Reflect** does what Cubism's does: the key values turn around across
+  the parameter's range on the selected objects, so a mouth keyed open at
+  0 and shut at 1 becomes shut at 0 and open at 1.
+- **Reset parameters (Ctrl+1)** left meshes in the old pose while the warp
+  lattice showed the new one.
+- **Perspective** follows a diagonal drag on both axes instead of keeping
+  only the larger one.
+- **Edit Mesh's Done** waits for at least three points and a triangle and
+  says why; a delete that would leave fewer than three points says so.
 
 ## 0.5.7 (2026-10-23)
 
