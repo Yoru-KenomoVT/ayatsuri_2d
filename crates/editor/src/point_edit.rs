@@ -218,6 +218,13 @@ pub struct PointState {
     pub snap: Vec<(bool, f32)>,
     /// The guides a moving point sits on right now (indices into `snap`).
     pub snapped: Vec<usize>,
+    /// Smooth movement: how long, in seconds, a drag takes to catch most of
+    /// the way up to the pointer (0 follows it at once). Letting go always
+    /// lands where the pointer is.
+    pub smooth: f32,
+    /// A smoothed drag is still catching up, so the canvas needs another
+    /// frame even when the pointer stays still.
+    pub settling: bool,
 }
 
 /// How close, in screen points, a moving point comes to a guide to land on it.
@@ -323,17 +330,20 @@ pub struct PtInput {
     pub drag_started: bool,
     pub drag_stopped: bool,
     pub clicked: bool,
+    /// Seconds since the last frame, for smooth movement.
+    pub dt: f32,
 }
 
 impl PtInput {
     pub fn read(ui: &egui::Ui, resp: &egui::Response) -> Self {
-        let (ptr, origin, shift, alt, any_down) = ui.ctx().input(|i| {
+        let (ptr, origin, shift, alt, any_down, dt) = ui.ctx().input(|i| {
             (
                 i.pointer.latest_pos(),
                 i.pointer.press_origin(),
                 i.modifiers.shift,
                 i.modifiers.alt,
                 i.pointer.any_down(),
+                i.stable_dt,
             )
         });
         Self {
@@ -347,6 +357,7 @@ impl PtInput {
             drag_started: resp.drag_started_by(egui::PointerButton::Primary),
             drag_stopped: resp.drag_stopped(),
             clicked: resp.clicked(),
+            dt,
         }
     }
 }
@@ -433,9 +444,11 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
         }
     }
     st.snapped.clear();
+    st.settling = false;
     if let Some(d) = &mut st.drag
         && let Some(p) = ptr
     {
+        let was = d.ptr;
         d.ptr = p;
         if matches!(d.grab, Grab::Point | Grab::Move) && !st.snap.is_empty() {
             let raw = p - d.start;
@@ -464,6 +477,19 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
                 st.snapped.push(gi);
             }
             d.ptr = d.start + t;
+        }
+        // smooth movement: ease towards the pointer, frame rate aside, and
+        // land on it when the button comes up
+        let landing = inp.drag_stopped || !inp.any_down;
+        if st.smooth > 0.0 && d.grab != Grab::Marquee && !landing {
+            let target = d.ptr;
+            let k = if inp.dt > 0.0 { 1.0 - (-inp.dt / st.smooth).exp() } else { 1.0 };
+            d.ptr = was + (target - was) * k;
+            if d.ptr.distance(target) > 0.25 {
+                st.settling = true;
+            } else {
+                d.ptr = target;
+            }
         }
         if let Some(path) = &mut d.lasso
             && path.last().is_none_or(|l| l.distance(p) > 2.0)
@@ -792,6 +818,56 @@ mod tests {
         let d = moved.iter().find(|m| m.0 == 0).map(|m| m.1).unwrap();
         assert!((d.x - 50.0).abs() < 1e-4, "snapped onto the guide: {d:?}");
         assert!((d.y - 20.0).abs() < 1e-4, "no horizontal guide, y as dragged");
+    }
+
+    #[test]
+    fn a_smoothed_drag_trails_the_pointer_and_lands_on_it() {
+        let mut st = PointState { smooth: 0.1, ..PointState::default() };
+        let mut pts = [pos2(0.0, 0.0), pos2(100.0, 100.0)];
+        let opts = PtOpts { whole_box: false, marquee: true, lasso: false, reach: 8.0, pad: 0.0 };
+        let start = PtInput {
+            ptr: Some(pos2(0.0, 0.0)),
+            origin: Some(pos2(0.0, 0.0)),
+            any_down: true,
+            drag_started: true,
+            dt: 1.0 / 60.0,
+            ..PtInput::default()
+        };
+        point_tool(&mut st, &start, &mut pts, &opts);
+        // one frame later the pointer is 60 px on; the point is part way
+        let mid = PtInput {
+            ptr: Some(pos2(60.0, 0.0)),
+            any_down: true,
+            dt: 1.0 / 60.0,
+            ..PtInput::default()
+        };
+        point_tool(&mut st, &mid, &mut pts, &opts);
+        assert!(pts[0].x > 1.0 && pts[0].x < 30.0, "trails the pointer: {:?}", pts[0]);
+        assert!(st.settling);
+        // still frames close the gap without the pointer moving
+        for _ in 0..120 {
+            point_tool(&mut st, &mid, &mut pts, &opts);
+        }
+        assert!((pts[0].x - 60.0).abs() < 1e-3);
+        assert!(!st.settling);
+        // a quick flick and release lands exactly under the pointer
+        let flick = PtInput {
+            ptr: Some(pos2(90.0, 30.0)),
+            any_down: true,
+            dt: 1.0 / 60.0,
+            ..PtInput::default()
+        };
+        point_tool(&mut st, &flick, &mut pts, &opts);
+        let end = PtInput {
+            ptr: Some(pos2(90.0, 30.0)),
+            any_down: false,
+            drag_stopped: true,
+            dt: 1.0 / 60.0,
+            ..PtInput::default()
+        };
+        let out = point_tool(&mut st, &end, &mut pts, &opts);
+        let d = out.commit.unwrap().iter().find(|m| m.0 == 0).map(|m| m.1).unwrap();
+        assert!((d.x - 90.0).abs() < 1e-4 && (d.y - 30.0).abs() < 1e-4, "{d:?}");
     }
 
     #[test]

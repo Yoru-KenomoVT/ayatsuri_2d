@@ -682,6 +682,23 @@ impl EditorUi {
                 }
             },
         );
+        row(
+            ui,
+            crate::i18n::tr("Smooth movement"),
+            crate::i18n::tr(
+                "Points and objects follow the pointer softly while dragged; they land where you let go",
+            ),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.smooth_drag, "").changed();
+                let mut amount = self.prefs.smooth_drag_amount();
+                let slider =
+                    egui::Slider::new(&mut amount, 1..=100).text(crate::i18n::tr("Smoothing"));
+                if ui.add_enabled(self.prefs.smooth_drag, slider).changed() {
+                    self.prefs.smooth_drag_amount = amount;
+                    save = true;
+                }
+            },
+        );
         section(ui, crate::i18n::tr("OVERLAYS"));
         ui.label(
             RichText::new(crate::i18n::tr(
