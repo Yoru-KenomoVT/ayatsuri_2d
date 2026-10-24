@@ -1316,7 +1316,6 @@
   "A mesh keeps at least three points.": "메시는 최소 3개의 점을 유지합니다.",
   "Click an art mesh to edit it.": "편집할 아트메시를 클릭하세요.",
   "Select Layer": "레이어 선택",
-  "Click a mesh to put the new deformer around it.": "메시를 클릭하면 그 주위에 새 디포머를 만듭니다.",
   "Select the objects keyed on this parameter first.": "먼저 이 파라미터에 키가 있는 오브젝트를 선택하세요.",
   "Batch Reflect": "일괄 반전",
   "Batch Reflect…": "일괄 반전…",

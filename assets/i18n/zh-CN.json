@@ -1316,7 +1316,6 @@
   "A mesh keeps at least three points.": "网格至少保留三个点。",
   "Click an art mesh to edit it.": "点击要编辑的图形网格。",
   "Select Layer": "选择图层",
-  "Click a mesh to put the new deformer around it.": "点击一个网格，在它周围创建新的变形器。",
   "Select the objects keyed on this parameter first.": "请先选择在此参数上有关键点的对象。",
   "Batch Reflect": "批量反转",
   "Batch Reflect…": "批量反转…",

@@ -1316,7 +1316,6 @@
   "A mesh keeps at least three points.": "メッシュには最低3つの点が残ります。",
   "Click an art mesh to edit it.": "編集するアートメッシュをクリックしてください。",
   "Select Layer": "レイヤーを選択",
-  "Click a mesh to put the new deformer around it.": "メッシュをクリックすると、その周りに新しいデフォーマを作成します。",
   "Select the objects keyed on this parameter first.": "先にこのパラメータにキーがあるオブジェクトを選択してください。",
   "Batch Reflect": "一括反転",
   "Batch Reflect…": "一括反転…",
