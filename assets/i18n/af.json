@@ -1316,5 +1316,6 @@
   "A mesh needs at least three points. Add points, or Cancel to undo the edit.": "'n Mesh het ten minste drie punte nodig. Voeg punte by, of kies Kanselleer om die wysiging ongedaan te maak.",
   "This mesh has no triangles, so nothing would be drawn. Connect points, or Cancel to undo the edit.": "Hierdie mesh het geen driehoeke nie, so niks sal geteken word nie. Verbind punte, of kies Kanselleer om die wysiging ongedaan te maak.",
   "A mesh keeps at least three points.": "'n Mesh hou ten minste drie punte.",
-  "Click an art mesh to edit it.": "Klik op 'n art mesh om dit te wysig."
+  "Click an art mesh to edit it.": "Klik op 'n art mesh om dit te wysig.",
+  "Select Layer": "Kies laag"
 }
