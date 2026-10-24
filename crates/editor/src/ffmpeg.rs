@@ -23,9 +23,9 @@ pub(crate) struct Download {
 }
 
 impl Download {
-    /// Start fetching ffmpeg into the preferences folder.
+    /// Start fetching ffmpeg into the data folder (`%LOCALAPPDATA%` on Windows).
     pub(crate) fn start() -> Result<Self, String> {
-        let dir = ayatsuri_update::ffmpeg::user_dir().ok_or("there is no settings folder")?;
+        let dir = ayatsuri_update::ffmpeg::user_dir().ok_or("there is no data folder")?;
         let progress = Arc::new(ayatsuri_update::Progress::default());
         let (tx, end) = channel();
         let counted = progress.clone();

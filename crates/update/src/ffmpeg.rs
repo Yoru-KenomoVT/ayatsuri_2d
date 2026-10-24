@@ -13,9 +13,11 @@
 //! ```
 //!
 //! Where it goes: `ffmpeg/` beside the editor when an installer fetched it
-//! (`ayatsuri-launcher --get-ffmpeg <dir>`), otherwise `ffmpeg/` in the
-//! preferences folder. Which one runs: ffmpeg on PATH first (the user's own
-//! choice), then beside the editor, then the preferences folder.
+//! (`ayatsuri-launcher --get-ffmpeg <dir>`), otherwise `ffmpeg/` in the data
+//! folder (`%LOCALAPPDATA%` on Windows: 165 MB has no business roaming with
+//! the profile). Which one runs: ffmpeg on PATH first (the user's own
+//! choice), then beside the editor, then the data folder, then the
+//! preferences folder, where versions before 0.5.8 put it.
 //!
 //! As with updates, a download that does not hash to its published line is
 //! never written; that proves the bytes match the checksum, and HTTPS to the
@@ -42,6 +44,10 @@ pub fn our_dirs() -> Vec<PathBuf> {
     {
         dirs.push(dir.join("ffmpeg"));
     }
+    if let Some(dir) = crate::data_dir() {
+        dirs.push(dir.join("ffmpeg"));
+    }
+    // a copy fetched by an older version
     if let Some(dir) = crate::config_dir() {
         dirs.push(dir.join("ffmpeg"));
     }
@@ -50,7 +56,7 @@ pub fn our_dirs() -> Vec<PathBuf> {
 
 /// Where a download from inside the editor goes.
 pub fn user_dir() -> Option<PathBuf> {
-    crate::config_dir().map(|d| d.join("ffmpeg"))
+    crate::data_dir().map(|d| d.join("ffmpeg"))
 }
 
 fn runs(program: &Path) -> bool {
