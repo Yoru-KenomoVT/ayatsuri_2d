@@ -14,8 +14,9 @@ The rest of @seoriboi's requests from #29, and a window for updates.
 - **Smooth movement** (#36): dragged points and objects ease after the
   pointer instead of jumping with it, and land where you let go. Turn it
   on in View > Smooth movement; Settings > Canvas sets how much.
-- **What's new**: the first start of a new version shows its part of this
-  changelog. Help > What's New opens it again.
+- **What's new**: the first start of a new release shows its part of this
+  changelog, once (test builds of it don't bring it back). Help > What's New
+  and the What's New button in About open it again.
 - **Join the Discord**, in Help, About and What's new.
 
 ### Changed

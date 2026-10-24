@@ -205,7 +205,9 @@ impl EditorUi {
                     egui::UiBuilder::new().max_rect(page).layout(Layout::top_down(Align::Min)),
                 );
                 match self.about.tab {
-                    Tab::About => about_page(&mut page_ui, gpu, &mut self.update),
+                    Tab::About => {
+                        about_page(&mut page_ui, gpu, &mut self.update, &mut self.show_whats_new)
+                    }
                     Tab::Credits => credits_page(&mut page_ui, &mut self.about.search),
                     Tab::Licence => licence_page(&mut page_ui),
                 }
@@ -315,7 +317,12 @@ fn faint(ui: &mut Ui, text: impl Into<String>) {
     ui.label(RichText::new(text.into()).size(11.5).color(theme::pal().text_faint));
 }
 
-fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
+fn about_page(
+    ui: &mut Ui,
+    gpu: bool,
+    update: &mut crate::update::UpdateState,
+    whats_new: &mut bool,
+) {
     heading(ui, crate::i18n::tr("Ayatsuri2D"));
     ui.label(crate::i18n::tr(
         "An open, native 2D puppet studio: rig, animate and run Live2D-style models, \
@@ -370,6 +377,17 @@ fn about_page(ui: &mut Ui, gpu: bool, update: &mut crate::update::UpdateState) {
             .clicked()
         {
             ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{GITHUB}/issues")));
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                egui_phosphor::regular::SPARKLE,
+                crate::i18n::tr("What's New")
+            ))
+            .on_hover_text(crate::i18n::tr("What changed in this version"))
+            .clicked()
+        {
+            *whats_new = true;
         }
         crate::whats_new::discord_button(ui);
         if ui

@@ -1306,5 +1306,6 @@
   "Don't ask about this release again": "このリリースについては今後確認しません",
   "Ask again the next time Ayatsuri2D starts": "次にAyatsuri2Dを起動したときに再度確認します",
   "What's New": "新機能",
-  "Check for Updates": "アップデートを確認"
+  "Check for Updates": "アップデートを確認",
+  "What changed in this version": "このバージョンの変更点"
 }
