@@ -1296,5 +1296,15 @@
   "Fewer divisions keep the shape only at the points that remain.": "分割数を減らすと、形が保たれるのは残る点だけです。",
   "Smooth movement": "スムーズな移動",
   "Points and objects follow the pointer softly while dragged; they land where you let go": "ドラッグ中、点やオブジェクトがポインターになめらかに追従します。離した位置にぴたりと置かれます",
-  "Smoothing": "なめらかさ"
+  "Smoothing": "なめらかさ",
+  "Join the Discord": "Discordに参加",
+  "Ideas, questions and help from other riggers": "アイデア、質問、ほかのリガーからの助け",
+  "This version has no notes.": "このバージョンには説明がありません。",
+  "Ideas, questions, or something you rigged? Come talk on Discord.": "アイデアや質問、作ったモデルの紹介などはDiscordでどうぞ。",
+  "Update available": "アップデートがあります",
+  "Skip this version": "このバージョンをスキップ",
+  "Don't ask about this release again": "このリリースについては今後確認しません",
+  "Ask again the next time Ayatsuri2D starts": "次にAyatsuri2Dを起動したときに再度確認します",
+  "What's New": "新機能",
+  "Check for Updates": "アップデートを確認"
 }

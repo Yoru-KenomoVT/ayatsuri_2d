@@ -114,6 +114,7 @@ impl Prompt {
             }
         }
         let mut close = false;
+        crate::windows::mark_shown(ctx);
         egui::Window::new(tr("Video export needs ffmpeg"))
             .collapsible(false)
             .resizable(false)

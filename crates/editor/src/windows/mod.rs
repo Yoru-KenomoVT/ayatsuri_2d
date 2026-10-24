@@ -12,7 +12,7 @@ pub(crate) mod render;
 pub(crate) mod settings;
 mod stats;
 
-pub(crate) use dialog::{Dialog, form};
+pub(crate) use dialog::{Dialog, dialog_shown_lately, form, mark_shown};
 
 /// A time left or taken, short: "42 s", "3 min 05 s", "1 h 12 min".
 pub(crate) fn span_short(secs: f32) -> String {

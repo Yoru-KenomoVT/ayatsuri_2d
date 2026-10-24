@@ -72,6 +72,7 @@ impl EditorUi {
             return;
         }
         let ctx = ui.ctx().clone();
+        crate::windows::mark_shown(&ctx);
         let mut open = true;
         egui::Window::new(crate::i18n::tr("Settings"))
             .title_bar(false)

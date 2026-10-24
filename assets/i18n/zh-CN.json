@@ -1296,5 +1296,15 @@
   "Fewer divisions keep the shape only at the points that remain.": "减少分割数时，只有保留下来的点能保持形状。",
   "Smooth movement": "平滑移动",
   "Points and objects follow the pointer softly while dragged; they land where you let go": "拖动时点和对象会平滑地跟随指针，松开时准确落在指针处",
-  "Smoothing": "平滑度"
+  "Smoothing": "平滑度",
+  "Join the Discord": "加入 Discord",
+  "Ideas, questions and help from other riggers": "想法、提问，以及来自其他绑定师的帮助",
+  "This version has no notes.": "此版本没有说明。",
+  "Ideas, questions, or something you rigged? Come talk on Discord.": "有想法、问题，或想展示你的作品？来 Discord 聊聊吧。",
+  "Update available": "有可用更新",
+  "Skip this version": "跳过此版本",
+  "Don't ask about this release again": "不再询问此版本",
+  "Ask again the next time Ayatsuri2D starts": "下次启动 Ayatsuri2D 时再询问",
+  "What's New": "新功能",
+  "Check for Updates": "检查更新"
 }
