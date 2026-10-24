@@ -15132,43 +15132,18 @@ mod key_cmd_tests {
     }
 
     #[test]
-    fn reflect_asks_then_mirrors_into_the_opposite_key() {
+    fn reflect_turns_the_key_values_around() {
         let mut ed = editor();
-        ed.session.as_mut().unwrap().puppet.set_value(0, 0.9);
+        ed.selected = Some(Sel::Mesh(0));
+        // keyed x - 1 at -1, x at 0, x + 2 at 1: Reflect swaps the ends
         ed.run_param_cmd(ParamCmd::Reflect(0));
-        // it only asks: the key at 1 would overwrite the one at -1
-        assert_eq!(ed.pmenu.reflect, Some((0, 1.0, Some(-1.0))));
+        let m = mesh(&ed);
+        assert_eq!(m.binding.axes[0].keys, vec![-1.0, 0.0, 1.0]);
+        assert_eq!(m.positions, vec![2.0, 0.0, 0.0, 0.0, -1.0, 0.0]);
+        // Batch Reflect does it again for every object on the parameter
+        ed.selected = None;
+        ed.batch_reflect(&[true]);
         assert_eq!(mesh(&ed).positions, vec![-1.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
-        // confirmed: the move away from the default (x + 2) comes back
-        // mirrored (x - 2) on the opposite key
-        ed.reflect_into_opposite(0, 1.0);
-        assert_eq!(mesh(&ed).positions, vec![-2.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
-    }
-
-    #[test]
-    fn reflect_on_an_up_and_down_parameter_flips_top_to_bottom() {
-        let mut ed = editor();
-        let s = ed.session.as_mut().unwrap();
-        s.edit(|m| {
-            m.parameters[0].id = "ParamAngleY".into();
-            true
-        });
-        assert!(param_menu::up_and_down(s.puppet.model(), 0));
-        s.puppet.set_value(0, 0.9);
-        ed.run_param_cmd(ParamCmd::Reflect(0));
-        assert_eq!(ed.pmenu.reflect, Some((0, 1.0, Some(-1.0))));
-        ed.reflect_into_opposite(0, 1.0);
-        // the move (x + 2) is kept, not turned around as left to right
-        // would, and the slider shows the key that was written
-        assert_eq!(mesh(&ed).positions, vec![2.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
-        assert_eq!(ed.session.as_ref().unwrap().puppet.value(0), -1.0);
-    }
-
-    #[test]
-    fn reflect_on_the_default_key_has_nothing_to_overwrite() {
-        let mut ed = editor();
-        ed.run_param_cmd(ParamCmd::Reflect(0));
-        assert_eq!(ed.pmenu.reflect, Some((0, 0.0, None)));
     }
 }
 

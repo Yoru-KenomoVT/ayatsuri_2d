@@ -62,6 +62,7 @@ pub(super) enum ParamCmd {
     DeleteKey(usize),
     Select(usize),
     Reflect(usize),
+    BatchReflect,
     Adjust(usize),
     Change(usize),
 }
@@ -161,9 +162,8 @@ pub(super) struct ParamMenuState {
     curve: Option<CurveDlg>,
     /// The colour window: whose colour, and the colour now.
     custom: Option<(ColorTarget, [u8; 3])>,
-    /// Reflect waiting for the overwrite confirmation: (parameter, the
-    /// key it mirrors from, the opposite key it overwrites).
-    pub(super) reflect: Option<(usize, f32, Option<f32>)>,
+    /// The Batch Reflect window: a tick per parameter.
+    pub(super) batch_reflect: Option<Vec<bool>>,
     /// Delete asked for on a parameter still in use: (parameter, objects
     /// bound on it, physics settings naming it), waiting for an answer.
     pub(super) delete_ask: Option<(usize, usize, usize)>,
@@ -365,6 +365,7 @@ pub(super) fn panel_menu(
     item(ui, true, crate::i18n::tr("Create Parameter…"), ParamCmd::Create(None), &mut out);
     item(ui, true, crate::i18n::tr("Create folder"), ParamCmd::CreateFolder, &mut out);
     ui.separator();
+    item(ui, true, crate::i18n::tr("Batch Reflect…"), ParamCmd::BatchReflect, &mut out);
     item_sc(
         ui,
         crate::i18n::tr("Reset to default values"),
@@ -469,36 +470,27 @@ impl EditorUi {
         out
     }
 
-    /// Mirror the key at `from` into its opposite key on the selected
-    /// objects, parents first, as one undo step: top to bottom for an up and
-    /// down parameter (Angle Y), left to right otherwise. The slider moves
-    /// to the key written, so the result is on screen.
-    pub(super) fn reflect_into_opposite(&mut self, param: usize, from: f32) {
-        let mut targets = self.param_targets();
-        if let Some(s) = &self.session {
-            targets.sort_by_key(|t| match t {
-                Target::Deformer(d) => depth(s, *d),
-                _ => usize::MAX,
-            });
-        }
+    /// Batch Reflect: Reflect on every object keyed on each ticked
+    /// parameter, as one undo step.
+    pub(super) fn batch_reflect(&mut self, ticks: &[bool]) {
         let Some(s) = &mut self.session else { return };
-        let vertical = up_and_down(s.puppet.model(), param);
-        let mut wrote = None;
+        let params: Vec<usize> =
+            ticks.iter().enumerate().filter(|(_, t)| **t).map(|(i, _)| i).collect();
+        let mut n = 0;
         s.edit(|m| {
-            for &t in &targets {
-                if let Some(k) = keyform::mirror_motion(m, t, param, from, !vertical, vertical) {
-                    wrote = Some(k);
+            let objects: Vec<Target> = (0..m.art_meshes.len())
+                .map(Target::ArtMesh)
+                .chain((0..m.deformers.len()).map(Target::Deformer))
+                .chain((0..m.parts.len()).map(Target::Part))
+                .collect();
+            for &p in &params {
+                for &t in &objects {
+                    n += usize::from(keyform::reflect_keys(m, t, p));
                 }
             }
-            wrote.is_some()
+            n > 0
         });
-        match wrote {
-            Some(k) => {
-                s.puppet.set_value(param, k);
-                log::info!("reflected the key at {from} into the key at {k}");
-            }
-            None => log::warn!("reflect: nothing on the selection has both keys"),
-        }
+        log::info!("batch reflect: {} parameter(s), {n} keyed object(s)", params.len());
     }
 
     /// What a drag carries becomes the move's subject: a dragged parameter
@@ -793,29 +785,31 @@ impl EditorUi {
                 };
             }
             ParamCmd::Reflect(pi) => {
-                // Cubism's Reflect: the key under the slider is mirrored into
-                // the opposite key, after asking before it overwrites that one
+                // Cubism's Reflect: the key values turn around across the
+                // parameter's range on the selected objects, so a mouth keyed
+                // open at 0 and shut at 1 becomes shut at 0 and open at 1
                 let targets = self.param_targets();
-                let Some(s) = &self.session else { return };
-                let model = s.puppet.model();
-                let Some(default) = model.parameters.get(pi).map(|p| p.default) else { return };
-                let value = s.puppet.value(pi);
-                let keys: Vec<f32> = targets
-                    .iter()
-                    .filter_map(|&t| keyform::keys_on(model, t, pi))
-                    .flatten()
-                    .collect();
-                let from = keys
-                    .iter()
-                    .copied()
-                    .min_by(|a, b| (a - value).abs().total_cmp(&(b - value).abs()))
-                    .unwrap_or(value);
-                let mirrored = 2.0 * default - from;
-                let opposite = keys
-                    .iter()
-                    .copied()
-                    .find(|k| (k - mirrored).abs() < 1e-3 && (from - default).abs() > 1e-4);
-                self.pmenu.reflect = Some((pi, from, opposite));
+                let Some(s) = &mut self.session else { return };
+                let name = s.puppet.model().parameters.get(pi).map(|p| p.id.clone());
+                let mut n = 0;
+                s.edit(|m| {
+                    for &t in &targets {
+                        n += usize::from(keyform::reflect_keys(m, t, pi));
+                    }
+                    n > 0
+                });
+                if n > 0 {
+                    log::info!("reflected the keys of {name:?} on {n} object(s)");
+                } else {
+                    super::set_notice(
+                        &mut self.notice,
+                        crate::i18n::tr("Select the objects keyed on this parameter first."),
+                    );
+                }
+            }
+            ParamCmd::BatchReflect => {
+                let n = self.session.as_ref().map_or(0, |s| s.puppet.model().parameters.len());
+                self.pmenu.batch_reflect = Some(vec![false; n]);
             }
             ParamCmd::Adjust(pi) => {
                 let v = self.session.as_ref().map_or(0.0, |s| s.puppet.value(pi));
@@ -1088,56 +1082,45 @@ impl EditorUi {
             }
         }
 
-        if let Some((p, from, opposite)) = self.pmenu.reflect {
+        if let Some(mut ticks) = self.pmenu.batch_reflect.take() {
             let mut open = true;
             let mut run = false;
-            let name = names.get(p).cloned().unwrap_or_default();
-            crate::windows::Dialog::new(crate::i18n::tr("Reflect"))
+            let mut keep = true;
+            crate::windows::Dialog::new(crate::i18n::tr("Batch Reflect"))
                 .open(&mut open)
-                .width(340.0)
-                .show(&ctx, |ui| match opposite {
-                    Some(to) => {
-                        ui.label(crate::i18n::trf(
-                            "The keyform at {to} on {name} will be overwritten with a mirror \
-                             image of the keyform at {from}.",
-                            &[("to", &to), ("name", &name), ("from", &from)],
-                        ));
-                        let vertical =
-                            self.session.as_ref().is_some_and(|s| up_and_down(s.puppet.model(), p));
-                        ui.label(crate::i18n::tr(if vertical {
-                            "Mirrored top to bottom, as an up and down parameter."
-                        } else {
-                            "Mirrored left to right."
-                        }));
-                        ui.weak(crate::i18n::tr(
-                            "This applies to the selected objects. Undo brings it back.",
-                        ));
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            if ui.button(crate::i18n::tr("Overwrite")).clicked() {
-                                run = true;
-                            }
-                            if ui.button(crate::i18n::tr("Cancel")).clicked() {
-                                self.pmenu.reflect = None;
-                            }
-                        });
+                .width(320.0)
+                .show(&ctx, |ui| {
+                    ui.weak(crate::i18n::tr(
+                        "The key values of the ticked parameters turn around across their range, on every object keyed on them.",
+                    ));
+                    ui.add_space(4.0);
+                    let mut all = !ticks.is_empty() && ticks.iter().all(|t| *t);
+                    if ui.checkbox(&mut all, crate::i18n::tr("All")).changed() {
+                        ticks.iter_mut().for_each(|t| *t = all);
                     }
-                    None => {
-                        ui.label(crate::i18n::trf(
-                            "Move {name} onto a key other than the default, on an object that \
-                             also has the opposite key.",
-                            &[("name", &name)],
-                        ));
-                        if ui.button(crate::i18n::tr("Close")).clicked() {
-                            self.pmenu.reflect = None;
+                    ui.separator();
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (i, t) in ticks.iter_mut().enumerate() {
+                            ui.checkbox(t, names.get(i).cloned().unwrap_or_default());
                         }
-                    }
+                    });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(ticks.iter().any(|t| *t), egui::Button::new(crate::i18n::tr("OK")))
+                            .clicked()
+                        {
+                            run = true;
+                        }
+                        if ui.button(crate::i18n::tr("Cancel")).clicked() {
+                            keep = false;
+                        }
+                    });
                 });
             if run {
-                self.pmenu.reflect = None;
-                self.reflect_into_opposite(p, from);
-            } else if !open {
-                self.pmenu.reflect = None;
+                self.batch_reflect(&ticks);
+            } else if keep && open {
+                self.pmenu.batch_reflect = Some(ticks);
             }
         }
 
@@ -1456,8 +1439,8 @@ pub(super) fn drag_target(
 }
 
 /// An up and down parameter: its id ends in Y, as Angle Y, Body Angle Y,
-/// Eye Ball Y and Brow L Y do in the standard set. Reflect and Motion
-/// Mirroring flip these top to bottom instead of left to right.
+/// Eye Ball Y and Brow L Y do in the standard set. Motion Mirroring starts
+/// with Flip vertically ticked for these, Flip horizontally otherwise.
 pub(super) fn up_and_down(model: &ayatsuri_format::model::Model, param: usize) -> bool {
     model.parameters.get(param).is_some_and(|p| {
         let id = p.id.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');

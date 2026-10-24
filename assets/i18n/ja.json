@@ -1308,8 +1308,6 @@
   "What's New": "新機能",
   "Check for Updates": "アップデートを確認",
   "What changed in this version": "このバージョンの変更点",
-  "Mirrored top to bottom, as an up and down parameter.": "上下のパラメータなので、上下に反転します。",
-  "Mirrored left to right.": "左右に反転します。",
   "The selection sits between keys. Move the parameters onto a key (a dot on the slider) first, then start the tool again.": "選択中のオブジェクトがキーの間にあります。パラメータをキー（スライダー上の点）に合わせてから、もう一度ツールを開始してください。",
   "Select one or more meshes, or a warp deformer, first.": "先に1つ以上のメッシュ、またはワープデフォーマを選択してください。",
   "Motion Mirroring on the selected parameter": "選択中のパラメータでモーションミラーリング",
@@ -1318,5 +1316,10 @@
   "A mesh keeps at least three points.": "メッシュには最低3つの点が残ります。",
   "Click an art mesh to edit it.": "編集するアートメッシュをクリックしてください。",
   "Select Layer": "レイヤーを選択",
-  "Click a mesh to put the new deformer around it.": "メッシュをクリックすると、その周りに新しいデフォーマを作成します。"
+  "Click a mesh to put the new deformer around it.": "メッシュをクリックすると、その周りに新しいデフォーマを作成します。",
+  "Select the objects keyed on this parameter first.": "先にこのパラメータにキーがあるオブジェクトを選択してください。",
+  "Batch Reflect": "一括反転",
+  "Batch Reflect…": "一括反転…",
+  "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "チェックしたパラメータのキー値を範囲内で反転します。そのパラメータにキーがあるすべてのオブジェクトが対象です。",
+  "All": "すべて"
 }
