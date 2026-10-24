@@ -2848,7 +2848,8 @@ impl EditorUi {
                         if ui
                             .add_enabled(
                                 self.session.is_some() && self.sel_param.is_some(),
-                                egui::Button::new(crate::i18n::tr("Motion Mirroring…")),
+                                egui::Button::new(crate::i18n::tr("Motion Mirroring…"))
+                                    .shortcut_text(self.sc("motion-mirror")),
                             )
                             .on_disabled_hover_text(crate::i18n::tr("Select a parameter first"))
                             .clicked()
@@ -5895,6 +5896,11 @@ impl EditorUi {
             "glue-unbind" if have => self.run_mesh_action(MeshAction::Unbind),
             "reset-params" => self.reset_parameters(),
             "four-corners" if have => self.run_param_cmd(ParamCmd::FourCorners),
+            "motion-mirror" if have => {
+                if let Some(pi) = self.sel_param {
+                    self.run_param_cmd(ParamCmd::Mirror(pi));
+                }
+            }
             "toggle-visible" => self.toggle_selected_visibility(),
             "lock-selected" => self.toggle_selected_lock(),
             "hide-unselected" => self.set_unselected_visible(false),
@@ -12676,6 +12682,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Modeling", "glue-unbind", "Unbind glue", CS, K::G),
         ("Modeling", "reset-params", "Reset parameters to default", C, K::Num1),
         ("Modeling", "four-corners", "Generate four corner forms", C, K::Num4),
+        ("Modeling", "motion-mirror", "Motion Mirroring on the selected parameter", N, K::F35),
         ("Modeling", "lock-selected", "Lock/unlock selected", C, K::Num2),
         ("Modeling", "toggle-visible", "Show/hide selected", C, K::Num3),
         ("Modeling", "hide-unselected", "Hide unselected", CS, K::Num3),

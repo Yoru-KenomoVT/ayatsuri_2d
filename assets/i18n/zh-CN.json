@@ -1311,5 +1311,6 @@
   "Mirrored top to bottom, as an up and down parameter.": "这是上下参数，因此上下翻转。",
   "Mirrored left to right.": "左右翻转。",
   "The selection sits between keys. Move the parameters onto a key (a dot on the slider) first, then start the tool again.": "所选对象位于关键帧之间。请先将参数移到关键点（滑块上的圆点），再重新启动工具。",
-  "Select one or more meshes, or a warp deformer, first.": "请先选择一个或多个网格，或一个弯曲变形器。"
+  "Select one or more meshes, or a warp deformer, first.": "请先选择一个或多个网格，或一个弯曲变形器。",
+  "Motion Mirroring on the selected parameter": "对所选参数进行动作镜像"
 }
