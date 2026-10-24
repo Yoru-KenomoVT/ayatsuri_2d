@@ -354,6 +354,9 @@ pub struct EditorUi {
     /// The meshes drawn where the canvas was right-clicked, front first,
     /// for its Select Layer menu.
     ctx_layers: Vec<usize>,
+    /// The right-click came with Ctrl: Cubism's ArtMesh pop-up list, the
+    /// meshes under the pointer and nothing else.
+    ctx_mesh_list: bool,
     show_guide_settings: bool,
     /// F: frame the selection once the canvas size is known.
     focus_request: bool,
@@ -1153,6 +1156,7 @@ impl Default for EditorUi {
             pending_guide: None,
             ctx_click: None,
             ctx_layers: Vec::new(),
+            ctx_mesh_list: false,
             show_guide_settings: false,
             focus_request: false,
             focus_search: false,
@@ -8816,6 +8820,7 @@ impl EditorUi {
         let space = space || middle || resp.dragged_by(egui::PointerButton::Middle);
         if resp.secondary_clicked() {
             self.ctx_click = resp.interact_pointer_pos();
+            self.ctx_mesh_list = ui.ctx().input(|i| i.modifiers.command);
             self.ctx_layers = match self.ctx_click {
                 Some(p) if self.mesh_edit.is_none() => {
                     let c = s.puppet.model().canvas;
@@ -8835,6 +8840,19 @@ impl EditorUi {
             self.ctx_layers.iter().map(|&mi| (mi, s.mesh_name(mi).to_string())).collect();
         let mut pick_layer = None;
         resp.context_menu(|ui| {
+            if self.ctx_mesh_list {
+                if layers.is_empty() {
+                    ui.weak(crate::i18n::tr("No art mesh here"));
+                }
+                for (mi, name) in &layers {
+                    let on = self.selected == Some(Sel::Mesh(*mi));
+                    if ui.selectable_label(on, name).clicked() {
+                        pick_layer = Some(*mi);
+                        ui.close();
+                    }
+                }
+                return;
+            }
             if !layers.is_empty() {
                 ui.menu_button(crate::i18n::tr("Select Layer"), |ui| {
                     for (mi, name) in &layers {

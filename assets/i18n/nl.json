@@ -1320,5 +1320,6 @@
   "Batch Reflect": "Batchgewijs omkeren",
   "Batch Reflect…": "Batchgewijs omkeren…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "De sleutelwaarden van de aangevinkte parameters worden over hun bereik omgekeerd, op elk object met sleutels erop.",
-  "All": "Alles"
+  "All": "Alles",
+  "No art mesh here": "Hier is geen art mesh"
 }

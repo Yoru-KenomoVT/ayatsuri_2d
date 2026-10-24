@@ -1320,5 +1320,6 @@
   "Batch Reflect": "일괄 반전",
   "Batch Reflect…": "일괄 반전…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "체크한 파라미터의 키 값을 범위 안에서 반전합니다. 해당 파라미터에 키가 있는 모든 오브젝트에 적용됩니다.",
-  "All": "모두"
+  "All": "모두",
+  "No art mesh here": "여기에 아트메시가 없습니다"
 }
