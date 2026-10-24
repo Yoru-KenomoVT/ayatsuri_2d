@@ -1312,5 +1312,9 @@
   "Mirrored left to right.": "左右に反転します。",
   "The selection sits between keys. Move the parameters onto a key (a dot on the slider) first, then start the tool again.": "選択中のオブジェクトがキーの間にあります。パラメータをキー（スライダー上の点）に合わせてから、もう一度ツールを開始してください。",
   "Select one or more meshes, or a warp deformer, first.": "先に1つ以上のメッシュ、またはワープデフォーマを選択してください。",
-  "Motion Mirroring on the selected parameter": "選択中のパラメータでモーションミラーリング"
+  "Motion Mirroring on the selected parameter": "選択中のパラメータでモーションミラーリング",
+  "A mesh needs at least three points. Add points, or Cancel to undo the edit.": "メッシュには3つ以上の点が必要です。点を追加するか、キャンセルで編集を取り消してください。",
+  "This mesh has no triangles, so nothing would be drawn. Connect points, or Cancel to undo the edit.": "このメッシュには三角形がないため、何も描画されません。点をつなぐか、キャンセルで編集を取り消してください。",
+  "A mesh keeps at least three points.": "メッシュには最低3つの点が残ります。",
+  "Click an art mesh to edit it.": "編集するアートメッシュをクリックしてください。"
 }

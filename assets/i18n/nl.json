@@ -1312,5 +1312,9 @@
   "Mirrored left to right.": "Van links naar rechts gespiegeld.",
   "The selection sits between keys. Move the parameters onto a key (a dot on the slider) first, then start the tool again.": "De selectie staat tussen sleutels. Zet de parameters eerst op een sleutel (een punt op de schuifregelaar) en start het gereedschap opnieuw.",
   "Select one or more meshes, or a warp deformer, first.": "Selecteer eerst een of meer meshes, of een warp-deformer.",
-  "Motion Mirroring on the selected parameter": "Bewegingsspiegeling op de geselecteerde parameter"
+  "Motion Mirroring on the selected parameter": "Bewegingsspiegeling op de geselecteerde parameter",
+  "A mesh needs at least three points. Add points, or Cancel to undo the edit.": "Een mesh heeft minstens drie punten nodig. Voeg punten toe, of kies Annuleren om de bewerking ongedaan te maken.",
+  "This mesh has no triangles, so nothing would be drawn. Connect points, or Cancel to undo the edit.": "Deze mesh heeft geen driehoeken, dus er wordt niets getekend. Verbind punten, of kies Annuleren om de bewerking ongedaan te maken.",
+  "A mesh keeps at least three points.": "Een mesh houdt minstens drie punten.",
+  "Click an art mesh to edit it.": "Klik op een art mesh om die te bewerken."
 }
