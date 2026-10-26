@@ -427,6 +427,7 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions,
+            blend_shapes: Vec::new(),
         });
         m.draw_groups.push(DrawGroup {
             total: 1,

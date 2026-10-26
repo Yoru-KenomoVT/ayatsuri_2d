@@ -286,6 +286,7 @@ mod tests {
                 default: 0.0,
                 repeat: false,
                 decimals: 3,
+                blend_shape: false,
             });
         }
         Session::create(&egui::Context::default(), "t".into(), String::new(), model).unwrap()

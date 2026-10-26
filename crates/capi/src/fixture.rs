@@ -28,6 +28,7 @@ pub fn small_aom() -> Vec<u8> {
         default: 0.0,
         repeat: false,
         decimals: 3,
+        blend_shape: false,
     });
     model.parameters.push(Parameter {
         id: "ParamB".into(),
@@ -36,6 +37,7 @@ pub fn small_aom() -> Vec<u8> {
         default: 0.0,
         repeat: false,
         decimals: 3,
+        blend_shape: false,
     });
     model.parts.push(Part {
         id: "Part".into(),
@@ -66,6 +68,7 @@ pub fn small_aom() -> Vec<u8> {
         opacities: vec![1.0, 1.0],
         draw_orders: vec![500.0, 500.0],
         positions: quad(0.0).into_iter().chain(quad(1.0)).collect(),
+        blend_shapes: Vec::new(),
     });
     model.physics = Some(PhysicsRig {
         fps: 60.0,

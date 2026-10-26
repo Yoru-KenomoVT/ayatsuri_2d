@@ -48,6 +48,7 @@ mod tests {
             default: 0.5,
             repeat: false,
             decimals: 3,
+            blend_shape: false,
         });
         model.art_meshes.push(ArtMesh {
             id: "M".into(),
@@ -66,6 +67,7 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
         });
         let payload = AomPayload {
             meta: Meta {

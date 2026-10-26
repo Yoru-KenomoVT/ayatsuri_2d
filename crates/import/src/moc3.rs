@@ -202,6 +202,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             default: defaults.get(i).unwrap_or(0.0),
             repeat: repeats.get(i).unwrap_or(0) != 0,
             decimals: decimals.get(i).unwrap_or(0),
+            blend_shape: false,
         })
         .collect();
 
@@ -496,6 +497,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
                 &coords,
                 vc * 2,
             )?,
+            blend_shapes: Vec::new(),
         });
     }
 

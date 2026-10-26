@@ -2152,6 +2152,13 @@ fn keys_of(model: &Model) -> Vec<Vec<f32>> {
             add(&g.binding);
         }
     }
+    // blend shape keys, with the base key at 0.0 among them
+    for shape in model.art_meshes.iter().flat_map(|m| &m.blend_shapes) {
+        if let Some(keys) = param_keys.get_mut(shape.parameter as usize) {
+            keys.extend_from_slice(&shape.keys);
+            keys.push(0.0);
+        }
+    }
     for keys in &mut param_keys {
         keys.sort_by(f32::total_cmp);
         keys.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
@@ -2217,6 +2224,7 @@ mod crash_tests {
                 default: 0.0,
                 repeat: false,
                 decimals: 3,
+                blend_shape: false,
             });
             true
         });
@@ -2395,6 +2403,7 @@ mod import_paint_tests {
                 opacities: vec![1.0],
                 draw_orders: vec![500.0],
                 positions: vec![0.0; 25_000],
+                blend_shapes: Vec::new(),
             });
             m
         };
@@ -2429,6 +2438,7 @@ mod import_paint_tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![],
+            blend_shapes: Vec::new(),
         };
         let mut m = Model::new();
         m.art_meshes = vec![mesh("A", 0), mesh("B", 2), mesh("C", 2)];

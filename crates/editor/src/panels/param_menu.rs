@@ -531,6 +531,7 @@ impl EditorUi {
                     default: 0.0,
                     max: 1.0,
                     group: group.unwrap_or(last),
+                    blend_shape: false,
                 });
             }
             ParamCmd::CreateFolder => {

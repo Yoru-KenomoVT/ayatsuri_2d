@@ -304,6 +304,7 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             // bottom layers first: later meshes draw over earlier ones
             draw_orders: vec![500.0],
             positions: corners.iter().flat_map(|&(x, y)| [x, y]).collect(),
+            blend_shapes: Vec::new(),
         });
     }
 

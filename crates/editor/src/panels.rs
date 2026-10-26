@@ -987,6 +987,8 @@ struct ParamNew {
     default: f32,
     max: f32,
     group: usize,
+    /// Drives blend shapes instead of keyforms (Cubism 5.0).
+    blend_shape: bool,
 }
 
 /// The Edit Parameter dialog's working copy.
@@ -2068,6 +2070,7 @@ impl EditorUi {
         self.whats_new_window(&ui.ctx().clone());
         self.temp_deform_error_window(&ui.ctx().clone());
         self.notice_area(&ui.ctx().clone());
+        self.blend_edit_label(&ui.ctx().clone());
         self.update_window(&ui.ctx().clone());
         // render-time crashes skip the rescue save, so unsaved work also
         // goes to an autosave file every couple of minutes
@@ -3903,6 +3906,42 @@ impl EditorUi {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64((until - now).max(0.05)));
     }
 
+    /// Cubism's "Blend Shape is editable: <parameter>": shown while edits to
+    /// the selected mesh land in a blend shape keyform, not a normal one.
+    fn blend_edit_label(&self, ctx: &egui::Context) {
+        let Some(Sel::Mesh(mi)) = self.selected else { return };
+        let Some(s) = &self.session else { return };
+        let model = s.puppet.model();
+        let values: Vec<f32> = (0..model.parameters.len()).map(|i| s.puppet.value(i)).collect();
+        let target = ayatsuri_core::edit::Target::ArtMesh(mi);
+        let Some(pi) = ayatsuri_core::keyform::editing_blend_shape(model, target, &values) else {
+            return;
+        };
+        let name = s
+            .param_names
+            .get(pi)
+            .filter(|n| !n.is_empty())
+            .or_else(|| model.parameters.get(pi).map(|p| &p.id))
+            .cloned()
+            .unwrap_or_default();
+        egui::Area::new(egui::Id::new("blend-edit-label"))
+            .anchor(Align2::CENTER_TOP, vec2(0.0, 74.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}  {}: {name}",
+                            egui_phosphor::regular::SHAPES,
+                            crate::i18n::tr("Blend Shape is editable")
+                        ))
+                        .color(theme::pal().accent),
+                    );
+                });
+            });
+    }
+
     fn mesh_edit_window(&mut self, ui: &mut Ui) {
         let Some(mi) = self.mesh_edit else { return };
         let (verts, tris, id) =
@@ -5587,6 +5626,7 @@ impl EditorUi {
                         default,
                         repeat: false,
                         decimals: 3,
+                        blend_shape: false,
                     });
                 }
             }
@@ -5656,6 +5696,17 @@ impl EditorUi {
                             }
                         });
                     ui.end_row();
+                    ui.label("");
+                    let blend = ui
+                        .checkbox(&mut new.blend_shape, crate::i18n::tr("Blend Shape"))
+                        .on_hover_text(crate::i18n::tr(
+                            "Its keyforms add on top of the others instead of multiplying them",
+                        ));
+                    // the manual's recommended range: base key at the default
+                    if blend.changed() && new.blend_shape {
+                        (new.min, new.default, new.max) = (0.0, 0.0, 1.0);
+                    }
+                    ui.end_row();
                 });
                 ui.add_space(6.0);
                 if ui.button(crate::i18n::tr("Create")).clicked() {
@@ -5664,16 +5715,20 @@ impl EditorUi {
             },
         );
         if create {
-            let (name, id, min, default, max, group) = {
+            let (name, id, min, default, max, group, blend_shape) = {
                 let n = self.new_param.take();
                 let Some(n) = n else { return };
-                (n.name, n.id, n.min, n.default, n.max, n.group)
+                (n.name, n.id, n.min, n.default, n.max, n.group, n.blend_shape)
             };
             let id = if id.is_empty() { name.replace(' ', "") } else { id };
             if let Some(s) = &mut self.session {
                 if s.edit(|m| {
-                    ayatsuri_core::edit::create_parameter(m, id.clone(), min, default, max)
-                        .is_some()
+                    let made =
+                        ayatsuri_core::edit::create_parameter(m, id.clone(), min, default, max);
+                    if let Some(p) = made.and_then(|i| m.parameters.get_mut(i)) {
+                        p.blend_shape = blend_shape;
+                    }
+                    made.is_some()
                 }) {
                     let pi = s.puppet.model().parameters.len() - 1;
                     s.param_names.push(if name.is_empty() { id.clone() } else { name });
@@ -6747,6 +6802,7 @@ impl EditorUi {
                         .as_ref()
                         .map(|s| s.groups.len().saturating_sub(1))
                         .unwrap_or(0),
+                    blend_shape: false,
                 });
             }
             if ui
@@ -13504,6 +13560,8 @@ struct KeyMarks {
     mirrored: Option<(usize, f32)>,
     /// Colours picked for single keys.
     colors: Vec<(usize, f32, [u8; 3])>,
+    /// Per parameter: drives blend shapes (its base key is drawn square).
+    blend: Vec<bool>,
 }
 
 /// One slider's share of [`KeyMarks`].
@@ -13513,6 +13571,7 @@ struct KeyLook {
     keys: Vec<(f32, usize)>,
     mirrored: Option<f32>,
     colors: Vec<(f32, [u8; 3])>,
+    blend: bool,
 }
 
 impl KeyMarks {
@@ -13522,6 +13581,7 @@ impl KeyMarks {
             keys: self.keys.get(pi).cloned().unwrap_or_default(),
             mirrored: self.mirrored.filter(|m| m.0 == pi).map(|m| m.1),
             colors: self.colors.iter().filter(|c| c.0 == pi).map(|c| (c.1, c.2)).collect(),
+            blend: self.blend.get(pi).copied().unwrap_or(false),
         }
     }
 }
@@ -13542,9 +13602,22 @@ impl EditorUi {
                 Target::Deformer(i) => model.deformers.get(i).map(|d| &d.binding),
                 Target::Part(i) => model.parts.get(i).map(|p| &p.binding),
             };
-            for axis in binding.map(|b| b.axes.as_slice()).unwrap_or_default() {
-                let Some(list) = keys.get_mut(axis.parameter as usize) else { continue };
-                for &k in &axis.keys {
+            let axes = binding.map(|b| b.axes.as_slice()).unwrap_or_default();
+            let shapes = match *t {
+                Target::ArtMesh(i) => model.art_meshes.get(i).map(|m| m.blend_shapes.as_slice()),
+                _ => None,
+            };
+            let held = axes.iter().map(|a| (a.parameter, a.keys.clone())).chain(
+                shapes.unwrap_or_default().iter().map(|b| {
+                    // a blend shape holds its base key too
+                    let mut k = b.keys.clone();
+                    k.push(0.0);
+                    (b.parameter, k)
+                }),
+            );
+            for (param, axis_keys) in held {
+                let Some(list) = keys.get_mut(param as usize) else { continue };
+                for k in axis_keys {
                     match list.iter_mut().find(|(e, _)| (*e - k).abs() < 1e-5) {
                         Some((_, n)) => *n += 1,
                         None => list.push((k, 1)),
@@ -13557,6 +13630,7 @@ impl EditorUi {
             keys,
             mirrored: self.mirror_mark.as_ref().map(|m| (m.0, m.1)),
             colors: s.key_colors.clone(),
+            blend: model.parameters.iter().map(|p| p.blend_shape).collect(),
         }
     }
 }
@@ -13639,7 +13713,13 @@ fn param_slider(
         } else {
             Stroke::new(1.6, Color32::from_rgb(0x4C, 0xC0, 0x6A))
         };
-        painter.circle(at, if held > 0 { 3.3 } else { 3.0 }, fill, ring);
+        if look.blend && k.abs() < 1e-5 {
+            // a blend shape's base key: Cubism's rectangle, holding no form
+            let r = Rect::from_center_size(at, vec2(5.0, 9.0));
+            painter.rect(r, 0.0, fill, ring, egui::StrokeKind::Middle);
+        } else {
+            painter.circle(at, if held > 0 { 3.3 } else { 3.0 }, fill, ring);
+        }
         // the selected key: the slider sits on it
         if held > 0 && (*value - k).abs() <= span * 1e-4 {
             painter.circle_stroke(at, 4.6, Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35)));
@@ -14719,6 +14799,7 @@ mod param_pick_tests {
                 default: 0.0,
                 repeat: false,
                 decimals: 3,
+                blend_shape: false,
             });
         }
         let ctx = egui::Context::default();
@@ -14797,6 +14878,7 @@ mod drag_tests {
             default: 0.0,
             repeat: false,
             decimals: 3,
+            blend_shape: false,
         });
         m.art_meshes.push(ArtMesh {
             id: "M".into(),
@@ -14815,6 +14897,7 @@ mod drag_tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.2, 0.2, 0.8, 0.2, 0.5, 0.8],
+            blend_shapes: Vec::new(),
         });
         let w = ayatsuri_core::edit::create_deformer(
             &mut m,
@@ -14906,6 +14989,7 @@ mod mesh_delete_tests {
                 opacities: vec![1.0],
                 draw_orders: vec![500.0],
                 positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                blend_shapes: Vec::new(),
             });
         }
         let ctx = egui::Context::default();
@@ -15009,6 +15093,7 @@ mod key_cmd_tests {
             default: 0.0,
             repeat: false,
             decimals: 3,
+            blend_shape: false,
         });
         model.art_meshes.push(ArtMesh {
             id: "ArtMesh0".into(),
@@ -15030,6 +15115,7 @@ mod key_cmd_tests {
             opacities: vec![1.0; 3],
             draw_orders: vec![500.0; 3],
             positions: vec![-1.0, 0.0, 0.0, 0.0, 2.0, 0.0],
+            blend_shapes: Vec::new(),
         });
         let ctx = egui::Context::default();
         let s = Session::create(&ctx, "t".into(), String::new(), model).unwrap();
@@ -15312,6 +15398,7 @@ mod eyedropper_tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
         });
         let mut puppet = ayatsuri_core::Puppet::new(m);
         puppet.update();

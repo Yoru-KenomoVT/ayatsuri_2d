@@ -978,6 +978,7 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
         });
         for v in ExportVersion::ALL.into_iter().filter(|v| v.max_slot() >= 113) {
             let file = to_moc3(&model, v).unwrap();
@@ -1011,6 +1012,7 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
         };
         let mut model = Model::new();
         model.art_meshes.push(mesh("Overlay", ColorBlend::Overlay));
@@ -1063,6 +1065,7 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions,
+            blend_shapes: Vec::new(),
         });
         model.draw_groups.push(DrawGroup {
             total: 1,

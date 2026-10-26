@@ -1321,5 +1321,8 @@
   "Batch Reflect…": "Groepsgewys omkeer…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "Die sleutelwaardes van die gemerkte parameters draai om oor hul bereik, op elke voorwerp met sleutels daarop.",
   "All": "Alles",
-  "No art mesh here": "Hier is geen art mesh nie"
+  "No art mesh here": "Hier is geen art mesh nie",
+  "Blend Shape": "Mengvorm",
+  "Its keyforms add on top of the others instead of multiplying them": "Sy sleutelvorms word by die ander getel in plaas daarvan om hulle te vermenigvuldig",
+  "Blend Shape is editable": "Mengvorm is wysigbaar"
 }
