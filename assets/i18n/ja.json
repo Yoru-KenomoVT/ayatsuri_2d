@@ -1366,5 +1366,12 @@
   "Save the values below into this preset": "下の値をこのプリセットに上書き保存",
   "Preset name": "プリセット名",
   "Deformation (small)": "変形（小）",
-  "Deformation (large)": "変形（大）"
+  "Deformation (large)": "変形（大）",
+  "New Part. Shift+click puts the selected objects in it": "新規パーツ。Shift+クリックで選択中のオブジェクトを中に入れます",
+  "Prohibit drag and drop": "ドラッグ＆ドロップを禁止",
+  "New Part": "新規パーツ",
+  "Part ID": "パーツID",
+  "Put selected objects into children": "選択したオブジェクトを子にする",
+  "IDs take letters, digits and _ only.": "IDには英数字と _ のみ使えます。",
+  "That Part ID is empty, taken or has characters IDs can't use.": "そのパーツIDは空か、使用済みか、IDに使えない文字を含んでいます。"
 }

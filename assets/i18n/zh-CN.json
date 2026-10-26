@@ -1366,5 +1366,12 @@
   "Save the values below into this preset": "将下面的数值保存到此预设",
   "Preset name": "预设名称",
   "Deformation (small)": "变形（小）",
-  "Deformation (large)": "变形（大）"
+  "Deformation (large)": "变形（大）",
+  "New Part. Shift+click puts the selected objects in it": "新建部件。Shift+点击会把选中的对象放进去",
+  "Prohibit drag and drop": "禁止拖放",
+  "New Part": "新建部件",
+  "Part ID": "部件 ID",
+  "Put selected objects into children": "将选中的对象设为子级",
+  "IDs take letters, digits and _ only.": "ID 只能使用字母、数字和 _。",
+  "That Part ID is empty, taken or has characters IDs can't use.": "该部件 ID 为空、已被使用，或包含 ID 不能使用的字符。"
 }

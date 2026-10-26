@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use ayatsuri_core::edit::Child;
+use ayatsuri_core::palette::{Drop as PDrop, Row as PRow};
 use ayatsuri_format::Model;
 use ayatsuri_format::model::DeformerKind;
 use egui::{
@@ -262,6 +263,8 @@ pub struct EditorUi {
     part_collapsed: std::collections::HashSet<usize>,
     new_param: Option<ParamNew>,
     new_folder: Option<String>,
+    /// Cubism's New Part dialog, while it is open.
+    new_part: Option<NewPartDlg>,
     /// Parameters the New Folder dialog files into the folder it makes.
     folder_from: Vec<usize>,
     new_model: Option<ModelNew>,
@@ -330,6 +333,8 @@ pub struct EditorUi {
     /// Parts picked in the Parts palette (Ctrl toggles, Shift a range), and
     /// the rows each Shift range starts from.
     part_pick: Vec<usize>,
+    /// Cubism's Prohibit drag and drop for the Parts palette.
+    parts_dnd_off: bool,
     part_anchor: Option<usize>,
     /// The Parts palette row under the pointer, outlined on the canvas.
     palette_hover: Option<Sel>,
@@ -795,6 +800,15 @@ struct PathPin {
 /// Results coming back from background threads.
 /// A Deformer palette menu choice, run once the palette is drawn.
 /// What a Parts palette mesh row's menu asked for.
+/// Cubism's New Part dialog as it is filled in.
+struct NewPartDlg {
+    name: String,
+    id: String,
+    order: f32,
+    /// Put selected objects into children.
+    take: bool,
+}
+
 enum MeshRowCmd {
     /// A click on the row; the palette applies Ctrl / Shift picking.
     Click(usize),
@@ -1107,6 +1121,7 @@ impl Default for EditorUi {
             last_autosave: std::time::Instant::now(),
             new_param: None,
             new_folder: None,
+            new_part: None,
             folder_from: Vec::new(),
             new_model: None,
             show_model_info: false,
@@ -1146,6 +1161,7 @@ impl Default for EditorUi {
             deformer_dialog: None,
             multi_sel: Vec::new(),
             part_pick: Vec::new(),
+            parts_dnd_off: false,
             part_anchor: None,
             palette_hover: None,
             part_search: String::new(),
@@ -1588,7 +1604,7 @@ impl EditorUi {
     /// frame. One comparison a frame and a line only on a change, so the
     /// log says what the user did without a line per frame.
     fn log_state_changes(&mut self) {
-        let states: [(&str, bool); 26] = [
+        let states: [(&str, bool); 27] = [
             ("Settings", self.show_settings),
             ("API window", self.show_api_window),
             ("Model Statistics", self.show_stats),
@@ -1602,6 +1618,7 @@ impl EditorUi {
             ("Export Model", self.export_dlg.is_some()),
             ("New Parameter", self.new_param.is_some()),
             ("New Folder", self.new_folder.is_some()),
+            ("New Part", self.new_part.is_some()),
             ("New Project", self.new_model.is_some()),
             ("Project", self.show_model_info),
             ("Save Workspace", self.show_ws_save),
@@ -3865,6 +3882,7 @@ impl EditorUi {
         self.mesh_edit_window(ui);
         self.param_new_window(ui);
         self.folder_new_window(ui);
+        self.part_new_window(ui);
         self.model_new_window(ui);
         self.model_info_window(ui);
         self.new_anim_window(ui);
@@ -5864,6 +5882,112 @@ impl EditorUi {
         }
     }
 
+    /// Cubism's New Part: name, ID, draw order, and whether the selected
+    /// objects go in. Without them the part goes inside the selected part
+    /// (or beside the selected mesh); with them, where they were.
+    fn part_new_window(&mut self, ui: &mut Ui) {
+        let Some(dlg) = &mut self.new_part else { return };
+        let mut open = true;
+        let mut create = false;
+        crate::windows::Dialog::new(crate::i18n::tr("New Part")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(260.0);
+                egui::Grid::new("new-part").num_columns(2).show(ui, |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(&mut dlg.name);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Part ID"));
+                    ui.text_edit_singleline(&mut dlg.id);
+                    ui.end_row();
+                    ui.label(crate::i18n::tr("Draw order"));
+                    ui.add(egui::DragValue::new(&mut dlg.order).range(0.0..=1000.0).speed(1.0));
+                    ui.end_row();
+                });
+                ui.checkbox(&mut dlg.take, crate::i18n::tr("Put selected objects into children"));
+                ui.weak(crate::i18n::tr("IDs take letters, digits and _ only."));
+                if ui.button(crate::i18n::tr("Create")).clicked() {
+                    create = true;
+                }
+            },
+        );
+        if !open {
+            self.new_part = None;
+            return;
+        }
+        if !create {
+            return;
+        }
+        let Some(dlg) = self.new_part.take() else { return };
+        let Some(s) = &mut self.session else { return };
+        let id = dlg.id.trim().to_string();
+        if id.is_empty()
+            || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            || s.puppet.model().parts.iter().any(|p| p.id == id)
+        {
+            set_notice(
+                &mut self.notice,
+                crate::i18n::tr("That Part ID is empty, taken or has characters IDs can't use."),
+            );
+            self.new_part = Some(dlg);
+            return;
+        }
+        // what goes in, in palette order, and where the part goes
+        let mut children: Vec<PRow> = Vec::new();
+        if dlg.take {
+            let parts: Vec<usize> = match (self.part_pick.is_empty(), self.selected) {
+                (true, Some(Sel::Part(p))) => vec![p],
+                _ => self.part_pick.clone(),
+            };
+            let meshes: Vec<usize> = match (self.multi_sel.is_empty(), self.selected) {
+                (true, Some(Sel::Mesh(m))) => vec![m],
+                _ => self.multi_sel.clone(),
+            };
+            for (r, _) in ayatsuri_core::palette::rows(s.puppet.model()) {
+                let picked = match r {
+                    PRow::Part(p) => parts.contains(&p),
+                    PRow::Mesh(m) => meshes.contains(&m),
+                };
+                if picked {
+                    children.push(r);
+                }
+            }
+        }
+        let parent = match children.first() {
+            Some(&r) => ayatsuri_core::palette::parent(s.puppet.model(), r),
+            None => match self.selected {
+                Some(Sel::Part(p)) => Some(p),
+                Some(Sel::Mesh(m)) => {
+                    ayatsuri_core::palette::parent(s.puppet.model(), PRow::Mesh(m))
+                }
+                _ => None,
+            },
+        };
+        let mut index = None;
+        s.edit(|m| {
+            index = Some(ayatsuri_core::palette::new_part(m, &id, parent, dlg.order, &children));
+            true
+        });
+        let Some(index) = index else { return };
+        let n = s.puppet.model().parts.len();
+        if s.part_names.len() < n {
+            s.part_names.resize(n, String::new());
+        }
+        if let Some(slot) = s.part_names.get_mut(index) {
+            slot.clone_from(&dlg.name);
+        }
+        if s.part_shown.len() < n {
+            s.part_shown.resize(n, true);
+        }
+        if let Some(p) = parent {
+            self.part_collapsed.remove(&p);
+        }
+        self.selected = Some(Sel::Part(index));
+        self.part_pick.clear();
+        self.multi_sel.clear();
+        log::info!("new part {id} ({}) holding {} object(s)", dlg.name, children.len());
+    }
+
     fn close_session(&mut self) {
         // closing means the work was saved or knowingly dropped
         if let Some(s) = &self.session {
@@ -6915,6 +7039,33 @@ impl EditorUi {
         {
             f.request_focus();
         }
+        ui.horizontal(|ui| {
+            let new = ui.small_button(egui_phosphor::regular::FOLDER_PLUS).on_hover_text(
+                crate::i18n::tr("New Part. Shift+click puts the selected objects in it"),
+            );
+            if new.clicked() {
+                let picked = self.part_pick.len() + self.multi_sel.len();
+                let take = picked > 1 || ui.input(|i| i.modifiers.shift);
+                self.new_part = Some(NewPartDlg {
+                    name: crate::i18n::tr("New Part").to_string(),
+                    id: ayatsuri_core::palette::free_part_id(s.puppet.model()),
+                    order: 500.0,
+                    take,
+                });
+            }
+            let lock = if self.parts_dnd_off {
+                egui_phosphor::regular::LOCK_SIMPLE
+            } else {
+                egui_phosphor::regular::HAND_GRABBING
+            };
+            if ui
+                .selectable_label(self.parts_dnd_off, lock)
+                .on_hover_text(crate::i18n::tr("Prohibit drag and drop"))
+                .clicked()
+            {
+                self.parts_dnd_off = !self.parts_dnd_off;
+            }
+        });
         let query = self.part_search.trim().to_lowercase();
         let searching = !query.is_empty();
         let (part_shown_by_search, mesh_shown_by_search) = if searching {
@@ -6947,37 +7098,36 @@ impl EditorUi {
         // the real tree: children render under their parent, depth-indented
         let n = s.puppet.model().parts.len();
         let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
-        let mut roots: Vec<usize> = Vec::new();
         for (i, part) in s.puppet.model().parts.iter().enumerate() {
-            match part.parent_part {
-                Some(p) if (p as usize) < n => {
-                    if let Some(c) = children.get_mut(p as usize) {
-                        c.push(i);
-                    }
-                }
-                _ => roots.push(i),
+            if let Some(p) = part.parent_part
+                && let Some(c) = children.get_mut(p as usize)
+            {
+                c.push(i);
             }
         }
-        let mut order: Vec<(usize, usize)> = Vec::new();
-        let mut stack: Vec<(usize, usize)> = roots.into_iter().rev().map(|i| (i, 0)).collect();
-        let mut guard = 0;
-        while let Some((i, depth)) = stack.pop() {
-            if !part_shown_by_search.get(i).copied().unwrap_or(true) {
+        // the palette's rows as Cubism orders them (front-most first), less
+        // what a search hides and what sits in a folded folder
+        let mut visible: Vec<(PRow, usize)> = Vec::new();
+        let mut folded_at: Option<usize> = None;
+        for (row, depth) in ayatsuri_core::palette::rows(s.puppet.model()) {
+            if folded_at.is_some_and(|d| depth > d) {
                 continue;
             }
-            order.push((i, depth));
-            // a search opens every folded folder so its matches show
-            if (searching || !self.part_collapsed.contains(&i))
-                && let Some(kids) = children.get(i)
+            folded_at = None;
+            let keep = match row {
+                PRow::Part(i) => part_shown_by_search.get(i).copied().unwrap_or(true),
+                PRow::Mesh(mi) => mesh_shown_by_search.get(mi).copied().unwrap_or(true),
+            };
+            if !keep {
+                continue;
+            }
+            if let PRow::Part(i) = row
+                && !searching
+                && self.part_collapsed.contains(&i)
             {
-                for &k in kids.iter().rev() {
-                    stack.push((k, depth + 1));
-                }
+                folded_at = Some(depth);
             }
-            guard += 1;
-            if guard > n * 2 + 16 {
-                break;
-            }
+            visible.push((row, depth));
         }
         // a folder can fold when it holds sub-folders or meshes
         let has_mesh: std::collections::HashSet<u32> =
@@ -7010,12 +7160,55 @@ impl EditorUi {
         // a couple of renders per frame keeps the palette responsive
         let mut budget = 2usize;
         let ctx = ui.ctx().clone();
-        let part_rows: Vec<usize> = order.iter().map(|o| o.0).collect();
-        let mut mesh_rows: Vec<usize> = Vec::new();
+        let part_rows: Vec<usize> = visible
+            .iter()
+            .filter_map(|(r, _)| match r {
+                PRow::Part(i) => Some(*i),
+                PRow::Mesh(_) => None,
+            })
+            .collect();
+        let mesh_rows: Vec<usize> = visible
+            .iter()
+            .filter_map(|(r, _)| match r {
+                PRow::Mesh(mi) => Some(*mi),
+                PRow::Part(_) => None,
+            })
+            .collect();
+        let dnd = !self.parts_dnd_off && self.mesh_edit.is_none();
+        let mut drop_cmd: Option<(Dragged, PDrop)> = None;
         let mut part_click: Option<usize> = None;
         let mut part_double = false;
         ScrollArea::vertical().id_salt("parts").show(ui, |ui| {
-            for (i, depth) in order {
+            for (row, depth) in visible {
+                let i = match row {
+                    PRow::Part(i) => i,
+                    PRow::Mesh(mi) => {
+                        let x_off =
+                            if depth == 0 { 30.0 } else { 66.0 + (depth - 1) as f32 * 14.0 };
+                        let parent =
+                            s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_part);
+                        let effective = ancestors_shown(s, parent);
+                        let mid = s.mesh_name(mi);
+                        let resp = parts_mesh_row(
+                            ui,
+                            s,
+                            &mut self.selected,
+                            mi,
+                            &mid,
+                            x_off,
+                            effective,
+                            &stack,
+                            &mut mesh_cmd,
+                            &self.multi_sel,
+                            &mut self.palette_hover,
+                            dnd,
+                        );
+                        if dnd {
+                            palette_drop_target(ui, &resp, row, false, &mut drop_cmd);
+                        }
+                        continue;
+                    }
+                };
                 let Some((id, parent)) =
                     s.puppet.model().parts.get(i).map(|p| (p.id.clone(), p.parent_part))
                 else {
@@ -7024,7 +7217,13 @@ impl EditorUi {
                 let name = s.part_names.get(i).cloned().unwrap_or(id);
                 let shown = s.part_shown.get(i).copied().unwrap_or(true);
                 let row_w = ui.available_width();
-                let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 18.0), Sense::click());
+                let sense = if dnd { Sense::click_and_drag() } else { Sense::click() };
+                let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 18.0), sense);
+                if dnd && resp.drag_started() {
+                    let parts =
+                        if self.part_pick.contains(&i) { self.part_pick.clone() } else { vec![i] };
+                    resp.dnd_set_drag_payload(Dragged::Parts(parts));
+                }
                 if self.selected == Some(Sel::Part(i)) || self.part_pick.contains(&i) {
                     paint_picked_row(ui, rect);
                 }
@@ -7160,69 +7359,10 @@ impl EditorUi {
                     }
                 });
 
-                // the part's meshes, nested one level deeper, unless folded
-                if self.part_collapsed.contains(&i) && !searching {
-                    continue;
+                if dnd {
+                    let open = !self.part_collapsed.contains(&i);
+                    palette_drop_target(ui, &resp, row, open, &mut drop_cmd);
                 }
-                let meshes: Vec<(usize, String)> = s
-                    .puppet
-                    .model()
-                    .art_meshes
-                    .iter()
-                    .enumerate()
-                    .filter(|(mi, m)| {
-                        m.parent_part == Some(i as u32)
-                            && mesh_shown_by_search.get(*mi).copied().unwrap_or(true)
-                    })
-                    .map(|(mi, _)| (mi, s.mesh_name(mi)))
-                    .collect();
-                for (mi, mid) in meshes {
-                    let x_off = 66.0 + depth as f32 * 14.0;
-                    mesh_rows.push(mi);
-                    parts_mesh_row(
-                        ui,
-                        s,
-                        &mut self.selected,
-                        mi,
-                        &mid,
-                        x_off,
-                        effective,
-                        &stack,
-                        &mut mesh_cmd,
-                        &self.multi_sel,
-                        &mut self.palette_hover,
-                    );
-                }
-            }
-            // meshes that belong to no part sit at the top level, so imports
-            // need no artificial root folder
-            let loose: Vec<(usize, String)> = s
-                .puppet
-                .model()
-                .art_meshes
-                .iter()
-                .enumerate()
-                .filter(|(mi, m)| {
-                    m.parent_part.is_none()
-                        && mesh_shown_by_search.get(*mi).copied().unwrap_or(true)
-                })
-                .map(|(mi, _)| (mi, s.mesh_name(mi)))
-                .collect();
-            for (mi, mid) in loose {
-                mesh_rows.push(mi);
-                parts_mesh_row(
-                    ui,
-                    s,
-                    &mut self.selected,
-                    mi,
-                    &mid,
-                    30.0,
-                    true,
-                    &stack,
-                    &mut mesh_cmd,
-                    &self.multi_sel,
-                    &mut self.palette_hover,
-                );
             }
             // glue objects, as the reference palette lists them
             let glues: Vec<(usize, String, String, String)> = s
@@ -7280,6 +7420,9 @@ impl EditorUi {
                 self.selected_glue = None;
             }
         });
+        if let Some((what, to)) = drop_cmd {
+            self.palette_move(what, to);
+        }
         let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
         if part_double {
             self.deselect_all();
@@ -7481,6 +7624,19 @@ impl EditorUi {
         self.selected = None;
         self.multi_sel.clear();
         self.selected_glue = None;
+        self.remap_mesh_state(&remap);
+    }
+
+    /// Renumber what the editor keeps per mesh after the meshes moved:
+    /// `remap` gives each old index its new one, or None when it is gone.
+    fn remap_mesh_state(&mut self, remap: &dyn Fn(usize) -> Option<usize>) {
+        self.selected = match self.selected {
+            Some(Sel::Mesh(m)) => remap(m).map(Sel::Mesh),
+            other => other,
+        };
+        self.multi_sel = self.multi_sel.iter().filter_map(|&m| remap(m)).collect();
+        self.mesh_anchor = self.mesh_anchor.and_then(remap);
+        self.clip_pick = self.clip_pick.and_then(remap);
         self.mesh_drag = None;
         self.edge_first = None;
         self.pending_edges =
@@ -7495,6 +7651,30 @@ impl EditorUi {
                 _ => Some(((kind, i), w)),
             })
             .collect();
+    }
+
+    /// A Parts palette drop: the rows move (a dragged mesh brings the pick
+    /// it is part of) and everything kept per mesh follows the renumbering.
+    fn palette_move(&mut self, what: Dragged, to: PDrop) {
+        let rows: Vec<PRow> = match what {
+            Dragged::Parts(p) => p.into_iter().map(PRow::Part).collect(),
+            Dragged::Mesh(mi) => self.mesh_pick_with(mi).into_iter().map(PRow::Mesh).collect(),
+        };
+        let Some(s) = &mut self.session else { return };
+        let ids: Vec<String> = s.puppet.model().art_meshes.iter().map(|m| m.id.clone()).collect();
+        if !s.edit(|m| ayatsuri_core::palette::move_rows(m, &rows, to)) {
+            return;
+        }
+        let now: std::collections::HashMap<String, usize> = s
+            .puppet
+            .model()
+            .art_meshes
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id.clone(), i))
+            .collect();
+        log::info!("parts palette: moved {} row(s) to {to:?}", rows.len());
+        self.remap_mesh_state(&|i| ids.get(i).and_then(|id| now.get(id).copied()));
     }
     /// The toolbar's right-click menu, wherever on the bar it opens.
     fn toolbar_menu(&mut self, ui: &mut Ui) {
@@ -13660,12 +13840,14 @@ fn parts_mesh_row(
     cmd: &mut Option<MeshRowCmd>,
     picked: &[usize],
     hover: &mut Option<Sel>,
-) {
+    drag_ok: bool,
+) -> egui::Response {
     let (rect, resp) =
         ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click_and_drag());
     // drag a mesh (or the picked meshes it is one of) onto a row of the
-    // Deformer palette to put it under that deformer
-    if resp.drag_started() {
+    // Deformer palette to put it under that deformer, or along the Parts
+    // palette to move it
+    if drag_ok && resp.drag_started() {
         resp.dnd_set_drag_payload(Child::Mesh(mi));
     }
     if resp.dragged() {
@@ -13753,6 +13935,64 @@ fn parts_mesh_row(
             ui.close();
         }
     });
+    resp
+}
+
+/// What a Parts palette drag carries: parts, or (from a mesh row, whose
+/// payload is the `Child::Mesh` the Deformer palette also takes) a mesh
+/// and the pick it belongs to.
+#[derive(Clone, Debug)]
+enum Dragged {
+    Parts(Vec<usize>),
+    Mesh(usize),
+}
+
+/// A Parts palette row as a drop place, as in Cubism: the top of a row
+/// drops above it and the bottom below it; the middle of a part row drops
+/// into the part, at the bottom of its list, and so does the lower half of
+/// an open part, whose first child shows just under it. Marks the place
+/// while a drag hovers and reports it on release.
+fn palette_drop_target(
+    ui: &Ui,
+    resp: &egui::Response,
+    row: PRow,
+    open: bool,
+    out: &mut Option<(Dragged, PDrop)>,
+) {
+    let dragged = match egui::DragAndDrop::payload::<Dragged>(ui.ctx()) {
+        Some(d) => (*d).clone(),
+        None => match egui::DragAndDrop::payload::<Child>(ui.ctx()).as_deref() {
+            Some(Child::Mesh(m)) => Dragged::Mesh(*m),
+            _ => return,
+        },
+    };
+    let rect = resp.rect;
+    let Some(ptr) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p)) else {
+        return;
+    };
+    let f = (ptr.y - rect.min.y) / rect.height().max(1.0);
+    let to = match row {
+        PRow::Mesh(_) if f < 0.5 => PDrop::Above(row),
+        PRow::Mesh(_) => PDrop::Below(row),
+        PRow::Part(_) if f < 0.3 => PDrop::Above(row),
+        PRow::Part(_) if f > 0.7 && !open => PDrop::Below(row),
+        PRow::Part(p) => PDrop::Into(p),
+    };
+    let stroke = Stroke::new(2.0, theme::pal().accent);
+    match to {
+        PDrop::Above(_) => {
+            ui.painter().hline(rect.x_range(), rect.min.y, stroke);
+        }
+        PDrop::Below(_) => {
+            ui.painter().hline(rect.x_range(), rect.max.y, stroke);
+        }
+        PDrop::Into(_) => {
+            ui.painter().rect_stroke(rect.shrink(1.0), 2.0, stroke, StrokeKind::Inside);
+        }
+    }
+    if ui.input(|i| i.pointer.any_released()) {
+        *out = Some((dragged, to));
+    }
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {

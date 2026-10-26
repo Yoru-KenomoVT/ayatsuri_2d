@@ -1366,5 +1366,12 @@
   "Save the values below into this preset": "Stoor die waardes hieronder in hierdie voorinstelling",
   "Preset name": "Voorinstelling se naam",
   "Deformation (small)": "Vervorming (klein)",
-  "Deformation (large)": "Vervorming (groot)"
+  "Deformation (large)": "Vervorming (groot)",
+  "New Part. Shift+click puts the selected objects in it": "Nuwe onderdeel. Shift+klik sit die gekose voorwerpe daarin",
+  "Prohibit drag and drop": "Verbied sleep en los",
+  "New Part": "Nuwe onderdeel",
+  "Part ID": "Onderdeel-ID",
+  "Put selected objects into children": "Sit gekose voorwerpe in as kinders",
+  "IDs take letters, digits and _ only.": "ID's bevat net letters, syfers en _.",
+  "That Part ID is empty, taken or has characters IDs can't use.": "Daardie onderdeel-ID is leeg, reeds gebruik of bevat karakters wat ID's nie mag hê nie."
 }
