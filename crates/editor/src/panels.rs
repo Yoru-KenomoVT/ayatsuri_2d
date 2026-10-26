@@ -13793,6 +13793,17 @@ fn param_slider(
         [pos2(x_of(min), cy), pos2(x_of(max), cy)],
         Stroke::new(1.0, theme::pal().track),
     );
+    // a blend shape parameter is marked by a rectangular border at 0.0, its
+    // base key, keys or not (Cubism manual, "Blend Shape")
+    if look.blend && (min..=max).contains(&0.0) {
+        let r = Rect::from_center_size(pos2(x_of(0.0), cy), vec2(10.0, 13.0));
+        painter.rect_stroke(
+            r,
+            0.0,
+            Stroke::new(1.2, theme::pal().text_faint),
+            egui::StrokeKind::Middle,
+        );
+    }
     for &k in keys {
         let at = pos2(x_of(k), cy);
         if look.mirrored.is_some_and(|m| (m - k).abs() < 1e-5) {
@@ -13817,16 +13828,32 @@ fn param_slider(
         } else {
             Stroke::new(1.6, Color32::from_rgb(0x4C, 0xC0, 0x6A))
         };
-        if look.blend && k.abs() < 1e-5 {
-            // a blend shape's base key: Cubism's rectangle, holding no form
-            let r = Rect::from_center_size(at, vec2(5.0, 9.0));
-            painter.rect(r, 0.0, fill, ring, egui::StrokeKind::Middle);
+        // a blend shape parameter's keys are rectangles, as in Cubism
+        let selected = held > 0 && (*value - k).abs() <= span * 1e-4;
+        let red = Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35));
+        if look.blend {
+            let size = if held > 0 { vec2(6.0, 9.0) } else { vec2(5.0, 8.0) };
+            painter.rect(
+                Rect::from_center_size(at, size),
+                0.0,
+                fill,
+                ring,
+                egui::StrokeKind::Middle,
+            );
+            if selected {
+                painter.rect_stroke(
+                    Rect::from_center_size(at, vec2(9.0, 12.0)),
+                    0.0,
+                    red,
+                    egui::StrokeKind::Middle,
+                );
+            }
         } else {
             painter.circle(at, if held > 0 { 3.3 } else { 3.0 }, fill, ring);
-        }
-        // the selected key: the slider sits on it
-        if held > 0 && (*value - k).abs() <= span * 1e-4 {
-            painter.circle_stroke(at, 4.6, Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35)));
+            // the selected key: the slider sits on it
+            if selected {
+                painter.circle_stroke(at, 4.6, red);
+            }
         }
     }
     // a faint tick at the default, the way Cubism hints the rest value
