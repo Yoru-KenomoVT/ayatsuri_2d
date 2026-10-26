@@ -3,7 +3,7 @@
 // fastest), so every change resamples the product: inserted keys take the
 // interpolated shape, so the puppet looks identical until someone moves it.
 
-use ayatsuri_format::model::{Binding, BindingAxis, BlendShape, DeformerKind, Model};
+use ayatsuri_format::model::{Binding, BindingAxis, BlendShape, DeformerKind, Model, WeightLimit};
 
 use crate::{blend, blendshape};
 
@@ -379,6 +379,7 @@ fn add_blend_keys(model: &mut Model, target: Target, param: usize, values: &[f32
                 parameter: param as u32,
                 keys: Vec::new(),
                 positions: Vec::new(),
+                limits: Vec::new(),
             });
             m.blend_shapes.len() - 1
         }
@@ -409,6 +410,83 @@ fn add_blend_keys(model: &mut Model, target: Target, param: usize, values: &[f32
         m.blend_shapes.remove(at);
     }
     changed
+}
+
+/// Why a weight limit cannot be set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LimitError {
+    /// The mesh has no blend shape on that parameter.
+    NoShape,
+    /// A shape cannot limit itself.
+    SameParameter,
+    /// The shape already has a limit on that parameter.
+    Duplicate,
+    /// No such parameter.
+    NoParameter,
+    Graph(blendshape::GraphError),
+}
+
+/// Add a weight limit to mesh `mi`'s blend shape on `shape`, following
+/// parameter `by` with the graph `keys` to `weights`.
+pub fn add_weight_limit(
+    model: &mut Model,
+    mi: usize,
+    shape: usize,
+    by: usize,
+    keys: Vec<f32>,
+    weights: Vec<f32>,
+) -> Result<(), LimitError> {
+    let p = model.parameters.get(by).ok_or(LimitError::NoParameter)?;
+    blendshape::check_graph(&keys, &weights, p.min, p.max).map_err(LimitError::Graph)?;
+    if shape == by {
+        return Err(LimitError::SameParameter);
+    }
+    let s = model
+        .art_meshes
+        .get_mut(mi)
+        .and_then(|m| m.blend_shapes.iter_mut().find(|s| s.parameter as usize == shape))
+        .ok_or(LimitError::NoShape)?;
+    if s.limits.iter().any(|l| l.parameter as usize == by) {
+        return Err(LimitError::Duplicate);
+    }
+    s.limits.push(WeightLimit { parameter: by as u32, keys, weights });
+    Ok(())
+}
+
+/// Replace the graph of the limit on `by` of mesh `mi`'s shape on `shape`.
+pub fn set_weight_limit(
+    model: &mut Model,
+    mi: usize,
+    shape: usize,
+    by: usize,
+    keys: Vec<f32>,
+    weights: Vec<f32>,
+) -> Result<(), LimitError> {
+    let p = model.parameters.get(by).ok_or(LimitError::NoParameter)?;
+    blendshape::check_graph(&keys, &weights, p.min, p.max).map_err(LimitError::Graph)?;
+    let l = model
+        .art_meshes
+        .get_mut(mi)
+        .and_then(|m| m.blend_shapes.iter_mut().find(|s| s.parameter as usize == shape))
+        .and_then(|s| s.limits.iter_mut().find(|l| l.parameter as usize == by))
+        .ok_or(LimitError::NoShape)?;
+    l.keys = keys;
+    l.weights = weights;
+    Ok(())
+}
+
+/// Take the limit on `by` off mesh `mi`'s shape on `shape`.
+pub fn remove_weight_limit(model: &mut Model, mi: usize, shape: usize, by: usize) -> bool {
+    let Some(s) = model
+        .art_meshes
+        .get_mut(mi)
+        .and_then(|m| m.blend_shapes.iter_mut().find(|s| s.parameter as usize == shape))
+    else {
+        return false;
+    };
+    let before = s.limits.len();
+    s.limits.retain(|l| l.parameter as usize != by);
+    s.limits.len() != before
 }
 
 /// Remove the blend shape key nearest `value`; the base key cannot go. The
@@ -2838,7 +2916,9 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
     let id = meta.id.clone();
     let p32 = param as u32;
     let uses = |b: &Binding| b.axes.iter().any(|a| a.parameter == p32);
-    let shaped = |s: &[BlendShape]| s.iter().any(|s| s.parameter == p32);
+    let shaped = |s: &[BlendShape]| {
+        s.iter().any(|s| s.parameter == p32 || s.limits.iter().any(|l| l.parameter == p32))
+    };
     let used = model.parts.iter().any(|p| uses(&p.binding))
         || model.deformers.iter().any(|d| uses(&d.binding))
         || model.art_meshes.iter().any(|m| uses(&m.binding) || shaped(&m.blend_shapes))
@@ -2871,6 +2951,11 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
             if s.parameter > p32 {
                 s.parameter -= 1;
             }
+            for l in &mut s.limits {
+                if l.parameter > p32 {
+                    l.parameter -= 1;
+                }
+            }
         }
     }
     for g in &mut model.glues {
@@ -2889,7 +2974,12 @@ pub fn param_users(model: &Model, param: usize) -> (usize, usize) {
         + model
             .art_meshes
             .iter()
-            .filter(|m| uses(&m.binding) || m.blend_shapes.iter().any(|s| s.parameter == p32))
+            .filter(|m| {
+                uses(&m.binding)
+                    || m.blend_shapes
+                        .iter()
+                        .any(|s| s.parameter == p32 || s.limits.iter().any(|l| l.parameter == p32))
+            })
             .count()
         + model.glues.iter().filter(|g| uses(&g.binding)).count();
     let id = model.parameters.get(param).map(|p| p.id.as_str()).unwrap_or_default();
@@ -2943,6 +3033,12 @@ pub fn unbind_parameter_everywhere(model: &mut Model, param: usize) -> bool {
     let mut changed = false;
     for t in targets {
         changed |= delete_binding(model, t, param, default);
+    }
+    // weight limits that follow it go: nothing is left to read
+    for s in model.art_meshes.iter_mut().flat_map(|m| &mut m.blend_shapes) {
+        let before = s.limits.len();
+        s.limits.retain(|l| l.parameter != p32);
+        changed |= s.limits.len() != before;
     }
     // glue intensity keyforms: keep the one nearest the default
     for g in &mut model.glues {

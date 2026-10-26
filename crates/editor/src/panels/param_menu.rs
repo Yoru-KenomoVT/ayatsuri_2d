@@ -39,6 +39,8 @@ pub(super) enum ParamCmd {
     Uncombine(usize),
     /// Automatic Generation of Four Corner Forms (Ctrl+4).
     FourCorners,
+    /// Limit Settings for Blend Shape Weights.
+    WeightLimits,
     /// Motion Mirroring for a parameter.
     Mirror(usize),
     /// Extended Interpolation for a parameter on the selected objects.
@@ -163,6 +165,7 @@ pub(super) struct ParamMenuState {
     pub(super) delete_ask: Option<(usize, usize, usize)>,
     adjust: Option<(usize, f32, f32)>,
     change: Option<(usize, usize)>,
+    pub(super) limits: Option<super::weight_limits::LimitsDlg>,
 }
 
 /// The label colour picker shared by parameters, folders and keys: a
@@ -374,6 +377,13 @@ pub(super) fn panel_menu(
         ParamCmd::FourCorners,
         &mut out,
     );
+    item(
+        ui,
+        true,
+        crate::i18n::tr("Limit Settings for Blend Shape Weights…"),
+        ParamCmd::WeightLimits,
+        &mut out,
+    );
     if ui.button(crate::i18n::tr("Expand all")).clicked() {
         s.groups.iter_mut().for_each(|g| g.open = true);
         ui.close();
@@ -437,7 +447,7 @@ fn bound_on(s: &Session, p: usize) -> Vec<Target> {
     out
 }
 
-fn label(s: &Session, p: usize) -> String {
+pub(super) fn label(s: &Session, p: usize) -> String {
     s.param_names
         .get(p)
         .cloned()
@@ -621,6 +631,7 @@ impl EditorUi {
                     None => CurveDlg { param: pi, method: 2, points: 5, scale: 1.0 },
                 });
             }
+            ParamCmd::WeightLimits => self.open_weight_limits(),
             ParamCmd::FourCorners => {
                 let Some(s) = &self.session else { return };
                 // start from the conventional pair, else the first pad
@@ -884,6 +895,7 @@ impl EditorUi {
 
     /// Rename, Adjust and Change, drawn each frame while open.
     pub(super) fn param_menu_windows(&mut self, ui: &mut Ui) {
+        self.weight_limits_window(ui);
         let ctx = ui.ctx().clone();
         if let Some((gi, name)) = &mut self.pmenu.rename {
             let mut open = true;

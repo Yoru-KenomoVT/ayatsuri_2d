@@ -222,6 +222,17 @@ fn ids(names: &[String]) -> Vec<u8> {
 
 /// The shared binding machinery: parameter bindings grouped per parameter,
 /// keyform bindings deduped across objects, all four pools at once.
+/// The blend shape weight limit pools (slots 131-136).
+#[derive(Default)]
+struct Limits {
+    index: Vec<i32>,
+    param: Vec<i32>,
+    begin: Vec<i32>,
+    count: Vec<i32>,
+    keys: Vec<f32>,
+    weights: Vec<f32>,
+}
+
 #[derive(Default)]
 struct Bindings {
     keys: Vec<f32>,
@@ -617,6 +628,12 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let m_normal_keyforms = m_opac.len();
     let mut bs_bindings: Vec<(i32, i32, i32)> = Vec::new();
     let mut bs_meshes: Vec<(i32, i32, i32)> = Vec::new();
+    // weight limits (131-136): per binding a run of constraint indices, one
+    // constraint per limit (its parameter and graph), none shared; weights
+    // are written as 0 to 1, as the model holds them (no Cubism file with
+    // limits has been measured yet)
+    let mut bs_limit_runs: Vec<(i32, i32)> = Vec::new();
+    let mut lim = Limits::default();
     for (mi, m) in model.art_meshes.iter().enumerate().filter(|_| shapes_on) {
         if m.blend_shapes.is_empty() {
             continue;
@@ -655,6 +672,20 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                 coords.extend_from_slice(&delta);
             }
             bs_bindings.push((t as i32, off, keys.len() as i32));
+            bs_limit_runs.push((lim.index.len() as i32, shape.limits.len() as i32));
+            for l in &shape.limits {
+                if l.parameter as usize >= n_params || l.keys.len() != l.weights.len() {
+                    return Err(err(format!(
+                        "art mesh {mi}: a blend shape weight limit is broken"
+                    )));
+                }
+                lim.index.push(lim.param.len() as i32);
+                lim.param.push(l.parameter as i32);
+                lim.begin.push(lim.keys.len() as i32);
+                lim.count.push(l.keys.len() as i32);
+                lim.keys.extend_from_slice(&l.keys);
+                lim.weights.extend_from_slice(&l.weights);
+            }
         }
         bs_meshes.push((mi as i32, first, m.blend_shapes.len() as i32));
     }
@@ -948,9 +979,14 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
             sect.insert(120, i32s(&bs_bindings.iter().map(|b| b.0).collect::<Vec<_>>()));
             sect.insert(121, i32s(&bs_bindings.iter().map(|b| b.1).collect::<Vec<_>>()));
             sect.insert(122, i32s(&bs_bindings.iter().map(|b| b.2).collect::<Vec<_>>()));
-            // no limit settings: every binding's constraint run is empty
-            sect.insert(123, i32s(&vec![0i32; bs_bindings.len()]));
-            sect.insert(124, i32s(&vec![0i32; bs_bindings.len()]));
+            sect.insert(123, i32s(&bs_limit_runs.iter().map(|r| r.0).collect::<Vec<_>>()));
+            sect.insert(124, i32s(&bs_limit_runs.iter().map(|r| r.1).collect::<Vec<_>>()));
+            sect.insert(131, i32s(&lim.index));
+            sect.insert(132, i32s(&lim.param));
+            sect.insert(133, i32s(&lim.begin));
+            sect.insert(134, i32s(&lim.count));
+            sect.insert(135, f32s(&lim.keys));
+            sect.insert(136, f32s(&lim.weights));
             sect.insert(128, i32s(&bs_meshes.iter().map(|b| b.0).collect::<Vec<_>>()));
             sect.insert(129, i32s(&bs_meshes.iter().map(|b| b.1).collect::<Vec<_>>()));
             sect.insert(130, i32s(&bs_meshes.iter().map(|b| b.2).collect::<Vec<_>>()));
@@ -1038,9 +1074,9 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         bs_bindings.len() as i32,
         0,
         bs_meshes.len() as i32,
-        0,
-        0,
-        0,
+        lim.index.len() as i32,
+        lim.param.len() as i32,
+        lim.keys.len() as i32,
     ];
     // 5.0 doubled the table; past 4.2's fields only the offscreen counts
     // (35, 36) are written, as no blend shapes are
@@ -1283,6 +1319,12 @@ mod tests {
                 parameter: 1,
                 keys: vec![-1.0, 1.0],
                 positions: vec![0.0, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0],
+                // ParamX past the middle fades the smile out
+                limits: vec![ayatsuri_format::model::WeightLimit {
+                    parameter: 0,
+                    keys: vec![0.0, 0.5, 1.0],
+                    weights: vec![1.0, 1.0, 0.0],
+                }],
             }],
         });
         let drawn = |m: &Model, x: f32, smile: f32| {
@@ -1297,9 +1339,16 @@ mod tests {
             assert!(back.parameters[1].blend_shape && !back.parameters[0].blend_shape, "{v:?}");
             let shape = &back.art_meshes[0].blend_shapes[0];
             assert_eq!(shape.keys, vec![-1.0, 1.0], "{v:?}");
-            for (x, smile) in
-                [(0.0, 0.0), (0.0, 1.0), (0.5, 0.5), (1.0, -1.0), (0.3, -0.25), (1.0, 1.0)]
-            {
+            assert_eq!(shape.limits, model.art_meshes[0].blend_shapes[0].limits, "{v:?}");
+            for (x, smile) in [
+                (0.0, 0.0),
+                (0.0, 1.0),
+                (0.5, 0.5),
+                (1.0, -1.0),
+                (0.3, -0.25),
+                (1.0, 1.0),
+                (0.75, 1.0),
+            ] {
                 let (want, got) = (drawn(&model, x, smile), drawn(&back, x, smile));
                 assert_eq!(want.len(), got.len());
                 for (a, b) in want.iter().zip(&got) {
