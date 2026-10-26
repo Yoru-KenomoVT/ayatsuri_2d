@@ -209,6 +209,10 @@ pub struct PointState {
     /// The pointer is over something this tool would take (a point or the
     /// box), so canvas clicks should not reselect objects underneath.
     pub hot: bool,
+    /// The pointer is on a handle only this tool takes (a point, a scale
+    /// dot, the rotate handle) or a drag is on: unlike the box body, a
+    /// click there must not pick another object.
+    pub on_handle: bool,
     /// A brush selection's per-point weights; empty when there is none.
     /// While present, every weighted point moves by its weight and the box
     /// wraps them.
@@ -291,6 +295,7 @@ impl PointState {
         self.picked.clear();
         self.drag = None;
         self.hot = false;
+        self.on_handle = false;
         self.weights.clear();
     }
 
@@ -391,6 +396,8 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
         (g, None) => g,
     };
     st.hot = hover_grab.is_some() || st.drag.is_some();
+    st.on_handle = st.drag.is_some()
+        || matches!(hover_grab, Some(Grab::Point | Grab::Scale { .. } | Grab::Rotate));
 
     if inp.drag_started
         && let Some(start) = inp.origin.or(inp.press).or(ptr)
@@ -747,6 +754,32 @@ mod tests {
         let d = drag(Grab::Rotate, pos2(20.0, 5.0), pos2(5.0, 20.0));
         let x = xform(&d, false, false);
         assert!(x.apply(pos2(10.0, 5.0)).distance(pos2(5.0, 10.0)) < 1e-3);
+    }
+
+    #[test]
+    fn only_handles_keep_a_click_from_picking_another_mesh() {
+        let mut st = PointState::default();
+        let mut pts = [pos2(0.0, 0.0), pos2(100.0, 0.0), pos2(100.0, 100.0), pos2(0.0, 100.0)];
+        let opts = PtOpts { whole_box: true, marquee: true, lasso: false, reach: 8.0, pad: 0.0 };
+        let hover = |p: Pos2| PtInput {
+            ptr: Some(p),
+            press: None,
+            origin: None,
+            shift: false,
+            alt: false,
+            any_down: false,
+            drag_started: false,
+            drag_stopped: false,
+            clicked: false,
+            dt: 0.016,
+        };
+        // inside the box, away from points and dots: the box would take a
+        // drag, but a click there picks whatever mesh is under it
+        point_tool(&mut st, &hover(pos2(40.0, 60.0)), &mut pts, &opts);
+        assert!(st.hot && !st.on_handle);
+        // on a point
+        point_tool(&mut st, &hover(pos2(1.0, 1.0)), &mut pts, &opts);
+        assert!(st.hot && st.on_handle);
     }
 
     #[test]

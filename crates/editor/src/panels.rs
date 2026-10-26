@@ -10146,11 +10146,12 @@ impl EditorUi {
                     vp.line_segment([s2, s0], stroke);
                 }
             }
-            // a click on the selected warp's points or box handles belongs
-            // to warp editing, not to picking the mesh underneath
+            // a click on the selected object's points or box handles belongs
+            // to editing, not to picking the mesh underneath; a click on the
+            // box body picks, so another mesh inside it is one click away
             let ctrl_now = ui.ctx().input(|i| i.modifiers.command);
             if resp.clicked()
-                && (!self.pts.hot || ctrl_now)
+                && (!self.pts.on_handle || ctrl_now)
                 && let Some(ptr) = resp.interact_pointer_pos()
             {
                 let (ux, uy) = unit_of(ptr);
@@ -11556,6 +11557,9 @@ impl EditorUi {
         }
 
         self.pts.hot = warp_hot;
+        if !warp_hot {
+            self.pts.on_handle = false;
+        }
 
         if self.tool != Tool::DeformBrush
             && let Some(st) = self.dbrush.take()
