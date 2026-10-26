@@ -885,8 +885,8 @@ impl EditorUi {
             (
                 "Inherited clipping",
                 "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its \
-                 masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its \
-                 own masks only for now",
+                 masks are clipped by. moc3 export carries it with hidden helper masks, so it \
+                 works in every version and VTube Studio",
                 &mut self.prefs.experimental_inherit_clip,
             ),
             (

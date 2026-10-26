@@ -1458,5 +1458,6 @@
   "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "Maak donkerder: wit los die kuns soos dit is. Word van 'n vervormer oorgedra na alles daaronder",
   "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "Maak ligter: swart los die kuns soos dit is. Word van 'n vervormer oorgedra na alles daaronder",
   "Between keys. Move the parameters onto a key to set the color there.": "Tussen sleutels. Skuif die parameters op 'n sleutel om die kleur daar te stel.",
-  "Back to the color that leaves the art as it is": "Terug na die kleur wat die kuns los soos dit is"
+  "Back to the color that leaves the art as it is": "Terug na die kleur wat die kuns los soos dit is",
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "Wys Erf in die Inspekteur se knipwerk: 'n mesh word ook geknip deur wat sy maskers knip. Die moc3-uitvoer dra dit met versteekte hulpmaskers, so dit werk in elke weergawe en VTube Studio"
 }

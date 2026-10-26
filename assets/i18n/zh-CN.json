@@ -1458,5 +1458,6 @@
   "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "变暗:白色保持原图不变。设在变形器上会传给其下的所有对象",
   "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "变亮:黑色保持原图不变。设在变形器上会传给其下的所有对象",
   "Between keys. Move the parameters onto a key to set the color there.": "位于关键帧之间。请把参数移到关键点上再设置颜色。",
-  "Back to the color that leaves the art as it is": "恢复为保持原图不变的颜色"
+  "Back to the color that leaves the art as it is": "恢复为保持原图不变的颜色",
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "在检查器的剪贴中显示“继承”:网格还会被其遮罩自身的剪贴所裁剪。moc3 导出用隐藏的辅助遮罩实现,所以在所有版本和 VTube Studio 中都可用"
 }

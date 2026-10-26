@@ -1458,5 +1458,6 @@
   "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "어둡게 합니다. 흰색이면 원래 그림 그대로입니다. 디포머에 설정하면 그 아래 모두에 적용됩니다",
   "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "밝게 합니다. 검은색이면 원래 그림 그대로입니다. 디포머에 설정하면 그 아래 모두에 적용됩니다",
   "Between keys. Move the parameters onto a key to set the color there.": "키 사이입니다. 색을 설정하려면 파라미터를 키 위로 옮기세요.",
-  "Back to the color that leaves the art as it is": "원래 그림 그대로가 되는 색으로 되돌리기"
+  "Back to the color that leaves the art as it is": "원래 그림 그대로가 되는 색으로 되돌리기",
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "인스펙터의 클리핑에 '상속'을 표시합니다. 메시가 마스크 자신의 클리핑으로도 잘립니다. moc3 내보내기는 숨겨진 보조 마스크로 이를 옮기므로 모든 버전과 VTube Studio에서 작동합니다"
 }

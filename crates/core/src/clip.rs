@@ -63,6 +63,44 @@ pub fn chain_of(model: &Model, mesh: usize) -> (Vec<Vec<u32>>, Option<ChainStop>
     (levels, None)
 }
 
+/// Why an inherited clip cannot go to moc3 as plain masks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotExportable {
+    /// A level with more than one mask: "inside iris or pupil" cannot be
+    /// turned inside out as one mesh.
+    SeveralMasks,
+    /// The mesh already inverts its masks.
+    Inverted,
+    /// The chain stopped short (see `ChainStop`).
+    Stopped(ChainStop),
+}
+
+/// The masks an inheriting mesh must be inside, one per level, its own
+/// first, when moc3 can carry that as masks: inside every one of them is
+/// outside none of their opposites, so each becomes a hidden helper mesh
+/// showing where the mask does not, and the mesh clips inverted by those.
+/// None when the mesh does not inherit a clip (one level or none).
+pub fn inherited_masks(model: &Model, mesh: usize) -> Option<Result<Vec<u32>, NotExportable>> {
+    let (levels, stop) = chain_of(model, mesh);
+    if levels.len() < 2 {
+        return None;
+    }
+    if let Some(stop) = stop {
+        return Some(Err(NotExportable::Stopped(stop)));
+    }
+    let inverted = model
+        .art_meshes
+        .get(mesh)
+        .is_some_and(|m| m.flags & ayatsuri_format::model::flags::INVERTED_MASK != 0);
+    if inverted {
+        return Some(Err(NotExportable::Inverted));
+    }
+    if levels.iter().any(|l| l.len() != 1) {
+        return Some(Err(NotExportable::SeveralMasks));
+    }
+    Some(Ok(levels.iter().filter_map(|l| l.first().copied()).collect()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +146,25 @@ mod tests {
         m.art_meshes[1].clip_inherit = true;
         m.art_meshes[0].masks = vec![3];
         assert_eq!(chain_of(&m, 2).0, vec![vec![1], vec![0], vec![3]]);
+    }
+
+    #[test]
+    fn exportable_chains_have_one_mask_a_level() {
+        let mut m = Model::new();
+        m.art_meshes = vec![mesh(vec![], false), mesh(vec![0], false), mesh(vec![1], true)];
+        assert_eq!(inherited_masks(&m, 2), Some(Ok(vec![1, 0])));
+        assert_eq!(inherited_masks(&m, 1), None, "one level is a plain clip");
+        m.art_meshes[2].flags = ayatsuri_format::model::flags::INVERTED_MASK;
+        assert_eq!(inherited_masks(&m, 2), Some(Err(NotExportable::Inverted)));
+        // two meshes clipped alike, both clipping a third that inherits
+        let mut m = Model::new();
+        m.art_meshes = vec![
+            mesh(vec![], false),
+            mesh(vec![0], false),
+            mesh(vec![0], false),
+            mesh(vec![1, 2], true),
+        ];
+        assert_eq!(inherited_masks(&m, 3), Some(Err(NotExportable::SeveralMasks)));
     }
 
     #[test]

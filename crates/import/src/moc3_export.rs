@@ -161,13 +161,16 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
              draws their contents directly, without the layer's opacity, clipping or blend mode"
         ));
     }
-    let inherited = (0..model.art_meshes.len())
-        .filter(|&mi| ayatsuri_core::clip::chain_of(model, mi).0.len() > 1)
+    // inherited clips go out as hidden helper masks (the editor's export
+    // adds them); the ones that cannot say so
+    let stuck = (0..model.art_meshes.len())
+        .filter(|&mi| matches!(ayatsuri_core::clip::inherited_masks(model, mi), Some(Err(_))))
         .count();
-    if inherited > 0 {
+    if stuck > 0 {
         out.push(format!(
-            "{inherited} mesh(es) inherit their masks' clip, which moc3 cannot store yet; they \
-             export clipped by their own masks only"
+            "{stuck} mesh(es) inherit a clip moc3 cannot carry (a level with more than one \
+             mask, an inverted clip, or a chain that stops); they export clipped by their own \
+             masks only"
         ));
     }
     let shaped = model.art_meshes.iter().filter(|m| !m.blend_shapes.is_empty()).count();
