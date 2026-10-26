@@ -17,7 +17,7 @@ use crate::discord::GITHUB;
 const WEBSITE: &str = "https://ayatsuri-2d.org";
 /// Where people can support the project, if they want to: optional, and
 /// nothing in the app depends on it.
-pub(crate) const SUPPORT: &str = "https://buymeacoffee.com/ayatsuri2d_alterion";
+pub(crate) const SUPPORT: &str = "https://buymeacoffee.com/ayatsuri2d";
 use crate::panels::{EditorUi, WashKey, dithered_wash};
 use crate::theme;
 
