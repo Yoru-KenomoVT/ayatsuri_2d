@@ -1444,5 +1444,8 @@
   "Repack when a mesh outgrows its art": "Herpak wanneer 'n mesh verby sy kuns groei",
   "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "Wanneer jy Mesh Edit verlaat, word die atlas weer uitgelê as 'n mesh nou verby sy eie kuns strek, sodat geen uitvoer ooit 'n buurman s'n wys nie. Skakel af om 'n uitleg wat met die hand gerangskik is, te behou",
   "Custom…": "Pasgemaak…",
-  "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "{mb} MB GPU-geheue per bladsy. Sommige programme en GPU's kan nie bladsye bo 8192 px laai nie"
+  "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "{mb} MB GPU-geheue per bladsy. Sommige programme en GPU's kan nie bladsye bo 8192 px laai nie",
+  "Support (optional)": "Ondersteun (opsioneel)",
+  "Support Ayatsuri2D (optional)": "Ondersteun Ayatsuri2D (opsioneel)",
+  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee. Ayatsuri2D is gratis en bly gratis; dit is net as jy wil"
 }
