@@ -346,7 +346,7 @@ Ayatsuri2D is free and always will be. If it saves you time or money, you can
 help keep it going:
 
 <p>
-  <a href="https://buymeacoffee.com/ChaceBerry"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
+  <a href="https://buymeacoffee.com/ayatsuri2d"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
 </p>
 
 Reporting bugs, sharing what you rig with it, and starring the repo help too.
