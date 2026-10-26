@@ -118,6 +118,20 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
             ));
         }
     }
+    let offscreen = model.parts.iter().filter(|p| p.offscreen.is_some()).count();
+    if offscreen > 0 && version.max_slot() < 152 {
+        out.push(format!(
+            "{offscreen} part(s) use offscreen drawing, which only moc3 5.3 stores; this version \
+             draws their contents directly, without the layer's opacity, clipping or blend mode"
+        ));
+    }
+    let shaped = model.art_meshes.iter().filter(|m| !m.blend_shapes.is_empty()).count();
+    if shaped > 0 {
+        out.push(format!(
+            "{shaped} mesh(es) have blend shapes, which moc3 export does not write yet; they \
+             export in their normal keyforms only"
+        ));
+    }
     if version.max_slot() >= 152 {
         out.push(VTS_NOTE.into());
     } else {
@@ -597,6 +611,43 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     sect.insert(70, i32s(&m_pos_begin));
     sect.insert(78, f32s(&uv_pool));
     sect.insert(79, i16s(&tri_pool));
+    // ---- offscreen parts (5.3): one offscreen per part that has it on,
+    // its masks joining the drawable mask pool after the meshes' and one
+    // offscreen keyform per part keyform ----
+    let mut part_off = vec![-1i32; n_parts];
+    let mut part_kf_off: Vec<i32> = Vec::new();
+    let (mut off_owner, mut off_flags, mut off_blend) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut off_mask_begin, mut off_mask_count) = (Vec::new(), Vec::new());
+    let mut off_opac: Vec<f32> = Vec::new();
+    if version.max_slot() >= 152 {
+        for (i, p) in model.parts.iter().enumerate() {
+            let Some(o) = &p.offscreen else {
+                part_kf_off.extend(std::iter::repeat_n(-1, p.draw_orders.len()));
+                continue;
+            };
+            if o.opacities.len() != p.draw_orders.len() {
+                return Err(err(format!(
+                    "part {i}: {} offscreen opacities for {} keyforms",
+                    o.opacities.len(),
+                    p.draw_orders.len()
+                )));
+            }
+            if let Some(slot) = part_off.get_mut(i) {
+                *slot = off_owner.len() as i32;
+            }
+            off_owner.push(i as i32);
+            // the flags byte is read as a drawable's: only the mask bit
+            off_flags.push(if o.inverted { flags::INVERTED_MASK } else { 0 });
+            off_blend.push(o.blend.to_moc3());
+            off_mask_begin.push(mask_pool.len() as i32);
+            off_mask_count.push(o.masks.len() as i32);
+            mask_pool.extend(o.masks.iter().map(|&s| s as i32));
+            for &a in &o.opacities {
+                part_kf_off.push(off_opac.len() as i32);
+                off_opac.push(a);
+            }
+        }
+    }
     sect.insert(80, i32s(&mask_pool));
 
     // ---- glue (89-100) ----
@@ -744,7 +795,8 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         // the per-object begins pointing at their keyform runs
         let w_total = w_opac.len() as i32;
         let r_total = r_opac.len() as i32;
-        let color_total = w_opac.len() + r_opac.len() + m_opac.len();
+        // offscreen keyforms take neutral colours after the meshes'
+        let color_total = w_opac.len() + r_opac.len() + m_opac.len() + off_opac.len();
         sect.insert(105, i32s(&w_kf_begin.clone()));
         sect.insert(106, i32s(&r_kf_begin.iter().map(|b| b + w_total).collect::<Vec<_>>()));
         sect.insert(
@@ -789,11 +841,22 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     // no offscreen keyform; each mesh's colour and alpha blend in one word
     // (colour in the low byte)
     if version.max_slot() >= 152 {
-        sect.insert(152, i32s(&vec![-1i32; n_parts]));
         let modes: Vec<i32> =
             model.art_meshes.iter().map(|m| Blend::of(m.blend, m.flags).to_moc3()).collect();
         sect.insert(153, i32s(&modes));
-        sect.insert(160, i32s(&vec![-1i32; part_keyforms]));
+        sect.insert(152, i32s(&part_off));
+        sect.insert(154, vec![0u8; off_owner.len() * 8]);
+        sect.insert(155, i32s(&off_owner));
+        sect.insert(156, off_flags.clone());
+        sect.insert(157, i32s(&off_blend));
+        sect.insert(158, i32s(&off_mask_begin));
+        sect.insert(159, i32s(&off_mask_count));
+        sect.insert(160, i32s(&part_kf_off));
+        sect.insert(161, f32s(&off_opac));
+        let first_color = (w_opac.len() + r_opac.len() + m_opac.len()) as i32;
+        let off_colors: Vec<i32> = (0..off_opac.len() as i32).map(|k| first_color + k).collect();
+        sect.insert(162, i32s(&off_colors));
+        sect.insert(163, i32s(&off_colors));
     }
 
     // ---- counts table (slot 0), field order is the on-disk order ----
@@ -822,12 +885,12 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         g_weights.len() as i32,
         g_intens.len() as i32,
         if version.max_slot() >= 102 {
-            (w_opac.len() + r_opac.len() + m_opac.len()) as i32
+            (w_opac.len() + r_opac.len() + m_opac.len() + off_opac.len()) as i32
         } else {
             0
         },
         if version.max_slot() >= 102 {
-            (w_opac.len() + r_opac.len() + m_opac.len()) as i32
+            (w_opac.len() + r_opac.len() + m_opac.len() + off_opac.len()) as i32
         } else {
             0
         },
@@ -839,10 +902,12 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         0,
         0,
     ];
-    // 5.0 doubled the table; the fields past 4.2's (blend shapes, offscreens)
-    // stay zero because this writer emits none
+    // 5.0 doubled the table; past 4.2's fields only the offscreen counts
+    // (35, 36) are written, as no blend shapes are
     let mut count_bytes = vec![0u8; version.count_ints() * 4];
-    for (i, c) in counts.iter().enumerate() {
+    let extra = [(35usize, off_owner.len() as i32), (36, off_opac.len() as i32)];
+    let extra = extra.into_iter().filter(|_| version.max_slot() >= 152);
+    for (i, c) in counts.iter().copied().enumerate().chain(extra) {
         let at = i * 4;
         if let Some(slice) = count_bytes.get_mut(at..at + 4) {
             slice.copy_from_slice(&c.to_le_bytes());
@@ -1030,6 +1095,58 @@ mod tests {
         assert_eq!(Blend::of(m[1].blend, m[1].flags).color, ColorBlend::AddCompatible);
         let warnings = export_warnings(&model, ExportVersion::V5_00).join(" ");
         assert!(warnings.contains("2 mesh(es) use a blend mode"), "{warnings}");
+    }
+
+    #[test]
+    fn offscreen_parts_round_trip_through_5_3() {
+        use ayatsuri_format::model::{AlphaBlend, ArtMesh, Blend, ColorBlend, Offscreen, Part};
+        let mut model = Model::new();
+        model.parts.push(Part {
+            id: "Hair".into(),
+            parent_part: None,
+            visible: true,
+            enabled: true,
+            binding: Default::default(),
+            draw_orders: vec![500.0],
+            offscreen: Some(Offscreen {
+                masks: vec![1],
+                inverted: true,
+                blend: Blend { color: ColorBlend::Multiply, alpha: AlphaBlend::Over },
+                opacities: vec![0.4],
+            }),
+        });
+        let mesh = |id: &str, part: Option<u32>| ArtMesh {
+            id: id.into(),
+            parent_part: part,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: Default::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
+        };
+        model.art_meshes.push(mesh("Strand", Some(0)));
+        model.art_meshes.push(mesh("Head", None));
+
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_03).unwrap()).unwrap();
+        assert_eq!(back.parts[0].offscreen, model.parts[0].offscreen);
+        // the meshes' own masks are untouched by the layer's
+        assert!(back.art_meshes.iter().all(|m| m.masks.is_empty()));
+
+        // before 5.3 the layer goes, and the export says so
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_00).unwrap()).unwrap();
+        assert!(back.parts[0].offscreen.is_none());
+        let warnings = export_warnings(&model, ExportVersion::V5_00).join(" ");
+        assert!(warnings.contains("1 part(s) use offscreen drawing"), "{warnings}");
     }
 
     #[test]

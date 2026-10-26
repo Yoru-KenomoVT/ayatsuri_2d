@@ -518,7 +518,6 @@
   "Warp {cols}x{rows}": "ワープ {cols}x{rows}",
   "Rotation": "回転",
   "{count} meshes": "メッシュ{count}個",
-  "Only changes what you see while editing; it is not saved or exported, because moc3 parts have no opacity. To fade a part by a parameter, put its meshes under a deformer and key that deformer's Opacity.": "編集中の表示だけを変更します。moc3のパーツには不透明度がないため、保存や書き出しはされません。パラメータでパーツをフェードさせるには、そのメッシュをデフォーマの下に入れ、そのデフォーマの不透明度にキーを打ってください。",
   "{from} to {to}": "{from}から{to}",
   "yes": "はい",
   "no": "いいえ",
@@ -1324,5 +1323,12 @@
   "No art mesh here": "ここにアートメッシュはありません",
   "Blend Shape": "ブレンドシェイプ",
   "Its keyforms add on top of the others instead of multiplying them": "キーフォームを掛け合わせず、他のキーフォームの上に加算します",
-  "Blend Shape is editable": "ブレンドシェイプ編集中"
+  "Blend Shape is editable": "ブレンドシェイプ編集中",
+  "Offscreen drawing": "オフスクリーン描画",
+  "Draws the part's contents as one layer first, so its opacity, clipping and blend mode apply to the group as a whole. Its contents keep together in the draw order. Exports as moc3 5.3.": "パーツの中身を先に1枚のレイヤーとして描画するので、不透明度・クリッピング・ブレンドモードがグループ全体にかかります。中身は描画順でまとまったままになります。moc3 5.3 として書き出されます。",
+  "Reverse mask": "マスクを反転",
+  "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "編集中の見た目だけを変えます。保存や書き出しはされません。パラメータでパーツをフェードさせるには、オフスクリーン描画をオンにして不透明度にキーを付けるか、メッシュをデフォーマの下に入れてそのデフォーマの不透明度にキーを付けてください。",
+  "  Offscreen drawing": "  オフスクリーン描画",
+  "  Most nested offscreen layers": "  オフスクリーンの最大階層数",
+  "Blend shapes": "ブレンドシェイプ"
 }

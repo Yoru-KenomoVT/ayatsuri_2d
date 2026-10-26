@@ -518,7 +518,6 @@
   "Warp {cols}x{rows}": "Warp {cols}x{rows}",
   "Rotation": "Rotatie",
   "{count} meshes": "{count} meshes",
-  "Only changes what you see while editing; it is not saved or exported, because moc3 parts have no opacity. To fade a part by a parameter, put its meshes under a deformer and key that deformer's Opacity.": "Verandert alleen wat je ziet tijdens het bewerken; het wordt niet opgeslagen of geëxporteerd, omdat moc3-onderdelen geen dekking hebben. Om een onderdeel met een parameter te laten vervagen, zet je de meshes onder een deformer en zet je sleutels op de dekking van die deformer.",
   "{from} to {to}": "{from} tot {to}",
   "yes": "ja",
   "no": "nee",
@@ -1324,5 +1323,12 @@
   "No art mesh here": "Hier is geen art mesh",
   "Blend Shape": "Blendshape",
   "Its keyforms add on top of the others instead of multiplying them": "De keyforms worden bij de andere opgeteld in plaats van ermee vermenigvuldigd",
-  "Blend Shape is editable": "Blendshape bewerkbaar"
+  "Blend Shape is editable": "Blendshape bewerkbaar",
+  "Offscreen drawing": "Offscreen tekenen",
+  "Draws the part's contents as one layer first, so its opacity, clipping and blend mode apply to the group as a whole. Its contents keep together in the draw order. Exports as moc3 5.3.": "Tekent de inhoud van het onderdeel eerst als één laag, zodat dekking, uitknippen en overvloeimodus voor de hele groep gelden. De inhoud blijft bij elkaar in de tekenvolgorde. Exporteert als moc3 5.3.",
+  "Reverse mask": "Masker omkeren",
+  "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "Verandert alleen wat je ziet tijdens het bewerken; het wordt niet opgeslagen of geëxporteerd. Om een onderdeel met een parameter te laten vervagen: zet Offscreen tekenen aan en key de dekking, of zet de meshes onder een deformer en key diens dekking.",
+  "  Offscreen drawing": "  Offscreen tekenen",
+  "  Most nested offscreen layers": "  Diepst geneste offscreen lagen",
+  "Blend shapes": "Blendshapes"
 }

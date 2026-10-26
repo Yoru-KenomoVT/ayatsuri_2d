@@ -665,6 +665,66 @@ pub const SECTIONS: &[SectionDesc] = &[
         name: "Art Meshes v5.3: Blend Modes (colour in the low byte, alpha in the next)",
         count_of: |c| c.art_meshes,
         elem_size: 4,
+    }, // offscreens: layout from PurismCore (MIT), see the research notes
+    SectionDesc {
+        slot: 154,
+        name: "Offscreens v5.3: Runtime Space",
+        count_of: |c| c.offscreens,
+        elem_size: 8,
+    },
+    SectionDesc {
+        slot: 155,
+        name: "Offscreens v5.3: Owner Part Indices",
+        count_of: |c| c.offscreens,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 156,
+        name: "Offscreens v5.3: Constant Flags",
+        count_of: |c| c.offscreens,
+        elem_size: 1,
+    },
+    SectionDesc {
+        slot: 157,
+        name: "Offscreens v5.3: Blend Modes",
+        count_of: |c| c.offscreens,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 158,
+        name: "Offscreens v5.3: Mask Begin Indices",
+        count_of: |c| c.offscreens,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 159,
+        name: "Offscreens v5.3: Mask Counts",
+        count_of: |c| c.offscreens,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 160,
+        name: "Part Keyforms v5.3: Offscreen Keyform Indices",
+        count_of: |c| c.part_keyforms,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 161,
+        name: "Offscreen Keyforms v5.3: Opacities",
+        count_of: |c| c.offscreen_keyforms,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 162,
+        name: "Offscreen Keyforms v5.3: Multiply Color Begin Indices",
+        count_of: |c| c.offscreen_keyforms,
+        elem_size: 4,
+    },
+    SectionDesc {
+        slot: 163,
+        name: "Offscreen Keyforms v5.3: Screen Color Begin Indices",
+        count_of: |c| c.offscreen_keyforms,
+        elem_size: 4,
     },
 ];
 

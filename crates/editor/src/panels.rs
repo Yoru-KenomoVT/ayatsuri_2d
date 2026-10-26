@@ -8458,57 +8458,10 @@ impl EditorUi {
                 let targets: Vec<ayatsuri_core::edit::Target> =
                     picked.iter().map(|&m| ayatsuri_core::edit::Target::ArtMesh(m)).collect();
                 opacity_row(ui, s, &targets, self.sel_param);
-                use ayatsuri_format::model::{AlphaBlend, Blend, ColorBlend, flags};
+                use ayatsuri_format::model::{Blend, flags};
                 let blend = Blend::of(m.blend, m.flags);
                 let mut new_blend = blend;
-                let label = |ui: &mut egui::Ui, text: &'static str| {
-                    ui.add_sized(
-                        [74.0, 16.0],
-                        egui::Label::new(
-                            egui::RichText::new(crate::i18n::tr(text))
-                                .color(theme::pal().text_faint)
-                                .size(11.0),
-                        ),
-                    );
-                };
-                ui.horizontal(|ui| {
-                    label(ui, "Blend mode");
-                    egui::ComboBox::from_id_salt(("blend", i))
-                        .selected_text(crate::i18n::trc(color_blend_name(new_blend.color)))
-                        .show_ui(ui, |ui| {
-                            for c in COLOR_BLEND_MENU {
-                                ui.selectable_value(
-                                    &mut new_blend.color,
-                                    c,
-                                    crate::i18n::trc(color_blend_name(c)),
-                                );
-                            }
-                        });
-                });
-                // the two modes from before 5.3 ignore the alpha blend
-                let compatible = matches!(
-                    new_blend.color,
-                    ColorBlend::AddCompatible | ColorBlend::MultiplyCompatible
-                );
-                ui.horizontal(|ui| {
-                    label(ui, "Alpha blend");
-                    ui.add_enabled_ui(!compatible, |ui| {
-                        egui::ComboBox::from_id_salt(("alpha-blend", i))
-                            .selected_text(crate::i18n::trc(alpha_blend_name(new_blend.alpha)))
-                            .show_ui(ui, |ui| {
-                                for a in AlphaBlend::ALL {
-                                    ui.selectable_value(
-                                        &mut new_blend.alpha,
-                                        a,
-                                        crate::i18n::trc(alpha_blend_name(a)),
-                                    );
-                                }
-                            });
-                    });
-                });
-                if compatible {
-                    new_blend.alpha = AlphaBlend::Over;
-                }
+                blend_rows(ui, ("mesh", i), &mut new_blend);
                 if !new_blend.legacy_bits().1 {
                     ui.horizontal(|ui| {
                         ui.add_space(78.0);
@@ -8746,9 +8699,9 @@ impl EditorUi {
                         .add(slider)
                         .on_hover_text(crate::i18n::tr(
                             "Only changes what you see while editing; it is not saved or \
-                             exported, because moc3 parts have no opacity. To fade a part by a \
-                             parameter, put its meshes under a deformer and key that \
-                             deformer's Opacity.",
+                             exported. To fade a part by a parameter, turn on Offscreen drawing \
+                             and key its Opacity, or put its meshes under a deformer and key \
+                             that deformer's Opacity.",
                         ))
                         .changed()
                     {
@@ -8759,6 +8712,7 @@ impl EditorUi {
                         s.dirty = true;
                     }
                 });
+                self.offscreen_rows(ui, i);
             }
             Some(Sel::Parameter(i)) => {
                 let Some(p) = s.puppet.model().parameters.get(i) else { return };
@@ -8797,6 +8751,112 @@ impl EditorUi {
             }
         }
     }
+    /// Cubism 5.3's offscreen drawing on a part: the switch, then what the
+    /// layer lands with (opacity keyed like any opacity, blend, mask).
+    fn offscreen_rows(&mut self, ui: &mut Ui, part: usize) {
+        use ayatsuri_core::edit::Target;
+        let sel_param = self.sel_param;
+        let Some(s) = &mut self.session else { return };
+        let Some(current) = s.puppet.model().parts.get(part).map(|p| p.offscreen.clone()) else {
+            return;
+        };
+        ui.separator();
+        let mut on = current.is_some();
+        ui.horizontal(|ui| {
+            ui.add_space(78.0);
+            ui.checkbox(&mut on, crate::i18n::tr("Offscreen drawing")).on_hover_text(
+                crate::i18n::tr(
+                    "Draws the part's contents as one layer first, so its opacity, clipping \
+                     and blend mode apply to the group as a whole. Its contents keep together \
+                     in the draw order. Exports as moc3 5.3.",
+                ),
+            );
+        });
+        if on != current.is_some() && s.edit(|m| ayatsuri_core::edit::set_offscreen(m, part, on)) {
+            log::info!("part {part}: offscreen drawing {}", if on { "on" } else { "off" });
+            return;
+        }
+        let Some(o) = current else { return };
+        opacity_row(ui, s, &[Target::Part(part)], sel_param);
+        let mut blend = o.blend;
+        blend_rows(ui, ("part", part), &mut blend);
+        let mut inverted = o.inverted;
+        ui.horizontal(|ui| {
+            ui.add_space(78.0);
+            ui.checkbox(&mut inverted, crate::i18n::tr("Reverse mask"));
+        });
+        let mut masks = o.masks.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.add_sized(
+                [74.0, 16.0],
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::tr("Clip by"))
+                        .color(theme::pal().text_faint)
+                        .size(11.0),
+                ),
+            );
+            if masks.is_empty() {
+                ui.weak(crate::i18n::tr("none"));
+            }
+            let mut drop: Option<usize> = None;
+            for (at, &x) in masks.iter().enumerate() {
+                let chip = egui::Button::new(
+                    egui::RichText::new(format!("{}  ×", truncate(&s.mesh_name(x as usize), 18)))
+                        .size(10.5),
+                )
+                .corner_radius(8.0)
+                .small();
+                if ui
+                    .add(chip)
+                    .on_hover_text(crate::i18n::tr("Stop clipping by this mesh"))
+                    .clicked()
+                {
+                    drop = Some(at);
+                }
+            }
+            if let Some(at) = drop {
+                masks.remove(at);
+            }
+            ui.menu_button("+", |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.clip_search)
+                        .hint_text(crate::i18n::tr("Search meshes"))
+                        .desired_width(180.0),
+                );
+                let needle = self.clip_search.to_lowercase();
+                let n = s.puppet.model().art_meshes.len();
+                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    let free: Vec<usize> =
+                        (0..n).filter(|&mi| !masks.contains(&(mi as u32))).collect();
+                    for mi in free {
+                        let name = s.mesh_name(mi);
+                        if (needle.is_empty() || name.to_lowercase().contains(&needle))
+                            && ui.button(name).clicked()
+                        {
+                            masks.push(mi as u32);
+                            ui.close();
+                        }
+                    }
+                });
+            })
+            .response
+            .on_hover_text(crate::i18n::tr("Add a clipping mask from the list"));
+        });
+        if (blend != o.blend || inverted != o.inverted || masks != o.masks)
+            && s.edit(|m| {
+                let Some(off) = m.parts.get_mut(part).and_then(|p| p.offscreen.as_mut()) else {
+                    return false;
+                };
+                off.blend = blend;
+                off.inverted = inverted;
+                off.masks = masks;
+                true
+            })
+        {
+            log::info!("part {part}: offscreen layer settings changed");
+        }
+    }
+
     fn textures_panel(&mut self, ui: &mut Ui) {
         let mut open_atlas = false;
         let Some(s) = &self.session else {
@@ -15443,6 +15503,54 @@ const COLOR_BLEND_MENU: [ayatsuri_format::model::ColorBlend; 18] = {
         MultiplyCompatible,
     ]
 };
+
+/// The Inspector's Blend mode and Alpha blend rows, for a mesh or an
+/// offscreen part's layer. The two modes from before 5.3 ignore the alpha
+/// blend, so it greys out and stays Over with them.
+fn blend_rows(ui: &mut Ui, salt: (&str, usize), blend: &mut ayatsuri_format::model::Blend) {
+    use ayatsuri_format::model::{AlphaBlend, ColorBlend};
+    let label = |ui: &mut egui::Ui, text: &'static str| {
+        ui.add_sized(
+            [74.0, 16.0],
+            egui::Label::new(
+                egui::RichText::new(crate::i18n::tr(text))
+                    .color(theme::pal().text_faint)
+                    .size(11.0),
+            ),
+        );
+    };
+    ui.horizontal(|ui| {
+        label(ui, "Blend mode");
+        egui::ComboBox::from_id_salt(("blend", salt))
+            .selected_text(crate::i18n::trc(color_blend_name(blend.color)))
+            .show_ui(ui, |ui| {
+                for c in COLOR_BLEND_MENU {
+                    ui.selectable_value(&mut blend.color, c, crate::i18n::trc(color_blend_name(c)));
+                }
+            });
+    });
+    let compatible =
+        matches!(blend.color, ColorBlend::AddCompatible | ColorBlend::MultiplyCompatible);
+    ui.horizontal(|ui| {
+        label(ui, "Alpha blend");
+        ui.add_enabled_ui(!compatible, |ui| {
+            egui::ComboBox::from_id_salt(("alpha-blend", salt))
+                .selected_text(crate::i18n::trc(alpha_blend_name(blend.alpha)))
+                .show_ui(ui, |ui| {
+                    for a in AlphaBlend::ALL {
+                        ui.selectable_value(
+                            &mut blend.alpha,
+                            a,
+                            crate::i18n::trc(alpha_blend_name(a)),
+                        );
+                    }
+                });
+        });
+    });
+    if compatible {
+        blend.alpha = AlphaBlend::Over;
+    }
+}
 
 fn color_blend_name(c: ayatsuri_format::model::ColorBlend) -> &'static str {
     use ayatsuri_format::model::ColorBlend::*;

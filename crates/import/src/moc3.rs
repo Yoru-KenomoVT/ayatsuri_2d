@@ -236,8 +236,10 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             enabled: part_enabled.get(i).unwrap_or(1) != 0,
             binding,
             draw_orders: collect_f32(&part_draw_orders, kf),
+            offscreen: None,
         });
     }
+    read_offscreens(&moc, &mut parts, &part_kf_begin);
 
     // ---- deformers (slots 10-28, 59-67, 101) ----
     let d_ids: Vec<&str> = moc.ids(openmoc3::slot::DEFORMER_IDS)?.collect();
@@ -623,4 +625,45 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         art_path_colors: Vec::new(),
         art_path_page: None,
     })
+}
+
+/// moc3 5.3's offscreen parts (slots 152-161): each part's offscreen, its
+/// masks in the drawable mask pool and one opacity per part keyform. Files
+/// before 5.3 have none; a malformed entry leaves that part drawn directly.
+fn read_offscreens(moc: &Moc3<'_>, parts: &mut [Part], part_kf_begin: &I32s<'_>) {
+    let (Ok(index), Ok(owner), Ok(flag), Ok(blend), Ok(mask_begin), Ok(mask_count)) =
+        (moc.i32s(152), moc.i32s(155), moc.u8s(156), moc.i32s(157), moc.i32s(158), moc.i32s(159))
+    else {
+        return;
+    };
+    let (Ok(kf_off), Ok(opacity), Ok(pool)) = (moc.i32s(160), moc.f32s(161), moc.i32s(80)) else {
+        return;
+    };
+    for (i, p) in parts.iter_mut().enumerate() {
+        let Ok(o) = usize::try_from(index.get(i).unwrap_or(-1)) else { continue };
+        if owner.get(o) != Some(i as i32) {
+            log::warn!("moc3: offscreen {o} does not belong to part {i}; drawn directly");
+            continue;
+        }
+        let begin = mask_begin.get(o).unwrap_or(0).max(0) as usize;
+        let count = mask_count.get(o).unwrap_or(0).max(0) as usize;
+        let masks = (begin..begin.saturating_add(count))
+            .filter_map(|k| u32::try_from(pool.get(k)?).ok())
+            .collect();
+        let kf = part_kf_begin.get(i).unwrap_or(0).max(0) as usize;
+        let opacities = (0..p.draw_orders.len())
+            .map(|k| {
+                let at = kf_off.get(kf + k).unwrap_or(-1);
+                usize::try_from(at).ok().and_then(|a| opacity.get(a)).unwrap_or(1.0)
+            })
+            .collect();
+        p.offscreen = Some(ayatsuri_format::model::Offscreen {
+            masks,
+            inverted: flag
+                .get(o)
+                .is_some_and(|f| f & ayatsuri_format::model::flags::INVERTED_MASK != 0),
+            blend: ayatsuri_format::model::Blend::from_moc3(blend.get(o).unwrap_or(0)),
+            opacities,
+        });
+    }
 }

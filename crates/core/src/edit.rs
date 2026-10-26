@@ -159,7 +159,10 @@ pub(crate) fn with_object<R>(
     match target {
         Target::Part(i) => {
             let p = model.parts.get_mut(i)?;
-            let channels = vec![Channel::F32 { elems: 1, data: &mut p.draw_orders }];
+            let mut channels = vec![Channel::F32 { elems: 1, data: &mut p.draw_orders }];
+            if let Some(o) = &mut p.offscreen {
+                channels.push(Channel::F32 { elems: 1, data: &mut o.opacities });
+            }
             Some(f(&mut p.binding, channels))
         }
         Target::ArtMesh(i) => {
@@ -1624,7 +1627,9 @@ pub fn set_opacity(model: &mut Model, target: Target, keyform: usize, opacity: f
             DeformerKind::Warp(w) => w.opacities.get_mut(keyform),
             DeformerKind::Rotation(r) => r.opacities.get_mut(keyform),
         }),
-        Target::Part(_) => None,
+        Target::Part(i) => {
+            model.parts.get_mut(i).and_then(|p| p.offscreen.as_mut()?.opacities.get_mut(keyform))
+        }
     };
     let Some(slot) = slot else { return false };
     let opacity = opacity.clamp(0.0, 1.0);
@@ -1632,6 +1637,22 @@ pub fn set_opacity(model: &mut Model, target: Target, keyform: usize, opacity: f
         return false;
     }
     *slot = opacity;
+    true
+}
+
+/// Turn offscreen drawing on a part on (opaque, no masks, Normal blend) or
+/// off. True on change.
+pub fn set_offscreen(model: &mut Model, part: usize, on: bool) -> bool {
+    let Some(p) = model.parts.get_mut(part) else { return false };
+    if p.offscreen.is_some() == on {
+        return false;
+    }
+    p.offscreen = on.then(|| ayatsuri_format::model::Offscreen {
+        masks: Vec::new(),
+        inverted: false,
+        blend: Default::default(),
+        opacities: vec![1.0; p.draw_orders.len().max(1)],
+    });
     true
 }
 

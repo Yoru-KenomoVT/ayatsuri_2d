@@ -13,12 +13,12 @@ use crate::{read_i32, Error};
 /// file will try both a negative count and a huge one.
 const MAX_COUNT: i32 = (u32::MAX / 64) as i32;
 
-/// How many counts are defined through v5. The table has room for more
+/// How many counts are defined through v6. The table has room for more
 /// (32 entries in v4, 64 in v5 and v6); the rest are reserved zeroes.
-const DEFINED: usize = 35;
+const DEFINED: usize = 38;
 
 /// Field order is the on-disk order. Indices 0..=31 exist in v4.02; v5 added
-/// 32..=34 for the remaining blend-shape targets.
+/// 32..=34 for the remaining blend-shape targets; v6 35..=37 for offscreens.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Counts {
     pub parts: i32,
@@ -57,6 +57,10 @@ pub struct Counts {
     pub blend_shapes_parts: i32,
     pub blend_shapes_rotation_deformers: i32,
     pub blend_shapes_glue: i32,
+    // ---- v6 (5.3) and later ----
+    pub offscreens: i32,
+    pub offscreen_keyforms: i32,
+    pub blend_shapes_offscreens: i32,
 }
 
 impl Counts {
@@ -73,7 +77,7 @@ impl Counts {
             }
             *out = raw;
         }
-        let [parts, deformers, warp_deformers, rotation_deformers, art_meshes, parameters, part_keyforms, warp_deformer_keyforms, rotation_deformer_keyforms, art_mesh_keyforms, keyform_positions, parameter_binding_indices, keyform_bindings, parameter_bindings, keys, uvs, position_indices, drawable_masks, draw_order_groups, draw_order_group_objects, glue, glue_info, glue_keyforms, keyform_multiply_colors, keyform_screen_colors, blend_shape_parameter_bindings, blend_shape_keyform_bindings, blend_shapes_warp_deformers, blend_shapes_art_meshes, blend_shape_constraint_indices, blend_shape_constraints, blend_shape_constraint_values, blend_shapes_parts, blend_shapes_rotation_deformers, blend_shapes_glue] =
+        let [parts, deformers, warp_deformers, rotation_deformers, art_meshes, parameters, part_keyforms, warp_deformer_keyforms, rotation_deformer_keyforms, art_mesh_keyforms, keyform_positions, parameter_binding_indices, keyform_bindings, parameter_bindings, keys, uvs, position_indices, drawable_masks, draw_order_groups, draw_order_group_objects, glue, glue_info, glue_keyforms, keyform_multiply_colors, keyform_screen_colors, blend_shape_parameter_bindings, blend_shape_keyform_bindings, blend_shapes_warp_deformers, blend_shapes_art_meshes, blend_shape_constraint_indices, blend_shape_constraints, blend_shape_constraint_values, blend_shapes_parts, blend_shapes_rotation_deformers, blend_shapes_glue, offscreens, offscreen_keyforms, blend_shapes_offscreens] =
             v;
         Ok(Self {
             parts,
@@ -111,6 +115,9 @@ impl Counts {
             blend_shapes_parts,
             blend_shapes_rotation_deformers,
             blend_shapes_glue,
+            offscreens,
+            offscreen_keyforms,
+            blend_shapes_offscreens,
         })
     }
 

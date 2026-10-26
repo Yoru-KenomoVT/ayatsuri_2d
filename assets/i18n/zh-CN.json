@@ -518,7 +518,6 @@
   "Warp {cols}x{rows}": "弯曲 {cols}x{rows}",
   "Rotation": "旋转",
   "{count} meshes": "{count} 个图形网格",
-  "Only changes what you see while editing; it is not saved or exported, because moc3 parts have no opacity. To fade a part by a parameter, put its meshes under a deformer and key that deformer's Opacity.": "仅改变编辑时的显示效果；不会保存或导出，因为 moc3 的部件没有不透明度。若要通过参数让部件淡入淡出，请将其图形网格放到变形器下，并为该变形器的不透明度打关键。",
   "{from} to {to}": "{from} 到 {to}",
   "yes": "是",
   "no": "否",
@@ -1324,5 +1323,12 @@
   "No art mesh here": "此处没有图形网格",
   "Blend Shape": "混合形状",
   "Its keyforms add on top of the others instead of multiplying them": "其关键形态叠加在其他关键形态之上，而不是相乘",
-  "Blend Shape is editable": "可编辑混合形状"
+  "Blend Shape is editable": "可编辑混合形状",
+  "Offscreen drawing": "离屏绘制",
+  "Draws the part's contents as one layer first, so its opacity, clipping and blend mode apply to the group as a whole. Its contents keep together in the draw order. Exports as moc3 5.3.": "先将部件的内容绘制为一个图层，因此不透明度、剪贴和混合模式作用于整个组。其内容在绘制顺序中保持在一起。导出为 moc3 5.3。",
+  "Reverse mask": "反转遮罩",
+  "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "只改变编辑时看到的效果，不会保存或导出。要用参数淡化部件，请开启离屏绘制并为其不透明度设置关键帧，或把网格放在变形器下并为该变形器的不透明度设置关键帧。",
+  "  Offscreen drawing": "  离屏绘制",
+  "  Most nested offscreen layers": "  离屏图层最大嵌套数",
+  "Blend shapes": "混合形状"
 }

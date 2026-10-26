@@ -157,6 +157,26 @@ pub struct Part {
     pub binding: Binding,
     /// Per keyform.
     pub draw_orders: Vec<f32>,
+    /// Drawn offscreen (Cubism 5.3): its children paint into a layer of
+    /// their own first, which lands on the canvas as one image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offscreen: Option<Offscreen>,
+}
+
+/// How an offscreen part's layer lands on the canvas. Its children keep
+/// together in the draw order while it is on, as a draw order group does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Offscreen {
+    /// Art meshes whose alpha clips the layer.
+    #[serde(default)]
+    pub masks: Vec<u32>,
+    /// Show the layer outside the masks instead of inside.
+    #[serde(default)]
+    pub inverted: bool,
+    #[serde(default)]
+    pub blend: Blend,
+    /// Per part keyform.
+    pub opacities: Vec<f32>,
 }
 
 /// Free-form deformation lattice. The grid's control points live in the

@@ -110,48 +110,119 @@ pub fn callback(
     egui_wgpu::Callback::new_paint_callback(rect, ModelPaint { packet: Mutex::new(Some(packet)) })
 }
 
+/// The renderer's blend for a mesh or layer blend.
+fn blend_mode(b: ayatsuri_format::model::Blend) -> BlendMode {
+    match b.color {
+        ColorBlend::AddCompatible => BlendMode::Additive,
+        ColorBlend::MultiplyCompatible => BlendMode::Multiplicative,
+        _ if b.is_simple() => BlendMode::Normal,
+        _ => BlendMode::Advanced { color: b.color.code(), alpha: b.alpha.code() },
+    }
+}
+
+/// A frame's packet as it is built: geometry, commands, and the mask set
+/// the mask buffer holds by then.
+struct Frame<'a> {
+    puppet: &'a Puppet,
+    c: Canvas,
+    to_ndc: [f32; 4],
+    verts: Vec<Vertex>,
+    indices: Vec<u32>,
+    cmds: Vec<Cmd>,
+    last_masks: Option<Vec<u32>>,
+}
+
+impl Frame<'_> {
+    /// Fill the mask buffer with `masks`, unless it already holds them.
+    fn mask_set(&mut self, masks: &[u32]) {
+        if self.last_masks.as_deref() == Some(masks) {
+            return;
+        }
+        self.last_masks = Some(masks.to_vec());
+        let mut shapes = Vec::new();
+        for &src in masks {
+            if let Some(g) = self.puppet.mesh_geometry(src as usize) {
+                let range = push_mesh(
+                    &mut self.verts,
+                    &mut self.indices,
+                    &self.c,
+                    g.positions,
+                    g.uvs,
+                    g.indices,
+                    1.0,
+                );
+                shapes.push((range, g.texture));
+            }
+        }
+        self.cmds.push(Cmd::MaskSet { shapes });
+    }
+
+    /// Land an offscreen part's layer: a quad over the whole target, its
+    /// uvs covering the layer, its alpha the layer's opacity.
+    fn land(&mut self, part: u32) {
+        let Some(layer) = self.puppet.layer(part as usize) else { return };
+        let mut mask = MaskMode::None;
+        if !layer.masks.is_empty() {
+            self.mask_set(layer.masks);
+            mask = if layer.inverted { MaskMode::Inverted } else { MaskMode::Normal };
+        }
+        let [sx, sy, ox, oy] = self.to_ndc;
+        let base = self.verts.len() as u32;
+        let color = [1.0, 1.0, 1.0, layer.opacity];
+        let corners = [
+            ([-1.0, 1.0], [0.0, 0.0]),
+            ([1.0, 1.0], [1.0, 0.0]),
+            ([1.0, -1.0], [1.0, 1.0]),
+            ([-1.0, -1.0], [0.0, 1.0]),
+        ];
+        for ([nx, ny], uv) in corners {
+            self.verts.push(Vertex { pos: [(nx - ox) / sx, (ny - oy) / sy], uv, color });
+        }
+        let start = self.indices.len() as u32;
+        self.indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
+        self.cmds.push(Cmd::EndLayer {
+            indices: start..self.indices.len() as u32,
+            blend: blend_mode(layer.blend),
+            mask,
+        });
+    }
+}
+
 /// The frame as the renderer takes it: every drawable's triangles in
-/// order, mask sets where they change, and how canvas pixels map to the
-/// target. Textures and pages are left for the caller to attach.
+/// order, mask sets where they change, offscreen part layers opened and
+/// landed around their meshes, and how canvas pixels map to the target.
+/// Textures and pages are left for the caller to attach.
 pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
-    let c = puppet.model().canvas;
-    let mut verts = Vec::new();
-    let mut indices = Vec::new();
-    let mut cmds = Vec::new();
-    let mut last_masks: Option<Vec<u32>> = None;
+    let mut f = Frame {
+        puppet,
+        c: puppet.model().canvas,
+        to_ndc,
+        verts: Vec::new(),
+        indices: Vec::new(),
+        cmds: Vec::new(),
+        last_masks: None,
+    };
+    // the offscreen parts open now, outermost first
+    let mut open: Vec<u32> = Vec::new();
 
     for d in puppet.drawables() {
         if d.opacity <= 0.0 || d.indices.is_empty() {
             continue;
         }
-        let blend = match d.blend.color {
-            ColorBlend::AddCompatible => BlendMode::Additive,
-            ColorBlend::MultiplyCompatible => BlendMode::Multiplicative,
-            _ if d.blend.is_simple() => BlendMode::Normal,
-            _ => BlendMode::Advanced { color: d.blend.color.code(), alpha: d.blend.alpha.code() },
-        };
+        // land the layers this mesh is not in, open the ones it is
+        let chain = puppet.layers_of(d.mesh);
+        let shared = open.iter().zip(chain).take_while(|(a, b)| a == b).count();
+        while open.len() > shared {
+            let Some(part) = open.pop() else { break };
+            f.land(part);
+        }
+        for &part in chain.get(shared..).unwrap_or_default() {
+            f.cmds.push(Cmd::BeginLayer);
+            open.push(part);
+        }
         let mut mask = MaskMode::None;
         if !d.masks.is_empty() {
-            let same = last_masks.as_deref() == Some(d.masks);
-            if !same {
-                last_masks = Some(d.masks.to_vec());
-                let mut shapes = Vec::new();
-                for &src in d.masks {
-                    if let Some(g) = puppet.mesh_geometry(src as usize) {
-                        let range = push_mesh(
-                            &mut verts,
-                            &mut indices,
-                            &c,
-                            g.positions,
-                            g.uvs,
-                            g.indices,
-                            1.0,
-                        );
-                        shapes.push((range, g.texture));
-                    }
-                }
-                cmds.push(Cmd::MaskSet { shapes });
-            }
+            f.mask_set(d.masks);
             mask = if d.flags & flags::INVERTED_MASK != 0 {
                 MaskMode::Inverted
             } else {
@@ -159,14 +230,22 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
             };
         }
         let range =
-            push_mesh(&mut verts, &mut indices, &c, d.positions, d.uvs, d.indices, d.opacity);
-        cmds.push(Cmd::Draw { indices: range, texture: d.texture, blend, mask });
+            push_mesh(&mut f.verts, &mut f.indices, &f.c, d.positions, d.uvs, d.indices, d.opacity);
+        f.cmds.push(Cmd::Draw {
+            indices: range,
+            texture: d.texture,
+            blend: blend_mode(d.blend),
+            mask,
+        });
+    }
+    while let Some(part) = open.pop() {
+        f.land(part);
     }
 
     Packet {
-        vertices: verts,
-        indices,
-        cmds,
+        vertices: f.verts,
+        indices: f.indices,
+        cmds: f.cmds,
         to_ndc,
         width: w,
         height: h,
