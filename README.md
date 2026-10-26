@@ -14,7 +14,7 @@ runs in VTube Studio. On Windows, macOS and Linux.
 [![Latest release](https://img.shields.io/github/v/release/Yoru-KenomoVT/ayatsuri_2d?include_prereleases&label=download&color=e85d8a)](https://github.com/Yoru-KenomoVT/ayatsuri_2d/releases)
 [![CI](https://github.com/Yoru-KenomoVT/ayatsuri_2d/actions/workflows/ci.yml/badge.svg)](https://github.com/Yoru-KenomoVT/ayatsuri_2d/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSING.md)
-[![Platforms](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-555)](https://ayatsuri-2d.org/download)
+[![Platforms](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-555)](https://ayatsuri-2d.org/download/)
 ![moc3](https://img.shields.io/badge/moc3-3.0%20to%205.3-brightgreen)
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Website](https://img.shields.io/badge/ayatsuri--2d.org-website-f08e1e)](https://ayatsuri-2d.org)
