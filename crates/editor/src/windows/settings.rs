@@ -13,8 +13,7 @@ use crate::theme;
 const W: f32 = 760.0;
 const H: f32 = 520.0;
 const RAIL: f32 = 170.0;
-const PAGES: [&str; 7] =
-    ["General", "Appearance", "Performance", "Audio", "Keyboard", "API", "Experimental"];
+const PAGES: [&str; 6] = ["General", "Appearance", "Performance", "Audio", "Keyboard", "API"];
 
 /// Settings tabs by name, for the menus that open one: their place in
 /// `PAGES`, so adding a tab cannot send a menu to the wrong one.
@@ -180,8 +179,7 @@ impl EditorUi {
                             2 => self.settings_performance(ui),
                             3 => self.settings_audio(ui),
                             TAB_KEYBOARD => self.settings_keyboard(ui),
-                            TAB_API => self.settings_api(ui),
-                            _ => self.settings_experimental(ui),
+                            _ => self.settings_api(ui),
                         }
                     });
             });
@@ -433,6 +431,8 @@ impl EditorUi {
         if save {
             self.prefs.save();
         }
+        // last on the page, out of the way of everyday settings
+        self.settings_experimental(ui);
     }
 
     fn settings_appearance(&mut self, ui: &mut Ui) {
@@ -818,8 +818,8 @@ impl EditorUi {
         }
     }
 
-    /// Features still being proven: off until turned on here, and what a
-    /// model already uses keeps working either way.
+    /// Features still being proven, at the bottom of General: off until
+    /// turned on here, and what a model already uses keeps working either way.
     fn settings_experimental(&mut self, ui: &mut Ui) {
         let mut save = false;
         section(ui, crate::i18n::tr("EXPERIMENTAL"));
