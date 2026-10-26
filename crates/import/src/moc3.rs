@@ -614,7 +614,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         });
     }
 
-    Ok(Model {
+    let mut model = Model {
         canvas,
         parameters,
         parts,
@@ -627,7 +627,100 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         art_path_colors: Vec::new(),
         art_path_page: None,
         clip_groups: Vec::new(),
-    })
+    };
+    read_blend_shapes(&moc, &mut model, &coords, &m_pos_begin);
+    Ok(model)
+}
+
+/// moc3 4.2+'s blend shapes on art meshes (slots 114-130): each binding's
+/// keyforms, one per key of its parameter's key table with the base key's
+/// among them, hold what the shape adds; the model keeps the shape's form
+/// at each non-base key (base form plus that). Blend shapes on other
+/// objects and their limit settings are not kept yet, and say so.
+fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_begin: &I32s<'_>) {
+    let c = *moc.counts();
+    if c.blend_shape_keyform_bindings <= 0 {
+        return;
+    }
+    let others = c.blend_shapes_warp_deformers
+        + c.blend_shapes_parts
+        + c.blend_shapes_rotation_deformers
+        + c.blend_shapes_glue
+        + c.blend_shapes_offscreens;
+    if others > 0 {
+        log::warn!("moc3: {others} blend shape(s) on deformers, parts or glue are not kept yet");
+    }
+    if c.blend_shape_constraints > 0 {
+        log::warn!("moc3: blend shape weight limits are not kept yet; shapes apply in full");
+    }
+    let (Ok(ptype), Ok(table_begin), Ok(table_count)) =
+        (moc.i32s(114), moc.i32s(115), moc.i32s(116))
+    else {
+        return;
+    };
+    for (p, meta) in model.parameters.iter_mut().enumerate() {
+        meta.blend_shape = ptype.get(p) == Some(1) && table_count.get(p).unwrap_or(0) > 0;
+    }
+    let (Ok(keys_begin), Ok(keys_count), Ok(base_key), Ok(pool)) =
+        (moc.i32s(117), moc.i32s(118), moc.i32s(119), moc.f32s(77))
+    else {
+        return;
+    };
+    // which parameter each key table belongs to
+    let mut table_param = vec![None; c.blend_shape_parameter_bindings.max(0) as usize];
+    for p in 0..model.parameters.len() {
+        let (b, n) = (table_begin.get(p).unwrap_or(-1), table_count.get(p).unwrap_or(0));
+        for t in b.max(0)..b.max(0) + n.max(0) {
+            if let Some(slot) = table_param.get_mut(t as usize) {
+                *slot = Some(p as u32);
+            }
+        }
+    }
+    let (Ok(b_table), Ok(b_off), Ok(b_len)) = (moc.i32s(120), moc.i32s(121), moc.i32s(122)) else {
+        return;
+    };
+    let (Ok(target), Ok(m_bind_begin), Ok(m_bind_count)) =
+        (moc.i32s(128), moc.i32s(129), moc.i32s(130))
+    else {
+        return;
+    };
+    for s in 0..c.blend_shapes_art_meshes.max(0) as usize {
+        let Some(mi) = target.get(s).and_then(|t| usize::try_from(t).ok()) else { continue };
+        let Some(base) = ayatsuri_core::edit::base_form(model, mi) else {
+            log::warn!("moc3: art mesh {mi} has blend shapes but no form at the defaults; dropped");
+            continue;
+        };
+        let first = m_bind_begin.get(s).unwrap_or(0).max(0);
+        let mut shapes = Vec::new();
+        for b in first..first + m_bind_count.get(s).unwrap_or(0).max(0) {
+            let b = b as usize;
+            let Some(t) = b_table.get(b).and_then(|t| usize::try_from(t).ok()) else { continue };
+            let Some(parameter) = table_param.get(t).copied().flatten() else { continue };
+            let (kb, kn) =
+                (keys_begin.get(t).unwrap_or(0).max(0), keys_count.get(t).unwrap_or(0).max(0));
+            let base_at = base_key.get(t).unwrap_or(-1);
+            let (off, n) = (b_off.get(b).unwrap_or(0), b_len.get(b).unwrap_or(0));
+            let mut keys = Vec::new();
+            let mut positions = Vec::new();
+            for k in 0..kn.min(n) {
+                if k == base_at {
+                    continue;
+                }
+                let Some(key) = pool.get((kb + k) as usize) else { continue };
+                let start = pos_begin.get((off + k) as usize).unwrap_or(-1).max(0) as usize;
+                keys.push(key);
+                for (i, &b) in base.iter().enumerate() {
+                    positions.push(b + coords.get(start + i).unwrap_or(0.0));
+                }
+            }
+            if !keys.is_empty() {
+                shapes.push(ayatsuri_format::model::BlendShape { parameter, keys, positions });
+            }
+        }
+        if let Some(m) = model.art_meshes.get_mut(mi) {
+            m.blend_shapes = shapes;
+        }
+    }
 }
 
 /// moc3 5.3's offscreen parts (slots 152-161): each part's offscreen, its

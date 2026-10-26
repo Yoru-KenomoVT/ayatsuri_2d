@@ -334,7 +334,7 @@ fn is_blend_shape(model: &Model, param: usize) -> bool {
 
 /// A mesh's blend at every parameter's default: the form its blend shapes
 /// are differences from. None when its binding does not cover the defaults.
-fn base_form(model: &Model, mesh: usize) -> Option<Vec<f32>> {
+pub fn base_form(model: &Model, mesh: usize) -> Option<Vec<f32>> {
     let m = model.art_meshes.get(mesh)?;
     let stride = (m.vertex_count as usize).saturating_mul(2);
     let mut corners = Vec::new();
