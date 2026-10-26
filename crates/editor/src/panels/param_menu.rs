@@ -26,14 +26,8 @@ pub(super) enum ParamCmd {
     MoveHere(usize),
     /// Move the subject to the end of this folder.
     MoveIntoGroup(usize),
-    /// A parameter or folder dragged onto a parameter: it lands before it.
-    DropOnParam(Moving, usize),
-    /// A parameter or folder dragged onto a folder's header: into the folder,
-    /// or before it for a folder.
-    DropOnGroup(Moving, usize),
-    /// Dropped under the last row: a folder goes last, a parameter to the
-    /// end of the last folder.
-    DropAtEnd(Moving),
+    /// A parameter or folder dropped, layer-panel style (see `Place`).
+    Drop(Moving, Place),
     RenameGroup(usize),
     MoveGroupSubject(usize),
     /// Make a folder holding this parameter and everything picked with it.
@@ -493,16 +487,6 @@ impl EditorUi {
         log::info!("batch reflect: {} parameter(s), {n} keyed object(s)", params.len());
     }
 
-    /// What a drag carries becomes the move's subject: a dragged parameter
-    /// brings everything picked with it, as Select for Movement does.
-    fn drop_subject(&mut self, moving: Moving) {
-        self.pmenu.subject_set = match moving {
-            Moving::Param(p) => self.picked_with(p),
-            Moving::Group(_) => Vec::new(),
-        };
-        self.pmenu.subject = Some(moving);
-    }
-
     pub(super) fn run_param_cmd(&mut self, cmd: ParamCmd) {
         log::debug!("parameter palette: {cmd:?}");
         match cmd {
@@ -702,28 +686,15 @@ impl EditorUi {
                     s.modified = true;
                 }
             }
-            ParamCmd::DropOnParam(moving, dest) => {
-                self.drop_subject(moving);
-                self.run_param_cmd(ParamCmd::MoveHere(dest));
-            }
-            ParamCmd::DropOnGroup(moving, gi) => {
-                self.drop_subject(moving);
-                self.run_param_cmd(ParamCmd::MoveIntoGroup(gi));
-            }
-            ParamCmd::DropAtEnd(moving) => {
+            ParamCmd::Drop(moving, place) => {
+                let set = match moving {
+                    Moving::Param(p) => self.picked_with(p),
+                    Moving::Group(_) => Vec::new(),
+                };
                 let Some(s) = &mut self.session else { return };
-                let last = s.groups.len().saturating_sub(1);
                 match moving {
-                    Moving::Group(src) if src < s.groups.len() && src != last => {
-                        let g = s.groups.remove(src);
-                        s.groups.push(g);
-                        s.modified = true;
-                    }
-                    Moving::Group(_) => {}
-                    Moving::Param(_) => {
-                        self.drop_subject(moving);
-                        self.run_param_cmd(ParamCmd::MoveIntoGroup(last));
-                    }
+                    Moving::Param(_) => place_params(s, &set, place),
+                    Moving::Group(src) => place_group(s, src, place),
                 }
             }
             ParamCmd::MoveGroupSubject(gi) => {
@@ -1409,34 +1380,230 @@ pub(super) fn move_params_into(s: &mut Session, set: &[usize], gi: usize) {
     s.modified = true;
 }
 
-/// A name that drags: the drag carries `what`, and a drop of another
-/// parameter or folder here pushes `drop(what_was_dropped)`. While one
-/// hovers, a line in the accent colour shows where it lands.
+/// Where a dragged parameter or folder lands, as in a paint program's layer
+/// panel: just above or below a row at that row's level, above or below a
+/// folder outside it, or into a folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    Before(usize),
+    After(usize),
+    BeforeGroup(usize),
+    AfterGroup(usize),
+    /// First inside the folder.
+    Into(usize),
+    /// Last in the list, outside every folder.
+    End,
+}
+
+/// What a drop target row is: a parameter, or a folder's header (open or
+/// not).
+#[derive(Clone, Copy)]
+pub(super) enum Row {
+    Param(usize),
+    Folder { group: usize, open: bool },
+}
+
+/// A name that drags: the drag carries `what`, and a parameter or folder
+/// dropped on the row pushes where it lands. The pointer's height picks
+/// it: a parameter row's top half is above it, the bottom half below; a
+/// folder header's top quarter is above the folder, its bottom quarter
+/// below it (first inside, when the folder is open), the rest into it.
+/// While one hovers, an accent line (or outline, for into) shows where.
 pub(super) fn drag_target(
     ui: &Ui,
     resp: &egui::Response,
-    line: egui::Rect,
+    rect: egui::Rect,
     what: Moving,
-    drop: impl FnOnce(Moving) -> ParamCmd,
+    row: Row,
     out: &mut Option<ParamCmd>,
 ) {
     if resp.drag_started_by(egui::PointerButton::Primary) {
         resp.dnd_set_drag_payload(what);
     }
+    let place = || {
+        let y = ui.ctx().pointer_latest_pos().map_or(rect.center().y, |p| p.y);
+        let t = ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0);
+        match row {
+            Row::Param(p) if t < 0.5 => Place::Before(p),
+            Row::Param(p) => Place::After(p),
+            Row::Folder { group, .. } if t < 0.25 => Place::BeforeGroup(group),
+            Row::Folder { group, open: false } if t > 0.75 => Place::AfterGroup(group),
+            Row::Folder { group, .. } => Place::Into(group),
+        }
+    };
     if let Some(m) = resp.dnd_hover_payload::<Moving>()
         && *m != what
     {
-        ui.painter().hline(
-            line.x_range(),
-            line.top(),
-            egui::Stroke::new(2.0, crate::theme::pal().accent),
-        );
+        let stroke = egui::Stroke::new(2.0, crate::theme::pal().accent);
+        match place() {
+            Place::Before(_) | Place::BeforeGroup(_) => {
+                ui.painter().hline(rect.x_range(), rect.top(), stroke);
+            }
+            Place::After(_) | Place::AfterGroup(_) | Place::End => {
+                ui.painter().hline(rect.x_range(), rect.bottom(), stroke);
+            }
+            Place::Into(_) => {
+                ui.painter().rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
+            }
+        }
     }
     if let Some(m) = resp.dnd_release_payload::<Moving>()
         && *m != what
     {
-        *out = Some(drop(*m));
+        *out = Some(ParamCmd::Drop(*m, place()));
     }
+}
+
+/// Loose parameters (outside folders) are kept as unnamed runs between the
+/// folders; merge runs that end up side by side and drop empty ones.
+fn tidy_groups(s: &mut Session) {
+    s.groups.retain(|g| !(g.name.is_empty() && g.params.is_empty()));
+    let mut i = 1;
+    while i < s.groups.len() {
+        let both_loose = s.groups.get(i - 1).is_some_and(|g| g.name.is_empty())
+            && s.groups.get(i).is_some_and(|g| g.name.is_empty());
+        if both_loose {
+            let g = s.groups.remove(i);
+            if let Some(prev) = s.groups.get_mut(i - 1) {
+                prev.params.extend(g.params);
+            }
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Put `set` as a loose run at group position `at`: onto the end of a loose
+/// run just before it, the front of one just after it, or a run of its own.
+fn insert_loose(s: &mut Session, at: usize, set: &[usize]) {
+    let at = at.min(s.groups.len());
+    if let Some(prev) = at.checked_sub(1).and_then(|i| s.groups.get_mut(i))
+        && prev.name.is_empty()
+    {
+        prev.params.extend_from_slice(set);
+    } else if let Some(next) = s.groups.get_mut(at)
+        && next.name.is_empty()
+    {
+        for (k, &p) in set.iter().enumerate() {
+            next.params.insert(k, p);
+        }
+    } else {
+        s.groups.insert(
+            at,
+            crate::session::ParamGroup {
+                name: String::new(),
+                params: set.to_vec(),
+                open: true,
+                color: None,
+            },
+        );
+    }
+}
+
+/// Take the parameters in `set` from wherever they are and put them at
+/// `place`. Dropping a pick onto one of its own rows does nothing.
+pub(super) fn place_params(s: &mut Session, set: &[usize], place: Place) {
+    if set.is_empty() {
+        return;
+    }
+    if let Place::Before(d) | Place::After(d) = place
+        && set.contains(&d)
+    {
+        return;
+    }
+    for g in &mut s.groups {
+        g.params.retain(|p| !set.contains(p));
+    }
+    match place {
+        Place::Before(d) | Place::After(d) => {
+            let found = s
+                .groups
+                .iter()
+                .enumerate()
+                .find_map(|(gi, g)| g.params.iter().position(|&p| p == d).map(|at| (gi, at)));
+            if let Some((gi, at)) = found
+                && let Some(g) = s.groups.get_mut(gi)
+            {
+                let at = if matches!(place, Place::After(_)) { at + 1 } else { at };
+                for (k, &p) in set.iter().enumerate() {
+                    g.params.insert((at + k).min(g.params.len()), p);
+                }
+            }
+        }
+        Place::Into(gi) => {
+            if let Some(g) = s.groups.get_mut(gi) {
+                for (k, &p) in set.iter().enumerate() {
+                    g.params.insert(k.min(g.params.len()), p);
+                }
+                g.open = true;
+            }
+        }
+        Place::BeforeGroup(gi) => insert_loose(s, gi, set),
+        Place::AfterGroup(gi) => insert_loose(s, gi + 1, set),
+        Place::End => insert_loose(s, s.groups.len(), set),
+    }
+    tidy_groups(s);
+    s.modified = true;
+}
+
+/// Split the loose run `gi` so that its parameter at `at` starts a run of
+/// its own; returns where that second run now is.
+fn split_loose(s: &mut Session, gi: usize, at: usize) -> usize {
+    let Some(g) = s.groups.get_mut(gi) else { return gi };
+    if !g.name.is_empty() || at == 0 || at >= g.params.len() {
+        return if at == 0 { gi } else { gi + 1 };
+    }
+    let rest = g.params.split_off(at);
+    s.groups.insert(
+        gi + 1,
+        crate::session::ParamGroup { name: String::new(), params: rest, open: true, color: None },
+    );
+    gi + 1
+}
+
+/// Move folder `src` to `place`. Folders don't nest: dropped into a folder
+/// it lands before it; dropped beside a loose parameter, the run splits.
+pub(super) fn place_group(s: &mut Session, mut src: usize, place: Place) {
+    if s.groups.get(src).is_none_or(|g| g.name.is_empty()) {
+        return;
+    }
+    let mut to = match place {
+        Place::Before(d) | Place::After(d) => {
+            let Some((gi, at)) = s
+                .groups
+                .iter()
+                .enumerate()
+                .find_map(|(gi, g)| g.params.iter().position(|&p| p == d).map(|at| (gi, at)))
+            else {
+                return;
+            };
+            let named = s.groups.get(gi).is_some_and(|g| !g.name.is_empty());
+            let after = matches!(place, Place::After(_));
+            if named {
+                if after { gi + 1 } else { gi }
+            } else {
+                let to = split_loose(s, gi, if after { at + 1 } else { at });
+                if to <= src && gi < src {
+                    src += 1;
+                }
+                to
+            }
+        }
+        Place::BeforeGroup(gi) | Place::Into(gi) => gi,
+        Place::AfterGroup(gi) => gi + 1,
+        Place::End => s.groups.len(),
+    };
+    if to == src || to == src + 1 {
+        tidy_groups(s);
+        return;
+    }
+    let g = s.groups.remove(src);
+    if src < to {
+        to -= 1;
+    }
+    s.groups.insert(to.min(s.groups.len()), g);
+    tidy_groups(s);
+    s.modified = true;
 }
 
 /// An up and down parameter: its id ends in Y, as Angle Y, Body Angle Y,
