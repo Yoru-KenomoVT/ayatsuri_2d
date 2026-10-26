@@ -1426,5 +1426,18 @@
   "Step2": "ステップ2",
   "Weight Limit Graph": "ウェイト制限グラフ",
   "Weight limit (%)": "ウェイト制限 (%)",
-  "Rename Art Mesh": "アートメッシュの名前を変更"
+  "Rename Art Mesh": "アートメッシュの名前を変更",
+  "A pen in Mesh Edit's tool details: drag along a strand of hair or a line and get a mesh built along it, with width handles to shape it": "メッシュ編集のツール詳細にペンを追加します。髪の束や線に沿ってドラッグすると、それに沿ったメッシュが作られ、幅ハンドルで形を整えられます",
+  "Confirm stroke being edited (Click here [Shift+E])": "編集中のストロークを確定(ここをクリック [Shift+E])",
+  "Drag to draw a stroke; drag away from it to redraw it, Shift+drag for another. Click the line to add a control point, Alt+click one to delete it. Ctrl+click the line adds a width handle (orange), Ctrl+drag one sets the width, Ctrl+Alt+click deletes it. Shift+E confirms, Delete cancels.": "ドラッグでストロークを描きます。離れた所からドラッグすると描き直し、Shift+ドラッグで追加します。線をクリックで制御点を追加、Alt+クリックで削除。Ctrl+クリックで幅ハンドル(オレンジ)を追加、Ctrl+ドラッグで幅を変更、Ctrl+Alt+クリックで削除。Shift+Eで確定、Deleteで取り消します。",
+  "Invert mesh": "メッシュを反転",
+  "Maintain current mesh": "現在のメッシュを維持",
+  "Mesh width": "メッシュの幅",
+  "Mesh-mapping settings": "メッシュマッピング設定",
+  "Number of vertices in mesh width": "メッシュ幅の頂点数",
+  "Off: the points and edges the stroke mesh covers are removed": "オフ: ストロークのメッシュが覆う頂点と辺は削除されます",
+  "Repeated density": "繰り返し密度",
+  "Stroke mesh-mapping": "ストロークメッシュマッピング",
+  "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "ストロークメッシュマッピング(実験的): ドラッグでストロークに沿ったメッシュを作ります。Shift+Eで確定、Deleteで取り消し",
+  "With 2 vertices across: flip the diagonal of the first and last cells": "幅の頂点数が2のとき: 最初と最後のセルの対角線を反転します"
 }

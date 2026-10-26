@@ -17,6 +17,7 @@ mod deformer_dialog;
 mod param_menu;
 mod physics_page;
 mod skin_dialog;
+mod stroke_tool;
 mod temp_deform;
 mod tool_details;
 mod weight_limits;
@@ -105,6 +106,8 @@ struct ToolOptions {
     auto_new_name: Option<String>,
     warp_cols: u32,
     warp_rows: u32,
+    /// Stroke mesh-mapping's settings.
+    stroke: stroke_tool::StrokeOpts,
 }
 
 impl Default for ToolOptions {
@@ -115,6 +118,7 @@ impl Default for ToolOptions {
             auto_new_name: None,
             warp_cols: 5,
             warp_rows: 5,
+            stroke: stroke_tool::StrokeOpts::default(),
         }
     }
 }
@@ -290,6 +294,10 @@ pub struct EditorUi {
     dev_def_logged: bool,
     /// The art Mesh Edit shows, frozen on entry.
     mesh_art: Option<MeshArt>,
+    /// Stroke mesh-mapping's strokes, not yet confirmed.
+    stroke_edit: Option<stroke_tool::StrokeEdit>,
+    /// Confirm asked for on the canvas: applied once it lets go.
+    stroke_confirm: bool,
     /// The Mesh Edit dev hook has run, and has logged its vertices.
     dev_mesh_done: bool,
     dev_mesh_logged: bool,
@@ -1178,6 +1186,8 @@ impl Default for EditorUi {
             dev_def_done: false,
             dev_def_logged: false,
             mesh_art: None,
+            stroke_edit: None,
+            stroke_confirm: false,
             dev_mesh_logged: false,
             rot_live: None,
             api: Default::default(),
@@ -2125,6 +2135,9 @@ impl EditorUi {
         self.api_prompt_window(&ui.ctx().clone());
         self.api_window(ui);
         self.def_rename_window(&ui.ctx().clone());
+        if std::mem::take(&mut self.stroke_confirm) {
+            self.apply_stroke_mesh();
+        }
         self.def_division_window(&ui.ctx().clone());
         self.whats_new_window(&ui.ctx().clone());
         self.temp_deform_error_window(&ui.ctx().clone());
@@ -12224,6 +12237,7 @@ impl EditorUi {
         let mut mesh_op: Option<MeshOp> = None;
         if self.mesh_edit.is_none() {
             self.mesh_art = None;
+            self.stroke_edit = None;
         }
         if let Some(mi) = self.mesh_edit {
             vp.rect_filled(view, 0.0, Color32::from_black_alpha(150));
@@ -12589,6 +12603,27 @@ impl EditorUi {
                 } else {
                     self.erase_marked.clear();
                 }
+                // stroke mesh-mapping (experimental): strokes stay put while
+                // another tool is used, and go with Mesh Edit
+                if self.mesh_mode == 7 && !self.prefs.stroke_mesh_on() {
+                    self.mesh_mode = 0;
+                }
+                if self.mesh_mode == 7 && !space {
+                    let sv = stroke_tool::View { origin, scale, rect: view };
+                    let act = stroke_tool::stroke_tool(
+                        ui,
+                        &vp,
+                        &resp,
+                        &mut self.stroke_edit,
+                        mi,
+                        &self.tool_opts.stroke,
+                        sv,
+                        (alt, ctrl, shift),
+                    );
+                    if act == Some(stroke_tool::StrokeAct::Confirm) {
+                        self.stroke_confirm = true;
+                    }
+                }
                 // connect and cut both work on a pair: first click picks a
                 // point, second click acts; clicking empty space resets
                 let pairing = matches!(self.mesh_mode, 3 | 4);
@@ -12880,7 +12915,7 @@ impl EditorUi {
                     };
                     vp.circle(*sp, r, fill, Stroke::new(1.0, theme::pal().accent));
                 }
-                if hover_vi.is_some() && !space && self.mesh_mode != 5 {
+                if hover_vi.is_some() && !space && !matches!(self.mesh_mode, 5 | 7) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 for &(x, y) in self.pending_edges.get(&mi).map(|v| v.as_slice()).unwrap_or(&[]) {

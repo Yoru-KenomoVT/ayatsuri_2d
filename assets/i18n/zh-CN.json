@@ -1426,5 +1426,18 @@
   "Step2": "阶梯2",
   "Weight Limit Graph": "权重限制图表",
   "Weight limit (%)": "权重限制 (%)",
-  "Rename Art Mesh": "重命名图形网格"
+  "Rename Art Mesh": "重命名图形网格",
+  "A pen in Mesh Edit's tool details: drag along a strand of hair or a line and get a mesh built along it, with width handles to shape it": "在网格编辑的工具详情中添加画笔:沿发束或线条拖动即可生成沿其走向的网格,并可用宽度手柄调整形状",
+  "Confirm stroke being edited (Click here [Shift+E])": "确定正在编辑的笔画(点击此处 [Shift+E])",
+  "Drag to draw a stroke; drag away from it to redraw it, Shift+drag for another. Click the line to add a control point, Alt+click one to delete it. Ctrl+click the line adds a width handle (orange), Ctrl+drag one sets the width, Ctrl+Alt+click deletes it. Shift+E confirms, Delete cancels.": "拖动绘制笔画;在远离笔画处拖动可重画,Shift+拖动可再加一条。点击线条添加控制点,Alt+点击删除控制点。Ctrl+点击线条添加宽度手柄(橙色),Ctrl+拖动调整宽度,Ctrl+Alt+点击删除。Shift+E 确定,Delete 取消。",
+  "Invert mesh": "反转网格",
+  "Maintain current mesh": "保持当前网格",
+  "Mesh width": "网格宽度",
+  "Mesh-mapping settings": "网格映射设置",
+  "Number of vertices in mesh width": "网格宽度的顶点数",
+  "Off: the points and edges the stroke mesh covers are removed": "关闭时:笔画网格覆盖的顶点和边会被删除",
+  "Repeated density": "重复密度",
+  "Stroke mesh-mapping": "笔画网格映射",
+  "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "笔画网格映射(实验性):拖动以沿笔画生成网格。Shift+E 确定,Delete 取消",
+  "With 2 vertices across: flip the diagonal of the first and last cells": "宽度顶点数为 2 时:翻转首尾单元格的对角线"
 }

@@ -842,7 +842,7 @@ impl EditorUi {
         );
         section(ui, crate::i18n::tr("FEATURES"));
         let master = self.prefs.experimental;
-        let features: [(&str, &str, &mut bool); 2] = [
+        let features: [(&str, &str, &mut bool); 3] = [
             (
                 "Clip groups",
                 "Name a set of masks in the Inspector so several meshes clip by it together, \
@@ -855,6 +855,12 @@ impl EditorUi {
                  masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its \
                  own masks only for now",
                 &mut self.prefs.experimental_inherit_clip,
+            ),
+            (
+                "Stroke mesh-mapping",
+                "A pen in Mesh Edit's tool details: drag along a strand of hair or a line and \
+                 get a mesh built along it, with width handles to shape it",
+                &mut self.prefs.experimental_stroke_mesh,
             ),
         ];
         for (name, hint, on) in features {

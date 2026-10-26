@@ -1426,5 +1426,18 @@
   "Step2": "계단2",
   "Weight Limit Graph": "웨이트 제한 그래프",
   "Weight limit (%)": "웨이트 제한 (%)",
-  "Rename Art Mesh": "아트메시 이름 변경"
+  "Rename Art Mesh": "아트메시 이름 변경",
+  "A pen in Mesh Edit's tool details: drag along a strand of hair or a line and get a mesh built along it, with width handles to shape it": "메시 편집 도구 상세에 펜을 추가합니다. 머리카락 가닥이나 선을 따라 드래그하면 그에 맞춘 메시가 만들어지고, 폭 핸들로 모양을 다듬을 수 있습니다",
+  "Confirm stroke being edited (Click here [Shift+E])": "편집 중인 스트로크 확정 (여기를 클릭 [Shift+E])",
+  "Drag to draw a stroke; drag away from it to redraw it, Shift+drag for another. Click the line to add a control point, Alt+click one to delete it. Ctrl+click the line adds a width handle (orange), Ctrl+drag one sets the width, Ctrl+Alt+click deletes it. Shift+E confirms, Delete cancels.": "드래그하여 스트로크를 그립니다. 떨어진 곳에서 드래그하면 다시 그리고, Shift+드래그로 추가합니다. 선을 클릭하면 제어점 추가, Alt+클릭으로 삭제. Ctrl+클릭으로 폭 핸들(주황) 추가, Ctrl+드래그로 폭 변경, Ctrl+Alt+클릭으로 삭제. Shift+E로 확정, Delete로 취소합니다.",
+  "Invert mesh": "메시 반전",
+  "Maintain current mesh": "현재 메시 유지",
+  "Mesh width": "메시 폭",
+  "Mesh-mapping settings": "메시 매핑 설정",
+  "Number of vertices in mesh width": "메시 폭의 정점 수",
+  "Off: the points and edges the stroke mesh covers are removed": "끔: 스트로크 메시가 덮는 정점과 변은 삭제됩니다",
+  "Repeated density": "반복 밀도",
+  "Stroke mesh-mapping": "스트로크 메시 매핑",
+  "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "스트로크 메시 매핑 (실험적): 드래그하여 스트로크를 따라 메시를 만듭니다. Shift+E로 확정, Delete로 취소",
+  "With 2 vertices across: flip the diagonal of the first and last cells": "폭 정점이 2개일 때: 첫 번째와 마지막 칸의 대각선을 뒤집습니다"
 }
