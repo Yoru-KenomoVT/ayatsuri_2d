@@ -2045,6 +2045,83 @@ pub fn add_free_vertex(
     })
 }
 
+/// Add a vertex placed on `reference`, the mesh as it was when Mesh Edit
+/// began: weights `w` on its points `corners` give the new point's uv and
+/// its position on every keyform and blend shape key, so a mesh with fewer
+/// than three points (or none) can still grow, and every point lands on
+/// the art where it was clicked. `connect` closes a face onto two existing
+/// points. None when the reference no longer matches the mesh's keyforms.
+pub fn add_vertex_from(
+    model: &mut Model,
+    mesh: usize,
+    reference: &ayatsuri_format::model::ArtMesh,
+    corners: [usize; 3],
+    w: [f32; 3],
+    connect: Option<(u16, u16)>,
+) -> Option<usize> {
+    let m = model.art_meshes.get_mut(mesh)?;
+    let n = m.vertex_count as usize;
+    let rn = reference.vertex_count as usize;
+    if n >= u16::MAX as usize - 1 || corners.iter().any(|&c| c >= rn) {
+        return None;
+    }
+    if let Some((a, b)) = connect
+        && (a as usize >= n || b as usize >= n || a == b)
+    {
+        return None;
+    }
+    let mix = |pool: &[f32], base: usize| -> Option<(f32, f32)> {
+        let mut x = 0.0;
+        let mut y = 0.0;
+        for (&c, &wc) in corners.iter().zip(w.iter()) {
+            x += pool.get(base + c * 2).copied()? * wc;
+            y += pool.get(base + c * 2 + 1).copied()? * wc;
+        }
+        Some((x, y))
+    };
+    // the point appended to each block of `count` blocks of `pool`, mixed
+    // from the reference's matching blocks
+    let grow = |pool: &[f32], from: &[f32], count: usize| -> Option<Vec<f32>> {
+        let (stride, rstride) = (n * 2, rn * 2);
+        let mut out = Vec::with_capacity(count * (stride + 2));
+        for k in 0..count {
+            out.extend_from_slice(pool.get(k * stride..k * stride + stride)?);
+            let (x, y) = mix(from, k * rstride)?;
+            out.push(x);
+            out.push(y);
+        }
+        Some(out)
+    };
+    let keyforms = reference.positions.len().checked_div(rn * 2)?;
+    if n > 0 && m.positions.len() != keyforms * n * 2 {
+        return None;
+    }
+    if m.blend_shapes.len() != reference.blend_shapes.len() {
+        return None;
+    }
+    let (u, v) = mix(&reference.uvs, 0)?;
+    let positions = grow(&m.positions, &reference.positions, keyforms)?;
+    let mut shapes = Vec::with_capacity(m.blend_shapes.len());
+    for (s, r) in m.blend_shapes.iter().zip(&reference.blend_shapes) {
+        let keys = r.positions.len().checked_div(rn * 2)?;
+        if n > 0 && s.positions.len() != keys * n * 2 {
+            return None;
+        }
+        shapes.push(grow(&s.positions, &r.positions, keys)?);
+    }
+    m.positions = positions;
+    for (s, p) in m.blend_shapes.iter_mut().zip(shapes) {
+        s.positions = p;
+    }
+    m.uvs.push(u);
+    m.uvs.push(v);
+    m.vertex_count += 1;
+    if let Some((a, b)) = connect {
+        m.indices.extend_from_slice(&[a, b, n as u16]);
+    }
+    Some(n)
+}
+
 /// Where a pasted point goes in the target mesh.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PastedPoint {
@@ -2226,8 +2303,9 @@ pub fn delete_vertex(model: &mut Model, mesh: usize, vertex: usize) -> bool {
 
 /// Remove a set of vertices at once (the erase brush): every face touching
 /// one goes, keyform positions and uvs compact, glue pairs on removed
-/// points are dropped and the rest re-indexed. At least three points must
-/// remain, so a mesh is never erased out of existence by accident.
+/// points are dropped and the rest re-indexed. Every point may go: Mesh
+/// Edit places new ones from the mesh as it was on entering, and won't
+/// finish until there are three points and a face again.
 pub fn delete_vertices(model: &mut Model, mesh: usize, vertices: &[usize]) -> bool {
     with_shapes(model, |model| {
         let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
@@ -2239,7 +2317,7 @@ pub fn delete_vertices(model: &mut Model, mesh: usize, vertices: &[usize]) -> bo
             }
         }
         let removed = gone.iter().filter(|&&g| g).count();
-        if removed == 0 || n.saturating_sub(removed) < 3 {
+        if removed == 0 {
             return false;
         }
         // old index to new index, None for removed points
@@ -2326,6 +2404,32 @@ pub fn delete_vertices(model: &mut Model, mesh: usize, vertices: &[usize]) -> bo
     })
 }
 
+/// `remesh` for a mesh Mesh Edit may have cleared: with no points left,
+/// the mesh as it was on entering (`reference`) stands in for the old one
+/// the new points are placed on.
+pub fn remesh_from(
+    model: &mut Model,
+    mesh: usize,
+    reference: Option<&ayatsuri_format::model::ArtMesh>,
+    uvs: &[f32],
+    indices: &[u16],
+) -> bool {
+    if let Some(r) = reference
+        && let Some(m) = model.art_meshes.get_mut(mesh)
+        && m.vertex_count == 0
+        && m.blend_shapes.len() == r.blend_shapes.len()
+    {
+        m.vertex_count = r.vertex_count;
+        m.uvs.clone_from(&r.uvs);
+        m.indices.clone_from(&r.indices);
+        m.positions.clone_from(&r.positions);
+        for (s, rs) in m.blend_shapes.iter_mut().zip(&r.blend_shapes) {
+            s.positions.clone_from(&rs.positions);
+        }
+    }
+    remesh(model, mesh, uvs, indices)
+}
+
 /// Swap in a whole new triangulation. Every new vertex samples the old mesh
 /// in uv space: barycentric inside whichever old triangle holds it, nearest
 /// old vertex otherwise, so every keyform carries over. Glue on this mesh
@@ -2365,6 +2469,10 @@ pub fn remesh(model: &mut Model, mesh: usize, uvs: &[f32], indices: &[u16]) -> b
             let u = uvs.get(vi * 2).copied().unwrap_or(0.0);
             let v = uvs.get(vi * 2 + 1).copied().unwrap_or(0.0);
             let mut found = None;
+            // outside every old face: the nearest face carried on past its
+            // edge (exact for the imported quad, so a margin beyond the art
+            // keeps its place instead of piling onto the old corners)
+            let mut nearest: Option<([usize; 3], [f32; 3], f32)> = None;
             let (tris, _) = m.indices.as_chunks::<3>();
             for &[ta, tb, tc] in tris {
                 let (a, b, c) = (ta as usize, tb as usize, tc as usize);
@@ -2382,7 +2490,12 @@ pub fn remesh(model: &mut Model, mesh: usize, uvs: &[f32], indices: &[u16]) -> b
                     found = Some(Src::Tri([a, b, c], [w0, w1, w2]));
                     break;
                 }
+                let worst = w0.min(w1).min(w2);
+                if nearest.is_none_or(|n| worst > n.2) {
+                    nearest = Some(([a, b, c], [w0, w1, w2], worst));
+                }
             }
+            let found = found.or_else(|| nearest.map(|(t, w, _)| Src::Tri(t, w)));
             let src = found.unwrap_or_else(|| {
                 let mut best = (0usize, f32::MAX);
                 for ovi in 0..old_n {
@@ -3650,11 +3763,15 @@ mod tests {
         assert_eq!(am.uvs.len(), 8);
         assert_eq!(am.positions.len(), 16);
         assert!(am.indices.iter().all(|&i| (i as usize) < 4));
-        // refusing to leave fewer than three points
-        assert!(!delete_vertices(&mut m, 0, &[0, 1]));
-        // and the single-point form still works through the batch
+        // the single-point form works through the batch
         assert!(delete_vertex(&mut m, 0, 3));
         assert_eq!(m.art_meshes.first().unwrap().vertex_count, 3);
+        // and a mesh may be erased down to nothing, keyforms and all
+        assert!(delete_vertices(&mut m, 0, &[0, 1, 2]));
+        let am = m.art_meshes.first().unwrap();
+        assert_eq!((am.vertex_count, am.uvs.len(), am.positions.len()), (0, 0, 0));
+        // nothing left to erase
+        assert!(!delete_vertices(&mut m, 0, &[0]));
     }
 
     #[test]
@@ -3669,6 +3786,52 @@ mod tests {
         assert_eq!(added, 2);
         // keeping the existing faces adds nothing that overlaps them
         assert_eq!(auto_connect(&mut m, 0, false, &[], None), 0);
+    }
+
+    #[test]
+    fn remesh_carries_points_past_the_old_faces_on() {
+        // the triangle spans uv (0,0) (1,0) (0,1) and position 2x that; a
+        // new point at uv (1, 1), outside it, lands at (2, 2), not on a corner
+        let mut m = tri_mesh();
+        assert!(remesh(&mut m, 0, &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[0, 1, 2, 1, 3, 2]));
+        let am = &m.art_meshes[0];
+        assert!((am.positions[6] - 2.0).abs() < 1e-5 && (am.positions[7] - 2.0).abs() < 1e-5);
+        // and a cleared mesh takes a new triangulation from its reference
+        let reference = am.clone();
+        let n = am.vertex_count as usize;
+        assert!(delete_vertices(&mut m, 0, &(0..n).collect::<Vec<_>>()));
+        assert!(!remesh(&mut m.clone(), 0, &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0], &[0, 1, 2]));
+        assert!(remesh_from(
+            &mut m,
+            0,
+            Some(&reference),
+            &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            &[0, 1, 2]
+        ));
+        assert_eq!(m.art_meshes[0].vertex_count, 3);
+    }
+
+    #[test]
+    fn a_mesh_erased_to_nothing_grows_again_from_its_reference() {
+        let mut m = tri_mesh();
+        let reference = m.art_meshes[0].clone();
+        assert!(delete_vertices(&mut m, 0, &[0, 1, 2]));
+        assert_eq!(m.art_meshes[0].vertex_count, 0);
+        // the runtime takes an empty mesh
+        let mut p = crate::Puppet::new(m.clone());
+        p.update();
+        // one point at the reference's middle, on both keyforms
+        let third = 1.0 / 3.0;
+        let v = add_vertex_from(&mut m, 0, &reference, [0, 1, 2], [third; 3], None).unwrap();
+        assert_eq!(v, 0);
+        let am = &m.art_meshes[0];
+        assert_eq!(am.positions.len(), 4, "a point on each of the two keyforms");
+        assert!((am.positions[0] - 2.0 / 3.0).abs() < 1e-5);
+        assert!((am.positions[2] - (1.0 + 2.0 / 3.0)).abs() < 1e-5, "key 1 is shifted +1");
+        // and with one point a second still goes in
+        add_vertex_from(&mut m, 0, &reference, [0, 1, 2], [1.0, 0.0, 0.0], None).unwrap();
+        assert_eq!(m.art_meshes[0].vertex_count, 2);
+        assert_eq!(m.art_meshes[0].positions.len(), 8);
     }
 
     #[test]

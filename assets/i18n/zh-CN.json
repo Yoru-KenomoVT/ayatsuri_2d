@@ -1373,5 +1373,6 @@
   "Part ID": "部件 ID",
   "Put selected objects into children": "将选中的对象设为子级",
   "IDs take letters, digits and _ only.": "ID 只能使用字母、数字和 _。",
-  "That Part ID is empty, taken or has characters IDs can't use.": "该部件 ID 为空、已被使用，或包含 ID 不能使用的字符。"
+  "That Part ID is empty, taken or has characters IDs can't use.": "该部件 ID 为空、已被使用，或包含 ID 不能使用的字符。",
+  "Clear mesh: remove every point to draw your own": "清除网格：删除所有点，自己重新绘制"
 }

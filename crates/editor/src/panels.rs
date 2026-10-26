@@ -534,6 +534,9 @@ struct MeshArt {
     positions: Vec<f32>,
     uvs: Vec<f32>,
     indices: Vec<u16>,
+    /// The mesh itself as it was then: new points are placed on it, so
+    /// they land on the art where clicked however few points are left.
+    reference: ayatsuri_format::model::ArtMesh,
 }
 
 struct MeshDrag {
@@ -895,6 +898,8 @@ struct PathGrab {
 enum MeshAction {
     AutoMesh,
     Reset,
+    /// Every point and face gone, to draw the mesh from scratch.
+    Clear,
     AutoConnect,
     Divide,
     Bind,
@@ -5293,6 +5298,29 @@ impl EditorUi {
                     log::info!("mesh reset to its original form on {} mesh(es)", originals.len());
                 }
             }
+            MeshAction::Clear => {
+                let Some(s) = &mut self.session else { return };
+                let cleared = s.edit(|m| {
+                    let mut any = false;
+                    for &mi in &targets {
+                        let n = m.art_meshes.get(mi).map_or(0, |a| a.vertex_count as usize);
+                        let all: Vec<usize> = (0..n).collect();
+                        any |= ayatsuri_core::edit::delete_vertices(m, mi, &all);
+                    }
+                    any
+                });
+                if cleared {
+                    for &mi in &targets {
+                        self.pending_edges.remove(&mi);
+                    }
+                    self.edge_first = None;
+                    self.mesh_picked.clear();
+                    log::info!(
+                        "mesh cleared on {} mesh(es): place points on the art",
+                        targets.len()
+                    );
+                }
+            }
             MeshAction::AutoConnect => {
                 let rebuild = self.connect_rebuild;
                 let protect = self.connect_protect;
@@ -5426,17 +5454,25 @@ impl EditorUi {
         let img = image::load_from_memory(png)
             .map_err(|e| format!("texture decode failed: {e}"))?
             .to_rgba8();
-        let (u0, v0, u1, v1) = am
-            .uvs
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(a, b, c, d), &[u, v]| {
-                (a.min(u), b.min(v), c.max(u), d.max(v))
-            });
-        if u0 > u1 || v0 > v1 {
-            return Err("mesh has no extent".into());
-        }
+        let bbox = |uvs: &[f32]| {
+            let b = uvs
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(a, b, c, d), &[u, v]| {
+                    (a.min(u), b.min(v), c.max(u), d.max(v))
+                });
+            (b.0 <= b.2 && b.1 <= b.3).then_some(b)
+        };
+        // the layer's own box, where its art was imported (or last packed),
+        // never where its points happen to be now: the old mesh is ignored
+        let art_box = |i: usize| {
+            s.original_meshes
+                .get(i)
+                .and_then(|(uvs, _)| bbox(uvs))
+                .or_else(|| s.puppet.model().art_meshes.get(i).and_then(|m| bbox(&m.uvs)))
+        };
+        let (u0, v0, u1, v1) = art_box(mi).ok_or("mesh has no extent")?;
         // Cubism gives margins for a 1024px texture and scales them with it
         let k = img.width().max(img.height()) as f32 / 1024.0;
         let params = ayatsuri_core::automesh::Params {
@@ -5453,15 +5489,58 @@ impl EditorUi {
                 ayatsuri_core::automesh::Style::Lattice
             },
         };
+        // room for the outline's margin: each side grows over the page's
+        // empty space, stopping two pixels short of the other layers' art
+        let (pw, ph) = (img.width() as f32, img.height() as f32);
+        let others: Vec<(f32, f32, f32, f32)> = s
+            .puppet
+            .model()
+            .art_meshes
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| *i != mi && m.texture == am.texture)
+            .filter_map(|(i, _)| art_box(i))
+            .filter(|b| *b != (u0, v0, u1, v1))
+            .collect();
+        let (gu, gv) = (2.0 / pw, 2.0 / ph);
+        let (ru, rv) = ((params.margin + 2.0) / pw, (params.margin + 2.0) / ph);
+        let mut room = (u0, v0, u1, v1);
+        let across_v = |o: &(f32, f32, f32, f32), r: &(f32, f32, f32, f32)| o.1 < r.3 && o.3 > r.1;
+        let across_u = |o: &(f32, f32, f32, f32), r: &(f32, f32, f32, f32)| o.0 < r.2 && o.2 > r.0;
+        let mut left = (u0 - ru).max(0.0);
+        let mut right = (u1 + ru).min(1.0);
+        for o in others.iter().filter(|o| across_v(o, &room)) {
+            if o.2 <= u0 {
+                left = left.max(o.2 + gu);
+            }
+            if o.0 >= u1 {
+                right = right.min(o.0 - gu);
+            }
+        }
+        room.0 = left.min(u0);
+        room.2 = right.max(u1);
+        let mut top = (v0 - rv).max(0.0);
+        let mut bottom = (v1 + rv).min(1.0);
+        for o in others.iter().filter(|o| across_u(o, &room)) {
+            if o.3 <= v0 {
+                top = top.max(o.3 + gv);
+            }
+            if o.1 >= v1 {
+                bottom = bottom.min(o.1 - gv);
+            }
+        }
+        room.1 = top.min(v0);
+        room.3 = bottom.max(v1);
         let started = std::time::Instant::now();
         let alpha_at = |x: u32, y: u32| img.get_pixel_checked(x, y).map_or(0, |p| p.0[3]);
         let out = ayatsuri_core::automesh::for_patch(
             &alpha_at,
             (img.width(), img.height()),
             (u0, v0, u1, v1),
+            room,
             &params,
         )
-        .ok_or("no opaque pixels under this mesh")?;
+        .ok_or("no opaque pixels in this layer's art")?;
         log::debug!(
             "auto mesh {mi}: {} points, {} triangles in {:.0} ms",
             out.0.len() / 2,
@@ -5483,13 +5562,16 @@ impl EditorUi {
         if jobs.is_empty() {
             return;
         }
+        // a mesh cleared in Mesh Edit is placed on the mesh as it was then
+        let reference = self.mesh_art.as_ref().map(|a| (a.mesh, a.reference.clone()));
         let Some(s) = &mut self.session else { return };
         let (verts, tris) =
             jobs.iter().fold((0, 0), |(v, t), (_, (uv, ix))| (v + uv.len() / 2, t + ix.len() / 3));
         if s.edit(|m| {
             let mut any = false;
             for (mi, (uvs, idx)) in &jobs {
-                any |= ayatsuri_core::edit::remesh(m, *mi, uvs, idx);
+                let r = reference.as_ref().filter(|r| r.0 == *mi).map(|r| &r.1);
+                any |= ayatsuri_core::edit::remesh_from(m, *mi, r, uvs, idx);
             }
             any
         }) {
@@ -11788,6 +11870,8 @@ impl EditorUi {
             /// closing a face onto an edge, with lines to `links`; `follow`
             /// makes it the start of the next line.
             AddFree(usize, [usize; 3], [f32; 3], Option<(u16, u16)>, Vec<u16>, bool),
+            /// The same, placed on the mesh as it was on entering Mesh Edit.
+            AddRef(usize, [usize; 3], [f32; 3], Option<(u16, u16)>, Vec<u16>, bool),
             Connect(usize, u16, u16),
             Cut(usize, u16, u16),
             EraseMany(usize, Vec<usize>),
@@ -11814,12 +11898,15 @@ impl EditorUi {
                     pairs.iter().map(|xy| to_screen(xy[0], xy[1])).collect();
                 // the art is shown as it was on entering Mesh Edit and stays
                 // put; only the nodes and lines move over it (Cubism's way)
-                if self.mesh_art.as_ref().is_none_or(|a| a.mesh != mi) {
+                if self.mesh_art.as_ref().is_none_or(|a| a.mesh != mi)
+                    && let Some(reference) = s.puppet.model().art_meshes.get(mi).cloned()
+                {
                     self.mesh_art = Some(MeshArt {
                         mesh: mi,
                         positions: g.positions.to_vec(),
                         uvs: g.uvs.to_vec(),
                         indices: g.indices.to_vec(),
+                        reference,
                     });
                 }
 
@@ -11985,12 +12072,95 @@ impl EditorUi {
                         }
                     }
                     let links: Vec<u16> = chain.map(|c| c as u16).into_iter().collect();
-                    if let Some((ti, c, w)) = inside {
-                        mesh_op = Some(if self.mesh_autoconnect && chain.is_none() {
-                            MeshOp::Add(mi, ti, w)
-                        } else {
-                            MeshOp::AddFree(mi, c, w, None, links, !shift)
-                        });
+                    // a loose point is placed on the art as it was on
+                    // entering Mesh Edit: its triangle under the pointer (or
+                    // the nearest one), else three of its points
+                    let on_art = self.mesh_art.as_ref().filter(|a| a.mesh == mi).and_then(|a| {
+                        let pts: Vec<Pos2> = a
+                            .positions
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|xy| to_screen(xy[0], xy[1]))
+                            .collect();
+                        let bary = |c: [usize; 3]| -> Option<[f32; 3]> {
+                            let (s0, s1, s2) = (*pts.get(c[0])?, *pts.get(c[1])?, *pts.get(c[2])?);
+                            let den = (s1.y - s2.y) * (s0.x - s2.x) + (s2.x - s1.x) * (s0.y - s2.y);
+                            if den.abs() < 1e-6 {
+                                return None;
+                            }
+                            let w0 = ((s1.y - s2.y) * (ptr.x - s2.x)
+                                + (s2.x - s1.x) * (ptr.y - s2.y))
+                                / den;
+                            let w1 = ((s2.y - s0.y) * (ptr.x - s2.x)
+                                + (s0.x - s2.x) * (ptr.y - s2.y))
+                                / den;
+                            Some([w0, w1, 1.0 - w0 - w1])
+                        };
+                        let best = a
+                            .indices
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .filter_map(|t| {
+                                let c = [t[0] as usize, t[1] as usize, t[2] as usize];
+                                bary(c).map(|w| (c, w, w[0].min(w[1]).min(w[2])))
+                            })
+                            .max_by(|x, y| x.2.total_cmp(&y.2))
+                            .map(|(c, w, _)| (c, w));
+                        best.or_else(|| {
+                            let mut order: Vec<usize> = (0..pts.len()).collect();
+                            order.sort_by(|&x, &y| {
+                                let d = |i: usize| pts.get(i).map_or(f32::MAX, |p| p.distance(ptr));
+                                d(x).total_cmp(&d(y))
+                            });
+                            let (&p0, &p1) = (order.first()?, order.get(1)?);
+                            order
+                                .iter()
+                                .skip(2)
+                                .find_map(|&p2| bary([p0, p1, p2]).map(|w| ([p0, p1, p2], w)))
+                        })
+                    });
+                    if let Some((ti, _, w)) = inside
+                        && self.mesh_autoconnect
+                        && chain.is_none()
+                    {
+                        mesh_op = Some(MeshOp::Add(mi, ti, w));
+                    } else if let Some((c, w)) = on_art {
+                        // outside the faces, auto connect closes a face onto
+                        // the nearest open edge (unless drawing a line)
+                        let connect =
+                            if self.mesh_autoconnect && chain.is_none() && inside.is_none() {
+                                let mut count: std::collections::HashMap<(u16, u16), u32> =
+                                    std::collections::HashMap::new();
+                                for t in tris {
+                                    for (x, y) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                                        *count.entry((x.min(y), x.max(y))).or_insert(0) += 1;
+                                    }
+                                }
+                                let mut best: Option<((u16, u16), f32)> = None;
+                                for (&(x, y), &n) in &count {
+                                    if n != 1 {
+                                        continue;
+                                    }
+                                    let (Some(&px), Some(&py)) =
+                                        (screen_pts.get(x as usize), screen_pts.get(y as usize))
+                                    else {
+                                        continue;
+                                    };
+                                    let seg = py - px;
+                                    let len2 = seg.length_sq().max(1e-6);
+                                    let k = ((ptr - px).dot(seg) / len2).clamp(0.0, 1.0);
+                                    let d = ptr.distance(px + seg * k);
+                                    if best.is_none_or(|(_, bd)| d < bd) {
+                                        best = Some(((x, y), d));
+                                    }
+                                }
+                                best.map(|(e, _)| e)
+                            } else {
+                                None
+                            };
+                        mesh_op = Some(MeshOp::AddRef(mi, c, w, connect, links, !shift));
                     } else if let Some((c, w, _)) = closest {
                         let connect = if self.mesh_autoconnect && chain.is_none() {
                             // open edges belong to exactly one face
@@ -12254,7 +12424,8 @@ impl EditorUi {
                     mesh_op =
                         Some(MeshOp::EraseMany(mi, self.mesh_picked.iter().copied().collect()));
                 }
-                if !space && self.mesh_mode == 0 {
+                // points drag in Select and in the point and line tools
+                if !space && !alt && matches!(self.mesh_mode, 0 | 1 | 3 | 4) {
                     if resp.drag_started()
                         && let Some((vi, _)) = near
                         && let Some(local) = s.puppet.mesh_local_positions(mi)
@@ -12464,6 +12635,26 @@ impl EditorUi {
                     let ok = s.edit(|m| ayatsuri_core::edit::add_vertex(m, mi, ti, w).is_some());
                     if ok && self.mesh_mode == 1 {
                         self.edge_first = Some(n as usize);
+                    }
+                    ok
+                }
+                MeshOp::AddRef(mi, corners, w, connect, links, follow) => {
+                    let n =
+                        s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count) as u16;
+                    let reference = self.mesh_art.as_ref().map(|a| a.reference.clone());
+                    let ok = reference.is_some_and(|r| {
+                        s.edit(|m| {
+                            ayatsuri_core::edit::add_vertex_from(m, mi, &r, corners, w, connect)
+                                .is_some()
+                        })
+                    });
+                    if ok {
+                        for l in links {
+                            connect_pair(&mut self.pending_edges, s, mi, n, l);
+                        }
+                        if follow && self.mesh_mode == 1 {
+                            self.edge_first = Some(n as usize);
+                        }
                     }
                     ok
                 }
