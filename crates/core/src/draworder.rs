@@ -206,6 +206,7 @@ mod tests {
                 blend: Default::default(),
                 opacities: vec![1.0],
             }),
+            blend_shapes: Vec::new(),
         }
     }
 

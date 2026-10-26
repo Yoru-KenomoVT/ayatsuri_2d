@@ -326,6 +326,7 @@ pub fn new_part(
         // no parameter keys yet: one keyform
         draw_orders: vec![draw_order],
         offscreen: None,
+        blend_shapes: Vec::new(),
     });
     for r in children {
         match *r {
@@ -397,6 +398,7 @@ mod tests {
             binding: Binding::default(),
             draw_orders: vec![500.0],
             offscreen: None,
+            blend_shapes: Vec::new(),
         }
     }
 
@@ -457,6 +459,7 @@ mod tests {
             intensities: vec![1.0],
             weights: vec![],
             indices: vec![],
+            blend_shapes: Vec::new(),
         });
         // back hair into Eye, at its bottom
         assert!(move_rows(&mut m, &[Row::Mesh(0)], Drop::Into(1)));

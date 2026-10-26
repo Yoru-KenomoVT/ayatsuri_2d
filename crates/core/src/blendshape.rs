@@ -8,7 +8,7 @@
 //! is `weight * (key form - base form)`, the base form being the object's
 //! blend at every parameter's default. Several blend shapes simply add up.
 
-use ayatsuri_format::model::{Parameter, WeightLimit};
+use ayatsuri_format::model::{BlendShape, Parameter, WeightLimit};
 
 /// Up to two keyforms of one blend shape and their weights. An entry with
 /// weight 0.0 is unused.
@@ -65,6 +65,93 @@ pub fn weights(value: f32, keys: &[f32]) -> Weights {
 pub fn add(out: &mut [f32], form: &[f32], base: &[f32], weight: f32) {
     for ((o, f), b) in out.iter_mut().zip(form).zip(base) {
         *o += weight * (f - b);
+    }
+}
+
+/// One of a blend shape's channels (see `BlendShape`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Channel {
+    Positions,
+    Opacity,
+    Multiply,
+    Screen,
+    Angle,
+    OriginX,
+    OriginY,
+    Scale,
+    DrawOrder,
+    Intensity,
+}
+
+impl Channel {
+    pub fn of(self, s: &BlendShape) -> &Vec<f32> {
+        match self {
+            Channel::Positions => &s.positions,
+            Channel::Opacity => &s.opacities,
+            Channel::Multiply => &s.multiply,
+            Channel::Screen => &s.screen,
+            Channel::Angle => &s.angles,
+            Channel::OriginX => &s.origins_x,
+            Channel::OriginY => &s.origins_y,
+            Channel::Scale => &s.scales,
+            Channel::DrawOrder => &s.draw_orders,
+            Channel::Intensity => &s.intensities,
+        }
+    }
+
+    pub fn of_mut(self, s: &mut BlendShape) -> &mut Vec<f32> {
+        match self {
+            Channel::Positions => &mut s.positions,
+            Channel::Opacity => &mut s.opacities,
+            Channel::Multiply => &mut s.multiply,
+            Channel::Screen => &mut s.screen,
+            Channel::Angle => &mut s.angles,
+            Channel::OriginX => &mut s.origins_x,
+            Channel::OriginY => &mut s.origins_y,
+            Channel::Scale => &mut s.scales,
+            Channel::DrawOrder => &mut s.draw_orders,
+            Channel::Intensity => &mut s.intensities,
+        }
+    }
+}
+
+/// Whether any of `shapes` shapes `channel`.
+pub fn shapes_any(shapes: &[BlendShape], channel: Channel) -> bool {
+    shapes.iter().any(|s| !channel.of(s).is_empty())
+}
+
+/// Add what `shapes` put on one channel of `n` floats a key: for each,
+/// `weight * limit * (key form - base)` at the current values, `base` being
+/// the object's blend of that channel at every parameter's default.
+pub fn add_channel(
+    out: &mut [f32],
+    base: &[f32],
+    shapes: &[BlendShape],
+    channel: Channel,
+    params: &[Parameter],
+    values: &[f32],
+) {
+    let n = out.len();
+    if n == 0 {
+        return;
+    }
+    for shape in shapes {
+        let pool = channel.of(shape);
+        if pool.is_empty() {
+            continue;
+        }
+        let value = values.get(shape.parameter as usize).copied().unwrap_or(0.0);
+        let lim = limit(params, &shape.limits, values);
+        for (k, w) in weights(value, &shape.keys) {
+            let w = w * lim;
+            if w == 0.0 {
+                continue;
+            }
+            let start = k.saturating_mul(n);
+            if let Some(form) = pool.get(start..start.saturating_add(n)) {
+                add(out, form, base, w);
+            }
+        }
     }
 }
 

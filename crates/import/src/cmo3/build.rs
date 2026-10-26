@@ -272,6 +272,7 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
             kind,
             multiply: Vec::new(),
             screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
     }
 

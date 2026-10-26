@@ -2370,6 +2370,7 @@ mod import_paint_tests {
             }),
             multiply: Vec::new(),
             screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
         let ctx = Context::default();
         let mut s = Session::create(&ctx, "t".into(), String::new(), m).unwrap();
@@ -2673,6 +2674,7 @@ mod deformer_name_tests {
                 }),
                 multiply: Vec::new(),
                 screen: Vec::new(),
+                blend_shapes: Vec::new(),
             })
             .collect();
         m

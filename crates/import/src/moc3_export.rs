@@ -1332,6 +1332,7 @@ mod tests {
             }),
             multiply: vec![1.0, 1.0, 1.0, 0.5, 0.5, 0.5],
             screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
         let tri = vec![0.1, 0.1, 0.9, 0.1, 0.1, 0.9];
         model.art_meshes.push(ArtMesh {
@@ -1470,6 +1471,15 @@ mod tests {
                     keys: vec![0.0, 0.5, 1.0],
                     weights: vec![1.0, 1.0, 0.0],
                 }],
+                angles: Vec::new(),
+                draw_orders: Vec::new(),
+                intensities: Vec::new(),
+                multiply: Vec::new(),
+                opacities: Vec::new(),
+                origins_x: Vec::new(),
+                origins_y: Vec::new(),
+                scales: Vec::new(),
+                screen: Vec::new(),
             }],
             multiply: Vec::new(),
             screen: Vec::new(),
@@ -1534,6 +1544,7 @@ mod tests {
                 blend: Blend { color: ColorBlend::Multiply, alpha: AlphaBlend::Over },
                 opacities: vec![0.4],
             }),
+            blend_shapes: Vec::new(),
         });
         let mesh = |id: &str, part: Option<u32>| ArtMesh {
             id: id.into(),

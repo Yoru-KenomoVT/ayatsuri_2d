@@ -133,6 +133,7 @@ mod tests {
                 blend: Default::default(),
                 opacities: vec![0.5],
             }),
+            blend_shapes: Vec::new(),
         });
         m.art_meshes.push(quad("A", 0.0, 6.0, Some(0), 1.0));
         m.art_meshes.push(quad("B", 2.0, 8.0, Some(0), 1.0));

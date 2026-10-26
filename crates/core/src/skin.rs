@@ -538,6 +538,7 @@ mod tests {
                 }),
                 multiply: Vec::new(),
                 screen: Vec::new(),
+                blend_shapes: Vec::new(),
             });
         }
         m
