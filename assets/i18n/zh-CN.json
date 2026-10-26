@@ -1381,5 +1381,8 @@
   "Select what to solo first.": "请先选择要单独显示的对象。",
   "Leave Solo (S)": "退出单独显示（S）",
   "Inactive color": "非活动颜色",
-  "Solo: show only the selected objects": "单独显示：只显示选中的对象"
+  "Solo: show only the selected objects": "单独显示：只显示选中的对象",
+  "Highlight Deformer's Child Elements": "高亮变形器的子元素",
+  "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "高亮所选变形器下的所有图形网格（Ctrl+Shift+D）",
+  "Highlight deformer's child elements": "高亮变形器的子元素"
 }

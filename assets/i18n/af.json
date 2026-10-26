@@ -1381,5 +1381,8 @@
   "Select what to solo first.": "Kies eers wat jy solo wil wys.",
   "Leave Solo (S)": "Verlaat solo (S)",
   "Inactive color": "Onaktiewe kleur",
-  "Solo: show only the selected objects": "Solo: wys net die gekose voorwerpe"
+  "Solo: show only the selected objects": "Solo: wys net die gekose voorwerpe",
+  "Highlight Deformer's Child Elements": "Merk die vervormer se kindelemente",
+  "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "Merk elke kunsmesh onder die gekose vervormer (Ctrl+Shift+D)",
+  "Highlight deformer's child elements": "Merk die vervormer se kindelemente"
 }

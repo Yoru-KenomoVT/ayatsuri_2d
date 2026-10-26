@@ -1381,5 +1381,8 @@
   "Select what to solo first.": "先にソロ表示するものを選択してください。",
   "Leave Solo (S)": "ソロ表示を終了（S）",
   "Inactive color": "非アクティブ色",
-  "Solo: show only the selected objects": "ソロ表示：選択したオブジェクトだけを表示"
+  "Solo: show only the selected objects": "ソロ表示：選択したオブジェクトだけを表示",
+  "Highlight Deformer's Child Elements": "デフォーマの子要素をハイライト",
+  "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "選択したデフォーマの下にあるすべてのアートメッシュを強調表示します（Ctrl+Shift+D）",
+  "Highlight deformer's child elements": "デフォーマの子要素をハイライト"
 }
