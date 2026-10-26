@@ -12603,27 +12603,6 @@ impl EditorUi {
                 } else {
                     self.erase_marked.clear();
                 }
-                // stroke mesh-mapping (experimental): strokes stay put while
-                // another tool is used, and go with Mesh Edit
-                if self.mesh_mode == 7 && !self.prefs.stroke_mesh_on() {
-                    self.mesh_mode = 0;
-                }
-                if self.mesh_mode == 7 && !space {
-                    let sv = stroke_tool::View { origin, scale, rect: view };
-                    let act = stroke_tool::stroke_tool(
-                        ui,
-                        &vp,
-                        &resp,
-                        &mut self.stroke_edit,
-                        mi,
-                        &self.tool_opts.stroke,
-                        sv,
-                        (alt, ctrl, shift),
-                    );
-                    if act == Some(stroke_tool::StrokeAct::Confirm) {
-                        self.stroke_confirm = true;
-                    }
-                }
                 // connect and cut both work on a pair: first click picks a
                 // point, second click acts; clicking empty space resets
                 let pairing = matches!(self.mesh_mode, 3 | 4);
@@ -12936,6 +12915,28 @@ impl EditorUi {
                             5.0,
                             3.0,
                         ));
+                    }
+                }
+                // stroke mesh-mapping (experimental), drawn over the mesh:
+                // strokes stay put while another tool is used, and go with
+                // Mesh Edit
+                if self.mesh_mode == 7 && !self.prefs.stroke_mesh_on() {
+                    self.mesh_mode = 0;
+                }
+                if self.mesh_mode == 7 && !space {
+                    let sv = stroke_tool::View { origin, scale, rect: view };
+                    let act = stroke_tool::stroke_tool(
+                        ui,
+                        &vp,
+                        &resp,
+                        &mut self.stroke_edit,
+                        mi,
+                        &self.tool_opts.stroke,
+                        sv,
+                        (alt, ctrl, shift),
+                    );
+                    if act == Some(stroke_tool::StrokeAct::Confirm) {
+                        self.stroke_confirm = true;
                     }
                 }
             }
