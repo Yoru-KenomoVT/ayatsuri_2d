@@ -1444,5 +1444,8 @@
   "Repack when a mesh outgrows its art": "메시가 그림을 벗어나면 다시 배치",
   "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "메시 편집을 마칠 때 메시가 자기 그림 밖으로 뻗어 있으면 아틀라스를 다시 배치해, 내보내기에 이웃 그림이 비치지 않게 합니다. 직접 배치한 레이아웃을 유지하려면 끄세요",
   "Custom…": "사용자 지정…",
-  "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "페이지당 GPU 메모리 {mb} MB. 일부 앱과 GPU는 8192 px를 넘는 페이지를 불러오지 못합니다"
+  "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "페이지당 GPU 메모리 {mb} MB. 일부 앱과 GPU는 8192 px를 넘는 페이지를 불러오지 못합니다",
+  "Support (optional)": "후원하기 (선택)",
+  "Support Ayatsuri2D (optional)": "Ayatsuri2D 후원하기 (선택)",
+  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee. Ayatsuri2D는 무료이고 앞으로도 무료입니다. 원하실 때만 후원해 주세요"
 }

@@ -15,6 +15,9 @@ use crate::discord::GITHUB;
 
 /// The project site: downloads, docs and tutorials.
 const WEBSITE: &str = "https://ayatsuri-2d.org";
+/// Where people can support the project, if they want to: optional, and
+/// nothing in the app depends on it.
+pub(crate) const SUPPORT: &str = "https://buymeacoffee.com/ayatsuri2d_alterion";
 use crate::panels::{EditorUi, WashKey, dithered_wash};
 use crate::theme;
 
@@ -385,6 +388,19 @@ fn about_page(
             .clicked()
         {
             ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{GITHUB}/issues")));
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                egui_phosphor::regular::COFFEE,
+                crate::i18n::tr("Support (optional)")
+            ))
+            .on_hover_text(crate::i18n::tr(
+                "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to",
+            ))
+            .clicked()
+        {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(SUPPORT));
         }
         if ui
             .button(format!(

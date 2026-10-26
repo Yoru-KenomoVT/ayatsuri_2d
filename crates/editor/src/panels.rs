@@ -3381,6 +3381,10 @@ impl EditorUi {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(crate::whats_new::DISCORD));
                         ui.close();
                     }
+                    if ui.button(crate::i18n::tr("Support Ayatsuri2D (optional)")).clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(crate::windows::about::SUPPORT));
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button(crate::i18n::tr("About Ayatsuri2D")).clicked() {
                         self.show_about = true;
