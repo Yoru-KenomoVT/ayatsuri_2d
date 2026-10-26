@@ -168,10 +168,12 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     let cdi = json!({
         "Version": 3,
         "Parameters": model.parameters.iter().enumerate().map(|(i, p)| {
+            // loose parameters (outside folders) have no group: only
+            // named folders are written as groups below
             let group = s
                 .groups
                 .iter()
-                .position(|g| g.params.contains(&i))
+                .position(|g| g.params.contains(&i) && !g.name.is_empty())
                 .map(|gi| format!("ParamGroup{gi}"))
                 .unwrap_or_default();
             json!({

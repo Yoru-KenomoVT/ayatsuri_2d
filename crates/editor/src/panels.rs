@@ -6611,7 +6611,7 @@ impl EditorUi {
                                 &resp,
                                 rect,
                                 here,
-                                |m| ParamCmd::DropOnGroup(m, gi),
+                                param_menu::Row::Folder { group: gi, open },
                                 &mut drop,
                             );
                             if let Some(c) = drop {
@@ -6688,9 +6688,8 @@ impl EditorUi {
                             actions.push(ParamAction::Cmd(c));
                         }
                     });
-                    // the space under the last row is the end of the list: a
-                    // folder dropped here goes last, a parameter into the
-                    // last folder
+                    // the space under the last row is the end of the list,
+                    // outside every folder
                     if bg.dnd_hover_payload::<param_menu::Moving>().is_some() {
                         ui.painter().hline(
                             bg_rect.x_range(),
@@ -6699,7 +6698,7 @@ impl EditorUi {
                         );
                     }
                     if let Some(m) = bg.dnd_release_payload::<param_menu::Moving>() {
-                        actions.push(ParamAction::Cmd(ParamCmd::DropAtEnd(*m)));
+                        actions.push(ParamAction::Cmd(ParamCmd::Drop(*m, param_menu::Place::End)));
                     }
                 }
             },
@@ -14392,14 +14391,7 @@ fn parameter_row(
             let mut drop = None;
             let line = Rect::from_min_max(nr.min, pos2(ui.max_rect().max.x, nr.max.y));
             let here = param_menu::Moving::Param(pi);
-            param_menu::drag_target(
-                ui,
-                &nresp,
-                line,
-                here,
-                |m| ParamCmd::DropOnParam(m, pi),
-                &mut drop,
-            );
+            param_menu::drag_target(ui, &nresp, line, here, param_menu::Row::Param(pi), &mut drop);
             if let Some(c) = drop {
                 actions.push(ParamAction::Cmd(c));
             }
@@ -14526,14 +14518,7 @@ fn combined_pad(
             });
             let mut drop = None;
             let here = param_menu::Moving::Param(p);
-            param_menu::drag_target(
-                ui,
-                &nresp,
-                nr,
-                here,
-                |m| ParamCmd::DropOnParam(m, p),
-                &mut drop,
-            );
+            param_menu::drag_target(ui, &nresp, nr, here, param_menu::Row::Param(p), &mut drop);
             if let Some(c) = drop {
                 actions.push(ParamAction::Cmd(c));
             }
@@ -15301,43 +15286,50 @@ mod key_cmd_tests {
     }
 
     #[test]
-    fn dragging_reorders_parameters_and_folders() {
+    fn dragging_places_parameters_and_folders_like_layers() {
         use crate::session::ParamGroup;
-        use param_menu::Moving;
+        use param_menu::{Moving, Place};
         let mut ed = editor();
-        let folder = |name: &str, params: Vec<usize>| ParamGroup {
+        let group = |name: &str, params: Vec<usize>| ParamGroup {
             name: name.into(),
             params,
             open: true,
             color: None,
         };
+        let layout = |ed: &EditorUi| -> Vec<(String, Vec<usize>)> {
+            let s = ed.session.as_ref().unwrap();
+            s.groups.iter().map(|g| (g.name.clone(), g.params.clone())).collect()
+        };
+        let row = |n: &str, p: &[usize]| (n.to_string(), p.to_vec());
         let s = ed.session.as_mut().unwrap();
-        s.groups = vec![folder("A", vec![0, 1, 2]), folder("B", vec![3])];
-        // parameter 2 dropped on parameter 0 lands before it
-        ed.run_param_cmd(ParamCmd::DropOnParam(Moving::Param(2), 0));
-        let s = ed.session.as_ref().unwrap();
-        assert_eq!(s.groups[0].params, vec![2, 0, 1]);
-        // parameter 1 dropped on folder B's header goes into B
-        ed.run_param_cmd(ParamCmd::DropOnGroup(Moving::Param(1), 1));
-        let s = ed.session.as_ref().unwrap();
+        s.groups = vec![group("A", vec![0, 1, 2]), group("B", vec![3])];
+        // above and below a row: same folder
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(2), Place::Before(0)));
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(0), Place::After(1)));
+        assert_eq!(layout(&ed), vec![row("A", &[2, 1, 0]), row("B", &[3])]);
+        // above a folder: out of every folder, between them
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(1), Place::BeforeGroup(1)));
+        assert_eq!(layout(&ed), vec![row("A", &[2, 0]), row("", &[1]), row("B", &[3])]);
+        // below a collapsed folder: out, and the loose run grows
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(0), Place::AfterGroup(0)));
+        assert_eq!(layout(&ed), vec![row("A", &[2]), row("", &[0, 1]), row("B", &[3])]);
+        // into a folder: first inside it; the emptied run goes
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(0), Place::Into(2)));
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(1), Place::Into(2)));
+        assert_eq!(layout(&ed), vec![row("A", &[2]), row("B", &[1, 0, 3])]);
+        // under the last row: the end, outside every folder
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(3), Place::End));
+        assert_eq!(layout(&ed), vec![row("A", &[2]), row("B", &[1, 0]), row("", &[3])]);
+        // a folder dropped beside a loose parameter splits the run
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Param(2), Place::After(3)));
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Group(1), Place::After(3)));
         assert_eq!(
-            (s.groups[0].params.clone(), s.groups[1].params.clone()),
-            (vec![2, 0], vec![3, 1])
+            layout(&ed),
+            vec![row("A", &[]), row("", &[3]), row("B", &[1, 0]), row("", &[2])]
         );
-        // folder B dropped on folder A's header moves before it
-        ed.run_param_cmd(ParamCmd::DropOnGroup(Moving::Group(1), 0));
-        let names: Vec<String> =
-            ed.session.as_ref().unwrap().groups.iter().map(|g| g.name.clone()).collect();
-        assert_eq!(names, ["B", "A"]);
-        // folder B dropped under the last row goes last again
-        ed.run_param_cmd(ParamCmd::DropAtEnd(Moving::Group(0)));
-        let names: Vec<String> =
-            ed.session.as_ref().unwrap().groups.iter().map(|g| g.name.clone()).collect();
-        assert_eq!(names, ["A", "B"]);
-        // a parameter dropped there joins the last folder
-        ed.run_param_cmd(ParamCmd::DropAtEnd(Moving::Param(2)));
-        let s = ed.session.as_ref().unwrap();
-        assert_eq!(s.groups[1].params.last(), Some(&2));
+        // and folders reorder around each other
+        ed.run_param_cmd(ParamCmd::Drop(Moving::Group(2), Place::BeforeGroup(0)));
+        assert_eq!(layout(&ed), vec![row("B", &[1, 0]), row("A", &[]), row("", &[3, 2])]);
     }
 
     #[test]
