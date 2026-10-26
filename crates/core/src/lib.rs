@@ -21,6 +21,7 @@ pub mod deform;
 pub mod draworder;
 pub mod edit;
 pub mod keyform;
+pub mod overlap;
 pub mod palette;
 pub mod physics;
 pub mod skin;

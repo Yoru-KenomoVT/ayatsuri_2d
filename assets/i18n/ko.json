@@ -1447,5 +1447,10 @@
   "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "페이지당 GPU 메모리 {mb} MB. 일부 앱과 GPU는 8192 px를 넘는 페이지를 불러오지 못합니다",
   "Support (optional)": "후원하기 (선택)",
   "Support Ayatsuri2D (optional)": "Ayatsuri2D 후원하기 (선택)",
-  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee. Ayatsuri2D는 무료이고 앞으로도 무료입니다. 원하실 때만 후원해 주세요"
+  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee. Ayatsuri2D는 무료이고 앞으로도 무료입니다. 원하실 때만 후원해 주세요",
+  "Highlight Overlapping Polygons": "겹치는 폴리곤 강조 표시",
+  "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "고급 블렌드 모드가 설정된 메시에서, 같은 메시의 다른 삼각형과 겹치는 삼각형을 표시합니다. 겹친 곳은 두 번 합성되어 움직일 때 깜빡입니다",
+  "  With overlapping polygons": "  폴리곤이 겹치는 것",
+  "Overlapping polygons": "겹치는 폴리곤",
+  "The color View > Highlight Overlapping Polygons marks them with": "보기 > 겹치는 폴리곤 강조 표시에서 쓰는 색"
 }

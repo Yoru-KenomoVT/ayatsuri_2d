@@ -350,6 +350,8 @@ pub struct EditorUi {
     parts_dnd_off: bool,
     /// Show > Highlight Deformer's Child Elements.
     highlight_children: bool,
+    /// View > Highlight Overlapping Polygons.
+    highlight_overlap: bool,
     part_anchor: Option<usize>,
     /// The Parts palette row under the pointer, outlined on the canvas.
     palette_hover: Option<Sel>,
@@ -1217,6 +1219,7 @@ impl Default for EditorUi {
             part_pick: Vec::new(),
             parts_dnd_off: false,
             highlight_children: false,
+            highlight_overlap: false,
             part_anchor: None,
             palette_hover: None,
             part_search: String::new(),
@@ -2764,6 +2767,14 @@ impl EditorUi {
                     )
                     .on_hover_text(crate::i18n::tr(
                         "Outline every art mesh under the selected deformer (Ctrl+Shift+D)",
+                    ));
+                    ui.checkbox(
+                        &mut self.highlight_overlap,
+                        crate::i18n::tr("Highlight Overlapping Polygons"),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        "Mark triangles that cover others of the same mesh, in meshes with an \
+                         advanced blend mode: they blend twice there and flicker as it moves",
                     ));
                     ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit"))
                         .on_hover_text(crate::i18n::tr(
@@ -10059,6 +10070,40 @@ impl EditorUi {
             }
         }
 
+        // Highlight Overlapping Polygons: in meshes with an advanced blend,
+        // the triangles that cover others of the same mesh, as drawn now
+        if self.highlight_overlap {
+            let [r, g, b, a] = self.prefs.overlap_color.unwrap_or(OVERLAP_COLOR);
+            let fill = Color32::from_rgba_unmultiplied(r, g, b, a);
+            let stroke = Stroke::new(1.2, Color32::from_rgb(r, g, b));
+            for (mi, am) in s.puppet.model().art_meshes.iter().enumerate() {
+                if !ayatsuri_core::overlap::can_flicker(am) {
+                    continue;
+                }
+                let Some(g) = s.puppet.mesh_geometry(mi) else { continue };
+                let hits = ayatsuri_core::overlap::overlapping(g.positions, g.indices);
+                if hits.is_empty() {
+                    continue;
+                }
+                let (pos, _) = g.positions.as_chunks::<2>();
+                let (tris, _) = g.indices.as_chunks::<3>();
+                let at = |i: u16| pos.get(i as usize).map(|p| to_screen(p[0], p[1]));
+                let mut mesh = egui::Mesh::default();
+                for t in hits.iter().filter_map(|&ti| tris.get(ti)) {
+                    let (Some(p0), Some(p1), Some(p2)) = (at(t[0]), at(t[1]), at(t[2])) else {
+                        continue;
+                    };
+                    let base = mesh.vertices.len() as u32;
+                    for p in [p0, p1, p2] {
+                        mesh.colored_vertex(p, fill);
+                    }
+                    mesh.indices.extend([base, base + 1, base + 2]);
+                    vp.add(egui::Shape::closed_line(vec![p0, p1, p2], stroke));
+                }
+                add_mesh_shape(&vp, mesh);
+            }
+        }
+
         // the Select tool: hover previews a mesh, click selects it, empty
         // click deselects, double-click jumps into mesh editing
         if self.tool == Tool::Arrow && !space && self.mesh_edit.is_none() {
@@ -15405,6 +15450,9 @@ fn solo_badge(ui: &mut Ui, view: Rect, s: &mut Session, prefs: &mut Prefs) -> bo
 
 /// The inactive color Solo puts over everything else: dimmed and faded.
 const SOLO_TINT: [u8; 4] = [90, 90, 100, 110];
+
+/// Highlight Overlapping Polygons' default color: a strong red, half seen.
+pub(crate) const OVERLAP_COLOR: [u8; 4] = [255, 64, 96, 120];
 
 /// While Solo is on, only the soloed meshes can be picked (Cubism's Solo
 /// keeps the rest from being deformed by mistake).

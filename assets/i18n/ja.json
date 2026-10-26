@@ -1447,5 +1447,10 @@
   "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "1ページあたり{mb} MBのGPUメモリを使います。8192 pxを超えるページを読み込めないアプリやGPUもあります",
   "Support (optional)": "支援する(任意)",
   "Support Ayatsuri2D (optional)": "Ayatsuri2Dを支援する(任意)",
-  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee。Ayatsuri2Dは無料で、これからも無料です。支援は希望する方だけで大丈夫です"
+  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee。Ayatsuri2Dは無料で、これからも無料です。支援は希望する方だけで大丈夫です",
+  "Highlight Overlapping Polygons": "重なっているポリゴンを強調表示",
+  "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "拡張ブレンドモードのメッシュで、同じメッシュの他の三角形に重なっている三角形を示します。重なった部分は二重に合成され、動くとちらつきます",
+  "  With overlapping polygons": "  ポリゴンが重なっているもの",
+  "Overlapping polygons": "重なっているポリゴン",
+  "The color View > Highlight Overlapping Polygons marks them with": "表示 > 重なっているポリゴンを強調表示 で使う色"
 }

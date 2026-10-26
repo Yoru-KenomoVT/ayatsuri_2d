@@ -197,6 +197,8 @@ pub struct Prefs {
     pub experimental_stroke_mesh: bool,
     /// Solo's inactive color, rgba; None for the default.
     pub solo_tint: Option<[u8; 4]>,
+    /// Highlight overlapping polygons' color, rgba; None for the default.
+    pub overlap_color: Option<[u8; 4]>,
     /// Automatic mesh generator presets the user added (Cubism's Add).
     pub mesh_presets: Vec<MeshPreset>,
     /// The Render window as it was last used: folder, format and settings.

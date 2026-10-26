@@ -43,6 +43,20 @@ impl EditorUi {
                 let layers =
                     (0..m.parts.len()).map(|i| depth_of(Some(i as u32))).max().unwrap_or(0);
                 let shapes: usize = m.art_meshes.iter().map(|am| am.blend_shapes.len()).sum();
+                // meshes that may flicker: an advanced blend and triangles
+                // covering each other, as the model stands now
+                let overlapping = m
+                    .art_meshes
+                    .iter()
+                    .enumerate()
+                    .filter(|(mi, am)| {
+                        ayatsuri_core::overlap::can_flicker(am)
+                            && s.puppet.mesh_geometry(*mi).is_some_and(|g| {
+                                !ayatsuri_core::overlap::overlapping(g.positions, g.indices)
+                                    .is_empty()
+                            })
+                    })
+                    .count();
                 ui.set_width(260.0);
                 crate::windows::form(ui, "stats", |ui| {
                     for (label, value) in [
@@ -61,6 +75,7 @@ impl EditorUi {
                         ("  Warp", warps.to_string()),
                         ("  Rotation", (m.deformers.len() - warps).to_string()),
                         ("ArtMeshes", m.art_meshes.len().to_string()),
+                        ("  With overlapping polygons", overlapping.to_string()),
                         ("Vertices", verts.to_string()),
                         ("Triangles", tris.to_string()),
                         ("Keyforms", keyforms.to_string()),

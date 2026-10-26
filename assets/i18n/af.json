@@ -1447,5 +1447,10 @@
   "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "{mb} MB GPU-geheue per bladsy. Sommige programme en GPU's kan nie bladsye bo 8192 px laai nie",
   "Support (optional)": "Ondersteun (opsioneel)",
   "Support Ayatsuri2D (optional)": "Ondersteun Ayatsuri2D (opsioneel)",
-  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee. Ayatsuri2D is gratis en bly gratis; dit is net as jy wil"
+  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee. Ayatsuri2D is gratis en bly gratis; dit is net as jy wil",
+  "Highlight Overlapping Polygons": "Merk oorvleuelende veelhoeke",
+  "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "Merk driehoeke wat ander van dieselfde mesh bedek, in meshes met 'n gevorderde mengmodus: daar meng hulle twee keer en flikker hulle wanneer dit beweeg",
+  "  With overlapping polygons": "  Met oorvleuelende veelhoeke",
+  "Overlapping polygons": "Oorvleuelende veelhoeke",
+  "The color View > Highlight Overlapping Polygons marks them with": "Die kleur waarmee Aansig > Merk oorvleuelende veelhoeke hulle merk"
 }
