@@ -299,9 +299,9 @@ pub struct EditorUi {
     rot_live: Option<(usize, Vec<f32>)>,
     /// Set by "Reset Toolbar Position": put the floating bar back next frame.
     toolbar_reset: bool,
-    /// The Rename Deformer dialog: deformer, name and ID being typed, and
-    /// whether the last ID was refused.
-    def_rename: Option<(usize, String, String, bool)>,
+    /// The Rename dialog of a deformer or an art mesh: which, the name and
+    /// ID being typed, and whether the last ID was refused.
+    def_rename: Option<(Sel, String, String, bool)>,
     /// The Conversion Divisions dialog: the warp and the columns and rows
     /// being set.
     def_division: Option<(usize, u32, u32)>,
@@ -840,6 +840,7 @@ enum MeshRowCmd {
     ClipBy(usize),
     /// Group into New Part: this mesh, or the pick it is in.
     Group(usize),
+    Rename(usize),
 }
 
 enum DefCmd {
@@ -847,6 +848,7 @@ enum DefCmd {
     Create(bool, Sel),
     CreateForSelection(bool),
     Rename(usize),
+    RenameMesh(usize),
     /// Change this warp's conversion divisions.
     Division(usize),
     Delete(usize),
@@ -7768,6 +7770,7 @@ impl EditorUi {
                 self.delete_meshes(meshes);
             }
             Some(MeshRowCmd::ClipBy(mi)) => self.start_clip_pick(mi),
+            Some(MeshRowCmd::Rename(mi)) => self.open_mesh_rename(mi),
             Some(MeshRowCmd::Group(mi)) => {
                 // a mesh outside the pick groups alone
                 if !self.multi_sel.contains(&mi) {
@@ -8496,6 +8499,10 @@ impl EditorUi {
                             ui.close();
                         }
                         ui.separator();
+                        if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                            def_cmd = Some(DefCmd::RenameMesh(mi));
+                            ui.close();
+                        }
                         if ui.button(crate::i18n::tr("Clip by…")).clicked() {
                             def_cmd = Some(DefCmd::ClipBy(mi));
                             ui.close();
@@ -8650,6 +8657,7 @@ impl EditorUi {
             }
             DefCmd::CreateForSelection(warp) => self.pending_create = Some((warp, None)),
             DefCmd::Rename(i) => self.open_def_rename(i),
+            DefCmd::RenameMesh(i) => self.open_mesh_rename(i),
             DefCmd::Division(i) => self.open_def_division(i),
             DefCmd::Reparent(child, parent) => {
                 let Some(s) = &mut self.session else { return };
@@ -8742,62 +8750,86 @@ impl EditorUi {
         let Some(s) = &self.session else { return };
         let Some(d) = s.puppet.model().deformers.get(i) else { return };
         let name = s.deformer_names.get(i).cloned().unwrap_or_default();
-        self.def_rename = Some((i, name, d.id.clone(), false));
+        self.def_rename = Some((Sel::Deformer(i), name, d.id.clone(), false));
     }
 
-    /// Rename Deformer: its name (shown in the palette, free text, as in
-    /// Cubism) and its ID (what exports and the runtime use: unique and
-    /// not empty), both editable after the deformer was made.
+    /// Open Rename Art Mesh on a mesh's current name and ID.
+    fn open_mesh_rename(&mut self, i: usize) {
+        let Some(s) = &self.session else { return };
+        let Some(m) = s.puppet.model().art_meshes.get(i) else { return };
+        let name = s.mesh_names.get(i).cloned().unwrap_or_default();
+        self.def_rename = Some((Sel::Mesh(i), name, m.id.clone(), false));
+    }
+
+    /// Rename a deformer or an art mesh: its name (shown in the palettes,
+    /// free text, as in Cubism) and its ID (what exports and the runtime
+    /// use: unique and not empty), both editable after it was made.
     fn def_rename_window(&mut self, ctx: &egui::Context) {
-        let Some((i, name, id, refused)) = &mut self.def_rename else { return };
-        let (i, mut open, mut ok) = (*i, true, false);
-        crate::windows::Dialog::new(crate::i18n::tr("Rename Deformer")).open(&mut open).show(
-            ctx,
-            |ui| {
-                crate::windows::form(ui, "def-rename", |ui| {
-                    ui.label(crate::i18n::tr("Name"));
-                    let edit = ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
-                    // the name takes the keyboard when the dialog opens
-                    if ui.memory(|m| m.focused().is_none()) {
-                        edit.request_focus();
-                    }
-                    ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
-                    ui.end_row();
-                    ui.label(crate::i18n::tr("ID"));
-                    let edit = ui.add(egui::TextEdit::singleline(id).desired_width(240.0));
-                    ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
-                    ui.end_row();
-                });
-                if *refused {
-                    ui.colored_label(
-                        theme::pal().rotation_red,
-                        crate::i18n::tr("That ID is empty or already used."),
-                    );
+        let Some((target, name, id, refused)) = &mut self.def_rename else { return };
+        let (target, mut open, mut ok) = (*target, true, false);
+        let title = match target {
+            Sel::Mesh(_) => crate::i18n::tr("Rename Art Mesh"),
+            _ => crate::i18n::tr("Rename Deformer"),
+        };
+        crate::windows::Dialog::new(title).open(&mut open).show(ctx, |ui| {
+            crate::windows::form(ui, "def-rename", |ui| {
+                ui.label(crate::i18n::tr("Name"));
+                let edit = ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
+                // the name takes the keyboard when the dialog opens
+                if ui.memory(|m| m.focused().is_none()) {
+                    edit.request_focus();
                 }
-                ui.add_space(6.0);
-                ok |= ui.button(crate::i18n::tr("Rename")).clicked();
-            },
-        );
+                ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
+                ui.end_row();
+                ui.label(crate::i18n::tr("ID"));
+                let edit = ui.add(egui::TextEdit::singleline(id).desired_width(240.0));
+                ok |= edit.lost_focus() && ui.input(|k| k.key_pressed(egui::Key::Enter));
+                ui.end_row();
+            });
+            if *refused {
+                ui.colored_label(
+                    theme::pal().rotation_red,
+                    crate::i18n::tr("That ID is empty or already used."),
+                );
+            }
+            ui.add_space(6.0);
+            ok |= ui.button(crate::i18n::tr("Rename")).clicked();
+        });
         if ok {
             let (name, id) = (name.trim().to_string(), id.trim().to_string());
             let Some(s) = &mut self.session else { return };
-            let same_id = s.puppet.model().deformers.get(i).is_some_and(|d| d.id == id);
-            if !same_id && !s.edit(|m| ayatsuri_core::edit::rename_deformer(m, i, &id)) {
-                log::warn!("deformer {i}: the ID {id:?} is empty or already used");
+            let (kind, i, same_id) = match target {
+                Sel::Mesh(i) => {
+                    ("art mesh", i, s.puppet.model().art_meshes.get(i).is_some_and(|m| m.id == id))
+                }
+                Sel::Deformer(i) => {
+                    ("deformer", i, s.puppet.model().deformers.get(i).is_some_and(|d| d.id == id))
+                }
+                _ => {
+                    self.def_rename = None;
+                    return;
+                }
+            };
+            let renamed = same_id
+                || s.edit(|m| match target {
+                    Sel::Mesh(i) => ayatsuri_core::edit::rename_art_mesh(m, i, &id),
+                    _ => ayatsuri_core::edit::rename_deformer(m, i, &id),
+                });
+            if !renamed {
+                log::warn!("{kind} {i}: the ID {id:?} is empty or already used");
                 if let Some(r) = &mut self.def_rename {
                     r.3 = true;
                 }
                 return;
             }
             if !same_id {
-                log::info!("deformer {i}: ID changed to {id}");
+                log::info!("{kind} {i}: ID changed to {id}");
             }
-            if s.deformer_names.get(i).is_some_and(|n| *n != name) {
-                if let Some(n) = s.deformer_names.get_mut(i) {
-                    *n = name.clone();
-                }
+            let names = if kind == "art mesh" { &mut s.mesh_names } else { &mut s.deformer_names };
+            if let Some(n) = names.get_mut(i).filter(|n| **n != name) {
+                *n = name.clone();
                 s.modified = true;
-                log::info!("deformer {i}: renamed to {name:?}");
+                log::info!("{kind} {i}: renamed to {name:?}");
             }
             self.def_rename = None;
         } else if !open {
@@ -14433,6 +14465,10 @@ fn parts_mesh_row(
         };
         if ui.button(label).clicked() {
             *cmd = Some(MeshRowCmd::Group(mi));
+            ui.close();
+        }
+        if ui.button(crate::i18n::tr("Rename…")).clicked() {
+            *cmd = Some(MeshRowCmd::Rename(mi));
             ui.close();
         }
         if ui

@@ -1882,6 +1882,21 @@ pub fn rename_deformer(model: &mut Model, deformer: usize, id: &str) -> bool {
     }
 }
 
+/// Rename an art mesh's id; refused when another art mesh already has it.
+pub fn rename_art_mesh(model: &mut Model, mesh: usize, id: &str) -> bool {
+    let id = id.trim();
+    if id.is_empty() || model.art_meshes.iter().enumerate().any(|(i, m)| i != mesh && m.id == id) {
+        return false;
+    }
+    match model.art_meshes.get_mut(mesh) {
+        Some(m) => {
+            m.id = id.to_string();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Change a warp deformer's division to `cols` x `rows` after it was
 /// made: every keyform's grid is sampled again at the new division, so
 /// what the warp holds keeps its shape (exactly when the division gets

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ayatsuri_core::Puppet;
-use ayatsuri_format::model::{Binding, flags};
+use ayatsuri_format::model::{ArtMesh, Binding, flags};
 use ayatsuri_format::{AomPayload, Meta, Model};
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use log::{debug, info, warn};
@@ -1648,8 +1648,15 @@ impl Session {
     /// over by mesh id so each stays with its own mesh.
     fn follow_mesh_ids(&mut self, next: &Model) {
         let now = &self.puppet.model().art_meshes;
+        // the same meshes in the same places, at most some given new IDs
+        // (Rename, and its undo): each stays where it is
+        let renamed = |a: &ArtMesh, b: &ArtMesh| {
+            a.id == b.id
+                || (!now.iter().any(|m| m.id == b.id)
+                    && !next.art_meshes.iter().any(|m| m.id == a.id))
+        };
         if now.len() == next.art_meshes.len()
-            && now.iter().zip(&next.art_meshes).all(|(a, b)| a.id == b.id)
+            && now.iter().zip(&next.art_meshes).all(|(a, b)| renamed(a, b))
         {
             return;
         }
@@ -2361,6 +2368,30 @@ mod import_paint_tests {
         // one undo step takes it back out
         s.undo();
         assert!(s.puppet.model().art_meshes.is_empty());
+    }
+
+    #[test]
+    fn a_new_mesh_id_keeps_its_name_visibility_and_undo_too() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        let art = ayatsuri_import::from_layers(&doc(
+            200,
+            100,
+            &[("Hair", "Head", 60, 20, 16), ("Bang", "Head", 5, 5, 8)],
+        ))
+        .unwrap();
+        s.add_imported(&ctx, art, Path::new("a.psd")).unwrap();
+        s.mesh_shown[1] = false;
+        assert!(s.edit(|m| ayatsuri_core::edit::rename_art_mesh(m, 1, "ArtMeshBang")));
+        assert_eq!(s.puppet.model().art_meshes[1].id, "ArtMeshBang");
+        assert_eq!((s.mesh_name(0), s.mesh_name(1)), ("Hair".into(), "Bang".into()));
+        assert_eq!(s.mesh_shown, vec![true, false]);
+        s.undo();
+        assert_eq!(s.puppet.model().art_meshes[1].id, "ArtMesh1");
+        assert_eq!(s.mesh_name(1), "Bang");
+        assert_eq!(s.mesh_shown, vec![true, false]);
+        // taken IDs are refused
+        assert!(!s.edit(|m| ayatsuri_core::edit::rename_art_mesh(m, 1, "ArtMesh0")));
     }
 
     #[test]
