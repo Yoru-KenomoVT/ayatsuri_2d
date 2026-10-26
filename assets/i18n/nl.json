@@ -1330,5 +1330,6 @@
   "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "Verandert alleen wat je ziet tijdens het bewerken; het wordt niet opgeslagen of geëxporteerd. Om een onderdeel met een parameter te laten vervagen: zet Offscreen tekenen aan en key de dekking, of zet de meshes onder een deformer en key diens dekking.",
   "  Offscreen drawing": "  Offscreen tekenen",
   "  Most nested offscreen layers": "  Diepst geneste offscreen lagen",
-  "Blend shapes": "Blendshapes"
+  "Blend shapes": "Blendshapes",
+  "Where the whole group draws among its neighbours; its contents keep their own order inside it": "Waar de hele groep tussen zijn buren tekent; de inhoud houdt binnen de groep zijn eigen volgorde"
 }

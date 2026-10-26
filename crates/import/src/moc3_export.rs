@@ -119,6 +119,27 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
         }
     }
     let offscreen = model.parts.iter().filter(|p| p.offscreen.is_some()).count();
+    if offscreen > 0 && version.max_slot() >= 152 && !model.draw_groups.is_empty() {
+        let grouped: std::collections::HashSet<u32> = model
+            .draw_groups
+            .iter()
+            .flat_map(|g| &g.items)
+            .filter(|it| it.part && it.child_group.is_some())
+            .map(|it| it.object)
+            .collect();
+        let loose = (0..model.parts.len() as u32)
+            .filter(|p| {
+                model.parts.get(*p as usize).is_some_and(|p| p.offscreen.is_some())
+                    && !grouped.contains(p)
+            })
+            .count();
+        if loose > 0 {
+            out.push(format!(
+                "{loose} offscreen part(s) are not draw order groups in this model's imported \
+                 draw order, so they export drawn directly"
+            ));
+        }
+    }
     if offscreen > 0 && version.max_slot() < 152 {
         out.push(format!(
             "{offscreen} part(s) use offscreen drawing, which only moc3 5.3 stores; this version \
@@ -611,6 +632,24 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     sect.insert(70, i32s(&m_pos_begin));
     sect.insert(78, f32s(&uv_pool));
     sect.insert(79, i16s(&tri_pool));
+    // the draw order groups to write: the model's own, or for a model built
+    // from scratch the ones its offscreen parts call for (runtimes want at
+    // least the root group, and an offscreen part must be a part item with
+    // a group of its own)
+    let synthesized;
+    let groups: &[ayatsuri_format::model::DrawGroup] = if model.draw_groups.is_empty() {
+        synthesized = ayatsuri_core::draworder::synthesize(model);
+        &synthesized
+    } else {
+        &model.draw_groups
+    };
+    let grouped: std::collections::HashSet<u32> = groups
+        .iter()
+        .flat_map(|g| &g.items)
+        .filter(|it| it.part && it.child_group.is_some())
+        .map(|it| it.object)
+        .collect();
+
     // ---- offscreen parts (5.3): one offscreen per part that has it on,
     // its masks joining the drawable mask pool after the meshes' and one
     // offscreen keyform per part keyform ----
@@ -621,7 +660,8 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let mut off_opac: Vec<f32> = Vec::new();
     if version.max_slot() >= 152 {
         for (i, p) in model.parts.iter().enumerate() {
-            let Some(o) = &p.offscreen else {
+            // a part the draw order groups don't hold as a group draws directly
+            let Some(o) = p.offscreen.as_ref().filter(|_| grouped.contains(&(i as u32))) else {
                 part_kf_off.extend(std::iter::repeat_n(-1, p.draw_orders.len()));
                 continue;
             };
@@ -695,36 +735,15 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let mut do_types = Vec::new();
     let mut do_idx = Vec::new();
     let mut do_self = Vec::new();
-    // a model built from scratch has no draw groups; runtimes expect at
-    // least the root one, so synthesize it with every mesh in index order
-    let synthesized;
-    let groups: &[ayatsuri_format::model::DrawGroup] =
-        if model.draw_groups.is_empty() && n_meshes > 0 {
-            let orders: Vec<i32> = model
-                .art_meshes
-                .iter()
-                .map(|m| m.draw_orders.first().copied().unwrap_or(500.0).round() as i32)
-                .collect();
-            synthesized = [ayatsuri_format::model::DrawGroup {
-                total: n_meshes as u32,
-                min_order: orders.iter().copied().min().unwrap_or(500),
-                max_order: orders.iter().copied().max().unwrap_or(500),
-                items: (0..n_meshes)
-                    .map(|i| ayatsuri_format::model::DrawItem {
-                        part: false,
-                        object: i as u32,
-                        child_group: None,
-                    })
-                    .collect(),
-            }];
-            &synthesized
-        } else {
-            &model.draw_groups
-        };
-    for g in groups {
+    // totals counted the runtime's way: an offscreen written here takes a
+    // layer slot, one dropped (or a version before 5.3) does not
+    let totals = ayatsuri_core::draworder::totals(groups, |p| {
+        part_off.get(p as usize).is_some_and(|&o| o >= 0)
+    });
+    for (g, &total) in groups.iter().zip(&totals) {
         dg_begin.push(do_types.len() as i32);
         dg_count.push(g.items.len() as i32);
-        dg_total.push(g.total as i32);
+        dg_total.push(total as i32);
         dg_max.push(g.max_order);
         dg_min.push(g.min_order);
         for it in &g.items {
@@ -1139,12 +1158,24 @@ mod tests {
 
         let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_03).unwrap()).unwrap();
         assert_eq!(back.parts[0].offscreen, model.parts[0].offscreen);
+        // the part is a part item with a group of its own, and the root's
+        // total counts both meshes and the layer's slot, as runtimes walk it
+        let root = &back.draw_groups[0];
+        assert!(root.items.iter().any(|it| it.part && it.object == 0 && it.child_group.is_some()));
+        assert_eq!(root.total, 3);
+        // read back, every mesh still finds its place in the render order
+        let mut puppet = ayatsuri_core::Puppet::new(back.clone());
+        puppet.update();
+        assert_eq!(puppet.drawables().count(), 2);
+        assert_eq!(puppet.layers_of(0), &[0]);
         // the meshes' own masks are untouched by the layer's
         assert!(back.art_meshes.iter().all(|m| m.masks.is_empty()));
 
         // before 5.3 the layer goes, and the export says so
         let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_00).unwrap()).unwrap();
         assert!(back.parts[0].offscreen.is_none());
+        // no layer slots before 5.3: the root counts the two meshes only
+        assert_eq!(back.draw_groups[0].total, 2);
         let warnings = export_warnings(&model, ExportVersion::V5_00).join(" ");
         assert!(warnings.contains("1 part(s) use offscreen drawing"), "{warnings}");
     }

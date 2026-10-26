@@ -1330,5 +1330,6 @@
   "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "편집 중에 보이는 것만 바꾸며 저장하거나 내보내지 않습니다. 파라미터로 파츠를 페이드하려면 오프스크린 드로잉을 켜고 불투명도에 키를 넣거나, 메시를 디포머 아래에 두고 그 디포머의 불투명도에 키를 넣으세요.",
   "  Offscreen drawing": "  오프스크린 드로잉",
   "  Most nested offscreen layers": "  오프스크린 최대 중첩 수",
-  "Blend shapes": "블렌드 셰이프"
+  "Blend shapes": "블렌드 셰이프",
+  "Where the whole group draws among its neighbours; its contents keep their own order inside it": "그룹 전체가 주변 오브젝트 사이에서 그려지는 위치입니다. 내용은 그 안에서 자신의 순서를 유지합니다"
 }

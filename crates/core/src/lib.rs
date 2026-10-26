@@ -17,6 +17,7 @@ pub mod blendshape;
 pub mod comp;
 pub mod compose;
 pub mod deform;
+pub mod draworder;
 pub mod edit;
 pub mod keyform;
 pub mod physics;
@@ -45,9 +46,15 @@ pub struct Puppet {
     mesh_layers: Vec<Vec<u32>>,
     /// The deepest offscreen nesting any mesh has (0: no layers at all).
     layer_depth: usize,
-    // layer grouping workspace, sized at load
-    layer_first: Vec<u32>,
-    render_pos: Vec<u32>,
+    /// Per part: its lowest mesh, the tie order of an offscreen part's item.
+    part_tie: Vec<u32>,
+    /// Per draw order group: its total, counted the runtime's way (see
+    /// `draworder`), offscreen layer slots included.
+    group_total: Vec<u32>,
+    // grouped walk workspace, sized at load: the render slots (meshes and
+    // offscreen layers) and which meshes found one
+    slot_buf: Vec<u32>,
+    mesh_seen: Vec<bool>,
     /// Per deformer: chain state.
     def_enabled: Vec<bool>,
     def_user_visible: Vec<bool>,
@@ -256,8 +263,13 @@ impl Puppet {
             layer_opacity: vec![1.0; n_parts],
             mesh_layers,
             layer_depth,
-            layer_first: vec![u32::MAX; n_parts],
-            render_pos: vec![0; n_meshes],
+            part_tie: draworder::part_first_mesh(&model),
+            group_total: draworder::group_totals(&model),
+            slot_buf: vec![
+                u32::MAX;
+                n_meshes + model.parts.iter().filter(|p| p.offscreen.is_some()).count()
+            ],
+            mesh_seen: vec![false; n_meshes],
             dog_first: vec![-1; max_level],
             dog_last: vec![-1; max_level],
             dog_next: vec![-1; max_items],
@@ -1006,41 +1018,32 @@ impl Puppet {
         self.group_layers();
     }
 
-    /// Keep each offscreen part's meshes together, as a draw order group
-    /// does: they move to where the first of them sorted, nested layers
-    /// inside it the same way, everything else keeping its order.
+    /// In a model without draw order groups of its own, an offscreen part
+    /// sorts as one item at its own draw order among its siblings, its
+    /// contents together inside it, as a draw order group does (and as the
+    /// groups a moc3 export writes for it, `draworder::synthesize`). Ties
+    /// keep mesh index order, a part by its lowest mesh.
     fn group_layers(&mut self) {
-        if self.layer_depth == 0 {
+        if self.layer_depth == 0 || !self.model.draw_groups.is_empty() {
             return;
         }
-        for (pos, &mi) in self.render_order.iter().enumerate() {
-            if let Some(p) = self.render_pos.get_mut(mi as usize) {
-                *p = pos as u32;
-            }
-        }
-        self.layer_first.fill(u32::MAX);
-        for (mi, chain) in self.mesh_layers.iter().enumerate() {
-            let pos = self.render_pos.get(mi).copied().unwrap_or(0);
-            for &part in chain {
-                if let Some(f) = self.layer_first.get_mut(part as usize) {
-                    *f = (*f).min(pos);
-                }
-            }
-        }
-        let (layers, first, pos) = (&self.mesh_layers, &self.layer_first, &self.render_pos);
-        let pos_of = |mi: u32| pos.get(mi as usize).copied().unwrap_or(0);
-        // level by level: inside a layer, its first member's slot; outside
-        // any, the mesh's own
+        let (layers, tie) = (&self.mesh_layers, &self.part_tie);
+        let (parts, meshes) = (&self.part_draw_order, &self.mesh_draw_order);
+        // a mesh's item at each nesting level: the offscreen part it sits in
+        // there, or past its own chain the mesh itself
         let key = |mi: u32, level: usize| match layers.get(mi as usize).and_then(|c| c.get(level)) {
-            Some(&part) => first.get(part as usize).copied().unwrap_or(0),
-            None => pos_of(mi),
+            Some(&p) => (
+                parts.get(p as usize).copied().unwrap_or(500.0).round() as i64,
+                tie.get(p as usize).copied().unwrap_or(u32::MAX),
+            ),
+            None => (meshes.get(mi as usize).copied().unwrap_or(500.0).round() as i64, mi),
         };
         let depth = self.layer_depth;
         self.render_order.sort_unstable_by(|&a, &b| {
-            (0..depth)
+            (0..=depth)
                 .map(|level| key(a, level).cmp(&key(b, level)))
                 .find(|o| o.is_ne())
-                .unwrap_or_else(|| pos_of(a).cmp(&pos_of(b)))
+                .unwrap_or(core::cmp::Ordering::Equal)
         });
     }
 
@@ -1062,6 +1065,7 @@ impl Puppet {
         for c in self.dog_cursor.iter_mut() {
             *c = 0;
         }
+        self.slot_buf.fill(u32::MAX);
         for gi in 0..self.model.draw_groups.len() {
             let Some(group) = self.model.draw_groups.get(gi) else { break };
             let n = group.items.len();
@@ -1117,9 +1121,17 @@ impl Puppet {
                 while di >= 0 && (di as usize) < n {
                     let Some(item) = group.items.get(di as usize) else { break };
                     if item.part {
+                        // an offscreen part's layer takes a slot of its own
+                        if self
+                            .model
+                            .parts
+                            .get(item.object as usize)
+                            .is_some_and(|p| p.offscreen.is_some())
+                        {
+                            pos = pos.saturating_add(1);
+                        }
                         if let Some(cg) = item.child_group
-                            && let Some(child_total) =
-                                self.model.draw_groups.get(cg as usize).map(|g| g.total)
+                            && let Some(&child_total) = self.group_total.get(cg as usize)
                         {
                             if let Some(c) = self.dog_cursor.get_mut(cg as usize) {
                                 *c = pos;
@@ -1127,7 +1139,7 @@ impl Puppet {
                             pos = pos.saturating_add(child_total);
                         }
                     } else {
-                        if let Some(slot) = self.render_order.get_mut(pos as usize) {
+                        if let Some(slot) = self.slot_buf.get_mut(pos as usize) {
                             *slot = item.object;
                         }
                         pos = pos.saturating_add(1);
@@ -1138,6 +1150,29 @@ impl Puppet {
                     }
                     di = ni;
                 }
+            }
+        }
+        // the slots in order are the render order; layer slots hold no mesh.
+        // A mesh no group placed (a malformed file) draws last
+        self.mesh_seen.fill(false);
+        let mut n = 0;
+        for &mi in self.slot_buf.iter().filter(|&&mi| mi != u32::MAX) {
+            if let Some(seen) = self.mesh_seen.get_mut(mi as usize)
+                && !*seen
+            {
+                *seen = true;
+                if let Some(slot) = self.render_order.get_mut(n) {
+                    *slot = mi;
+                }
+                n += 1;
+            }
+        }
+        for mi in 0..self.mesh_seen.len() {
+            if !self.mesh_seen.get(mi).copied().unwrap_or(true)
+                && let Some(slot) = self.render_order.get_mut(n)
+            {
+                *slot = mi as u32;
+                n += 1;
             }
         }
     }
@@ -1512,6 +1547,18 @@ mod tests {
                 opacities: vec![0.5],
             }),
         });
+        // the part sorts as one item at its own order (500): after x
+        let mut p = Puppet::new(model.clone());
+        p.update();
+        let order: Vec<usize> = p.drawables().map(|d| d.mesh).collect();
+        assert_eq!(order, vec![1, 0, 2]);
+        // switched on through the editor, it takes its lowest mesh's order
+        // (100) and stays where a was: a, b, then x
+        model.parts[0].offscreen = None;
+        assert!(edit::set_offscreen(&mut model, 0, true));
+        if let Some(o) = &mut model.parts[0].offscreen {
+            (o.masks, o.inverted, o.opacities) = (vec![1], true, vec![0.5]);
+        }
         let mut p = Puppet::new(model);
         p.set_part_opacity(0, 0.8);
         p.update();
@@ -1524,6 +1571,48 @@ mod tests {
         assert_eq!((layer.masks, layer.inverted), (&[1u32][..], true));
         // the layer carries the part's opacity, its meshes don't
         assert!(p.drawables().all(|d| (d.opacity - 1.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn the_flat_rule_matches_the_groups_an_export_writes() {
+        use ayatsuri_format::model::{Offscreen, Part};
+        // meshes a, x, b, c at 100, 200, 300, 250: a and b inside offscreen
+        // P, c inside offscreen Q nested in P
+        let mut model = one_param_model();
+        let mesh = model.art_meshes[0].clone();
+        model.art_meshes.clear();
+        for (order, part) in [(100.0, Some(0)), (200.0, None), (300.0, Some(0)), (250.0, Some(1))] {
+            let mut m = mesh.clone();
+            m.parent_part = part;
+            m.draw_orders = vec![order, order];
+            model.art_meshes.push(m);
+        }
+        let part = |parent, order| Part {
+            id: String::new(),
+            parent_part: parent,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            draw_orders: vec![order],
+            offscreen: Some(Offscreen {
+                masks: vec![],
+                inverted: false,
+                blend: Default::default(),
+                opacities: vec![1.0],
+            }),
+        };
+        let order_of = |model: &Model| {
+            let mut p = Puppet::new(model.clone());
+            p.update();
+            p.drawables().map(|d| d.mesh).collect::<Vec<_>>()
+        };
+        for (p_order, q_order) in [(150.0, 400.0), (500.0, 100.0), (100.0, 300.0)] {
+            model.parts = vec![part(None, p_order), part(Some(0), q_order)];
+            model.draw_groups.clear();
+            let flat = order_of(&model);
+            model.draw_groups = draworder::synthesize(&model);
+            assert_eq!(order_of(&model), flat, "P at {p_order}, Q at {q_order}");
+        }
     }
 
     #[test]

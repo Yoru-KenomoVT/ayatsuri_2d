@@ -8757,7 +8757,13 @@ impl EditorUi {
         use ayatsuri_core::edit::Target;
         let sel_param = self.sel_param;
         let Some(s) = &mut self.session else { return };
-        let Some(current) = s.puppet.model().parts.get(part).map(|p| p.offscreen.clone()) else {
+        let Some((current, base_order)) = s
+            .puppet
+            .model()
+            .parts
+            .get(part)
+            .map(|p| (p.offscreen.clone(), p.draw_orders.first().copied().unwrap_or(500.0)))
+        else {
             return;
         };
         ui.separator();
@@ -8778,6 +8784,34 @@ impl EditorUi {
         }
         let Some(o) = current else { return };
         opacity_row(ui, s, &[Target::Part(part)], sel_param);
+        // the group sorts as one item at the part's own draw order
+        let mut order = base_order;
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [74.0, 16.0],
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::tr("Draw order"))
+                        .color(theme::pal().text_faint)
+                        .size(11.0),
+                ),
+            );
+            ui.add(egui::DragValue::new(&mut order).range(0.0..=1000.0).speed(1))
+                .on_hover_text(crate::i18n::tr(
+                    "Where the whole group draws among its neighbours; its contents keep their own order inside it",
+                ));
+        });
+        if (order - base_order).abs() > 0.5
+            && s.edit(|m| {
+                let Some(p) = m.parts.get_mut(part) else { return false };
+                let delta = (order - base_order).round();
+                for d in &mut p.draw_orders {
+                    *d += delta;
+                }
+                true
+            })
+        {
+            log::info!("part {part}: draw order {order:.0}");
+        }
         let mut blend = o.blend;
         blend_rows(ui, ("part", part), &mut blend);
         let mut inverted = o.inverted;

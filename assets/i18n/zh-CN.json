@@ -1330,5 +1330,6 @@
   "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "只改变编辑时看到的效果，不会保存或导出。要用参数淡化部件，请开启离屏绘制并为其不透明度设置关键帧，或把网格放在变形器下并为该变形器的不透明度设置关键帧。",
   "  Offscreen drawing": "  离屏绘制",
   "  Most nested offscreen layers": "  离屏图层最大嵌套数",
-  "Blend shapes": "混合形状"
+  "Blend shapes": "混合形状",
+  "Where the whole group draws among its neighbours; its contents keep their own order inside it": "整个组在相邻对象之间的绘制位置；其内容在组内保持各自的顺序"
 }

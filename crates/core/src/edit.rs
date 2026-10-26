@@ -1641,11 +1641,35 @@ pub fn set_opacity(model: &mut Model, target: Target, keyform: usize, opacity: f
 }
 
 /// Turn offscreen drawing on a part on (opaque, no masks, Normal blend) or
-/// off. True on change.
+/// off. True on change. Turning it on also sets the part's draw order to
+/// its lowest mesh's, since it now sorts as one item at its own order: the
+/// group stays where its first mesh was.
 pub fn set_offscreen(model: &mut Model, part: usize, on: bool) -> bool {
+    let p32 = part as u32;
+    let lowest = model
+        .art_meshes
+        .iter()
+        .filter(|m| {
+            let mut at = m.parent_part;
+            for _ in 0..model.parts.len() {
+                match at {
+                    Some(pi) if pi == p32 => return true,
+                    Some(pi) => at = model.parts.get(pi as usize).and_then(|p| p.parent_part),
+                    None => break,
+                }
+            }
+            false
+        })
+        .filter_map(|m| m.draw_orders.first().copied())
+        .min_by(f32::total_cmp);
     let Some(p) = model.parts.get_mut(part) else { return false };
     if p.offscreen.is_some() == on {
         return false;
+    }
+    if on && let Some(order) = lowest {
+        for d in &mut p.draw_orders {
+            *d = order.round();
+        }
     }
     p.offscreen = on.then(|| ayatsuri_format::model::Offscreen {
         masks: Vec::new(),
