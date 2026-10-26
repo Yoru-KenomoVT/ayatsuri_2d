@@ -1374,5 +1374,7 @@
   "Put selected objects into children": "Geselecteerde objecten als kinderen opnemen",
   "IDs take letters, digits and _ only.": "ID's bevatten alleen letters, cijfers en _.",
   "That Part ID is empty, taken or has characters IDs can't use.": "Dat onderdeel-ID is leeg, al in gebruik of bevat tekens die ID's niet mogen hebben.",
-  "Clear mesh: remove every point to draw your own": "Mesh wissen: alle punten weghalen om er zelf een te tekenen"
+  "Clear mesh: remove every point to draw your own": "Mesh wissen: alle punten weghalen om er zelf een te tekenen",
+  "Group {count} Objects into New Part…": "{count} objecten groeperen in nieuw onderdeel…",
+  "Group into New Part…": "Groeperen in nieuw onderdeel…"
 }

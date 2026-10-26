@@ -1374,5 +1374,7 @@
   "Put selected objects into children": "選択したオブジェクトを子にする",
   "IDs take letters, digits and _ only.": "IDには英数字と _ のみ使えます。",
   "That Part ID is empty, taken or has characters IDs can't use.": "そのパーツIDは空か、使用済みか、IDに使えない文字を含んでいます。",
-  "Clear mesh: remove every point to draw your own": "メッシュを消去：すべての点を消して自分で描き直します"
+  "Clear mesh: remove every point to draw your own": "メッシュを消去：すべての点を消して自分で描き直します",
+  "Group {count} Objects into New Part…": "{count} 個のオブジェクトを新規パーツにまとめる…",
+  "Group into New Part…": "新規パーツにまとめる…"
 }
