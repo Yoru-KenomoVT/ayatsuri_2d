@@ -28,6 +28,84 @@ pub struct RenderPrefs {
     pub audio_kbps: u32,
 }
 
+/// One Automatic mesh generator preset, Cubism's settings by name. The
+/// margins are pixels on a 1024px texture, scaled with the texture's size.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct MeshPreset {
+    pub name: String,
+    pub interval_outside: f32,
+    pub interval_inside: f32,
+    pub margin_outside: f32,
+    pub margin_inside: f32,
+    pub min_margin: f32,
+    pub min_points: u32,
+    /// Alpha value determined as transparent.
+    pub alpha: u8,
+    /// Ayatsuri's face layout instead of Cubism's.
+    pub face: bool,
+}
+
+impl Default for MeshPreset {
+    /// Cubism's Standard.
+    fn default() -> Self {
+        Self {
+            name: "Standard".into(),
+            interval_outside: 50.0,
+            interval_inside: 50.0,
+            margin_outside: 14.0,
+            margin_inside: 14.0,
+            min_margin: 5.0,
+            min_points: 10,
+            alpha: 0,
+            face: false,
+        }
+    }
+}
+
+impl MeshPreset {
+    /// The presets that come with the app: Cubism's three, then the face.
+    pub fn built_in() -> Vec<MeshPreset> {
+        let standard = MeshPreset::default();
+        vec![
+            standard.clone(),
+            MeshPreset {
+                name: "Deformation (small)".into(),
+                interval_outside: 80.0,
+                interval_inside: 80.0,
+                min_points: 15,
+                ..standard.clone()
+            },
+            MeshPreset {
+                name: "Deformation (large)".into(),
+                interval_outside: 25.0,
+                interval_inside: 25.0,
+                margin_outside: 3.0,
+                margin_inside: 2.0,
+                min_margin: 2.0,
+                min_points: 5,
+                ..standard.clone()
+            },
+            MeshPreset {
+                name: "Face standard".into(),
+                interval_outside: 36.0,
+                interval_inside: 72.0,
+                margin_outside: 6.0,
+                margin_inside: 0.0,
+                min_margin: 0.0,
+                face: true,
+                ..standard
+            },
+        ]
+    }
+
+    /// The same settings, whatever the name.
+    pub fn same_values(&self, o: &MeshPreset) -> bool {
+        MeshPreset { name: String::new(), ..self.clone() }
+            == MeshPreset { name: String::new(), ..o.clone() }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -111,6 +189,8 @@ pub struct Prefs {
     /// Inherited clipping: a mesh also clipped by what its masks are
     /// clipped by.
     pub experimental_inherit_clip: bool,
+    /// Automatic mesh generator presets the user added (Cubism's Add).
+    pub mesh_presets: Vec<MeshPreset>,
     /// The Render window as it was last used: folder, format and settings.
     pub render: RenderPrefs,
     /// Where the last moc3 or image export went.

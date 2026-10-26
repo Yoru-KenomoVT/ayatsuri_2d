@@ -1,21 +1,33 @@
-//! Outline-following automatic meshing, the way Cubism's auto mesh works:
-//! points along the artwork's contour (pushed out by a margin), sparser
-//! points inside, Delaunay triangulation, then everything outside the shape
-//! carved away so concave outlines and holes stay open.
+//! Outline-following automatic meshing, the way Cubism's Automatic Mesh
+//! generator works: points along the artwork's contour (pushed out by a
+//! margin), a second ring a margin inside the art's edge, points down the
+//! middle of strokes too thin for that ring, an even lattice deeper in,
+//! then Delaunay triangulation with the outline forced in and everything
+//! outside it carved away, so concave outlines and holes stay open.
 //!
 //! The mask is worked on in coarse cells rather than pixels, so a 4096px
 //! layer costs about as much as a 400px one.
 
-/// Knobs, all in texture pixels.
-#[derive(Clone, Copy, Debug)]
+/// Knobs, named after Cubism's dialog, all in texture pixels. Cubism gives
+/// its margins for a 1024px texture and scales them with the texture's
+/// size; the caller does that.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Params {
-    /// Distance between points along the outline.
+    /// Vertices interval (outside): between points along the outline.
     pub outline_spacing: f32,
-    /// Distance between points inside the shape.
+    /// Vertices interval (inside): between points inside the shape.
     pub inner_spacing: f32,
-    /// How far the outline sits outside the opaque pixels.
+    /// Boundary margin (outside): how far the outline sits off the art.
     pub margin: f32,
-    /// Alpha above this counts as artwork.
+    /// Boundary margin (inside): how far in from the art's edge the inner
+    /// ring runs; 0 leaves the ring out.
+    pub inner_margin: f32,
+    /// Minimum boundary margin: where the outline would cut a corner closer
+    /// to the art than this, a point goes in to hold it off.
+    pub min_margin: f32,
+    /// Minimum number of points on a boundary: the fewest a ring gets.
+    pub min_points: usize,
+    /// Alpha value determined as transparent: alpha above it is art.
     pub threshold: u8,
     /// How the inside is filled.
     pub style: Style,
@@ -24,8 +36,8 @@ pub struct Params {
 /// How a mesh is laid out inside its outline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Style {
-    /// One ring on the outline and an even lattice inside (Cubism's
-    /// Standard, Deform and Light).
+    /// Cubism's layout: the outline ring, an inner ring, a middle row in
+    /// thin strokes and an even lattice deeper in.
     #[default]
     Lattice,
     /// A face as riggers build it: the outline ring outside the art at the
@@ -37,12 +49,16 @@ pub enum Style {
 }
 
 impl Default for Params {
+    /// Cubism's Standard preset.
     fn default() -> Self {
         Self {
-            outline_spacing: 24.0,
-            inner_spacing: 48.0,
-            margin: 8.0,
-            threshold: 8,
+            outline_spacing: 50.0,
+            inner_spacing: 50.0,
+            margin: 14.0,
+            inner_margin: 14.0,
+            min_margin: 5.0,
+            min_points: 10,
+            threshold: 0,
             style: Style::Lattice,
         }
     }
@@ -72,86 +88,109 @@ impl Grid {
         self.on.get(y as usize * self.w + x as usize).copied().unwrap_or(false)
     }
 
-    /// Whether a point in pixel space lies on the (dilated) shape.
+    /// Whether a point in pixel space lies on the shape.
     fn contains(&self, px: f32, py: f32) -> bool {
         let gx = (px / self.cell + 1.0).floor() as i64;
         let gy = (py / self.cell + 1.0).floor() as i64;
         self.at(gx, gy)
     }
+
+    /// The same grid with other cells on.
+    fn with(&self, on: Vec<bool>) -> Grid {
+        Grid { w: self.w, h: self.h, cell: self.cell, on }
+    }
+
+    /// The shape grown by `px`, the outermost ring kept empty so contours
+    /// still close.
+    fn grown(&self, px: f32) -> Grid {
+        let d = chamfer(&self.on, self.w, self.h);
+        let reach = (px / self.cell).max(0.0);
+        let on = (0..self.on.len())
+            .map(|i| {
+                let (x, y) = (i % self.w, i / self.w);
+                let border = x == 0 || y == 0 || x + 1 == self.w || y + 1 == self.h;
+                !border && d.get(i).is_some_and(|&v| v <= reach)
+            })
+            .collect();
+        self.with(on)
+    }
+
+    /// Per cell, how deep inside the shape it is, in pixels (0 outside).
+    fn depth(&self) -> Vec<f32> {
+        let empty: Vec<bool> = self.on.iter().map(|o| !o).collect();
+        // a cell next to an empty one has its centre half a cell in
+        chamfer(&empty, self.w, self.h).iter().map(|d| ((d - 0.5) * self.cell).max(0.0)).collect()
+    }
+
+    /// The shape shrunk by `px`.
+    fn shrunk(&self, px: f32) -> Grid {
+        let on = self.depth().iter().map(|&d| d > px).collect();
+        self.with(on)
+    }
 }
 
-fn build_grid(alpha: &[u8], w: usize, h: usize, p: &Params) -> Grid {
-    // a face's outline has to sit a set distance off the art, so its cells
-    // are finer: a quarter spacing would round the margin to a whole cell
-    let per = if p.style == Style::Face { 6.0 } else { 4.0 };
-    let cell = (p.outline_spacing.min(p.inner_spacing) / per).clamp(1.0, 32.0);
+/// Distance in cells from each cell to the nearest `seed` cell, by two
+/// chamfer passes.
+fn chamfer(seed: &[bool], gw: usize, gh: usize) -> Vec<f32> {
+    let big = f32::MAX / 4.0;
+    let mut d: Vec<f32> = seed.iter().map(|&o| if o { 0.0 } else { big }).collect();
+    let (a, b) = (1.0f32, std::f32::consts::SQRT_2);
+    let get = |d: &Vec<f32>, x: usize, y: usize| d.get(y * gw + x).copied().unwrap_or(big);
+    for y in 0..gh {
+        for x in 0..gw {
+            let mut v = get(&d, x, y);
+            if x > 0 {
+                v = v.min(get(&d, x - 1, y) + a);
+            }
+            if y > 0 {
+                v = v.min(get(&d, x, y - 1) + a);
+                if x > 0 {
+                    v = v.min(get(&d, x - 1, y - 1) + b);
+                }
+                if x + 1 < gw {
+                    v = v.min(get(&d, x + 1, y - 1) + b);
+                }
+            }
+            if let Some(s) = d.get_mut(y * gw + x) {
+                *s = v;
+            }
+        }
+    }
+    for y in (0..gh).rev() {
+        for x in (0..gw).rev() {
+            let mut v = get(&d, x, y);
+            if x + 1 < gw {
+                v = v.min(get(&d, x + 1, y) + a);
+            }
+            if y + 1 < gh {
+                v = v.min(get(&d, x, y + 1) + a);
+                if x + 1 < gw {
+                    v = v.min(get(&d, x + 1, y + 1) + b);
+                }
+                if x > 0 {
+                    v = v.min(get(&d, x - 1, y + 1) + b);
+                }
+            }
+            if let Some(s) = d.get_mut(y * gw + x) {
+                *s = v;
+            }
+        }
+    }
+    d
+}
+
+/// The art's cells: on where any pixel in the cell is art.
+fn art_grid(alpha: &[u8], w: usize, h: usize, cell: f32, threshold: u8) -> Grid {
     let gw = (w as f32 / cell).ceil() as usize + 2;
     let gh = (h as f32 / cell).ceil() as usize + 2;
     let mut on = vec![false; gw * gh];
     for y in 0..h {
         let gy = (y as f32 / cell) as usize + 1;
         for x in 0..w {
-            if alpha.get(y * w + x).copied().unwrap_or(0) > p.threshold {
+            if alpha.get(y * w + x).copied().unwrap_or(0) > threshold {
                 let gx = (x as f32 / cell) as usize + 1;
                 if let Some(c) = on.get_mut(gy * gw + gx) {
                     *c = true;
-                }
-            }
-        }
-    }
-    // grow by the margin with a two-pass chamfer distance, in cell units
-    let reach = (p.margin / cell).max(0.0);
-    if reach > 0.0 {
-        let big = f32::MAX / 4.0;
-        let mut d: Vec<f32> = on.iter().map(|&o| if o { 0.0 } else { big }).collect();
-        let (a, b) = (1.0f32, std::f32::consts::SQRT_2);
-        let get = |d: &Vec<f32>, x: usize, y: usize| d.get(y * gw + x).copied().unwrap_or(big);
-        for y in 0..gh {
-            for x in 0..gw {
-                let mut v = get(&d, x, y);
-                if x > 0 {
-                    v = v.min(get(&d, x - 1, y) + a);
-                }
-                if y > 0 {
-                    v = v.min(get(&d, x, y - 1) + a);
-                    if x > 0 {
-                        v = v.min(get(&d, x - 1, y - 1) + b);
-                    }
-                    if x + 1 < gw {
-                        v = v.min(get(&d, x + 1, y - 1) + b);
-                    }
-                }
-                if let Some(s) = d.get_mut(y * gw + x) {
-                    *s = v;
-                }
-            }
-        }
-        for y in (0..gh).rev() {
-            for x in (0..gw).rev() {
-                let mut v = get(&d, x, y);
-                if x + 1 < gw {
-                    v = v.min(get(&d, x + 1, y) + a);
-                }
-                if y + 1 < gh {
-                    v = v.min(get(&d, x, y + 1) + a);
-                    if x + 1 < gw {
-                        v = v.min(get(&d, x + 1, y + 1) + b);
-                    }
-                    if x > 0 {
-                        v = v.min(get(&d, x - 1, y + 1) + b);
-                    }
-                }
-                if let Some(s) = d.get_mut(y * gw + x) {
-                    *s = v;
-                }
-            }
-        }
-        // keep the outermost ring empty so contours still close
-        for y in 0..gh {
-            for x in 0..gw {
-                let border = x == 0 || y == 0 || x + 1 == gw || y + 1 == gh;
-                if let Some(c) = on.get_mut(y * gw + x) {
-                    *c = !border && d.get(y * gw + x).copied().unwrap_or(big) <= reach;
                 }
             }
         }
@@ -258,33 +297,87 @@ fn smooth(loop_: &[(f32, f32)], passes: usize) -> Vec<(f32, f32)> {
     cur
 }
 
-/// Evenly spaced points along a closed loop.
-fn resample(loop_: &[(f32, f32)], spacing: f32) -> Vec<(f32, f32)> {
-    let n = loop_.len();
-    let seg = |i: usize| {
-        let a = loop_.get(i).copied().unwrap_or((0.0, 0.0));
-        let b = loop_.get((i + 1) % n).copied().unwrap_or((0.0, 0.0));
-        (a, b, ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt())
-    };
-    let total: f32 = (0..n).map(|i| seg(i).2).sum();
-    if total < spacing * 3.0 {
+/// A closed loop with each point's distance along it, for finding the
+/// point at any distance.
+struct Walk {
+    pts: Vec<(f32, f32)>,
+    at: Vec<f32>,
+    total: f32,
+}
+
+impl Walk {
+    fn new(loop_: &[(f32, f32)]) -> Walk {
+        let n = loop_.len();
+        let mut at = Vec::with_capacity(n);
+        let mut total = 0.0;
+        for i in 0..n {
+            at.push(total);
+            let a = loop_.get(i).copied().unwrap_or((0.0, 0.0));
+            let b = loop_.get((i + 1) % n).copied().unwrap_or((0.0, 0.0));
+            total += ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        }
+        Walk { pts: loop_.to_vec(), at, total }
+    }
+
+    fn point(&self, s: f32) -> (f32, f32) {
+        let n = self.pts.len();
+        let s = s.rem_euclid(self.total.max(1e-6));
+        let i = self.at.partition_point(|&a| a <= s).saturating_sub(1);
+        let a = self.pts.get(i).copied().unwrap_or((0.0, 0.0));
+        let b = self.pts.get((i + 1) % n.max(1)).copied().unwrap_or(a);
+        let start = self.at.get(i).copied().unwrap_or(0.0);
+        let end = self.at.get(i + 1).copied().unwrap_or(self.total);
+        let k = if end > start { (s - start) / (end - start) } else { 0.0 };
+        (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k)
+    }
+}
+
+/// Evenly spaced points along a closed loop, at least `min` of them, as
+/// distances along it. Loops shorter than `tiny` (specks, pinholes) get
+/// none.
+fn resample(walk: &Walk, spacing: f32, min: usize, tiny: f32) -> Vec<f32> {
+    if walk.pts.len() < 3 || walk.total < tiny {
         return Vec::new();
     }
-    let count = (total / spacing).round().max(3.0) as usize;
-    let step = total / count as f32;
-    let mut out = Vec::with_capacity(count);
-    let mut target = 0.0f32;
-    let mut walked = 0.0f32;
-    for i in 0..n {
-        let (a, b, len) = seg(i);
-        while target <= walked + len && out.len() < count {
-            let k = if len > 0.0 { (target - walked) / len } else { 0.0 };
-            out.push((a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k));
-            target += step;
+    let count = ((walk.total / spacing).round() as usize).max(min).max(3);
+    let step = walk.total / count as f32;
+    (0..count).map(|k| k as f32 * step).collect()
+}
+
+/// Cubism's Minimum boundary margin: where the straight edge between two
+/// outline points runs onto `near` (the art grown by that margin), the
+/// loop's point halfway between them goes in, a few rounds deep.
+fn hold_off(walk: &Walk, mut at: Vec<f32>, near: &Grid, finest: f32) -> Vec<f32> {
+    for _ in 0..4 {
+        let n = at.len();
+        let mut out = Vec::with_capacity(n * 2);
+        let mut added = false;
+        for i in 0..n {
+            let s0 = at.get(i).copied().unwrap_or(0.0);
+            out.push(s0);
+            let mut s1 = at.get((i + 1) % n).copied().unwrap_or(0.0);
+            if s1 <= s0 {
+                s1 += walk.total;
+            }
+            if s1 - s0 < finest * 2.0 {
+                continue;
+            }
+            let (a, b) = (walk.point(s0), walk.point(s1));
+            let cuts = (1..8).any(|k| {
+                let f = k as f32 / 8.0;
+                near.contains(a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+            });
+            if cuts {
+                out.push((s0 + s1) / 2.0);
+                added = true;
+            }
         }
-        walked += len;
+        at = out;
+        if !added {
+            break;
+        }
     }
-    out
+    at
 }
 
 /// Bowyer-Watson Delaunay triangulation. Quadratic, which is fine for the
@@ -526,23 +619,67 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
         inner_spacing: p.inner_spacing.min((short / 3.0).max(outline)).max(outline),
         ..*p
     };
-    let grid = build_grid(alpha, w, h, &p);
+    // cells a quarter of the spacing (a sixth for a face, whose outline has
+    // to sit a set distance off the art), and fine enough for the margins
+    let per = if p.style == Style::Face { 6.0 } else { 4.0 };
+    let mut cell = p.outline_spacing.min(p.inner_spacing) / per;
+    for m in [p.margin, p.inner_margin, p.min_margin] {
+        if m > 0.0 {
+            cell = cell.min(m / 1.5);
+        }
+    }
+    let art = art_grid(alpha, w, h, cell.clamp(1.0, 32.0), p.threshold);
+    let outer = art.grown(p.margin);
+    // the minimum margin can't ask for more room than the margin gives, and
+    // the grid's cells blur both by a cell or so, which must not count
+    let floor = p.min_margin.min(p.margin * 0.9) - art.cell * 1.5;
+    let near = (p.min_margin > 0.0).then(|| art.grown(floor.max(0.0)));
+    let tiny = art.cell * 8.0;
 
     let mut points: Vec<(f32, f32)> = Vec::new();
-    let rings: Vec<Vec<(f32, f32)>> =
-        contours(&grid).iter().map(|l| resample(&smooth(l, 3), p.outline_spacing)).collect();
-    for r in &rings {
-        points.extend(r.iter().copied());
+    let mut rings: Vec<Vec<(f32, f32)>> = Vec::new();
+    for l in contours(&outer) {
+        let walk = Walk::new(&smooth(&l, 3));
+        let mut at = resample(&walk, p.outline_spacing, p.min_points, tiny);
+        if let Some(near) = &near {
+            at = hold_off(&walk, at, near, art.cell);
+        }
+        let ring: Vec<(f32, f32)> = at.iter().map(|&s| walk.point(s)).collect();
+        points.extend(ring.iter().copied());
+        rings.push(ring);
     }
     if points.len() < 3 {
         return Mesh::default();
     }
     if p.style == Style::Face {
-        face_inside(&mut points, &rings, &grid, alpha, w, &p);
-        lattice_inside(&mut points, &grid, w, h, &p, 0.7);
+        face_inside(&mut points, &rings, &outer, alpha, w, &p);
+        lattice_inside(&mut points, &outer, w, h, p.inner_spacing, p.outline_spacing * 0.7);
     } else {
-        spine_inside(&mut points, &grid, &p);
-        lattice_inside(&mut points, &grid, w, h, &p, 0.6);
+        let clear = p.outline_spacing.min(p.inner_spacing) * 0.5;
+        let inner = (p.inner_margin > 0.0).then(|| art.shrunk(p.inner_margin));
+        if let Some(inner) = &inner {
+            for l in contours(inner) {
+                let walk = Walk::new(&smooth(&l, 3));
+                for s in resample(&walk, p.inner_spacing, 3, tiny) {
+                    let q = walk.point(s);
+                    if !points
+                        .iter()
+                        .any(|o| (o.0 - q.0).powi(2) + (o.1 - q.1).powi(2) < clear * clear)
+                    {
+                        points.push(q);
+                    }
+                }
+            }
+        }
+        spine_inside(&mut points, &art, &p, clear);
+        lattice_inside(
+            &mut points,
+            inner.as_ref().unwrap_or(&outer),
+            w,
+            h,
+            p.inner_spacing,
+            p.inner_spacing * 0.6,
+        );
     }
     if points.len() >= u16::MAX as usize {
         points.truncate(u16::MAX as usize - 1);
@@ -550,75 +687,47 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
     triangulate(points, &rings)
 }
 
-/// A row of points down the middle of the thin parts (a lash, a strand),
-/// as Cubism lays them: outline, spine, outline, so the strip can bend
-/// along its length. The middle is where the distance to the edge peaks
-/// across the stroke; parts wider than the inner spacing are left to the
-/// lattice.
-fn spine_inside(points: &mut Vec<(f32, f32)>, grid: &Grid, p: &Params) {
-    let (gw, gh) = (grid.w, grid.h);
-    // distance in cells to the nearest empty cell, two chamfer passes
-    let big = f32::MAX / 4.0;
-    let mut d: Vec<f32> = grid.on.iter().map(|&o| if o { big } else { 0.0 }).collect();
-    let get = |d: &[f32], x: i64, y: i64| {
+/// A row of points down the middle of the strokes too thin for the inner
+/// ring (a lash, a strand), as Cubism lays them: outline, middle, outline,
+/// so the strip can bend along its length. The middle is where the depth
+/// inside the art peaks across the stroke.
+fn spine_inside(points: &mut Vec<(f32, f32)>, art: &Grid, p: &Params, clear: f32) {
+    let (gw, gh) = (art.w, art.h);
+    let depth = art.depth();
+    let get = |x: i64, y: i64| {
         if x < 0 || y < 0 || x as usize >= gw || y as usize >= gh {
             0.0
         } else {
-            d.get(y as usize * gw + x as usize).copied().unwrap_or(0.0)
+            depth.get(y as usize * gw + x as usize).copied().unwrap_or(0.0)
         }
     };
-    let diag = std::f32::consts::SQRT_2;
-    let back = [(-1i64, 0i64, 1.0f32), (0, -1, 1.0), (-1, -1, diag), (1, -1, diag)];
-    for pass in 0..2 {
-        let order: Vec<(i64, i64)> = if pass == 0 {
-            (0..gh as i64).flat_map(|y| (0..gw as i64).map(move |x| (x, y))).collect()
-        } else {
-            (0..gh as i64).rev().flat_map(|y| (0..gw as i64).rev().map(move |x| (x, y))).collect()
-        };
-        for (x, y) in order {
-            let i = y as usize * gw + x as usize;
-            if d.get(i).copied().unwrap_or(0.0) == 0.0 {
-                continue;
-            }
-            let mut v = d.get(i).copied().unwrap_or(big);
-            for &(dx, dy, c) in &back {
-                let (dx, dy) = if pass == 0 { (dx, dy) } else { (-dx, -dy) };
-                v = v.min(get(&d, x + dx, y + dy) + c);
-            }
-            if let Some(s) = d.get_mut(i) {
-                *s = v;
-            }
-        }
-    }
-    // ridge cells: not lower than both neighbours across some direction
-    let thin = p.inner_spacing * 0.5 / grid.cell;
+    // thin: where the inner ring can't reach (no deeper than its margin)
+    let thin = if p.inner_margin > 0.0 { p.inner_margin } else { p.inner_spacing * 0.5 };
     let mut ridge: Vec<(f32, f32, f32)> = Vec::new();
     for y in 0..gh as i64 {
         for x in 0..gw as i64 {
-            let v = get(&d, x, y);
-            if v < 1.5 || v > thin {
+            let v = get(x, y);
+            if v < art.cell || v > thin {
                 continue;
             }
+            // not lower than both neighbours across some direction
             let peak = [(1, 0), (0, 1), (1, 1), (1, -1)]
                 .iter()
-                .any(|&(dx, dy)| v >= get(&d, x + dx, y + dy) && v >= get(&d, x - dx, y - dy));
+                .any(|&(dx, dy)| v >= get(x + dx, y + dy) && v >= get(x - dx, y - dy));
             if peak {
                 // cell gx covers pixels (gx - 1) * cell up to gx * cell
-                let px = (x as f32 - 0.5) * grid.cell;
-                let py = (y as f32 - 0.5) * grid.cell;
-                ridge.push((px, py, v));
+                ridge.push(((x as f32 - 0.5) * art.cell, (y as f32 - 0.5) * art.cell, v));
             }
         }
     }
     // thickest first, so the row settles on the stroke's true middle
     ridge.sort_by(|a, b| b.2.total_cmp(&a.2));
-    let clear = p.outline_spacing * 0.6;
-    let gap = p.outline_spacing;
-    let outline = points.clone();
+    let gap = p.inner_spacing;
+    let placed = points.clone();
     let mut row: Vec<(f32, f32)> = Vec::new();
     for (x, y, _) in ridge {
         let near = |q: &(f32, f32), r: f32| (q.0 - x).powi(2) + (q.1 - y).powi(2) < r * r;
-        if outline.iter().any(|q| near(q, clear)) || row.iter().any(|q| near(q, gap)) {
+        if placed.iter().any(|q| near(q, clear)) || row.iter().any(|q| near(q, gap)) {
             continue;
         }
         row.push((x, y));
@@ -626,30 +735,29 @@ fn spine_inside(points: &mut Vec<(f32, f32)>, grid: &Grid, p: &Params) {
     points.extend(row);
 }
 
-/// Cubism's inside: points on a staggered grid, kept `clear` outline
-/// spacings away from the points already placed.
+/// Cubism's inside: points on a staggered grid `spacing` apart over the
+/// cells of `grid`, kept `clear` pixels from the points already placed.
 fn lattice_inside(
     points: &mut Vec<(f32, f32)>,
     grid: &Grid,
     w: usize,
     h: usize,
-    p: &Params,
+    spacing: f32,
     clear: f32,
 ) {
-    let clear = p.outline_spacing * clear;
-    let rows = (h as f32 / (p.inner_spacing * 0.866)).ceil() as usize + 1;
-    let cols = (w as f32 / p.inner_spacing).ceil() as usize + 1;
-    let outline: Vec<(f32, f32)> = points.clone();
+    let rows = (h as f32 / (spacing * 0.866)).ceil() as usize + 1;
+    let cols = (w as f32 / spacing).ceil() as usize + 1;
+    let placed: Vec<(f32, f32)> = points.clone();
     for r in 0..rows {
-        let y = r as f32 * p.inner_spacing * 0.866;
-        let shift = if r % 2 == 1 { p.inner_spacing * 0.5 } else { 0.0 };
+        let y = r as f32 * spacing * 0.866;
+        let shift = if r % 2 == 1 { spacing * 0.5 } else { 0.0 };
         for c in 0..cols {
-            let x = c as f32 * p.inner_spacing + shift;
+            let x = c as f32 * spacing + shift;
             if !grid.contains(x, y) {
                 continue;
             }
             let near_edge =
-                outline.iter().any(|&(ox, oy)| (ox - x).powi(2) + (oy - y).powi(2) < clear * clear);
+                placed.iter().any(|&(ox, oy)| (ox - x).powi(2) + (oy - y).powi(2) < clear * clear);
             if !near_edge {
                 points.push((x, y));
             }

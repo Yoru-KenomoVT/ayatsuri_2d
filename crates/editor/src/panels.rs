@@ -97,12 +97,10 @@ impl Tool {
 /// Per-tool options shown in the Tool Details palette.
 struct ToolOptions {
     brush_size: f32,
-    auto_preset: usize,
-    auto_spacing: f32,
-    auto_inner: f32,
-    auto_margin: f32,
-    /// The layout inside: Cubism's lattice, or a face's rings and hubs.
-    auto_style: ayatsuri_core::automesh::Style,
+    /// The Automatic mesh generator's settings as they stand.
+    auto: crate::prefs::MeshPreset,
+    /// The name being typed for a new preset (Add…), while it is open.
+    auto_new_name: Option<String>,
     warp_cols: u32,
     warp_rows: u32,
 }
@@ -111,11 +109,8 @@ impl Default for ToolOptions {
     fn default() -> Self {
         Self {
             brush_size: 40.0,
-            auto_preset: 0,
-            auto_spacing: 24.0,
-            auto_inner: 48.0,
-            auto_margin: 8.0,
-            auto_style: ayatsuri_core::automesh::Style::Lattice,
+            auto: crate::prefs::MeshPreset::default(),
+            auto_new_name: None,
             warp_cols: 5,
             warp_rows: 5,
         }
@@ -5404,29 +5399,9 @@ impl EditorUi {
         }
     }
 
-    /// Auto mesh presets: outline spacing, inner spacing, margin. The first
-    /// three are Cubism's. Face standard follows a face mesh a rigger built
-    /// by hand: the outline about a quarter spacing outside the art, a
-    /// second ring just inside the drawn edge, zigzagging with the outline,
-    /// so the edge stays in a thin strip when a warp turns the head, and an
-    /// even inside at twice the outline spacing.
-    const AUTO_PRESETS: [(&'static str, f32, f32, f32, ayatsuri_core::automesh::Style); 4] = [
-        ("Standard", 24.0, 48.0, 8.0, ayatsuri_core::automesh::Style::Lattice),
-        ("Deform", 14.0, 28.0, 6.0, ayatsuri_core::automesh::Style::Lattice),
-        ("Light", 40.0, 80.0, 10.0, ayatsuri_core::automesh::Style::Lattice),
-        ("Face standard", 36.0, 72.0, 6.0, ayatsuri_core::automesh::Style::Face),
-    ];
-
     /// One mesh's new triangulation from its texture's alpha, or why not.
     fn auto_mesh_data(&self, mi: usize) -> Result<(Vec<f32>, Vec<u16>), String> {
-        let o = &self.tool_opts;
-        let params = ayatsuri_core::automesh::Params {
-            outline_spacing: o.auto_spacing.clamp(4.0, 256.0),
-            inner_spacing: o.auto_inner.clamp(4.0, 512.0),
-            margin: o.auto_margin.clamp(0.0, 128.0),
-            threshold: 8,
-            style: o.auto_style,
-        };
+        let o = &self.tool_opts.auto;
         let s = self.session.as_ref().ok_or("no model open")?;
         let am = s.puppet.model().art_meshes.get(mi).ok_or("mesh is gone")?;
         let png = s.texture_pngs.get(am.texture as usize).ok_or("mesh has no texture")?;
@@ -5444,6 +5419,22 @@ impl EditorUi {
         if u0 > u1 || v0 > v1 {
             return Err("mesh has no extent".into());
         }
+        // Cubism gives margins for a 1024px texture and scales them with it
+        let k = img.width().max(img.height()) as f32 / 1024.0;
+        let params = ayatsuri_core::automesh::Params {
+            outline_spacing: o.interval_outside.clamp(4.0, 512.0),
+            inner_spacing: o.interval_inside.clamp(4.0, 512.0),
+            margin: (o.margin_outside * k).clamp(0.0, 256.0),
+            inner_margin: (o.margin_inside * k).clamp(0.0, 256.0),
+            min_margin: (o.min_margin * k).clamp(0.0, 256.0),
+            min_points: o.min_points.clamp(3, 64) as usize,
+            threshold: o.alpha,
+            style: if o.face {
+                ayatsuri_core::automesh::Style::Face
+            } else {
+                ayatsuri_core::automesh::Style::Lattice
+            },
+        };
         let started = std::time::Instant::now();
         let alpha_at = |x: u32, y: u32| img.get_pixel_checked(x, y).map_or(0, |p| p.0[3]);
         let out = ayatsuri_core::automesh::for_patch(
