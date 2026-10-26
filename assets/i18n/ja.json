@@ -1376,5 +1376,10 @@
   "That Part ID is empty, taken or has characters IDs can't use.": "そのパーツIDは空か、使用済みか、IDに使えない文字を含んでいます。",
   "Clear mesh: remove every point to draw your own": "メッシュを消去：すべての点を消して自分で描き直します",
   "Group {count} Objects into New Part…": "{count} 個のオブジェクトを新規パーツにまとめる…",
-  "Group into New Part…": "新規パーツにまとめる…"
+  "Group into New Part…": "新規パーツにまとめる…",
+  "Show the selected objects in front and keep the rest from being picked (S)": "選択したオブジェクトを手前に表示し、それ以外を選べないようにします（S）",
+  "Select what to solo first.": "先にソロ表示するものを選択してください。",
+  "Leave Solo (S)": "ソロ表示を終了（S）",
+  "Inactive color": "非アクティブ色",
+  "Solo: show only the selected objects": "ソロ表示：選択したオブジェクトだけを表示"
 }

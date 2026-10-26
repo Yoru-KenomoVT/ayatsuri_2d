@@ -53,7 +53,7 @@ impl Frames {
         let h = ((ch * (w as f32 / cw)) as u32).clamp(1, self.max_side);
         // canvas pixels to clip space: the whole canvas fills the frame
         let to_ndc = [2.0 / cw, -2.0 / ch, -1.0, 1.0];
-        let mut packet = crate::gpu_view::packet(puppet, w, h, to_ndc);
+        let mut packet = crate::gpu_view::packet(puppet, w, h, to_ndc, None);
         packet.textures = self.textures.take();
         let mut enc = self.device.create_command_encoder(&Default::default());
         self.renderer.prepare(&self.device, &self.queue, &mut enc, &packet);

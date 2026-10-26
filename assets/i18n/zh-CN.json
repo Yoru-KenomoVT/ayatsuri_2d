@@ -1376,5 +1376,10 @@
   "That Part ID is empty, taken or has characters IDs can't use.": "该部件 ID 为空、已被使用，或包含 ID 不能使用的字符。",
   "Clear mesh: remove every point to draw your own": "清除网格：删除所有点，自己重新绘制",
   "Group {count} Objects into New Part…": "将 {count} 个对象组合到新部件…",
-  "Group into New Part…": "组合到新部件…"
+  "Group into New Part…": "组合到新部件…",
+  "Show the selected objects in front and keep the rest from being picked (S)": "将选中的对象显示在前面，其余对象不可选取（S）",
+  "Select what to solo first.": "请先选择要单独显示的对象。",
+  "Leave Solo (S)": "退出单独显示（S）",
+  "Inactive color": "非活动颜色",
+  "Solo: show only the selected objects": "单独显示：只显示选中的对象"
 }

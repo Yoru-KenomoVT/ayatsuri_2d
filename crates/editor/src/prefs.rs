@@ -189,6 +189,8 @@ pub struct Prefs {
     /// Inherited clipping: a mesh also clipped by what its masks are
     /// clipped by.
     pub experimental_inherit_clip: bool,
+    /// Solo's inactive color, rgba; None for the default.
+    pub solo_tint: Option<[u8; 4]>,
     /// Automatic mesh generator presets the user added (Cubism's Add).
     pub mesh_presets: Vec<MeshPreset>,
     /// The Render window as it was last used: folder, format and settings.

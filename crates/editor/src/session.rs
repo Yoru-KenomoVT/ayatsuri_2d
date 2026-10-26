@@ -192,6 +192,10 @@ pub struct Session {
     /// Per-part and per-mesh show/hide from the Parts palette eye column.
     pub part_shown: Vec<bool>,
     pub mesh_shown: Vec<bool>,
+    /// Cubism's Solo: the meshes (by id, so moves and undo can't confuse
+    /// them) drawn in front at full strength and alone pickable; the rest
+    /// sit behind the inactive color. None when Solo is off.
+    pub solo: Option<std::collections::HashSet<String>>,
     /// Name, visibility and reset shape of meshes an edit removed, by id,
     /// so undoing the delete gets them back.
     departed: HashMap<String, MeshExtras>,
@@ -1351,6 +1355,7 @@ impl Session {
             current_anim: None,
             part_shown: vec![true; n_parts],
             mesh_shown: vec![true; n_meshes],
+            solo: None,
             departed: HashMap::new(),
             deformer_shown: vec![true; n_defs],
             param_colors: vec![None; n_params],

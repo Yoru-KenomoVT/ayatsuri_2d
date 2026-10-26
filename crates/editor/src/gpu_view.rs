@@ -62,13 +62,12 @@ fn push_mesh(
     positions: &[f32],
     uvs: &[f32],
     tris: &[u16],
-    opacity: f32,
+    color: [f32; 4],
 ) -> std::ops::Range<u32> {
     let base = verts.len() as u32;
     let start = indices.len() as u32;
     let (pos_pairs, _) = positions.as_chunks::<2>();
     let (uv_pairs, _) = uvs.as_chunks::<2>();
-    let color = [1.0, 1.0, 1.0, opacity];
     for (xy, uv) in pos_pairs.iter().zip(uv_pairs) {
         verts.push(Vertex {
             pos: [c.origin_x + xy[0] * c.pixels_per_unit, c.origin_y + xy[1] * c.pixels_per_unit],
@@ -94,6 +93,7 @@ pub fn callback(
     screen_origin: egui::Pos2,
     scale: f32,
     pixels_per_point: f32,
+    solo: Option<&Solo>,
 ) -> egui::PaintCallback {
     let w = ((rect.width() * pixels_per_point) as u32).max(1);
     let h = ((rect.height() * pixels_per_point) as u32).max(1);
@@ -101,7 +101,7 @@ pub fn callback(
     let sy = -(scale * pixels_per_point / h as f32 * 2.0);
     let ox = (screen_origin.x - rect.min.x) * pixels_per_point / w as f32 * 2.0 - 1.0;
     let oy = 1.0 - (screen_origin.y - rect.min.y) * pixels_per_point / h as f32 * 2.0;
-    let mut packet = packet(puppet, w, h, [sx, sy, ox, oy]);
+    let mut packet = packet(puppet, w, h, [sx, sy, ox, oy], solo);
     packet.textures = textures;
     packet.uploaded = Some(uploaded);
     packet.pages = pages;
@@ -158,7 +158,7 @@ impl Frame<'_> {
                     g.positions,
                     g.uvs,
                     g.indices,
-                    1.0,
+                    [1.0; 4],
                 );
                 shapes.push((range, g.texture));
             }
@@ -197,11 +197,19 @@ impl Frame<'_> {
     }
 }
 
+/// Solo as the frame draws it: these meshes go last, in front and as they
+/// are; every other one is multiplied by `tint` (rgb, and alpha for how
+/// much of it shows), Cubism's inactive color.
+pub struct Solo {
+    pub meshes: std::collections::HashSet<usize>,
+    pub tint: [f32; 4],
+}
+
 /// The frame as the renderer takes it: every drawable's triangles in
 /// order, mask sets where they change, offscreen part layers opened and
 /// landed around their meshes, and how canvas pixels map to the target.
 /// Textures and pages are left for the caller to attach.
-pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
+pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4], solo: Option<&Solo>) -> Packet {
     let mut f = Frame {
         puppet,
         c: puppet.model().canvas,
@@ -213,9 +221,16 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
     };
     // the offscreen parts open now, outermost first
     let mut open: Vec<u32> = Vec::new();
+    let tint = solo.map_or([1.0; 4], |s| s.tint);
+    // soloed meshes wait to be drawn last, in front of everything
+    let mut front = Vec::new();
 
     for d in puppet.drawables() {
         if d.opacity <= 0.0 || d.indices.is_empty() {
+            continue;
+        }
+        if solo.is_some_and(|s| s.meshes.contains(&d.mesh)) {
+            front.push(d);
             continue;
         }
         // land the layers this mesh is not in, open the ones it is
@@ -238,8 +253,9 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
                 MaskMode::Normal
             };
         }
+        let color = [tint[0], tint[1], tint[2], d.opacity * tint[3]];
         let range =
-            push_mesh(&mut f.verts, &mut f.indices, &f.c, d.positions, d.uvs, d.indices, d.opacity);
+            push_mesh(&mut f.verts, &mut f.indices, &f.c, d.positions, d.uvs, d.indices, color);
         f.cmds.push(Cmd::Draw {
             indices: range,
             texture: d.texture,
@@ -249,6 +265,26 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
     }
     while let Some(part) = open.pop() {
         f.land(part);
+    }
+    for d in front {
+        let mut mask = MaskMode::None;
+        if !d.masks.is_empty() {
+            f.mask_set(d.masks, d.clip_and);
+            mask = if d.flags & flags::INVERTED_MASK != 0 {
+                MaskMode::Inverted
+            } else {
+                MaskMode::Normal
+            };
+        }
+        let color = [1.0, 1.0, 1.0, d.opacity];
+        let range =
+            push_mesh(&mut f.verts, &mut f.indices, &f.c, d.positions, d.uvs, d.indices, color);
+        f.cmds.push(Cmd::Draw {
+            indices: range,
+            texture: d.texture,
+            blend: blend_mode(d.blend),
+            mask,
+        });
     }
 
     Packet {

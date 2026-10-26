@@ -1376,5 +1376,10 @@
   "That Part ID is empty, taken or has characters IDs can't use.": "그 파츠 ID는 비어 있거나, 이미 쓰였거나, ID에 쓸 수 없는 문자가 있습니다.",
   "Clear mesh: remove every point to draw your own": "메시 지우기: 모든 점을 지우고 직접 다시 그립니다",
   "Group {count} Objects into New Part…": "오브젝트 {count}개를 새 파츠로 묶기…",
-  "Group into New Part…": "새 파츠로 묶기…"
+  "Group into New Part…": "새 파츠로 묶기…",
+  "Show the selected objects in front and keep the rest from being picked (S)": "선택한 오브젝트를 앞에 표시하고 나머지는 선택되지 않게 합니다(S)",
+  "Select what to solo first.": "먼저 솔로로 볼 대상을 선택하세요.",
+  "Leave Solo (S)": "솔로 종료(S)",
+  "Inactive color": "비활성 색",
+  "Solo: show only the selected objects": "솔로: 선택한 오브젝트만 표시"
 }
