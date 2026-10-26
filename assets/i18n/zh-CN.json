@@ -1321,5 +1321,8 @@
   "Batch Reflect…": "批量反转…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "所勾选参数的关键值在其范围内反转，作用于在这些参数上有关键点的所有对象。",
   "All": "全部",
-  "No art mesh here": "此处没有图形网格"
+  "No art mesh here": "此处没有图形网格",
+  "Blend Shape": "混合形状",
+  "Its keyforms add on top of the others instead of multiplying them": "其关键形态叠加在其他关键形态之上，而不是相乘",
+  "Blend Shape is editable": "可编辑混合形状"
 }

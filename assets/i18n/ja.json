@@ -1321,5 +1321,8 @@
   "Batch Reflect…": "一括反転…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "チェックしたパラメータのキー値を範囲内で反転します。そのパラメータにキーがあるすべてのオブジェクトが対象です。",
   "All": "すべて",
-  "No art mesh here": "ここにアートメッシュはありません"
+  "No art mesh here": "ここにアートメッシュはありません",
+  "Blend Shape": "ブレンドシェイプ",
+  "Its keyforms add on top of the others instead of multiplying them": "キーフォームを掛け合わせず、他のキーフォームの上に加算します",
+  "Blend Shape is editable": "ブレンドシェイプ編集中"
 }

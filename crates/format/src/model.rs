@@ -80,6 +80,10 @@ pub struct Parameter {
     /// Displayed decimal places; also sets the key-snap epsilon the runtime
     /// uses (10^-decimals, the behaviour PurismCore verified).
     pub decimals: i32,
+    /// Drives blend shapes (see [`BlendShape`]) instead of keyforms: its
+    /// base key at 0.0 holds no keyform and the others add on top.
+    #[serde(default)]
+    pub blend_shape: bool,
 }
 
 /// One interpolation axis of a binding: a parameter and the key values at
@@ -400,6 +404,24 @@ pub struct ArtMesh {
     pub opacities: Vec<f32>,
     pub draw_orders: Vec<f32>,
     /// Keyform-major vertex positions: `keyforms * vertex_count * 2`.
+    #[serde(with = "f32_bin")]
+    pub positions: Vec<f32>,
+    /// Shapes added on top of the blended keyform, in no particular order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blend_shapes: Vec<BlendShape>,
+}
+
+/// Keyforms added on top of an object's normal blend instead of multiplied
+/// into it (Cubism 5.0). What lands on the object is `weight * (key form -
+/// base form)`, the base form being its blend at every parameter's default.
+/// The parameter's base key, 0.0, is implied and holds no keyform.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendShape {
+    /// Index into `Model::parameters`; that parameter has `blend_shape` set.
+    pub parameter: u32,
+    /// The keys that hold a keyform: strictly increasing, never 0.0.
+    pub keys: Vec<f32>,
+    /// One `vertex_count * 2` block per key, in key order.
     #[serde(with = "f32_bin")]
     pub positions: Vec<f32>,
 }

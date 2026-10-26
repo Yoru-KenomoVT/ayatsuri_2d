@@ -4,7 +4,7 @@
 // form. Every function leaves the model untouched when it returns false or
 // None.
 
-use ayatsuri_format::model::{Binding, DeformerKind, Model};
+use ayatsuri_format::model::{ArtMesh, Binding, BlendShape, DeformerKind, Model};
 
 use crate::edit::{KeySrc, Target, axis_lens, product, remap, with_object};
 
@@ -112,13 +112,95 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
     }
 }
 
-/// The keys `target` has on `param`, if it is bound on it.
+/// The keys `target` has on `param`, if it is bound on it. A blend shape's
+/// keys come with its base key, 0.0, in its place among them.
 pub fn keys_on(model: &Model, target: Target, param: usize) -> Option<Vec<f32>> {
+    if let Some(shape) = blend_shape_on(model, target, param) {
+        let mut keys = shape.keys.clone();
+        keys.push(0.0);
+        keys.sort_by(f32::total_cmp);
+        return Some(keys);
+    }
     binding_of(model, target)?
         .axes
         .iter()
         .find(|a| a.parameter as usize == param)
         .map(|a| a.keys.clone())
+}
+
+/// `target`'s blend shape on `param`, when it has one (art meshes only).
+pub fn blend_shape_on(model: &Model, target: Target, param: usize) -> Option<&BlendShape> {
+    let Target::ArtMesh(mi) = target else { return None };
+    model.art_meshes.get(mi)?.blend_shapes.iter().find(|s| s.parameter as usize == param)
+}
+
+/// How many normal keyforms a mesh has. Its blend shapes' keyforms are
+/// numbered after them, shape by shape in list order, key by key.
+fn normal_keyforms(m: &ArtMesh) -> usize {
+    m.positions.len().checked_div((m.vertex_count as usize).saturating_mul(2)).unwrap_or(0)
+}
+
+/// A mesh's keyform `k` as points, normal or blend shape (see
+/// `normal_keyforms` for the numbering).
+pub fn mesh_form_mut(m: &mut ArtMesh, k: usize) -> Option<&mut [f32]> {
+    let stride = (m.vertex_count as usize).checked_mul(2)?;
+    let normal = normal_keyforms(m);
+    let (pool, at) = if k < normal {
+        (&mut m.positions, k)
+    } else {
+        let mut rest = k - normal;
+        let mut hit = None;
+        for s in &mut m.blend_shapes {
+            if rest < s.keys.len() {
+                hit = Some(s);
+                break;
+            }
+            rest -= s.keys.len();
+        }
+        (&mut hit?.positions, rest)
+    };
+    let start = at.checked_mul(stride)?;
+    pool.get_mut(start..start.checked_add(stride)?)
+}
+
+/// The blend shape parameter whose keyform edits on `target` land in now
+/// (see `keyform_at`), for the editor's "Blend Shape is editable" label.
+pub fn editing_blend_shape(model: &Model, target: Target, values: &[f32]) -> Option<usize> {
+    let Target::ArtMesh(mi) = target else { return None };
+    let m = model.art_meshes.get(mi)?;
+    let k = blend_keyform_at(model, m, values)??;
+    let mut first = normal_keyforms(m);
+    for s in &m.blend_shapes {
+        if k < first + s.keys.len() {
+            return Some(s.parameter as usize);
+        }
+        first += s.keys.len();
+    }
+    None
+}
+
+/// The blend shape keyform the values sit on: exactly one blend shape
+/// parameter off its base key and on one of its keys (Cubism can edit one
+/// blend shape keyform per object at a time). `Some(None)` when every blend
+/// shape is at its base key, so the normal keyforms are the ones to edit;
+/// None when nothing can be edited.
+fn blend_keyform_at(model: &Model, m: &ArtMesh, values: &[f32]) -> Option<Option<usize>> {
+    let mut found = None;
+    let mut first = normal_keyforms(m);
+    for s in &m.blend_shapes {
+        let p = model.parameters.get(s.parameter as usize)?;
+        let v = values.get(s.parameter as usize).copied().unwrap_or(p.default);
+        let tol = ((p.max - p.min).abs() * 0.01).max(1e-4);
+        if v.abs() > tol {
+            let i = s.keys.iter().position(|k| (k - v).abs() <= tol)?;
+            if found.is_some() {
+                return None;
+            }
+            found = Some(first + i);
+        }
+        first += s.keys.len();
+    }
+    Some(found)
 }
 
 /// Every keyform at the key of `param` that its current value sits on, across
@@ -148,7 +230,15 @@ pub fn keyforms_on_key(
 
 /// The keyform the current parameter values sit on, when every bound axis
 /// is on a key (within a hundredth of its range). Copy and paste need one.
+/// A mesh with a blend shape parameter on one of its keys gives that blend
+/// shape keyform instead, whatever the normal axes are doing.
 pub fn keyform_at(model: &Model, target: Target, values: &[f32]) -> Option<usize> {
+    if let Target::ArtMesh(mi) = target
+        && let Some(m) = model.art_meshes.get(mi)
+        && let Some(k) = blend_keyform_at(model, m, values)?
+    {
+        return Some(k);
+    }
     let binding = binding_of(model, target)?;
     let lens = axis_lens(binding);
     let mut coords = Vec::with_capacity(lens.len());
@@ -537,7 +627,15 @@ mod tests {
     use ayatsuri_format::model::{ArtMesh, BindingAxis, Canvas, Parameter};
 
     fn param(id: &str, min: f32, default: f32, max: f32) -> Parameter {
-        Parameter { id: id.into(), min, max, default, repeat: false, decimals: 3 }
+        Parameter {
+            id: id.into(),
+            min,
+            max,
+            default,
+            repeat: false,
+            decimals: 3,
+            blend_shape: false,
+        }
     }
 
     // one triangle, bound on X (-1, 0, 1) and Y (-1, 0, 1)
@@ -580,6 +678,7 @@ mod tests {
                 opacities: vec![1.0; 9],
                 draw_orders: vec![500.0; 9],
                 positions,
+                blend_shapes: Vec::new(),
             }],
             ..Model::new()
         }

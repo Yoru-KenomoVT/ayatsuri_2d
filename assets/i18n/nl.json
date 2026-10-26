@@ -1321,5 +1321,8 @@
   "Batch Reflect…": "Batchgewijs omkeren…",
   "The key values of the ticked parameters turn around across their range, on every object keyed on them.": "De sleutelwaarden van de aangevinkte parameters worden over hun bereik omgekeerd, op elk object met sleutels erop.",
   "All": "Alles",
-  "No art mesh here": "Hier is geen art mesh"
+  "No art mesh here": "Hier is geen art mesh",
+  "Blend Shape": "Blendshape",
+  "Its keyforms add on top of the others instead of multiplying them": "De keyforms worden bij de andere opgeteld in plaats van ermee vermenigvuldigd",
+  "Blend Shape is editable": "Blendshape bewerkbaar"
 }

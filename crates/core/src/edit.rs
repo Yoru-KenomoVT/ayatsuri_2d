@@ -3,7 +3,9 @@
 // fastest), so every change resamples the product: inserted keys take the
 // interpolated shape, so the puppet looks identical until someone moves it.
 
-use ayatsuri_format::model::{Binding, BindingAxis, DeformerKind, Model};
+use ayatsuri_format::model::{Binding, BindingAxis, BlendShape, DeformerKind, Model};
+
+use crate::{blend, blendshape};
 
 /// Which rig object an edit touches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -283,10 +285,168 @@ pub fn bake_curves(model: &mut Model) {
     }
 }
 
+/// Run `f` with every mesh's blend shape forms joined onto the end of its
+/// keyform positions, then split back off. Edits that rewrite every
+/// keyform block alike (topology changes, reparenting, all-keyform moves)
+/// carry the blend forms along without knowing about them. A nested call
+/// finds the forms already joined and leaves them to the outer one.
+fn with_shapes<R>(model: &mut Model, f: impl FnOnce(&mut Model) -> R) -> R {
+    // per joined mesh: its index, normal keyform count, blocks per shape
+    let mut joined: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+    for (mi, m) in model.art_meshes.iter_mut().enumerate() {
+        let stride = (m.vertex_count as usize).saturating_mul(2);
+        if stride == 0 || m.blend_shapes.is_empty() || m.positions.len() % stride != 0 {
+            continue;
+        }
+        let whole = m.blend_shapes.iter().all(|s| {
+            !s.keys.is_empty() && s.positions.len() == s.keys.len().saturating_mul(stride)
+        });
+        if !whole {
+            continue;
+        }
+        let normal = m.positions.len() / stride;
+        let blocks = m.blend_shapes.iter().map(|s| s.keys.len()).collect();
+        for s in &mut m.blend_shapes {
+            m.positions.append(&mut s.positions);
+        }
+        joined.push((mi, normal, blocks));
+    }
+    let out = f(model);
+    for (mi, normal, blocks) in joined {
+        let Some(m) = model.art_meshes.get_mut(mi) else { continue };
+        let stride = (m.vertex_count as usize).saturating_mul(2);
+        let mut tail = m.positions.split_off(normal.saturating_mul(stride).min(m.positions.len()));
+        for (s, n) in m.blend_shapes.iter_mut().zip(blocks) {
+            let rest = tail.split_off(n.saturating_mul(stride).min(tail.len()));
+            s.positions = tail;
+            tail = rest;
+        }
+    }
+    out
+}
+
+fn is_blend_shape(model: &Model, param: usize) -> bool {
+    model.parameters.get(param).is_some_and(|p| p.blend_shape)
+}
+
+/// A mesh's blend at every parameter's default: the form its blend shapes
+/// are differences from. None when its binding does not cover the defaults.
+fn base_form(model: &Model, mesh: usize) -> Option<Vec<f32>> {
+    let m = model.art_meshes.get(mesh)?;
+    let stride = (m.vertex_count as usize).saturating_mul(2);
+    let mut corners = Vec::new();
+    let at_default = blend::corners(
+        &m.binding,
+        |p| model.parameters.get(p).map_or(0.0, |q| q.default),
+        |p| {
+            let snap = 0.1f32.powi(model.parameters.get(p).map_or(3, |q| q.decimals).clamp(0, 10));
+            (snap, snap * 1.5)
+        },
+        &mut corners,
+    );
+    if !at_default {
+        return None;
+    }
+    let mut base = vec![0.0; stride];
+    for &(k, w) in &corners {
+        let start = k.saturating_mul(stride);
+        let Some(src) = m.positions.get(start..start.saturating_add(stride)) else { continue };
+        for (b, s) in base.iter_mut().zip(src) {
+            *b += s * w;
+        }
+    }
+    Some(base)
+}
+
+/// Blend shape keys: every value off the base key gains a keyform on the
+/// mesh's blend shape for `param` (made when it has none), holding the form
+/// the mesh shows there now, so nothing moves. Art meshes only for now.
+fn add_blend_keys(model: &mut Model, target: Target, param: usize, values: &[f32]) -> bool {
+    let Target::ArtMesh(mi) = target else { return false };
+    let Some(base) = base_form(model, mi) else { return false };
+    let Some(m) = model.art_meshes.get_mut(mi) else { return false };
+    let stride = base.len();
+    if stride == 0 {
+        return false;
+    }
+    let at = match m.blend_shapes.iter().position(|s| s.parameter as usize == param) {
+        Some(at) => at,
+        None => {
+            m.blend_shapes.push(BlendShape {
+                parameter: param as u32,
+                keys: Vec::new(),
+                positions: Vec::new(),
+            });
+            m.blend_shapes.len() - 1
+        }
+    };
+    let Some(shape) = m.blend_shapes.get_mut(at) else { return false };
+    let mut changed = false;
+    for &v in values {
+        if v.abs() < 1e-5 || shape.keys.iter().any(|k| (k - v).abs() < 1e-5) {
+            continue;
+        }
+        // the base plus whatever the shape already adds at `v`
+        let mut form = base.clone();
+        for (k, w) in blendshape::weights(v, &shape.keys) {
+            let start = k.saturating_mul(stride);
+            if w > 0.0
+                && let Some(f) = shape.positions.get(start..start.saturating_add(stride))
+            {
+                blendshape::add(&mut form, f, &base, w);
+            }
+        }
+        let i = shape.keys.partition_point(|&k| k < v);
+        let start = i.saturating_mul(stride).min(shape.positions.len());
+        shape.keys.insert(i, v);
+        shape.positions.splice(start..start, form);
+        changed = true;
+    }
+    if shape.keys.is_empty() {
+        m.blend_shapes.remove(at);
+    }
+    changed
+}
+
+/// Remove the blend shape key nearest `value`; the base key cannot go. The
+/// last key going takes the blend shape with it.
+fn delete_blend_key(model: &mut Model, target: Target, param: usize, value: f32) -> bool {
+    let Target::ArtMesh(mi) = target else { return false };
+    let Some(m) = model.art_meshes.get_mut(mi) else { return false };
+    let stride = (m.vertex_count as usize).saturating_mul(2);
+    let Some(at) = m.blend_shapes.iter().position(|s| s.parameter as usize == param) else {
+        return false;
+    };
+    let Some(shape) = m.blend_shapes.get_mut(at) else { return false };
+    let Some((i, k)) = shape
+        .keys
+        .iter()
+        .copied()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| (a - value).abs().total_cmp(&(b - value).abs()))
+    else {
+        return false;
+    };
+    if value.abs() < (k - value).abs() {
+        return false;
+    }
+    let start = i.saturating_mul(stride).min(shape.positions.len());
+    let end = start.saturating_add(stride).min(shape.positions.len());
+    shape.keys.remove(i);
+    shape.positions.drain(start..end);
+    if shape.keys.is_empty() {
+        m.blend_shapes.remove(at);
+    }
+    true
+}
+
 /// Add keys at `values` to `target`'s binding on `param`. Objects not yet
 /// bound on the parameter gain a new axis; existing shapes are preserved
 /// exactly (new keys take the interpolated form). Returns true on change.
 pub fn add_keys(model: &mut Model, target: Target, param: usize, values: &[f32]) -> bool {
+    if is_blend_shape(model, param) {
+        return add_blend_keys(model, target, param, values);
+    }
     with_object(model, target, |binding, mut channels| {
         let mut changed = false;
         let axis_at = binding.axes.iter().position(|a| a.parameter as usize == param);
@@ -366,6 +526,9 @@ pub fn add_keys(model: &mut Model, target: Target, param: usize, values: &[f32])
 /// Delete the key nearest `value` on `target`'s axis for `param`. Deleting
 /// the last key removes the binding itself. Returns true on change.
 pub fn delete_key(model: &mut Model, target: Target, param: usize, value: f32) -> bool {
+    if is_blend_shape(model, param) {
+        return delete_blend_key(model, target, param, value);
+    }
     with_object(model, target, |binding, mut channels| {
         let Some(axis_at) = binding.axes.iter().position(|a| a.parameter as usize == param) else {
             return false;
@@ -404,6 +567,15 @@ pub fn delete_key(model: &mut Model, target: Target, param: usize, value: f32) -
 /// Remove `target`'s whole binding on `param`, keeping the current-default
 /// shape (the keyform at the key nearest the parameter default).
 pub fn delete_binding(model: &mut Model, target: Target, param: usize, default: f32) -> bool {
+    if is_blend_shape(model, param) {
+        // at its base key a blend shape adds nothing: dropping it keeps the
+        // default shape
+        let Target::ArtMesh(mi) = target else { return false };
+        let Some(m) = model.art_meshes.get_mut(mi) else { return false };
+        let before = m.blend_shapes.len();
+        m.blend_shapes.retain(|s| s.parameter as usize != param);
+        return m.blend_shapes.len() != before;
+    }
     with_object(model, target, |binding, mut channels| {
         let Some(axis_at) = binding.axes.iter().position(|a| a.parameter as usize == param) else {
             return false;
@@ -471,55 +643,57 @@ pub fn create_warp_deformer(
     cols: u32,
     id: String,
 ) -> Option<usize> {
-    if meshes.is_empty() {
-        return None;
-    }
-    let parent = common_parent(model, meshes).ok()?;
-    let (x0, y0, x1, y1) = meshes_bbox(model, meshes)?;
-    // a little margin so edge vertices sit inside the grid
-    let (w, h) = ((x1 - x0).max(1e-4), (y1 - y0).max(1e-4));
-    let (x0, y0) = (x0 - w * 0.05, y0 - h * 0.05);
-    let (w, h) = (w * 1.1, h * 1.1);
-
-    let rows = rows.clamp(1, 64);
-    let cols = cols.clamp(1, 64);
-    let mut grid = Vec::with_capacity(((rows + 1) * (cols + 1) * 2) as usize);
-    for r in 0..=rows {
-        for c in 0..=cols {
-            grid.push(x0 + w * (c as f32 / cols as f32));
-            grid.push(y0 + h * (r as f32 / rows as f32));
+    with_shapes(model, |model| {
+        if meshes.is_empty() {
+            return None;
         }
-    }
+        let parent = common_parent(model, meshes).ok()?;
+        let (x0, y0, x1, y1) = meshes_bbox(model, meshes)?;
+        // a little margin so edge vertices sit inside the grid
+        let (w, h) = ((x1 - x0).max(1e-4), (y1 - y0).max(1e-4));
+        let (x0, y0) = (x0 - w * 0.05, y0 - h * 0.05);
+        let (w, h) = (w * 1.1, h * 1.1);
 
-    let parent_part =
-        meshes.first().and_then(|&m| model.art_meshes.get(m)).and_then(|m| m.parent_part);
-    let di = model.deformers.len();
-    model.deformers.push(ayatsuri_format::model::Deformer {
-        id,
-        parent_part,
-        parent_deformer: parent,
-        visible: true,
-        enabled: true,
-        binding: Binding::default(),
-        kind: DeformerKind::Warp(ayatsuri_format::model::WarpData {
-            rows,
-            cols,
-            quad: true,
-            opacities: alloc_one(),
-            positions: grid,
-        }),
-    });
-
-    for &mi in meshes {
-        let Some(m) = model.art_meshes.get_mut(mi) else { continue };
-        let (pairs, _) = m.positions.as_chunks_mut::<2>();
-        for p in pairs {
-            p[0] = (p[0] - x0) / w;
-            p[1] = (p[1] - y0) / h;
+        let rows = rows.clamp(1, 64);
+        let cols = cols.clamp(1, 64);
+        let mut grid = Vec::with_capacity(((rows + 1) * (cols + 1) * 2) as usize);
+        for r in 0..=rows {
+            for c in 0..=cols {
+                grid.push(x0 + w * (c as f32 / cols as f32));
+                grid.push(y0 + h * (r as f32 / rows as f32));
+            }
         }
-        m.parent_deformer = Some(di as u32);
-    }
-    Some(di)
+
+        let parent_part =
+            meshes.first().and_then(|&m| model.art_meshes.get(m)).and_then(|m| m.parent_part);
+        let di = model.deformers.len();
+        model.deformers.push(ayatsuri_format::model::Deformer {
+            id,
+            parent_part,
+            parent_deformer: parent,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            kind: DeformerKind::Warp(ayatsuri_format::model::WarpData {
+                rows,
+                cols,
+                quad: true,
+                opacities: alloc_one(),
+                positions: grid,
+            }),
+        });
+
+        for &mi in meshes {
+            let Some(m) = model.art_meshes.get_mut(mi) else { continue };
+            let (pairs, _) = m.positions.as_chunks_mut::<2>();
+            for p in pairs {
+                p[0] = (p[0] - x0) / w;
+                p[1] = (p[1] - y0) / h;
+            }
+            m.parent_deformer = Some(di as u32);
+        }
+        Some(di)
+    })
 }
 
 /// Create a rotation deformer at `origin` (selection center when None) and
@@ -531,50 +705,52 @@ pub fn create_rotation_deformer(
     origin: Option<(f32, f32)>,
     id: String,
 ) -> Option<usize> {
-    if meshes.is_empty() {
-        return None;
-    }
-    let parent = common_parent(model, meshes).ok()?;
-    let (ox, oy) = match origin {
-        Some(o) => o,
-        None => {
-            let (x0, y0, x1, y1) = meshes_bbox(model, meshes)?;
-            ((x0 + x1) * 0.5, (y0 + y1) * 0.5)
+    with_shapes(model, |model| {
+        if meshes.is_empty() {
+            return None;
         }
-    };
+        let parent = common_parent(model, meshes).ok()?;
+        let (ox, oy) = match origin {
+            Some(o) => o,
+            None => {
+                let (x0, y0, x1, y1) = meshes_bbox(model, meshes)?;
+                ((x0 + x1) * 0.5, (y0 + y1) * 0.5)
+            }
+        };
 
-    let parent_part =
-        meshes.first().and_then(|&m| model.art_meshes.get(m)).and_then(|m| m.parent_part);
-    let di = model.deformers.len();
-    model.deformers.push(ayatsuri_format::model::Deformer {
-        id,
-        parent_part,
-        parent_deformer: parent,
-        visible: true,
-        enabled: true,
-        binding: Binding::default(),
-        kind: DeformerKind::Rotation(ayatsuri_format::model::RotationData {
-            base_angle: 0.0,
-            opacities: alloc_one(),
-            angles: vec![0.0],
-            origins_x: vec![ox],
-            origins_y: vec![oy],
-            scales: vec![1.0],
-            reflect_x: vec![false],
-            reflect_y: vec![false],
-        }),
-    });
+        let parent_part =
+            meshes.first().and_then(|&m| model.art_meshes.get(m)).and_then(|m| m.parent_part);
+        let di = model.deformers.len();
+        model.deformers.push(ayatsuri_format::model::Deformer {
+            id,
+            parent_part,
+            parent_deformer: parent,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            kind: DeformerKind::Rotation(ayatsuri_format::model::RotationData {
+                base_angle: 0.0,
+                opacities: alloc_one(),
+                angles: vec![0.0],
+                origins_x: vec![ox],
+                origins_y: vec![oy],
+                scales: vec![1.0],
+                reflect_x: vec![false],
+                reflect_y: vec![false],
+            }),
+        });
 
-    for &mi in meshes {
-        let Some(m) = model.art_meshes.get_mut(mi) else { continue };
-        let (pairs, _) = m.positions.as_chunks_mut::<2>();
-        for p in pairs {
-            p[0] -= ox;
-            p[1] -= oy;
+        for &mi in meshes {
+            let Some(m) = model.art_meshes.get_mut(mi) else { continue };
+            let (pairs, _) = m.positions.as_chunks_mut::<2>();
+            for p in pairs {
+                p[0] -= ox;
+                p[1] -= oy;
+            }
+            m.parent_deformer = Some(di as u32);
         }
-        m.parent_deformer = Some(di as u32);
-    }
-    Some(di)
+        Some(di)
+    })
 }
 
 /// Re-expresses a parent-space point in a new deformer's space.
@@ -732,146 +908,148 @@ pub fn create_deformer(
     part: Option<u32>,
     id: String,
 ) -> Option<usize> {
-    // objects under different deformers: wrap their branches instead
-    let lifted = lift_to_common_parent(model, children)?;
-    let children = lifted.as_slice();
-    let parent = match children.first() {
-        Some(&first) => {
-            let p = parent_of(model, first)?;
-            if children.iter().any(|&c| parent_of(model, c) != Some(p)) {
-                return None;
+    with_shapes(model, |model| {
+        // objects under different deformers: wrap their branches instead
+        let lifted = lift_to_common_parent(model, children)?;
+        let children = lifted.as_slice();
+        let parent = match children.first() {
+            Some(&first) => {
+                let p = parent_of(model, first)?;
+                if children.iter().any(|&c| parent_of(model, c) != Some(p)) {
+                    return None;
+                }
+                p
             }
-            p
+            None => empty_parent,
+        };
+        // the extent the deformer covers, in the parent's space
+        let (x0, y0, x1, y1) = if children.is_empty() {
+            empty_extent
+        } else {
+            children
+                .iter()
+                .flat_map(|&c| child_points(model, c))
+                .fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(a, b, c, d), (x, y)| {
+                    (a.min(x), b.min(y), c.max(x), d.max(y))
+                })
+        };
+        if !(x0 <= x1 && y0 <= y1) {
+            return None;
         }
-        None => empty_parent,
-    };
-    // the extent the deformer covers, in the parent's space
-    let (x0, y0, x1, y1) = if children.is_empty() {
-        empty_extent
-    } else {
-        children
+        let span = (x1 - x0).max(y1 - y0).max(1e-3);
+        let (deformer_kind, map): (DeformerKind, Box<PointMap>) = match kind {
+            NewDeformer::Warp { rows, cols } => {
+                // a little margin so edge points sit inside the grid
+                let (w, h) = ((x1 - x0).max(span * 0.05), (y1 - y0).max(span * 0.05));
+                let (gx, gy, gw, gh) = (x0 - w * 0.05, y0 - h * 0.05, w * 1.1, h * 1.1);
+                let (rows, cols) = (rows.clamp(1, 64), cols.clamp(1, 64));
+                let mut grid = Vec::with_capacity(((rows + 1) * (cols + 1) * 2) as usize);
+                for r in 0..=rows {
+                    for c in 0..=cols {
+                        grid.push(gx + gw * (c as f32 / cols as f32));
+                        grid.push(gy + gh * (r as f32 / rows as f32));
+                    }
+                }
+                (
+                    DeformerKind::Warp(ayatsuri_format::model::WarpData {
+                        rows,
+                        cols,
+                        quad: true,
+                        opacities: alloc_one(),
+                        positions: grid,
+                    }),
+                    Box::new(move |x, y| ((x - gx) / gw, (y - gy) / gh)),
+                )
+            }
+            NewDeformer::Rotation { origin } => {
+                let (ox, oy) = origin.unwrap_or(((x0 + x1) * 0.5, (y0 + y1) * 0.5));
+                (
+                    DeformerKind::Rotation(ayatsuri_format::model::RotationData {
+                        base_angle: 0.0,
+                        opacities: alloc_one(),
+                        angles: vec![0.0],
+                        origins_x: vec![ox],
+                        origins_y: vec![oy],
+                        scales: vec![1.0],
+                        reflect_x: vec![false],
+                        reflect_y: vec![false],
+                    }),
+                    Box::new(move |x, y| (x - ox, y - oy)),
+                )
+            }
+        };
+        if let Some(p) = parent
+            && model.deformers.get(p as usize).is_none()
+        {
+            return None;
+        }
+        // deformers evaluate in index order, parents first (the moc3 rule too),
+        // so a new parent of existing deformers goes in just before the first
+        // of them and every deformer reference past that point shifts up one
+        let di = children
             .iter()
-            .flat_map(|&c| child_points(model, c))
-            .fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(a, b, c, d), (x, y)| {
-                (a.min(x), b.min(y), c.max(x), d.max(y))
+            .filter_map(|&c| if let Child::Deformer(d) = c { Some(d) } else { None })
+            .min()
+            .unwrap_or(model.deformers.len())
+            .min(model.deformers.len());
+        let bump = |r: &mut Option<u32>| {
+            if let Some(x) = r
+                && *x as usize >= di
+            {
+                *x += 1;
+            }
+        };
+        for m in &mut model.art_meshes {
+            bump(&mut m.parent_deformer);
+        }
+        for d in &mut model.deformers {
+            bump(&mut d.parent_deformer);
+        }
+        let shift = |i: usize| if i >= di { i + 1 } else { i };
+        let children: Vec<Child> = children
+            .iter()
+            .map(|&c| match c {
+                Child::Deformer(d) => Child::Deformer(shift(d)),
+                m => m,
             })
-    };
-    if !(x0 <= x1 && y0 <= y1) {
-        return None;
-    }
-    let span = (x1 - x0).max(y1 - y0).max(1e-3);
-    let (deformer_kind, map): (DeformerKind, Box<PointMap>) = match kind {
-        NewDeformer::Warp { rows, cols } => {
-            // a little margin so edge points sit inside the grid
-            let (w, h) = ((x1 - x0).max(span * 0.05), (y1 - y0).max(span * 0.05));
-            let (gx, gy, gw, gh) = (x0 - w * 0.05, y0 - h * 0.05, w * 1.1, h * 1.1);
-            let (rows, cols) = (rows.clamp(1, 64), cols.clamp(1, 64));
-            let mut grid = Vec::with_capacity(((rows + 1) * (cols + 1) * 2) as usize);
-            for r in 0..=rows {
-                for c in 0..=cols {
-                    grid.push(gx + gw * (c as f32 / cols as f32));
-                    grid.push(gy + gh * (r as f32 / rows as f32));
-                }
+            .collect();
+        let mut parent = parent;
+        bump(&mut parent);
+        model.deformers.insert(
+            di,
+            ayatsuri_format::model::Deformer {
+                id,
+                parent_part: part,
+                parent_deformer: parent,
+                visible: true,
+                enabled: true,
+                binding: Binding::default(),
+                kind: deformer_kind,
+            },
+        );
+        for &c in &children {
+            // a deformer can't become a child of its own descendant
+            if let Child::Deformer(d) = c
+                && parent.is_some_and(|p| deformer_under(model, p as usize, d))
+            {
+                continue;
             }
-            (
-                DeformerKind::Warp(ayatsuri_format::model::WarpData {
-                    rows,
-                    cols,
-                    quad: true,
-                    opacities: alloc_one(),
-                    positions: grid,
-                }),
-                Box::new(move |x, y| ((x - gx) / gw, (y - gy) / gh)),
-            )
-        }
-        NewDeformer::Rotation { origin } => {
-            let (ox, oy) = origin.unwrap_or(((x0 + x1) * 0.5, (y0 + y1) * 0.5));
-            (
-                DeformerKind::Rotation(ayatsuri_format::model::RotationData {
-                    base_angle: 0.0,
-                    opacities: alloc_one(),
-                    angles: vec![0.0],
-                    origins_x: vec![ox],
-                    origins_y: vec![oy],
-                    scales: vec![1.0],
-                    reflect_x: vec![false],
-                    reflect_y: vec![false],
-                }),
-                Box::new(move |x, y| (x - ox, y - oy)),
-            )
-        }
-    };
-    if let Some(p) = parent
-        && model.deformers.get(p as usize).is_none()
-    {
-        return None;
-    }
-    // deformers evaluate in index order, parents first (the moc3 rule too),
-    // so a new parent of existing deformers goes in just before the first
-    // of them and every deformer reference past that point shifts up one
-    let di = children
-        .iter()
-        .filter_map(|&c| if let Child::Deformer(d) = c { Some(d) } else { None })
-        .min()
-        .unwrap_or(model.deformers.len())
-        .min(model.deformers.len());
-    let bump = |r: &mut Option<u32>| {
-        if let Some(x) = r
-            && *x as usize >= di
-        {
-            *x += 1;
-        }
-    };
-    for m in &mut model.art_meshes {
-        bump(&mut m.parent_deformer);
-    }
-    for d in &mut model.deformers {
-        bump(&mut d.parent_deformer);
-    }
-    let shift = |i: usize| if i >= di { i + 1 } else { i };
-    let children: Vec<Child> = children
-        .iter()
-        .map(|&c| match c {
-            Child::Deformer(d) => Child::Deformer(shift(d)),
-            m => m,
-        })
-        .collect();
-    let mut parent = parent;
-    bump(&mut parent);
-    model.deformers.insert(
-        di,
-        ayatsuri_format::model::Deformer {
-            id,
-            parent_part: part,
-            parent_deformer: parent,
-            visible: true,
-            enabled: true,
-            binding: Binding::default(),
-            kind: deformer_kind,
-        },
-    );
-    for &c in &children {
-        // a deformer can't become a child of its own descendant
-        if let Child::Deformer(d) = c
-            && parent.is_some_and(|p| deformer_under(model, p as usize, d))
-        {
-            continue;
-        }
-        map_child(model, c, &*map);
-        match c {
-            Child::Mesh(i) => {
-                if let Some(m) = model.art_meshes.get_mut(i) {
-                    m.parent_deformer = Some(di as u32);
+            map_child(model, c, &*map);
+            match c {
+                Child::Mesh(i) => {
+                    if let Some(m) = model.art_meshes.get_mut(i) {
+                        m.parent_deformer = Some(di as u32);
+                    }
                 }
-            }
-            Child::Deformer(i) => {
-                if let Some(d) = model.deformers.get_mut(i) {
-                    d.parent_deformer = Some(di as u32);
+                Child::Deformer(i) => {
+                    if let Some(d) = model.deformers.get_mut(i) {
+                        d.parent_deformer = Some(di as u32);
+                    }
                 }
             }
         }
-    }
-    Some(di)
+        Some(di)
+    })
 }
 
 /// Where a point in `deformer`'s local space lands on the canvas, and the
@@ -989,113 +1167,117 @@ fn sort_parents_first(model: &mut Model) -> Vec<usize> {
 /// deformer can't move under itself or its own descendants. Deformers are
 /// re-sorted parents-first when needed; returns the child's new index.
 pub fn set_parent(model: &mut Model, child: Child, new_parent: Option<usize>) -> Option<Child> {
-    let old_parent = parent_of(model, child)?;
-    if new_parent.is_some_and(|p| model.deformers.get(p).is_none()) {
-        return None;
-    }
-    if let (Child::Deformer(d), Some(p)) = (child, new_parent)
-        && deformer_under(model, p, d)
-    {
-        return None;
-    }
-    if old_parent.map(|p| p as usize) == new_parent {
-        return Some(child);
-    }
-    let before = rest_puppet(model);
-    let old_frame = match child {
-        Child::Deformer(d) => before.rotation_state(d).map(|r| (r.angle, r.scale)),
-        Child::Mesh(_) => None,
-    };
-    let remap = |x: f32, y: f32| {
-        let world = match old_parent {
-            Some(p) => before.deformer_point(p as usize, x, y),
-            None => (x, y),
-        };
-        to_local(&before, new_parent, world)
-    };
-    map_child(model, child, &remap);
-    let np = new_parent.map(|p| p as u32);
-    match child {
-        Child::Mesh(i) => {
-            if let Some(m) = model.art_meshes.get_mut(i) {
-                m.parent_deformer = np;
-            }
+    with_shapes(model, |model| {
+        let old_parent = parent_of(model, child)?;
+        if new_parent.is_some_and(|p| model.deformers.get(p).is_none()) {
+            return None;
         }
-        Child::Deformer(i) => {
-            if let Some(d) = model.deformers.get_mut(i) {
-                d.parent_deformer = np;
-            }
-        }
-    }
-    let new_of = sort_parents_first(model);
-    let child = match child {
-        Child::Deformer(d) => Child::Deformer(new_of.get(d).copied().unwrap_or(d)),
-        m => m,
-    };
-    // a rotation reads its parents' turn and scale; give back the difference
-    if let (Child::Deformer(d), Some((old_angle, old_scale))) = (child, old_frame) {
-        let after = rest_puppet(model);
-        if let (Some(now), Some(def)) = (after.rotation_state(d), model.deformers.get_mut(d))
-            && let DeformerKind::Rotation(r) = &mut def.kind
+        if let (Child::Deformer(d), Some(p)) = (child, new_parent)
+            && deformer_under(model, p, d)
         {
-            r.base_angle += old_angle - now.angle;
-            if now.scale.abs() > 1e-6 && old_scale.is_finite() {
-                let ratio = old_scale / now.scale;
-                for s in &mut r.scales {
-                    *s *= ratio;
+            return None;
+        }
+        if old_parent.map(|p| p as usize) == new_parent {
+            return Some(child);
+        }
+        let before = rest_puppet(model);
+        let old_frame = match child {
+            Child::Deformer(d) => before.rotation_state(d).map(|r| (r.angle, r.scale)),
+            Child::Mesh(_) => None,
+        };
+        let remap = |x: f32, y: f32| {
+            let world = match old_parent {
+                Some(p) => before.deformer_point(p as usize, x, y),
+                None => (x, y),
+            };
+            to_local(&before, new_parent, world)
+        };
+        map_child(model, child, &remap);
+        let np = new_parent.map(|p| p as u32);
+        match child {
+            Child::Mesh(i) => {
+                if let Some(m) = model.art_meshes.get_mut(i) {
+                    m.parent_deformer = np;
+                }
+            }
+            Child::Deformer(i) => {
+                if let Some(d) = model.deformers.get_mut(i) {
+                    d.parent_deformer = np;
                 }
             }
         }
-    }
-    Some(child)
+        let new_of = sort_parents_first(model);
+        let child = match child {
+            Child::Deformer(d) => Child::Deformer(new_of.get(d).copied().unwrap_or(d)),
+            m => m,
+        };
+        // a rotation reads its parents' turn and scale; give back the difference
+        if let (Child::Deformer(d), Some((old_angle, old_scale))) = (child, old_frame) {
+            let after = rest_puppet(model);
+            if let (Some(now), Some(def)) = (after.rotation_state(d), model.deformers.get_mut(d))
+                && let DeformerKind::Rotation(r) = &mut def.kind
+            {
+                r.base_angle += old_angle - now.angle;
+                if now.scale.abs() > 1e-6 && old_scale.is_finite() {
+                    let ratio = old_scale / now.scale;
+                    for s in &mut r.scales {
+                        *s *= ratio;
+                    }
+                }
+            }
+        }
+        Some(child)
+    })
 }
 
 /// Delete a deformer. Its meshes and child deformers move up to its parent
 /// and keep their shape (see `set_parent`); only the deleted deformer's own
 /// motion goes with it. References past it shift down.
 pub fn delete_deformer(model: &mut Model, deformer: usize) -> bool {
-    let Some(gone) = model.deformers.get(deformer) else { return false };
-    let parent = gone.parent_deformer.map(|p| p as usize);
-    let meshes: Vec<usize> = model
-        .art_meshes
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| m.parent_deformer == Some(deformer as u32))
-        .map(|(i, _)| i)
-        .collect();
-    for i in meshes {
-        set_parent(model, Child::Mesh(i), parent);
-    }
-    // a deformer's parent comes before it, and the deleted one's parent
-    // comes before the deleted one, so moving children up never re-sorts
-    let kids: Vec<usize> = model
-        .deformers
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| d.parent_deformer == Some(deformer as u32))
-        .map(|(i, _)| i)
-        .collect();
-    for i in kids {
-        set_parent(model, Child::Deformer(i), parent);
-    }
-    if model.deformers.get(deformer).is_none() {
-        return false;
-    }
-    model.deformers.remove(deformer);
-    let shift = |r: &mut Option<u32>| {
-        if let Some(x) = r
-            && *x as usize > deformer
-        {
-            *x -= 1;
+    with_shapes(model, |model| {
+        let Some(gone) = model.deformers.get(deformer) else { return false };
+        let parent = gone.parent_deformer.map(|p| p as usize);
+        let meshes: Vec<usize> = model
+            .art_meshes
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.parent_deformer == Some(deformer as u32))
+            .map(|(i, _)| i)
+            .collect();
+        for i in meshes {
+            set_parent(model, Child::Mesh(i), parent);
         }
-    };
-    for m in &mut model.art_meshes {
-        shift(&mut m.parent_deformer);
-    }
-    for d in &mut model.deformers {
-        shift(&mut d.parent_deformer);
-    }
-    true
+        // a deformer's parent comes before it, and the deleted one's parent
+        // comes before the deleted one, so moving children up never re-sorts
+        let kids: Vec<usize> = model
+            .deformers
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.parent_deformer == Some(deformer as u32))
+            .map(|(i, _)| i)
+            .collect();
+        for i in kids {
+            set_parent(model, Child::Deformer(i), parent);
+        }
+        if model.deformers.get(deformer).is_none() {
+            return false;
+        }
+        model.deformers.remove(deformer);
+        let shift = |r: &mut Option<u32>| {
+            if let Some(x) = r
+                && *x as usize > deformer
+            {
+                *x -= 1;
+            }
+        };
+        for m in &mut model.art_meshes {
+            shift(&mut m.parent_deformer);
+        }
+        for d in &mut model.deformers {
+            shift(&mut d.parent_deformer);
+        }
+        true
+    })
 }
 
 /// Delete art meshes. Glues that hold one of them go too; other meshes
@@ -1353,6 +1535,7 @@ pub fn create_art_path(
         opacities: vec![1.0],
         draw_orders: vec![order],
         positions,
+        blend_shapes: Vec::new(),
     });
     let index = model.art_meshes.len() - 1;
     if let Some(root) = model.draw_groups.first_mut() {
@@ -1540,41 +1723,15 @@ pub fn slide_vertex(
 /// keyform. Blending is affine, so the evaluated vertex moves by exactly the
 /// same amount whatever the current pose.
 pub fn move_vertex(model: &mut Model, mesh: usize, vertex: usize, dx: f32, dy: f32) -> bool {
-    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
-    let stride = (m.vertex_count as usize).saturating_mul(2);
-    if stride == 0 || vertex >= m.vertex_count as usize {
-        return false;
-    }
-    let at = vertex * 2;
-    let mut touched = false;
-    for form in m.positions.chunks_exact_mut(stride) {
-        if let Some(x) = form.get_mut(at) {
-            *x += dx;
+    with_shapes(model, |model| {
+        let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+        let stride = (m.vertex_count as usize).saturating_mul(2);
+        if stride == 0 || vertex >= m.vertex_count as usize {
+            return false;
         }
-        if let Some(y) = form.get_mut(at + 1) {
-            *y += dy;
-            touched = true;
-        }
-    }
-    touched
-}
-
-/// Shift several vertices at once, each by its own parent-space offset.
-/// The deform path and brush tools land their falloff-weighted drags here.
-pub fn move_vertices(model: &mut Model, mesh: usize, moves: &[(usize, f32, f32)]) -> bool {
-    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
-    let count = m.vertex_count as usize;
-    let stride = count.saturating_mul(2);
-    if stride == 0 {
-        return false;
-    }
-    let mut touched = false;
-    for form in m.positions.chunks_exact_mut(stride) {
-        for &(vertex, dx, dy) in moves {
-            if vertex >= count {
-                continue;
-            }
-            let at = vertex * 2;
+        let at = vertex * 2;
+        let mut touched = false;
+        for form in m.positions.chunks_exact_mut(stride) {
             if let Some(x) = form.get_mut(at) {
                 *x += dx;
             }
@@ -1583,8 +1740,38 @@ pub fn move_vertices(model: &mut Model, mesh: usize, moves: &[(usize, f32, f32)]
                 touched = true;
             }
         }
-    }
-    touched
+        touched
+    })
+}
+
+/// Shift several vertices at once, each by its own parent-space offset.
+/// The deform path and brush tools land their falloff-weighted drags here.
+pub fn move_vertices(model: &mut Model, mesh: usize, moves: &[(usize, f32, f32)]) -> bool {
+    with_shapes(model, |model| {
+        let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+        let count = m.vertex_count as usize;
+        let stride = count.saturating_mul(2);
+        if stride == 0 {
+            return false;
+        }
+        let mut touched = false;
+        for form in m.positions.chunks_exact_mut(stride) {
+            for &(vertex, dx, dy) in moves {
+                if vertex >= count {
+                    continue;
+                }
+                let at = vertex * 2;
+                if let Some(x) = form.get_mut(at) {
+                    *x += dx;
+                }
+                if let Some(y) = form.get_mut(at + 1) {
+                    *y += dy;
+                    touched = true;
+                }
+            }
+        }
+        touched
+    })
 }
 
 /// Split the triangle `tri` of a mesh at the barycentric point (w0, w1, w2).
@@ -1592,55 +1779,57 @@ pub fn move_vertices(model: &mut Model, mesh: usize, moves: &[(usize, f32, f32)]
 /// keyform position are the same weighted mix of the triangle's corners,
 /// which keeps all existing deformation intact.
 pub fn add_vertex(model: &mut Model, mesh: usize, tri: usize, w: [f32; 3]) -> Option<usize> {
-    let m = model.art_meshes.get_mut(mesh)?;
-    let n = m.vertex_count as usize;
-    if n >= u16::MAX as usize - 1 {
-        return None;
-    }
-    let at = tri.checked_mul(3)?;
-    let corners = [
-        m.indices.get(at).copied()? as usize,
-        m.indices.get(at + 1).copied()? as usize,
-        m.indices.get(at + 2).copied()? as usize,
-    ];
-    if corners.iter().any(|&c| c >= n) {
-        return None;
-    }
-
-    let mix = |pool: &[f32], base: usize| -> Option<(f32, f32)> {
-        let mut x = 0.0;
-        let mut y = 0.0;
-        for (&c, &wc) in corners.iter().zip(w.iter()) {
-            x += pool.get(base + c * 2).copied()? * wc;
-            y += pool.get(base + c * 2 + 1).copied()? * wc;
+    with_shapes(model, |model| {
+        let m = model.art_meshes.get_mut(mesh)?;
+        let n = m.vertex_count as usize;
+        if n >= u16::MAX as usize - 1 {
+            return None;
         }
-        Some((x, y))
-    };
+        let at = tri.checked_mul(3)?;
+        let corners = [
+            m.indices.get(at).copied()? as usize,
+            m.indices.get(at + 1).copied()? as usize,
+            m.indices.get(at + 2).copied()? as usize,
+        ];
+        if corners.iter().any(|&c| c >= n) {
+            return None;
+        }
 
-    let (u, v) = mix(&m.uvs, 0)?;
-    let stride = n * 2;
-    let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
-    let mut positions = Vec::with_capacity(keyforms * (stride + 2));
-    for k in 0..keyforms {
-        let base = k * stride;
-        let (x, y) = mix(&m.positions, base)?;
-        positions.extend_from_slice(m.positions.get(base..base + stride)?);
-        positions.push(x);
-        positions.push(y);
-    }
+        let mix = |pool: &[f32], base: usize| -> Option<(f32, f32)> {
+            let mut x = 0.0;
+            let mut y = 0.0;
+            for (&c, &wc) in corners.iter().zip(w.iter()) {
+                x += pool.get(base + c * 2).copied()? * wc;
+                y += pool.get(base + c * 2 + 1).copied()? * wc;
+            }
+            Some((x, y))
+        };
 
-    let new = n as u16;
-    m.positions = positions;
-    m.uvs.push(u);
-    m.uvs.push(v);
-    m.vertex_count += 1;
-    // the split: one triangle becomes three fanned around the new vertex
-    let (a, b, c) = (corners[0] as u16, corners[1] as u16, corners[2] as u16);
-    if let Some(slot) = m.indices.get_mut(at..at + 3) {
-        slot.copy_from_slice(&[a, b, new]);
-    }
-    m.indices.extend_from_slice(&[b, c, new, c, a, new]);
-    Some(n)
+        let (u, v) = mix(&m.uvs, 0)?;
+        let stride = n * 2;
+        let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
+        let mut positions = Vec::with_capacity(keyforms * (stride + 2));
+        for k in 0..keyforms {
+            let base = k * stride;
+            let (x, y) = mix(&m.positions, base)?;
+            positions.extend_from_slice(m.positions.get(base..base + stride)?);
+            positions.push(x);
+            positions.push(y);
+        }
+
+        let new = n as u16;
+        m.positions = positions;
+        m.uvs.push(u);
+        m.uvs.push(v);
+        m.vertex_count += 1;
+        // the split: one triangle becomes three fanned around the new vertex
+        let (a, b, c) = (corners[0] as u16, corners[1] as u16, corners[2] as u16);
+        if let Some(slot) = m.indices.get_mut(at..at + 3) {
+            slot.copy_from_slice(&[a, b, new]);
+        }
+        m.indices.extend_from_slice(&[b, c, new, c, a, new]);
+        Some(n)
+    })
 }
 
 /// Add a vertex anywhere, placed by barycentric weights against three
@@ -1656,49 +1845,51 @@ pub fn add_free_vertex(
     w: [f32; 3],
     connect: Option<(u16, u16)>,
 ) -> Option<usize> {
-    let m = model.art_meshes.get_mut(mesh)?;
-    let n = m.vertex_count as usize;
-    if n >= u16::MAX as usize - 1 {
-        return None;
-    }
-    // any three points of the mesh work as the affine basis; they need not
-    // form a face, which is what lets a mesh with no faces still grow
-    if corners.iter().any(|&c| c >= n) {
-        return None;
-    }
-    if let Some((a, b)) = connect
-        && (a as usize >= n || b as usize >= n || a == b)
-    {
-        return None;
-    }
-    let mix = |pool: &[f32], base: usize| -> Option<(f32, f32)> {
-        let mut x = 0.0;
-        let mut y = 0.0;
-        for (&c, &wc) in corners.iter().zip(w.iter()) {
-            x += pool.get(base + c * 2).copied()? * wc;
-            y += pool.get(base + c * 2 + 1).copied()? * wc;
+    with_shapes(model, |model| {
+        let m = model.art_meshes.get_mut(mesh)?;
+        let n = m.vertex_count as usize;
+        if n >= u16::MAX as usize - 1 {
+            return None;
         }
-        Some((x, y))
-    };
-    let (u, v) = mix(&m.uvs, 0)?;
-    let stride = n * 2;
-    let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
-    let mut positions = Vec::with_capacity(keyforms * (stride + 2));
-    for k in 0..keyforms {
-        let base = k * stride;
-        let (x, y) = mix(&m.positions, base)?;
-        positions.extend_from_slice(m.positions.get(base..base + stride)?);
-        positions.push(x);
-        positions.push(y);
-    }
-    m.positions = positions;
-    m.uvs.push(u);
-    m.uvs.push(v);
-    m.vertex_count += 1;
-    if let Some((a, b)) = connect {
-        m.indices.extend_from_slice(&[a, b, n as u16]);
-    }
-    Some(n)
+        // any three points of the mesh work as the affine basis; they need not
+        // form a face, which is what lets a mesh with no faces still grow
+        if corners.iter().any(|&c| c >= n) {
+            return None;
+        }
+        if let Some((a, b)) = connect
+            && (a as usize >= n || b as usize >= n || a == b)
+        {
+            return None;
+        }
+        let mix = |pool: &[f32], base: usize| -> Option<(f32, f32)> {
+            let mut x = 0.0;
+            let mut y = 0.0;
+            for (&c, &wc) in corners.iter().zip(w.iter()) {
+                x += pool.get(base + c * 2).copied()? * wc;
+                y += pool.get(base + c * 2 + 1).copied()? * wc;
+            }
+            Some((x, y))
+        };
+        let (u, v) = mix(&m.uvs, 0)?;
+        let stride = n * 2;
+        let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
+        let mut positions = Vec::with_capacity(keyforms * (stride + 2));
+        for k in 0..keyforms {
+            let base = k * stride;
+            let (x, y) = mix(&m.positions, base)?;
+            positions.extend_from_slice(m.positions.get(base..base + stride)?);
+            positions.push(x);
+            positions.push(y);
+        }
+        m.positions = positions;
+        m.uvs.push(u);
+        m.uvs.push(v);
+        m.vertex_count += 1;
+        if let Some((a, b)) = connect {
+            m.indices.extend_from_slice(&[a, b, n as u16]);
+        }
+        Some(n)
+    })
 }
 
 /// Where a pasted point goes in the target mesh.
@@ -1722,49 +1913,52 @@ pub fn paste_points(
     points: &[PastedPoint],
     faces: &[[usize; 3]],
 ) -> Option<Vec<usize>> {
-    let n = model.art_meshes.get(mesh)?.vertex_count as usize;
-    let valid = points.iter().all(|p| match *p {
-        PastedPoint::Existing(v) => v < n,
-        PastedPoint::At(c, _) => c.iter().all(|&x| x < n),
-    });
-    if !valid || n + points.len() >= u16::MAX as usize {
-        return None;
-    }
-    let mut out = Vec::with_capacity(points.len());
-    for p in points {
-        let v = match *p {
-            PastedPoint::Existing(v) => v,
-            PastedPoint::At(c, w) => add_free_vertex(model, mesh, c, w, None)?,
-        };
-        out.push(v);
-    }
-    let m = model.art_meshes.get_mut(mesh)?;
-    let mut have: std::collections::HashSet<[u16; 3]> = m
-        .indices
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|t| {
-            let mut k = *t;
-            k.sort_unstable();
-            k
-        })
-        .collect();
-    for f in faces {
-        let (Some(&a), Some(&b), Some(&c)) = (out.get(f[0]), out.get(f[1]), out.get(f[2])) else {
-            continue;
-        };
-        if a == b || b == c || a == c {
-            continue;
+    with_shapes(model, |model| {
+        let n = model.art_meshes.get(mesh)?.vertex_count as usize;
+        let valid = points.iter().all(|p| match *p {
+            PastedPoint::Existing(v) => v < n,
+            PastedPoint::At(c, _) => c.iter().all(|&x| x < n),
+        });
+        if !valid || n + points.len() >= u16::MAX as usize {
+            return None;
         }
-        let tri = [a as u16, b as u16, c as u16];
-        let mut key = tri;
-        key.sort_unstable();
-        if have.insert(key) {
-            m.indices.extend_from_slice(&tri);
+        let mut out = Vec::with_capacity(points.len());
+        for p in points {
+            let v = match *p {
+                PastedPoint::Existing(v) => v,
+                PastedPoint::At(c, w) => add_free_vertex(model, mesh, c, w, None)?,
+            };
+            out.push(v);
         }
-    }
-    Some(out)
+        let m = model.art_meshes.get_mut(mesh)?;
+        let mut have: std::collections::HashSet<[u16; 3]> = m
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let mut k = *t;
+                k.sort_unstable();
+                k
+            })
+            .collect();
+        for f in faces {
+            let (Some(&a), Some(&b), Some(&c)) = (out.get(f[0]), out.get(f[1]), out.get(f[2]))
+            else {
+                continue;
+            };
+            if a == b || b == c || a == c {
+                continue;
+            }
+            let tri = [a as u16, b as u16, c as u16];
+            let mut key = tri;
+            key.sort_unstable();
+            if have.insert(key) {
+                m.indices.extend_from_slice(&tri);
+            }
+        }
+        Some(out)
+    })
 }
 
 /// The vertices joined to both `a` and `b`, by a face edge or one of the
@@ -1882,99 +2076,101 @@ pub fn delete_vertex(model: &mut Model, mesh: usize, vertex: usize) -> bool {
 /// points are dropped and the rest re-indexed. At least three points must
 /// remain, so a mesh is never erased out of existence by accident.
 pub fn delete_vertices(model: &mut Model, mesh: usize, vertices: &[usize]) -> bool {
-    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
-    let n = m.vertex_count as usize;
-    let mut gone = vec![false; n];
-    for &v in vertices {
-        if let Some(g) = gone.get_mut(v) {
-            *g = true;
-        }
-    }
-    let removed = gone.iter().filter(|&&g| g).count();
-    if removed == 0 || n.saturating_sub(removed) < 3 {
-        return false;
-    }
-    // old index to new index, None for removed points
-    let mut remap: Vec<Option<u16>> = Vec::with_capacity(n);
-    let mut next = 0u16;
-    for &g in &gone {
-        if g {
-            remap.push(None);
-        } else {
-            remap.push(Some(next));
-            next += 1;
-        }
-    }
-    let map = |i: u16| remap.get(i as usize).copied().flatten();
-
-    let (tris, _) = m.indices.as_chunks::<3>();
-    let mut indices = Vec::with_capacity(m.indices.len());
-    for t in tris {
-        if let (Some(a), Some(b), Some(c)) = (map(t[0]), map(t[1]), map(t[2])) {
-            indices.extend_from_slice(&[a, b, c]);
-        }
-    }
-    let stride = n * 2;
-    let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
-    let mut positions = Vec::with_capacity(keyforms * (n - removed) * 2);
-    for k in 0..keyforms {
-        let base = k * stride;
-        for (vi, &g) in gone.iter().enumerate() {
-            if !g {
-                positions.push(m.positions.get(base + vi * 2).copied().unwrap_or(0.0));
-                positions.push(m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0));
+    with_shapes(model, |model| {
+        let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+        let n = m.vertex_count as usize;
+        let mut gone = vec![false; n];
+        for &v in vertices {
+            if let Some(g) = gone.get_mut(v) {
+                *g = true;
             }
         }
-    }
-    let uvs: Vec<f32> = gone
-        .iter()
-        .enumerate()
-        .filter(|(_, g)| !**g)
-        .flat_map(|(vi, _)| {
-            [
-                m.uvs.get(vi * 2).copied().unwrap_or(0.0),
-                m.uvs.get(vi * 2 + 1).copied().unwrap_or(0.0),
-            ]
-        })
-        .collect();
-    m.indices = indices;
-    m.positions = positions;
-    m.uvs = uvs;
-    m.vertex_count = (n - removed) as u32;
-
-    let mesh32 = mesh as u32;
-    for g in &mut model.glues {
-        if g.art_mesh_a != mesh32 && g.art_mesh_b != mesh32 {
-            continue;
+        let removed = gone.iter().filter(|&&g| g).count();
+        if removed == 0 || n.saturating_sub(removed) < 3 {
+            return false;
         }
-        // pairs are (a, b) interleaved in weights/indices
-        let on_this = |slot: usize| {
-            (slot.is_multiple_of(2) && g.art_mesh_a == mesh32)
-                || (!slot.is_multiple_of(2) && g.art_mesh_b == mesh32)
-        };
-        let (pairs, _) = g.indices.as_chunks::<2>();
-        let mut new_w = Vec::with_capacity(g.weights.len());
-        let mut new_i = Vec::with_capacity(g.indices.len());
-        for (pi, pair) in pairs.iter().enumerate() {
-            let mut out = [0u16; 2];
-            let mut keep = true;
-            for (slot, &i) in pair.iter().enumerate() {
-                let v = if on_this(slot) { map(i) } else { Some(i) };
-                match (v, out.get_mut(slot)) {
-                    (Some(v), Some(o)) => *o = v,
-                    _ => keep = false,
+        // old index to new index, None for removed points
+        let mut remap: Vec<Option<u16>> = Vec::with_capacity(n);
+        let mut next = 0u16;
+        for &g in &gone {
+            if g {
+                remap.push(None);
+            } else {
+                remap.push(Some(next));
+                next += 1;
+            }
+        }
+        let map = |i: u16| remap.get(i as usize).copied().flatten();
+
+        let (tris, _) = m.indices.as_chunks::<3>();
+        let mut indices = Vec::with_capacity(m.indices.len());
+        for t in tris {
+            if let (Some(a), Some(b), Some(c)) = (map(t[0]), map(t[1]), map(t[2])) {
+                indices.extend_from_slice(&[a, b, c]);
+            }
+        }
+        let stride = n * 2;
+        let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
+        let mut positions = Vec::with_capacity(keyforms * (n - removed) * 2);
+        for k in 0..keyforms {
+            let base = k * stride;
+            for (vi, &g) in gone.iter().enumerate() {
+                if !g {
+                    positions.push(m.positions.get(base + vi * 2).copied().unwrap_or(0.0));
+                    positions.push(m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0));
                 }
             }
-            if keep {
-                new_i.extend_from_slice(&out);
-                new_w.push(g.weights.get(pi * 2).copied().unwrap_or(0.0));
-                new_w.push(g.weights.get(pi * 2 + 1).copied().unwrap_or(0.0));
-            }
         }
-        g.weights = new_w;
-        g.indices = new_i;
-    }
-    true
+        let uvs: Vec<f32> = gone
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| !**g)
+            .flat_map(|(vi, _)| {
+                [
+                    m.uvs.get(vi * 2).copied().unwrap_or(0.0),
+                    m.uvs.get(vi * 2 + 1).copied().unwrap_or(0.0),
+                ]
+            })
+            .collect();
+        m.indices = indices;
+        m.positions = positions;
+        m.uvs = uvs;
+        m.vertex_count = (n - removed) as u32;
+
+        let mesh32 = mesh as u32;
+        for g in &mut model.glues {
+            if g.art_mesh_a != mesh32 && g.art_mesh_b != mesh32 {
+                continue;
+            }
+            // pairs are (a, b) interleaved in weights/indices
+            let on_this = |slot: usize| {
+                (slot.is_multiple_of(2) && g.art_mesh_a == mesh32)
+                    || (!slot.is_multiple_of(2) && g.art_mesh_b == mesh32)
+            };
+            let (pairs, _) = g.indices.as_chunks::<2>();
+            let mut new_w = Vec::with_capacity(g.weights.len());
+            let mut new_i = Vec::with_capacity(g.indices.len());
+            for (pi, pair) in pairs.iter().enumerate() {
+                let mut out = [0u16; 2];
+                let mut keep = true;
+                for (slot, &i) in pair.iter().enumerate() {
+                    let v = if on_this(slot) { map(i) } else { Some(i) };
+                    match (v, out.get_mut(slot)) {
+                        (Some(v), Some(o)) => *o = v,
+                        _ => keep = false,
+                    }
+                }
+                if keep {
+                    new_i.extend_from_slice(&out);
+                    new_w.push(g.weights.get(pi * 2).copied().unwrap_or(0.0));
+                    new_w.push(g.weights.get(pi * 2 + 1).copied().unwrap_or(0.0));
+                }
+            }
+            g.weights = new_w;
+            g.indices = new_i;
+        }
+        true
+    })
 }
 
 /// Swap in a whole new triangulation. Every new vertex samples the old mesh
@@ -1982,108 +2178,110 @@ pub fn delete_vertices(model: &mut Model, mesh: usize, vertices: &[usize]) -> bo
 /// old vertex otherwise, so every keyform carries over. Glue on this mesh
 /// cannot survive a retriangulation and is cleared.
 pub fn remesh(model: &mut Model, mesh: usize, uvs: &[f32], indices: &[u16]) -> bool {
-    let new_n = uvs.len() / 2;
-    if new_n < 3
-        || new_n >= u16::MAX as usize
-        || indices.len() < 3
-        || !indices.len().is_multiple_of(3)
-    {
-        return false;
-    }
-    if indices.iter().any(|&i| i as usize >= new_n) {
-        return false;
-    }
-    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
-    let old_n = m.vertex_count as usize;
-    let stride = old_n * 2;
-    if stride == 0 || m.positions.len() < stride {
-        return false;
-    }
-    let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
-
-    let old_uv = |i: usize| -> (f32, f32) {
-        (m.uvs.get(i * 2).copied().unwrap_or(0.0), m.uvs.get(i * 2 + 1).copied().unwrap_or(0.0))
-    };
-
-    // where each new vertex sits on the old mesh
-    enum Src {
-        Tri([usize; 3], [f32; 3]),
-        Vert(usize),
-    }
-    let mut sources = Vec::with_capacity(new_n);
-    for vi in 0..new_n {
-        let u = uvs.get(vi * 2).copied().unwrap_or(0.0);
-        let v = uvs.get(vi * 2 + 1).copied().unwrap_or(0.0);
-        let mut found = None;
-        let (tris, _) = m.indices.as_chunks::<3>();
-        for &[ta, tb, tc] in tris {
-            let (a, b, c) = (ta as usize, tb as usize, tc as usize);
-            let (x0, y0) = old_uv(a);
-            let (x1, y1) = old_uv(b);
-            let (x2, y2) = old_uv(c);
-            let den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
-            if den.abs() < 1e-12 {
-                continue;
-            }
-            let w0 = ((y1 - y2) * (u - x2) + (x2 - x1) * (v - y2)) / den;
-            let w1 = ((y2 - y0) * (u - x2) + (x0 - x2) * (v - y2)) / den;
-            let w2 = 1.0 - w0 - w1;
-            if w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02 {
-                found = Some(Src::Tri([a, b, c], [w0, w1, w2]));
-                break;
-            }
+    with_shapes(model, |model| {
+        let new_n = uvs.len() / 2;
+        if new_n < 3
+            || new_n >= u16::MAX as usize
+            || indices.len() < 3
+            || !indices.len().is_multiple_of(3)
+        {
+            return false;
         }
-        let src = found.unwrap_or_else(|| {
-            let mut best = (0usize, f32::MAX);
-            for ovi in 0..old_n {
-                let (ou, ov) = old_uv(ovi);
-                let d = (ou - u) * (ou - u) + (ov - v) * (ov - v);
-                if d < best.1 {
-                    best = (ovi, d);
+        if indices.iter().any(|&i| i as usize >= new_n) {
+            return false;
+        }
+        let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+        let old_n = m.vertex_count as usize;
+        let stride = old_n * 2;
+        if stride == 0 || m.positions.len() < stride {
+            return false;
+        }
+        let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
+
+        let old_uv = |i: usize| -> (f32, f32) {
+            (m.uvs.get(i * 2).copied().unwrap_or(0.0), m.uvs.get(i * 2 + 1).copied().unwrap_or(0.0))
+        };
+
+        // where each new vertex sits on the old mesh
+        enum Src {
+            Tri([usize; 3], [f32; 3]),
+            Vert(usize),
+        }
+        let mut sources = Vec::with_capacity(new_n);
+        for vi in 0..new_n {
+            let u = uvs.get(vi * 2).copied().unwrap_or(0.0);
+            let v = uvs.get(vi * 2 + 1).copied().unwrap_or(0.0);
+            let mut found = None;
+            let (tris, _) = m.indices.as_chunks::<3>();
+            for &[ta, tb, tc] in tris {
+                let (a, b, c) = (ta as usize, tb as usize, tc as usize);
+                let (x0, y0) = old_uv(a);
+                let (x1, y1) = old_uv(b);
+                let (x2, y2) = old_uv(c);
+                let den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+                if den.abs() < 1e-12 {
+                    continue;
+                }
+                let w0 = ((y1 - y2) * (u - x2) + (x2 - x1) * (v - y2)) / den;
+                let w1 = ((y2 - y0) * (u - x2) + (x0 - x2) * (v - y2)) / den;
+                let w2 = 1.0 - w0 - w1;
+                if w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02 {
+                    found = Some(Src::Tri([a, b, c], [w0, w1, w2]));
+                    break;
                 }
             }
-            Src::Vert(best.0)
-        });
-        sources.push(src);
-    }
-
-    let mut positions = Vec::with_capacity(keyforms * new_n * 2);
-    for k in 0..keyforms {
-        let base = k * stride;
-        for src in &sources {
-            let (x, y) = match src {
-                Src::Vert(vi) => (
-                    m.positions.get(base + vi * 2).copied().unwrap_or(0.0),
-                    m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0),
-                ),
-                Src::Tri(c, w) => {
-                    let mut x = 0.0;
-                    let mut y = 0.0;
-                    for (&vi, &wc) in c.iter().zip(w.iter()) {
-                        x += m.positions.get(base + vi * 2).copied().unwrap_or(0.0) * wc;
-                        y += m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0) * wc;
+            let src = found.unwrap_or_else(|| {
+                let mut best = (0usize, f32::MAX);
+                for ovi in 0..old_n {
+                    let (ou, ov) = old_uv(ovi);
+                    let d = (ou - u) * (ou - u) + (ov - v) * (ov - v);
+                    if d < best.1 {
+                        best = (ovi, d);
                     }
-                    (x, y)
                 }
-            };
-            positions.push(x);
-            positions.push(y);
+                Src::Vert(best.0)
+            });
+            sources.push(src);
         }
-    }
 
-    m.positions = positions;
-    m.uvs = uvs.to_vec();
-    m.indices = indices.to_vec();
-    m.vertex_count = new_n as u32;
-
-    let mesh32 = mesh as u32;
-    for g in &mut model.glues {
-        if g.art_mesh_a == mesh32 || g.art_mesh_b == mesh32 {
-            g.weights.clear();
-            g.indices.clear();
+        let mut positions = Vec::with_capacity(keyforms * new_n * 2);
+        for k in 0..keyforms {
+            let base = k * stride;
+            for src in &sources {
+                let (x, y) = match src {
+                    Src::Vert(vi) => (
+                        m.positions.get(base + vi * 2).copied().unwrap_or(0.0),
+                        m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0),
+                    ),
+                    Src::Tri(c, w) => {
+                        let mut x = 0.0;
+                        let mut y = 0.0;
+                        for (&vi, &wc) in c.iter().zip(w.iter()) {
+                            x += m.positions.get(base + vi * 2).copied().unwrap_or(0.0) * wc;
+                            y += m.positions.get(base + vi * 2 + 1).copied().unwrap_or(0.0) * wc;
+                        }
+                        (x, y)
+                    }
+                };
+                positions.push(x);
+                positions.push(y);
+            }
         }
-    }
-    true
+
+        m.positions = positions;
+        m.uvs = uvs.to_vec();
+        m.indices = indices.to_vec();
+        m.vertex_count = new_n as u32;
+
+        let mesh32 = mesh as u32;
+        for g in &mut model.glues {
+            if g.art_mesh_a == mesh32 || g.art_mesh_b == mesh32 {
+                g.weights.clear();
+                g.indices.clear();
+            }
+        }
+        true
+    })
 }
 
 /// Cubism's four corner forms: on a two-axis binding, each diagonal corner
@@ -2192,8 +2390,7 @@ pub fn move_vertices_in(
     let Some(k) = keyform else { return move_vertices(model, mesh, moves) };
     let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
     let count = m.vertex_count as usize;
-    let stride = count.saturating_mul(2);
-    let Some(form) = m.positions.get_mut(k * stride..(k + 1) * stride) else { return false };
+    let Some(form) = crate::keyform::mesh_form_mut(m, k) else { return false };
     let mut touched = false;
     for &(vertex, dx, dy) in moves {
         if vertex >= count {
@@ -2363,6 +2560,7 @@ pub fn create_parameter(
         default: default.clamp(min, max),
         repeat: false,
         decimals: 3,
+        blend_shape: false,
     });
     Some(model.parameters.len() - 1)
 }
@@ -2374,9 +2572,10 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
     let id = meta.id.clone();
     let p32 = param as u32;
     let uses = |b: &Binding| b.axes.iter().any(|a| a.parameter == p32);
+    let shaped = |s: &[BlendShape]| s.iter().any(|s| s.parameter == p32);
     let used = model.parts.iter().any(|p| uses(&p.binding))
         || model.deformers.iter().any(|d| uses(&d.binding))
-        || model.art_meshes.iter().any(|m| uses(&m.binding))
+        || model.art_meshes.iter().any(|m| uses(&m.binding) || shaped(&m.blend_shapes))
         || model.glues.iter().any(|g| uses(&g.binding))
         || model.physics.as_ref().is_some_and(|rig| {
             rig.groups.iter().any(|g| {
@@ -2402,6 +2601,11 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
     }
     for m in &mut model.art_meshes {
         shift(&mut m.binding);
+        for s in &mut m.blend_shapes {
+            if s.parameter > p32 {
+                s.parameter -= 1;
+            }
+        }
     }
     for g in &mut model.glues {
         shift(&mut g.binding);
@@ -2416,7 +2620,11 @@ pub fn param_users(model: &Model, param: usize) -> (usize, usize) {
     let uses = |b: &Binding| b.axes.iter().any(|a| a.parameter == p32);
     let objects = model.parts.iter().filter(|p| uses(&p.binding)).count()
         + model.deformers.iter().filter(|d| uses(&d.binding)).count()
-        + model.art_meshes.iter().filter(|m| uses(&m.binding)).count()
+        + model
+            .art_meshes
+            .iter()
+            .filter(|m| uses(&m.binding) || m.blend_shapes.iter().any(|s| s.parameter == p32))
+            .count()
         + model.glues.iter().filter(|g| uses(&g.binding)).count();
     let id = model.parameters.get(param).map(|p| p.id.as_str()).unwrap_or_default();
     let physics = model.physics.as_ref().map_or(0, |rig| {
@@ -2463,7 +2671,7 @@ pub fn unbind_parameter_everywhere(model: &mut Model, param: usize) -> bool {
             .art_meshes
             .iter()
             .enumerate()
-            .filter(|(_, m)| uses(&m.binding))
+            .filter(|(_, m)| uses(&m.binding) || m.blend_shapes.iter().any(|s| s.parameter == p32))
             .map(|(i, _)| Target::ArtMesh(i)),
     );
     let mut changed = false;
@@ -2576,60 +2784,63 @@ pub fn auto_connect(
 /// midpoints, shape untouched. New points append, so existing indices (and
 /// any glue on them) stay valid.
 pub fn subdivide4(model: &mut Model, mesh: usize) -> bool {
-    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
-    let n = m.vertex_count as usize;
-    let stride = n * 2;
-    let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
-    let (tris, _) = m.indices.as_chunks::<3>();
-    let tris = tris.to_vec();
-    if tris.is_empty() {
-        return false;
-    }
-    let mut mid_of: std::collections::HashMap<(u16, u16), u16> = std::collections::HashMap::new();
-    let mut mids: Vec<(u16, u16)> = Vec::new();
-    for t in &tris {
-        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
-            let key = (a.min(b), a.max(b));
-            if let std::collections::hash_map::Entry::Vacant(slot) = mid_of.entry(key) {
-                let id = n + mids.len();
-                if id >= u16::MAX as usize {
-                    return false;
+    with_shapes(model, |model| {
+        let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+        let n = m.vertex_count as usize;
+        let stride = n * 2;
+        let keyforms = m.positions.len().checked_div(stride).unwrap_or(0);
+        let (tris, _) = m.indices.as_chunks::<3>();
+        let tris = tris.to_vec();
+        if tris.is_empty() {
+            return false;
+        }
+        let mut mid_of: std::collections::HashMap<(u16, u16), u16> =
+            std::collections::HashMap::new();
+        let mut mids: Vec<(u16, u16)> = Vec::new();
+        for t in &tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let key = (a.min(b), a.max(b));
+                if let std::collections::hash_map::Entry::Vacant(slot) = mid_of.entry(key) {
+                    let id = n + mids.len();
+                    if id >= u16::MAX as usize {
+                        return false;
+                    }
+                    slot.insert(id as u16);
+                    mids.push(key);
                 }
-                slot.insert(id as u16);
-                mids.push(key);
             }
         }
-    }
-    let half = |pool: &[f32], base: usize, (a, b): (u16, u16)| {
-        let g = |i: u16, k: usize| pool.get(base + i as usize * 2 + k).copied().unwrap_or(0.0);
-        [(g(a, 0) + g(b, 0)) * 0.5, (g(a, 1) + g(b, 1)) * 0.5]
-    };
-    let new_n = n + mids.len();
-    let mut positions = Vec::with_capacity(keyforms * new_n * 2);
-    for k in 0..keyforms {
-        let base = k * stride;
-        positions.extend_from_slice(m.positions.get(base..base + stride).unwrap_or(&[]));
-        for &e in &mids {
-            positions.extend_from_slice(&half(&m.positions, base, e));
+        let half = |pool: &[f32], base: usize, (a, b): (u16, u16)| {
+            let g = |i: u16, k: usize| pool.get(base + i as usize * 2 + k).copied().unwrap_or(0.0);
+            [(g(a, 0) + g(b, 0)) * 0.5, (g(a, 1) + g(b, 1)) * 0.5]
+        };
+        let new_n = n + mids.len();
+        let mut positions = Vec::with_capacity(keyforms * new_n * 2);
+        for k in 0..keyforms {
+            let base = k * stride;
+            positions.extend_from_slice(m.positions.get(base..base + stride).unwrap_or(&[]));
+            for &e in &mids {
+                positions.extend_from_slice(&half(&m.positions, base, e));
+            }
         }
-    }
-    let mut uvs = m.uvs.clone();
-    for &e in &mids {
-        let h = half(&m.uvs, 0, e);
-        uvs.extend_from_slice(&h);
-    }
-    let mid = |a: u16, b: u16| mid_of.get(&(a.min(b), a.max(b))).copied().unwrap_or(a);
-    let mut indices = Vec::with_capacity(tris.len() * 12);
-    for t in &tris {
-        let (a, b, c) = (t[0], t[1], t[2]);
-        let (ab, bc, ca) = (mid(a, b), mid(b, c), mid(c, a));
-        indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
-    }
-    m.positions = positions;
-    m.uvs = uvs;
-    m.indices = indices;
-    m.vertex_count = new_n as u32;
-    true
+        let mut uvs = m.uvs.clone();
+        for &e in &mids {
+            let h = half(&m.uvs, 0, e);
+            uvs.extend_from_slice(&h);
+        }
+        let mid = |a: u16, b: u16| mid_of.get(&(a.min(b), a.max(b))).copied().unwrap_or(a);
+        let mut indices = Vec::with_capacity(tris.len() * 12);
+        for t in &tris {
+            let (a, b, c) = (t[0], t[1], t[2]);
+            let (ab, bc, ca) = (mid(a, b), mid(b, c), mid(c, a));
+            indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
+        }
+        m.positions = positions;
+        m.uvs = uvs;
+        m.indices = indices;
+        m.vertex_count = new_n as u32;
+        true
+    })
 }
 
 /// Bind two meshes with glue, Cubism style: vertex pairs that overlap (in
@@ -2870,6 +3081,7 @@ mod tests {
                     default: 0.0,
                     repeat: false,
                     decimals: 3,
+                    blend_shape: false,
                 },
                 Parameter {
                     id: "B".into(),
@@ -2878,6 +3090,7 @@ mod tests {
                     default: 0.0,
                     repeat: false,
                     decimals: 3,
+                    blend_shape: false,
                 },
             ],
             parts: vec![],
@@ -2903,6 +3116,7 @@ mod tests {
                 draw_orders: vec![500.0, 500.0],
                 // the single vertex slides from x=0 to x=2
                 positions: vec![0.0, 0.0, 2.0, 0.0],
+                blend_shapes: Vec::new(),
             }],
             glues: vec![],
             draw_groups: vec![],

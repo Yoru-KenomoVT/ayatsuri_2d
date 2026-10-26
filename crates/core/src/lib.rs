@@ -13,6 +13,7 @@ pub mod artpath;
 pub mod automesh;
 pub mod bezier;
 pub mod blend;
+pub mod blendshape;
 pub mod comp;
 pub mod compose;
 pub mod deform;
@@ -21,7 +22,7 @@ pub mod keyform;
 pub mod physics;
 pub mod skin;
 
-use ayatsuri_format::model::{Blend, DeformerKind, Model};
+use ayatsuri_format::model::{ArtMesh, Blend, BlendShape, DeformerKind, Model, Parameter};
 use deform::{Rotation, Vec2, rotation_transform, signed_angle, v2, warp_transform};
 
 /// A loaded puppet: the model plus every buffer the frame loop needs,
@@ -70,6 +71,9 @@ pub struct Puppet {
     /// Scratch, reused every frame.
     corners: Vec<blend::Corner>,
     scratch: Vec<f32>,
+    /// A mesh's keyform weights at the default pose, for its blend shapes'
+    /// base form.
+    shape_corners: Vec<blend::Corner>,
     /// The pendulum rig's live state, when the model carries one.
     physics: Option<physics::Physics>,
     /// Work skipped when nothing changed. Each deformer and mesh remembers
@@ -81,11 +85,36 @@ pub struct Puppet {
     cache: Cache,
 }
 
+fn shape_value(values: &[f32], shape: &BlendShape) -> f32 {
+    values.get(shape.parameter as usize).copied().unwrap_or(0.0)
+}
+
 impl Cache {
-    fn remember_mesh(&mut self, mi: usize, corners: &[blend::Corner]) {
+    /// The mesh was last made at these blend shape values, bit for bit.
+    fn mesh_shapes_same(&self, mi: usize, shapes: &[BlendShape], values: &[f32]) -> bool {
+        self.mesh_shapes.get(mi).is_some_and(|seen| {
+            seen.len() == shapes.len()
+                && seen
+                    .iter()
+                    .zip(shapes)
+                    .all(|(v, s)| v.to_bits() == shape_value(values, s).to_bits())
+        })
+    }
+
+    fn remember_mesh(
+        &mut self,
+        mi: usize,
+        corners: &[blend::Corner],
+        shapes: &[BlendShape],
+        values: &[f32],
+    ) {
         if let Some(c) = self.mesh_corners.get_mut(mi) {
             c.clear();
             c.extend_from_slice(corners);
+        }
+        if let Some(seen) = self.mesh_shapes.get_mut(mi) {
+            seen.clear();
+            seen.extend(shapes.iter().map(|s| shape_value(values, s)));
         }
         if let Some(m) = self.mesh_made.get_mut(mi) {
             *m = true;
@@ -103,6 +132,8 @@ struct Cache {
     /// Changed this frame: children redo theirs.
     def_moved: Vec<bool>,
     mesh_corners: Vec<Vec<blend::Corner>>,
+    /// The blend shape parameter values each mesh was made at.
+    mesh_shapes: Vec<Vec<f32>>,
     mesh_made: Vec<bool>,
     /// Held by glue: always redone.
     mesh_glued: Vec<bool>,
@@ -202,6 +233,11 @@ impl Puppet {
                 def_made: vec![false; n_defs],
                 def_moved: vec![true; n_defs],
                 mesh_corners: vec![Vec::new(); n_meshes],
+                mesh_shapes: model
+                    .art_meshes
+                    .iter()
+                    .map(|m| Vec::with_capacity(m.blend_shapes.len()))
+                    .collect(),
                 mesh_made: vec![false; n_meshes],
                 mesh_glued: {
                     let mut g = vec![false; n_meshes];
@@ -234,6 +270,7 @@ impl Puppet {
             mask_source,
             corners: Vec::with_capacity(max_corners),
             scratch: vec![0.0; max_grid.max(max_mesh)],
+            shape_corners: Vec::with_capacity(max_corners),
             physics: physics::Physics::new(&model),
             model,
         }
@@ -329,10 +366,7 @@ impl Puppet {
     /// next `update` shows it. Callers restore and commit through an edit.
     pub fn mesh_keyform_mut(&mut self, mesh: usize, keyform: usize) -> Option<&mut [f32]> {
         self.cache.valid = false;
-        let m = self.model.art_meshes.get_mut(mesh)?;
-        let stride = (m.vertex_count as usize).checked_mul(2)?;
-        let start = keyform.checked_mul(stride)?;
-        m.positions.get_mut(start..start.checked_add(stride)?)
+        keyform::mesh_form_mut(self.model.art_meshes.get_mut(mesh)?, keyform)
     }
 
     /// One keyform's opacity of an art mesh or deformer, editable in place
@@ -491,6 +525,49 @@ impl Puppet {
             let Some(src) = pool.get(base..base.saturating_add(len)) else { continue };
             for (o, s) in out.iter_mut().zip(src) {
                 *o += s * w;
+            }
+        }
+    }
+
+    /// Add a mesh's blend shapes onto `out`, its blend at the current
+    /// values: each shape's weighted difference from the base form, the
+    /// mesh's blend at every parameter's default, made in `base`. A mesh
+    /// whose binding does not cover the defaults has no base form and so no
+    /// blend shapes (Cubism requires the defaults keyed).
+    fn add_blend_shapes(
+        params: &[Parameter],
+        m: &ArtMesh,
+        values: &[f32],
+        eps: &[(f32, f32)],
+        corners: &mut Vec<blend::Corner>,
+        base: &mut [f32],
+        out: &mut [f32],
+    ) {
+        if m.blend_shapes.is_empty() {
+            return;
+        }
+        let len = out.len();
+        let Some(base) = base.get_mut(..len) else { return };
+        let at_default = blend::corners(
+            &m.binding,
+            |p| params.get(p).map_or(0.0, |q| q.default),
+            |p| eps.get(p).copied().unwrap_or((0.001, 0.0015)),
+            corners,
+        );
+        if !at_default {
+            return;
+        }
+        Self::blend_positions(corners, &m.positions, len, base);
+        for shape in &m.blend_shapes {
+            for (k, w) in blendshape::weights(shape_value(values, shape), &shape.keys) {
+                if w == 0.0 {
+                    continue;
+                }
+                let start = k.saturating_mul(len);
+                let Some(form) = shape.positions.get(start..start.saturating_add(len)) else {
+                    continue;
+                };
+                blendshape::add(out, form, base, w);
             }
         }
     }
@@ -701,6 +778,8 @@ impl Puppet {
     fn update_meshes(&mut self) {
         let mut corners = core::mem::take(&mut self.corners);
         let mut mesh_pos = core::mem::take(&mut self.mesh_pos);
+        let mut scratch = core::mem::take(&mut self.scratch);
+        let mut shape_corners = core::mem::take(&mut self.shape_corners);
 
         for mi in 0..self.model.art_meshes.len() {
             let Some(m) = self.model.art_meshes.get(mi) else { break };
@@ -734,7 +813,8 @@ impl Puppet {
                 && !parent_moved
                 && !self.cache.mesh_glued.get(mi).copied().unwrap_or(true)
                 && self.cache.mesh_made.get(mi).copied().unwrap_or(false)
-                && self.cache.mesh_corners.get(mi).is_some_and(|c| *c == corners);
+                && self.cache.mesh_corners.get(mi).is_some_and(|c| *c == corners)
+                && self.cache.mesh_shapes_same(mi, &m.blend_shapes, &self.values);
             if !enabled {
                 if let Some(o) = self.mesh_opacity.get_mut(mi) {
                     *o = 0.0;
@@ -754,11 +834,20 @@ impl Puppet {
                     let off = self.mesh_pos_off.get(mi).copied().unwrap_or(0);
                     if let Some(out) = mesh_pos.get_mut(off..off.saturating_add(len)) {
                         Self::blend_positions(&corners, &m.positions, len, out);
+                        Self::add_blend_shapes(
+                            &self.model.parameters,
+                            m,
+                            &self.values,
+                            &self.eps,
+                            &mut shape_corners,
+                            &mut scratch,
+                            out,
+                        );
                         if let Some(pd) = m.parent_deformer {
                             self.apply_deformer(pd as usize, out);
                         }
                     }
-                    self.cache.remember_mesh(mi, &corners);
+                    self.cache.remember_mesh(mi, &corners, &m.blend_shapes, &self.values);
                 }
                 continue;
             }
@@ -768,11 +857,20 @@ impl Puppet {
                 let off = self.mesh_pos_off.get(mi).copied().unwrap_or(0);
                 if let Some(out) = mesh_pos.get_mut(off..off.saturating_add(len)) {
                     Self::blend_positions(&corners, &m.positions, len, out);
+                    Self::add_blend_shapes(
+                        &self.model.parameters,
+                        m,
+                        &self.values,
+                        &self.eps,
+                        &mut shape_corners,
+                        &mut scratch,
+                        out,
+                    );
                     if let Some(pd) = m.parent_deformer {
                         self.apply_deformer(pd as usize, out);
                     }
                 }
-                self.cache.remember_mesh(mi, &corners);
+                self.cache.remember_mesh(mi, &corners, &m.blend_shapes, &self.values);
             }
 
             let mut opacity = Self::blend_scalar(&corners, &m.opacities);
@@ -793,6 +891,8 @@ impl Puppet {
 
         self.corners = corners;
         self.mesh_pos = mesh_pos;
+        self.scratch = scratch;
+        self.shape_corners = shape_corners;
     }
 
     /// Stitch glued mesh pairs: each paired vertex pulls toward its partner
@@ -982,6 +1082,16 @@ impl Puppet {
         let len = (m.vertex_count as usize).saturating_mul(2);
         let mut out = vec![0.0; len];
         Self::blend_positions(&corners, &m.positions, len, &mut out);
+        let mut base = vec![0.0; len];
+        Self::add_blend_shapes(
+            &self.model.parameters,
+            m,
+            &self.values,
+            &self.eps,
+            &mut corners,
+            &mut base,
+            &mut out,
+        );
         Some(out)
     }
 
@@ -1120,7 +1230,7 @@ pub struct MeshGeometry<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ayatsuri_format::model::{ArtMesh, Binding, BindingAxis, Canvas, Parameter};
+    use ayatsuri_format::model::{Binding, BindingAxis, Canvas};
 
     fn one_param_model() -> Model {
         // one parameter 0..1, one mesh with two keyforms: a unit-right
@@ -1134,6 +1244,7 @@ mod tests {
                 default: 0.0,
                 repeat: false,
                 decimals: 3,
+                blend_shape: false,
             }],
             parts: vec![],
             deformers: vec![],
@@ -1160,6 +1271,7 @@ mod tests {
                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, // keyform 0
                     1.0, 0.0, 2.0, 0.0, 1.0, 1.0, // keyform 1
                 ],
+                blend_shapes: Vec::new(),
             }],
             glues: vec![],
             draw_groups: vec![],
@@ -1197,6 +1309,95 @@ mod tests {
         p.set_value(0, 7.0);
         p.update();
         assert_eq!(p.value(0), 1.0);
+    }
+
+    fn smile_model() -> Model {
+        // one_param_model plus a blend shape parameter whose key 1.0 lifts
+        // vertex 0 by 3 over the base form (keyform 0, ParamX's default)
+        let mut model = one_param_model();
+        model.parameters.push(Parameter {
+            id: "ParamSmile".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: true,
+        });
+        if let Some(m) = model.art_meshes.first_mut() {
+            m.blend_shapes.push(BlendShape {
+                parameter: 1,
+                keys: vec![1.0],
+                positions: vec![0.0, 3.0, 1.0, 0.0, 0.0, 1.0],
+            });
+        }
+        model
+    }
+
+    #[test]
+    fn blend_shapes_add_on_top_of_keyforms() {
+        let mut p = Puppet::new(smile_model());
+        p.set_value(0, 0.5);
+        p.update();
+        let d: Vec<_> = p.drawables().collect();
+        assert_eq!(&d[0].positions[..2], &[0.5, 0.0]);
+
+        // only the blend shape moves: the cache must not keep last frame's
+        p.set_value(1, 0.5);
+        p.update();
+        let d: Vec<_> = p.drawables().collect();
+        assert!((d[0].positions[0] - 0.5).abs() < 1e-6);
+        assert!((d[0].positions[1] - 1.5).abs() < 1e-6);
+        // the other vertices match the base form, so nothing lands on them
+        assert!((d[0].positions[2] - 1.5).abs() < 1e-6);
+        assert_eq!(d[0].positions[3], 0.0);
+
+        // the editor's local probe sees the same points
+        let local = p.mesh_local_positions(0).unwrap_or_default();
+        assert!((local[1] - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_blend_shape_is_made_edited_and_survives_mesh_edits() {
+        use edit::Target;
+        let mut model = smile_model();
+        if let Some(m) = model.art_meshes.first_mut() {
+            m.blend_shapes.clear();
+        }
+        // Add 2 Keyforms: the base key is implied, key 1.0 starts as the base
+        assert!(edit::add_keys(&mut model, Target::ArtMesh(0), 1, &[0.0, 1.0]));
+        let m = &model.art_meshes[0];
+        assert_eq!(m.blend_shapes[0].keys, vec![1.0]);
+        assert_eq!(m.blend_shapes[0].positions, m.positions[..6].to_vec());
+        assert_eq!(keyform::keys_on(&model, Target::ArtMesh(0), 1), Some(vec![0.0, 1.0]));
+
+        // on key 1.0 the blend keyform is the one edited, wherever ParamX is
+        let k = keyform::keyform_at(&model, Target::ArtMesh(0), &[0.3, 1.0]);
+        assert_eq!(k, Some(2));
+        assert!(edit::move_vertices_in(&mut model, 0, k, &[(0, 0.0, 3.0)]));
+        assert_eq!(model.art_meshes[0].blend_shapes[0].positions[1], 3.0);
+        // at the base key the normal keyforms are, between keys nothing is
+        assert_eq!(keyform::keyform_at(&model, Target::ArtMesh(0), &[1.0, 0.0]), Some(1));
+        assert_eq!(keyform::keyform_at(&model, Target::ArtMesh(0), &[1.0, 0.5]), None);
+
+        let mut p = Puppet::new(model.clone());
+        p.set_value(1, 0.5);
+        p.update();
+        assert!((p.drawables().next().map_or(0.0, |d| d.positions[1]) - 1.5).abs() < 1e-6);
+
+        // a new vertex lands in the blend form too, the forms stay aligned
+        assert!(edit::add_vertex(&mut model, 0, 0, [1.0 / 3.0; 3]).is_some());
+        let m = &model.art_meshes[0];
+        assert_eq!(m.positions.len(), 2 * 8);
+        assert_eq!(m.blend_shapes[0].positions.len(), 8);
+        assert!((m.blend_shapes[0].positions[1] - 3.0).abs() < 1e-6);
+        assert!((m.blend_shapes[0].positions[7] - 4.0 / 3.0).abs() < 1e-6);
+
+        // the parameter is in use until the blend shape goes
+        assert!(!edit::delete_parameter(&mut model, 1));
+        assert!(edit::delete_key(&mut model, Target::ArtMesh(0), 1, 1.0));
+        assert!(model.art_meshes[0].blend_shapes.is_empty());
+        assert!(edit::delete_parameter(&mut model, 1));
     }
 
     #[test]

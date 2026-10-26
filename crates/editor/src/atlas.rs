@@ -222,6 +222,7 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0; uvs.len()],
+            blend_shapes: Vec::new(),
         }
     }
 

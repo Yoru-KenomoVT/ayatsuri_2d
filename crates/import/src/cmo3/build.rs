@@ -166,6 +166,7 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
             default: p.default,
             repeat: p.repeat,
             decimals: p.decimals,
+            blend_shape: false,
         });
         param_names.push(p.name.clone());
         if p.folder.is_empty() {
