@@ -1366,5 +1366,12 @@
   "Save the values below into this preset": "아래 값을 이 프리셋에 저장",
   "Preset name": "프리셋 이름",
   "Deformation (small)": "변형(작게)",
-  "Deformation (large)": "변형(크게)"
+  "Deformation (large)": "변형(크게)",
+  "New Part. Shift+click puts the selected objects in it": "새 파츠. Shift+클릭하면 선택한 오브젝트를 안에 넣습니다",
+  "Prohibit drag and drop": "드래그 앤 드롭 금지",
+  "New Part": "새 파츠",
+  "Part ID": "파츠 ID",
+  "Put selected objects into children": "선택한 오브젝트를 자식으로 넣기",
+  "IDs take letters, digits and _ only.": "ID에는 영문자, 숫자, _만 쓸 수 있습니다.",
+  "That Part ID is empty, taken or has characters IDs can't use.": "그 파츠 ID는 비어 있거나, 이미 쓰였거나, ID에 쓸 수 없는 문자가 있습니다."
 }
