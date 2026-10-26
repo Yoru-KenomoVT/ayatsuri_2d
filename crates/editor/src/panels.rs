@@ -19,6 +19,7 @@ mod physics_page;
 mod skin_dialog;
 mod temp_deform;
 mod tool_details;
+mod weight_limits;
 use crate::logging;
 use crate::prefs::Prefs;
 use crate::session::{Sel, Session};

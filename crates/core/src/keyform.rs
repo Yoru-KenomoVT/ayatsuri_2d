@@ -194,7 +194,11 @@ fn blend_keyform_at(model: &Model, m: &ArtMesh, values: &[f32]) -> Option<Option
         let tol = ((p.max - p.min).abs() * 0.01).max(1e-4);
         if v.abs() > tol {
             let i = s.keys.iter().position(|k| (k - v).abs() <= tol)?;
-            if found.is_some() {
+            // a limited shape cannot be edited where its limit holds it
+            // under 100% (editor manual, weight limits: precautions)
+            if found.is_some()
+                || crate::blendshape::limit(&model.parameters, &s.limits, values) < 1.0 - 1e-6
+            {
                 return None;
             }
             found = Some(first + i);

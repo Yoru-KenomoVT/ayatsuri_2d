@@ -110,15 +110,23 @@ fn shape_value(values: &[f32], shape: &BlendShape) -> f32 {
     values.get(shape.parameter as usize).copied().unwrap_or(0.0)
 }
 
+/// Every value a mesh's blend shapes read: each shape's own parameter and
+/// the parameters its weight limits follow.
+fn shape_inputs<'a>(values: &'a [f32], shapes: &'a [BlendShape]) -> impl Iterator<Item = f32> + 'a {
+    shapes.iter().flat_map(move |s| {
+        core::iter::once(shape_value(values, s)).chain(
+            s.limits.iter().map(move |l| values.get(l.parameter as usize).copied().unwrap_or(0.0)),
+        )
+    })
+}
+
 impl Cache {
     /// The mesh was last made at these blend shape values, bit for bit.
     fn mesh_shapes_same(&self, mi: usize, shapes: &[BlendShape], values: &[f32]) -> bool {
         self.mesh_shapes.get(mi).is_some_and(|seen| {
-            seen.len() == shapes.len()
-                && seen
-                    .iter()
-                    .zip(shapes)
-                    .all(|(v, s)| v.to_bits() == shape_value(values, s).to_bits())
+            let mut now = shape_inputs(values, shapes);
+            seen.iter().all(|v| now.next().is_some_and(|n| n.to_bits() == v.to_bits()))
+                && now.next().is_none()
         })
     }
 
@@ -135,7 +143,7 @@ impl Cache {
         }
         if let Some(seen) = self.mesh_shapes.get_mut(mi) {
             seen.clear();
-            seen.extend(shapes.iter().map(|s| shape_value(values, s)));
+            seen.extend(shape_inputs(values, shapes));
         }
         if let Some(m) = self.mesh_made.get_mut(mi) {
             *m = true;
@@ -636,7 +644,9 @@ impl Puppet {
         }
         Self::blend_positions(corners, &m.positions, len, base);
         for shape in &m.blend_shapes {
+            let limit = blendshape::limit(params, &shape.limits, values);
             for (k, w) in blendshape::weights(shape_value(values, shape), &shape.keys) {
+                let w = w * limit;
                 if w == 0.0 {
                     continue;
                 }
@@ -1510,6 +1520,7 @@ mod tests {
                 parameter: 1,
                 keys: vec![1.0],
                 positions: vec![0.0, 3.0, 1.0, 0.0, 0.0, 1.0],
+                limits: Vec::new(),
             });
         }
         model
@@ -1536,6 +1547,41 @@ mod tests {
         // the editor's local probe sees the same points
         let local = p.mesh_local_positions(0).unwrap_or_default();
         assert!((local[1] - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_weight_limit_scales_the_shape_and_its_parameter_redraws() {
+        let mut model = smile_model();
+        model.parameters.push(Parameter {
+            id: "ParamOpen".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: true,
+        });
+        let (keys, weights) = blendshape::Preset::Straight3.graph(0.0, 1.0);
+        assert_eq!(edit::add_weight_limit(&mut model, 0, 1, 2, keys, weights), Ok(()));
+        let mut p = Puppet::new(model);
+        p.set_value(1, 1.0);
+        p.update();
+        assert!((p.drawables().next().unwrap().positions[1] - 3.0).abs() < 1e-6);
+        // only the limiting parameter moves: half the smile is left
+        p.set_value(2, 0.5);
+        p.update();
+        assert!((p.drawables().next().unwrap().positions[1] - 1.5).abs() < 1e-6);
+        // and there the smile's keyform cannot be edited
+        let values = [0.0, 1.0, 0.5];
+        assert_eq!(
+            keyform::editing_blend_shape(p.model(), edit::Target::ArtMesh(0), &values),
+            None
+        );
+        let values = [0.0, 1.0, 0.0];
+        assert_eq!(
+            keyform::editing_blend_shape(p.model(), edit::Target::ArtMesh(0), &values),
+            Some(1)
+        );
     }
 
     #[test]

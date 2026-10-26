@@ -454,6 +454,22 @@ pub struct BlendShape {
     /// One `vertex_count * 2` block per key, in key order.
     #[serde(with = "f32_bin")]
     pub positions: Vec<f32>,
+    /// Limit settings for the shape's weight (Cubism 4.2): its weight is
+    /// multiplied by the smallest of these limits at the current values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<WeightLimit>,
+}
+
+/// One limit on a blend shape's weight: a line graph over another
+/// parameter's value. Past the ends the graph holds the end's weight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeightLimit {
+    /// Index into `Model::parameters`: the parameter the graph reads.
+    pub parameter: u32,
+    /// The graph's parameter values, strictly increasing (2 to 5 of them).
+    pub keys: Vec<f32>,
+    /// The limit at each key, 0.0 to 1.0.
+    pub weights: Vec<f32>,
 }
 
 /// Stitches two meshes' edges together: paired vertices pull toward each

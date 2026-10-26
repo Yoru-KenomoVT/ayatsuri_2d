@@ -4,7 +4,7 @@
 
 use ayatsuri_format::model::{
     ArtMesh, Binding, BindingAxis, Canvas, Deformer, DeformerKind, DrawGroup, DrawItem, Glue,
-    Model, Parameter, Part, RotationData, WarpData,
+    Model, Parameter, Part, RotationData, WarpData, WeightLimit,
 };
 use openmoc3::{F32s, I32s, Moc3};
 
@@ -635,8 +635,9 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
 /// moc3 4.2+'s blend shapes on art meshes (slots 114-130): each binding's
 /// keyforms, one per key of its parameter's key table with the base key's
 /// among them, hold what the shape adds; the model keeps the shape's form
-/// at each non-base key (base form plus that). Blend shapes on other
-/// objects and their limit settings are not kept yet, and say so.
+/// at each non-base key (base form plus that), and its weight limits
+/// (slots 123-124, 131-136). Blend shapes on other objects are not kept
+/// yet, and say so.
 fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_begin: &I32s<'_>) {
     let c = *moc.counts();
     if c.blend_shape_keyform_bindings <= 0 {
@@ -649,9 +650,6 @@ fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_b
         + c.blend_shapes_offscreens;
     if others > 0 {
         log::warn!("moc3: {others} blend shape(s) on deformers, parts or glue are not kept yet");
-    }
-    if c.blend_shape_constraints > 0 {
-        log::warn!("moc3: blend shape weight limits are not kept yet; shapes apply in full");
     }
     let (Ok(ptype), Ok(table_begin), Ok(table_count)) =
         (moc.i32s(114), moc.i32s(115), moc.i32s(116))
@@ -714,13 +712,52 @@ fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_b
                 }
             }
             if !keys.is_empty() {
-                shapes.push(ayatsuri_format::model::BlendShape { parameter, keys, positions });
+                let limits = read_limits(moc, b, model.parameters.len());
+                shapes.push(ayatsuri_format::model::BlendShape {
+                    parameter,
+                    keys,
+                    positions,
+                    limits,
+                });
             }
         }
         if let Some(m) = model.art_meshes.get_mut(mi) {
             m.blend_shapes = shapes;
         }
     }
+}
+
+/// Binding `b`'s weight limits: its run of constraint indices (123, 124)
+/// into the constraints (132-134) and their graphs (135, 136). A limit
+/// that points outside the file, or whose graph is empty, is skipped.
+fn read_limits(moc: &Moc3<'_>, b: usize, n_params: usize) -> Vec<WeightLimit> {
+    let (Ok(run_begin), Ok(run_count), Ok(index)) = (moc.i32s(123), moc.i32s(124), moc.i32s(131))
+    else {
+        return Vec::new();
+    };
+    let (Ok(param), Ok(v_begin), Ok(v_count), Ok(keys), Ok(weights)) =
+        (moc.i32s(132), moc.i32s(133), moc.i32s(134), moc.f32s(135), moc.f32s(136))
+    else {
+        return Vec::new();
+    };
+    let first = run_begin.get(b).unwrap_or(0).max(0);
+    let mut out = Vec::new();
+    for r in first..first + run_count.get(b).unwrap_or(0).max(0) {
+        let Some(c) = index.get(r as usize).and_then(|c| usize::try_from(c).ok()) else { continue };
+        let Some(p) = param.get(c).and_then(|p| usize::try_from(p).ok()).filter(|p| *p < n_params)
+        else {
+            continue;
+        };
+        let (vb, vn) = (v_begin.get(c).unwrap_or(0).max(0), v_count.get(c).unwrap_or(0).max(0));
+        let ks: Vec<f32> = (vb..vb + vn).filter_map(|i| keys.get(i as usize)).collect();
+        let ws: Vec<f32> = (vb..vb + vn).filter_map(|i| weights.get(i as usize)).collect();
+        if ks.is_empty() || ks.len() != ws.len() {
+            log::warn!("moc3: a blend shape weight limit has no usable graph; dropped");
+            continue;
+        }
+        out.push(WeightLimit { parameter: p as u32, keys: ks, weights: ws });
+    }
+    out
 }
 
 /// moc3 5.3's offscreen parts (slots 152-161): each part's offscreen, its

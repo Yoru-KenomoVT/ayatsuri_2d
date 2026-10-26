@@ -71,6 +71,7 @@ mod tests {
                 parameter: 0,
                 keys: vec![1.0],
                 positions: vec![0.0, 3.0, 1.0, 0.0, 0.0, 1.0],
+                limits: Vec::new(),
             }],
             clip_group: None,
             clip_inherit: false,
