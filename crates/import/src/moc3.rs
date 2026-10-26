@@ -307,6 +307,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             binding,
             draw_orders: collect_f32(&part_draw_orders, kf),
             offscreen: None,
+            blend_shapes: Vec::new(),
         });
     }
     read_offscreens(&moc, &mut parts, &part_kf_begin);
@@ -446,6 +447,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             kind,
             multiply: colors.0,
             screen: colors.1,
+            blend_shapes: Vec::new(),
         });
     }
 
@@ -647,6 +649,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             intensities: collect_f32(&g_intensities, kf),
             weights,
             indices,
+            blend_shapes: Vec::new(),
         });
     }
 
@@ -797,6 +800,15 @@ fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_b
                     keys,
                     positions,
                     limits,
+                    angles: Vec::new(),
+                    draw_orders: Vec::new(),
+                    intensities: Vec::new(),
+                    multiply: Vec::new(),
+                    opacities: Vec::new(),
+                    origins_x: Vec::new(),
+                    origins_y: Vec::new(),
+                    scales: Vec::new(),
+                    screen: Vec::new(),
                 });
             }
         }

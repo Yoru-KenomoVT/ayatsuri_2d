@@ -395,6 +395,15 @@ fn add_blend_keys(model: &mut Model, target: Target, param: usize, values: &[f32
                 keys: Vec::new(),
                 positions: Vec::new(),
                 limits: Vec::new(),
+                angles: Vec::new(),
+                draw_orders: Vec::new(),
+                intensities: Vec::new(),
+                multiply: Vec::new(),
+                opacities: Vec::new(),
+                origins_x: Vec::new(),
+                origins_y: Vec::new(),
+                scales: Vec::new(),
+                screen: Vec::new(),
             });
             m.blend_shapes.len() - 1
         }
@@ -779,6 +788,7 @@ pub fn create_warp_deformer(
             }),
             multiply: Vec::new(),
             screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
 
         for &mi in meshes {
@@ -838,6 +848,7 @@ pub fn create_rotation_deformer(
             }),
             multiply: Vec::new(),
             screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
 
         for &mi in meshes {
@@ -1127,6 +1138,7 @@ pub fn create_deformer(
                 kind: deformer_kind,
                 multiply: Vec::new(),
                 screen: Vec::new(),
+                blend_shapes: Vec::new(),
             },
         );
         for &c in &children {
@@ -3512,6 +3524,7 @@ pub fn bind_glue(
                 intensities: vec![1.0],
                 weights: Vec::new(),
                 indices: Vec::new(),
+                blend_shapes: Vec::new(),
             });
             model.glues.len() - 1
         }
@@ -4643,6 +4656,7 @@ mod tests {
             intensities: vec![1.0],
             weights: vec![],
             indices: vec![],
+            blend_shapes: Vec::new(),
         };
         m.glues = vec![glue(0, 1), glue(2, 3)];
         let mesh = |object| DrawItem { part: false, object, child_group: None };

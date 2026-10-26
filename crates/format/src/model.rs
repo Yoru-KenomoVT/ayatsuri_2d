@@ -159,8 +159,13 @@ pub struct Part {
     pub draw_orders: Vec<f32>,
     /// Drawn offscreen (Cubism 5.3): its children paint into a layer of
     /// their own first, which lands on the canvas as one image.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // always written: a field after it must not shift in the timelapse's
+    // positional arrays (see `ArtMesh::clip_group`)
+    #[serde(default)]
     pub offscreen: Option<Offscreen>,
+    /// Blend shapes on its draw order and offscreen opacity (Cubism 5.0).
+    #[serde(default)]
+    pub blend_shapes: Vec<BlendShape>,
 }
 
 /// How an offscreen part's layer lands on the canvas. Its children keep
@@ -242,6 +247,10 @@ pub struct Deformer {
     pub multiply: Vec<f32>,
     #[serde(default, with = "f32_bin")]
     pub screen: Vec<f32>,
+    /// Blend shapes on its grid or rotation, opacity and colour (warps
+    /// Cubism 4.2, rotations 5.0).
+    #[serde(default)]
+    pub blend_shapes: Vec<BlendShape>,
 }
 
 /// Drawable flag bits, matching moc3 slot 42.
@@ -461,19 +470,48 @@ pub struct ArtMesh {
 /// into it (Cubism 5.0). What lands on the object is `weight * (key form -
 /// base form)`, the base form being its blend at every parameter's default.
 /// The parameter's base key, 0.0, is implied and holds no keyform.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Every object kind uses this one type; each channel holds one block per
+/// key, in key order, and an empty channel is not shaped (it stays as the
+/// base). Which channels an object has follows its kind: meshes positions,
+/// opacity and colour; warps their grid as positions, opacity and colour;
+/// rotations angle, origin, scale, opacity and colour; parts draw order and
+/// offscreen opacity; glue intensity.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BlendShape {
     /// Index into `Model::parameters`; that parameter has `blend_shape` set.
     pub parameter: u32,
     /// The keys that hold a keyform: strictly increasing, never 0.0.
     pub keys: Vec<f32>,
-    /// One `vertex_count * 2` block per key, in key order.
+    /// Points: a mesh's `vertex_count * 2`, or a warp's grid, per key.
     #[serde(with = "f32_bin")]
     pub positions: Vec<f32>,
     /// Limit settings for the shape's weight (Cubism 4.2): its weight is
     /// multiplied by the smallest of these limits at the current values.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub limits: Vec<WeightLimit>,
+    /// One per key: opacity (meshes, deformers; a part's offscreen layer).
+    #[serde(default, with = "f32_bin")]
+    pub opacities: Vec<f32>,
+    /// Three per key: multiply and screen colour.
+    #[serde(default, with = "f32_bin")]
+    pub multiply: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub screen: Vec<f32>,
+    /// One per key, rotation deformers.
+    #[serde(default, with = "f32_bin")]
+    pub angles: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub origins_x: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub origins_y: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub scales: Vec<f32>,
+    /// One per key: a part's draw order, a glue's intensity.
+    #[serde(default, with = "f32_bin")]
+    pub draw_orders: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub intensities: Vec<f32>,
 }
 
 /// One limit on a blend shape's weight: a line graph over another
@@ -505,6 +543,9 @@ pub struct Glue {
     /// Vertex index in the owning mesh, parallel to `weights`.
     #[serde(with = "u16_bin")]
     pub indices: Vec<u16>,
+    /// Blend shapes on its intensity (Cubism 5.0).
+    #[serde(default)]
+    pub blend_shapes: Vec<BlendShape>,
 }
 
 /// One entry in a draw-order group: an art mesh, or a part whose own group

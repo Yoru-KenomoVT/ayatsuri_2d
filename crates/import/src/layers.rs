@@ -188,6 +188,7 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
                         binding: Binding::default(),
                         draw_orders: vec![500.0],
                         offscreen: None,
+                        blend_shapes: Vec::new(),
                     });
                     part_names.push(sub.last().cloned().unwrap_or_default());
                     parts.len() - 1

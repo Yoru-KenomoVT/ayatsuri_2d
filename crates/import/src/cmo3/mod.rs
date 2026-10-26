@@ -122,6 +122,7 @@ mod tests {
             }),
             multiply: Vec::new(),
             screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
         model.deformers.push(Deformer {
             id: "Rotation".into(),
@@ -142,6 +143,7 @@ mod tests {
             }),
             multiply: Vec::new(),
             screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
         // the red mesh under the warp, in grid space, two keyforms
         {
