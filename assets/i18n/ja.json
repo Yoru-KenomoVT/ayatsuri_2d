@@ -1350,5 +1350,10 @@
   "experimental": "試験的",
   "Features still being tested. They may change, and a model that uses one may look different in other apps until it is finished.": "テスト中の機能です。変更される可能性があり、使用したモデルは完成するまで他のアプリで見た目が異なる場合があります。",
   "Inherited clipping": "クリッピングの継承",
-  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "インスペクターのクリッピングに「継承」を表示します。メッシュは、そのマスク自体をクリッピングしているものでもクリッピングされます。エディタでは正確に描画されます。moc3 書き出しでは今のところ自分のマスクだけでクリッピングされます"
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "インスペクターのクリッピングに「継承」を表示します。メッシュは、そのマスク自体をクリッピングしているものでもクリッピングされます。エディタでは正確に描画されます。moc3 書き出しでは今のところ自分のマスクだけでクリッピングされます",
+  "Experimental features": "試験的機能",
+  "Turns every feature below on or off at once": "下のすべての機能をまとめてオン・オフします",
+  "FEATURES": "機能",
+  "Clip groups": "クリップグループ",
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "インスペクターでマスクのセットに名前を付けると、複数のメッシュがそれでまとめてクリッピングされ、一緒に変更されます"
 }

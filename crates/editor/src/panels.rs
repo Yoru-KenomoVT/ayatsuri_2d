@@ -8607,7 +8607,8 @@ impl EditorUi {
                     s,
                     i,
                     &mut self.clip_group_name,
-                    self.prefs.experimental_inherit_clip,
+                    self.prefs.clip_groups_on(),
+                    self.prefs.inherit_clip_on(),
                 );
 
                 if new_flags != m.flags || new_blend != blend || (order - base_order).abs() > 0.5 {
@@ -15550,9 +15551,17 @@ const COLOR_BLEND_MENU: [ayatsuri_format::model::ColorBlend; 18] = {
 
 /// Below a mesh's Clip by: inheriting its masks' clip, the chain that
 /// gives, and the clip group it shares its masks through.
-/// Inherit is experimental (Settings > Experimental): offered when that is
-/// on, and kept visible on a mesh that already uses it so it can be undone.
-fn clip_rows(ui: &mut Ui, s: &mut Session, mesh: usize, name_buf: &mut String, experimental: bool) {
+/// Clip groups and inherit are experimental (Settings > Experimental):
+/// offered when switched on there, and kept visible on a mesh that already
+/// uses one so it can be undone.
+fn clip_rows(
+    ui: &mut Ui,
+    s: &mut Session,
+    mesh: usize,
+    name_buf: &mut String,
+    groups_on: bool,
+    inherit_on: bool,
+) {
     use ayatsuri_core::clip::{ChainStop, chain_of};
     let model = s.puppet.model();
     let Some(m) = model.art_meshes.get(mesh) else { return };
@@ -15565,7 +15574,7 @@ fn clip_rows(ui: &mut Ui, s: &mut Session, mesh: usize, name_buf: &mut String, e
         |set: &[u32]| set.iter().map(|&x| s.mesh_name(x as usize)).collect::<Vec<_>>().join(", ");
 
     let mut want_inherit = inherit;
-    if !masks.is_empty() && (experimental || inherit) {
+    if !masks.is_empty() && (inherit_on || inherit) {
         ui.horizontal(|ui| {
             ui.add_space(78.0);
             let label = if masks.len() == 1 {
@@ -15619,38 +15628,40 @@ fn clip_rows(ui: &mut Ui, s: &mut Session, mesh: usize, name_buf: &mut String, e
     let mut want_group = group;
     let mut save_as: Option<String> = None;
     let mut delete_group = false;
-    ui.horizontal(|ui| {
-        ui.add_sized(
-            [74.0, 16.0],
-            egui::Label::new(
-                egui::RichText::new(crate::i18n::tr("Clip group"))
-                    .color(theme::pal().text_faint)
-                    .size(11.0),
-            ),
-        );
-        let current = want_group
-            .and_then(|g| groups.get(g as usize).cloned())
-            .unwrap_or_else(|| crate::i18n::tr("none").into());
-        egui::ComboBox::from_id_salt(("clip-group", mesh)).selected_text(current).show_ui(
-            ui,
-            |ui| {
-                ui.selectable_value(&mut want_group, None, crate::i18n::tr("none"));
-                for (g, name) in groups.iter().enumerate() {
-                    ui.selectable_value(&mut want_group, Some(g as u32), name);
-                }
-            },
-        );
-        if want_group.is_some()
-            && ui
-                .small_button(egui_phosphor::regular::TRASH)
-                .on_hover_text(crate::i18n::tr(
-                    "Delete this clip group; its meshes keep the masks they have",
-                ))
-                .clicked()
-        {
-            delete_group = true;
-        }
-    });
+    if groups_on || group.is_some() {
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [74.0, 16.0],
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::tr("Clip group"))
+                        .color(theme::pal().text_faint)
+                        .size(11.0),
+                ),
+            );
+            let current = want_group
+                .and_then(|g| groups.get(g as usize).cloned())
+                .unwrap_or_else(|| crate::i18n::tr("none").into());
+            egui::ComboBox::from_id_salt(("clip-group", mesh)).selected_text(current).show_ui(
+                ui,
+                |ui| {
+                    ui.selectable_value(&mut want_group, None, crate::i18n::tr("none"));
+                    for (g, name) in groups.iter().enumerate() {
+                        ui.selectable_value(&mut want_group, Some(g as u32), name);
+                    }
+                },
+            );
+            if want_group.is_some()
+                && ui
+                    .small_button(egui_phosphor::regular::TRASH)
+                    .on_hover_text(crate::i18n::tr(
+                        "Delete this clip group; its meshes keep the masks they have",
+                    ))
+                    .clicked()
+            {
+                delete_group = true;
+            }
+        });
+    }
     if group.is_some() && shared > 1 {
         ui.horizontal_wrapped(|ui| {
             ui.add_space(78.0);
@@ -15663,7 +15674,7 @@ fn clip_rows(ui: &mut Ui, s: &mut Session, mesh: usize, name_buf: &mut String, e
             );
         });
     }
-    if group.is_none() && !masks.is_empty() {
+    if groups_on && group.is_none() && !masks.is_empty() {
         ui.horizontal(|ui| {
             ui.add_space(78.0);
             ui.menu_button(crate::i18n::tr("Save as group…"), |ui| {
