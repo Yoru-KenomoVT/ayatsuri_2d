@@ -223,6 +223,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![0.0; uvs.len()],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         }
     }
 

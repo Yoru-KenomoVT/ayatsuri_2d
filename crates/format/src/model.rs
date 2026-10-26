@@ -419,6 +419,16 @@ pub struct ArtMesh {
     pub indices: Vec<u16>,
     /// Art meshes whose alpha clips this one.
     pub masks: Vec<u32>,
+    /// A clip group (index into `Model::clip_groups`) whose masks clip this
+    /// mesh too.
+    // always written: the timelapse stores models as positional arrays, where
+    // a skipped field in the middle would shift every later one
+    #[serde(default)]
+    pub clip_group: Option<u32>,
+    /// Also clipped by whatever its masks are clipped by: a highlight
+    /// clipped by the iris stays inside the eye white the iris is clipped by.
+    #[serde(default)]
+    pub clip_inherit: bool,
     pub binding: Binding,
     /// All per keyform.
     pub opacities: Vec<f32>,
@@ -485,6 +495,14 @@ pub struct DrawGroup {
     pub items: Vec<DrawItem>,
 }
 
+/// A named set of masks any number of meshes can clip by together.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClipGroup {
+    pub name: String,
+    /// Art mesh indices.
+    pub masks: Vec<u32>,
+}
+
 /// A whole puppet.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Model {
@@ -495,6 +513,8 @@ pub struct Model {
     pub art_meshes: Vec<ArtMesh>,
     pub glues: Vec<Glue>,
     pub draw_groups: Vec<DrawGroup>,
+    #[serde(default)]
+    pub clip_groups: Vec<ClipGroup>,
     /// Pendulum physics, when the model has any. Older .aom files simply
     /// have none.
     #[serde(default)]

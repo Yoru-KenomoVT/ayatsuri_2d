@@ -306,6 +306,8 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             draw_orders: vec![500.0],
             positions: corners.iter().flat_map(|&(x, y)| [x, y]).collect(),
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         });
     }
 

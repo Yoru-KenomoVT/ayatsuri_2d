@@ -109,6 +109,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![x, 0.0, 1.0, 0.0, 0.0, 1.0],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         }
     }
 

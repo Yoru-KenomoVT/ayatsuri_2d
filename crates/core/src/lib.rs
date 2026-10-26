@@ -14,6 +14,7 @@ pub mod automesh;
 pub mod bezier;
 pub mod blend;
 pub mod blendshape;
+pub mod clip;
 pub mod comp;
 pub mod compose;
 pub mod deform;
@@ -44,6 +45,8 @@ pub struct Puppet {
     layer_opacity: Vec<f32>,
     /// Per mesh: the offscreen parts it draws inside, outermost first.
     mesh_layers: Vec<Vec<u32>>,
+    /// Per mesh: the mask sets it inherits past its own masks (see `clip`).
+    mesh_clip_and: Vec<Vec<Vec<u32>>>,
     /// The deepest offscreen nesting any mesh has (0: no layers at all).
     layer_depth: usize,
     /// Per part: its lowest mesh, the tie order of an offscreen part's item.
@@ -201,7 +204,15 @@ impl Puppet {
             mesh_pos_off.push(pos_total);
             pos_total = pos_total.saturating_add((m.vertex_count as usize).saturating_mul(2));
         }
+        let mesh_clip_and: Vec<Vec<Vec<u32>>> = (0..n_meshes)
+            .map(|mi| clip::chain_of(&model, mi).0.into_iter().skip(1).collect())
+            .collect();
         let mut mask_source = vec![false; n_meshes];
+        for &src in mesh_clip_and.iter().flatten().flatten() {
+            if let Some(f) = mask_source.get_mut(src as usize) {
+                *f = true;
+            }
+        }
         let layer_masks =
             model.parts.iter().filter_map(|p| p.offscreen.as_ref()).flat_map(|o| &o.masks);
         for &src in model.art_meshes.iter().flat_map(|m| &m.masks).chain(layer_masks) {
@@ -262,6 +273,7 @@ impl Puppet {
             part_draw_order: vec![500.0; n_parts],
             layer_opacity: vec![1.0; n_parts],
             mesh_layers,
+            mesh_clip_and,
             layer_depth,
             part_tie: draworder::part_first_mesh(&model),
             group_total: draworder::group_totals(&model),
@@ -1341,6 +1353,7 @@ impl Puppet {
                 uvs: &m.uvs,
                 indices: &m.indices,
                 masks: &m.masks,
+                clip_and: self.mesh_clip_and.get(mi).map(Vec::as_slice).unwrap_or_default(),
             })
         })
     }
@@ -1378,6 +1391,9 @@ pub struct Drawable<'a> {
     pub indices: &'a [u16],
     /// Meshes whose texture alpha clips this one.
     pub masks: &'a [u32],
+    /// Inherited clips: further mask sets it must also be inside, one per
+    /// level (a highlight inside the iris inside the eye white).
+    pub clip_and: &'a [Vec<u32>],
 }
 
 /// A mesh's current geometry, visible or not; mask rendering needs this.
@@ -1433,6 +1449,8 @@ mod tests {
                     1.0, 0.0, 2.0, 0.0, 1.0, 1.0, // keyform 1
                 ],
                 blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
             }],
             glues: vec![],
             draw_groups: vec![],
@@ -1440,6 +1458,7 @@ mod tests {
             art_paths: Vec::new(),
             art_path_colors: Vec::new(),
             art_path_page: None,
+            clip_groups: Vec::new(),
         }
     }
 

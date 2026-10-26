@@ -500,6 +500,8 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
                 vc * 2,
             )?,
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         });
     }
 
@@ -624,6 +626,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         art_paths: Vec::new(),
         art_path_colors: Vec::new(),
         art_path_page: None,
+        clip_groups: Vec::new(),
     })
 }
 

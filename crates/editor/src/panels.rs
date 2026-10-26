@@ -420,6 +420,8 @@ pub struct EditorUi {
     art_pick: Option<u8>,
     clip_with: Option<usize>,
     clip_search: String,
+    /// The name typed for a new clip group.
+    clip_group_name: String,
     dbrush: Option<DeformStroke>,
     tdeform: Option<temp_deform::TempDeform>,
     tdeform_cols: usize,
@@ -1197,6 +1199,7 @@ impl Default for EditorUi {
             art_pick: None,
             clip_with: None,
             clip_search: String::new(),
+            clip_group_name: String::new(),
             clip_invert: false,
             dbrush: None,
             tdeform: None,
@@ -8600,6 +8603,13 @@ impl EditorUi {
                 {
                     log::info!("{} clips by {} mesh(es)", s.mesh_name(i), masks.len());
                 }
+                clip_rows(
+                    ui,
+                    s,
+                    i,
+                    &mut self.clip_group_name,
+                    self.prefs.experimental_inherit_clip,
+                );
 
                 if new_flags != m.flags || new_blend != blend || (order - base_order).abs() > 0.5 {
                     let changed = s.edit(|model| {
@@ -14992,6 +15002,8 @@ mod drag_tests {
             draw_orders: vec![500.0],
             positions: vec![0.2, 0.2, 0.8, 0.2, 0.5, 0.8],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         });
         let w = ayatsuri_core::edit::create_deformer(
             &mut m,
@@ -15084,6 +15096,8 @@ mod mesh_delete_tests {
                 draw_orders: vec![500.0],
                 positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
                 blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
             });
         }
         let ctx = egui::Context::default();
@@ -15210,6 +15224,8 @@ mod key_cmd_tests {
             draw_orders: vec![500.0; 3],
             positions: vec![-1.0, 0.0, 0.0, 0.0, 2.0, 0.0],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         });
         let ctx = egui::Context::default();
         let s = Session::create(&ctx, "t".into(), String::new(), model).unwrap();
@@ -15493,6 +15509,8 @@ mod eyedropper_tests {
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         });
         let mut puppet = ayatsuri_core::Puppet::new(m);
         puppet.update();
@@ -15537,6 +15555,170 @@ const COLOR_BLEND_MENU: [ayatsuri_format::model::ColorBlend; 18] = {
         MultiplyCompatible,
     ]
 };
+
+/// Below a mesh's Clip by: inheriting its masks' clip, the chain that
+/// gives, and the clip group it shares its masks through.
+/// Inherit is experimental (Settings > Experimental): offered when that is
+/// on, and kept visible on a mesh that already uses it so it can be undone.
+fn clip_rows(ui: &mut Ui, s: &mut Session, mesh: usize, name_buf: &mut String, experimental: bool) {
+    use ayatsuri_core::clip::{ChainStop, chain_of};
+    let model = s.puppet.model();
+    let Some(m) = model.art_meshes.get(mesh) else { return };
+    let (masks, inherit, group) = (m.masks.clone(), m.clip_inherit, m.clip_group);
+    let (chain, stop) = chain_of(model, mesh);
+    let groups: Vec<String> = model.clip_groups.iter().map(|g| g.name.clone()).collect();
+    let shared =
+        group.map_or(0, |g| model.art_meshes.iter().filter(|x| x.clip_group == Some(g)).count());
+    let names =
+        |set: &[u32]| set.iter().map(|&x| s.mesh_name(x as usize)).collect::<Vec<_>>().join(", ");
+
+    let mut want_inherit = inherit;
+    if !masks.is_empty() && (experimental || inherit) {
+        ui.horizontal(|ui| {
+            ui.add_space(78.0);
+            let label = if masks.len() == 1 {
+                crate::i18n::trf("Inherit {mask}'s clip", &[("mask", &names(&masks))])
+            } else {
+                crate::i18n::tr("Inherit the masks' clip").into()
+            };
+            ui.checkbox(&mut want_inherit, label).on_hover_text(crate::i18n::tr(
+                "Also clip by whatever the masks are clipped by, so a highlight clipped by \
+                 the iris stays inside the eye white. moc3 export cannot store it yet: it \
+                 exports clipped by its own masks only, and says so.",
+            ));
+            ui.label(
+                egui::RichText::new(crate::i18n::tr("experimental"))
+                    .size(10.0)
+                    .color(theme::pal().accent),
+            );
+        });
+        if inherit && chain.len() > 1 {
+            let mut line = format!("→ {}", s.mesh_name(mesh));
+            for set in &chain {
+                line.push_str(" ⊂ ");
+                line.push_str(&names(set));
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(78.0);
+                ui.weak(egui::RichText::new(line).size(10.5));
+            });
+        }
+        if inherit {
+            let why = match stop {
+                Some(ChainStop::MasksDisagree) => Some(
+                    "The masks are clipped differently, so there is no one clip to inherit past here",
+                ),
+                Some(ChainStop::Loop) => {
+                    Some("The masks clip each other in a loop; the chain stops there")
+                }
+                Some(ChainStop::TooDeep) => Some("Inherited clips stop after eight levels"),
+                None if chain.len() < 2 => Some("The masks are not clipped by anything yet"),
+                None => None,
+            };
+            if let Some(why) = why {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(78.0);
+                    ui.weak(egui::RichText::new(crate::i18n::tr(why)).size(10.5));
+                });
+            }
+        }
+    }
+
+    let mut want_group = group;
+    let mut save_as: Option<String> = None;
+    let mut delete_group = false;
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [74.0, 16.0],
+            egui::Label::new(
+                egui::RichText::new(crate::i18n::tr("Clip group"))
+                    .color(theme::pal().text_faint)
+                    .size(11.0),
+            ),
+        );
+        let current = want_group
+            .and_then(|g| groups.get(g as usize).cloned())
+            .unwrap_or_else(|| crate::i18n::tr("none").into());
+        egui::ComboBox::from_id_salt(("clip-group", mesh)).selected_text(current).show_ui(
+            ui,
+            |ui| {
+                ui.selectable_value(&mut want_group, None, crate::i18n::tr("none"));
+                for (g, name) in groups.iter().enumerate() {
+                    ui.selectable_value(&mut want_group, Some(g as u32), name);
+                }
+            },
+        );
+        if want_group.is_some()
+            && ui
+                .small_button(egui_phosphor::regular::TRASH)
+                .on_hover_text(crate::i18n::tr(
+                    "Delete this clip group; its meshes keep the masks they have",
+                ))
+                .clicked()
+        {
+            delete_group = true;
+        }
+    });
+    if group.is_some() && shared > 1 {
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(78.0);
+            ui.weak(
+                egui::RichText::new(crate::i18n::trf(
+                    "Changing these masks changes them on all {count} meshes in the group",
+                    &[("count", &shared)],
+                ))
+                .size(10.5),
+            );
+        });
+    }
+    if group.is_none() && !masks.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(78.0);
+            ui.menu_button(crate::i18n::tr("Save as group…"), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(name_buf)
+                        .hint_text(crate::i18n::tr("Group name, e.g. Eye L"))
+                        .desired_width(160.0),
+                );
+                let name = name_buf.trim().to_string();
+                if ui
+                    .add_enabled(!name.is_empty(), egui::Button::new(crate::i18n::tr("Save")))
+                    .clicked()
+                {
+                    save_as = Some(name);
+                    ui.close();
+                }
+            })
+            .response
+            .on_hover_text(crate::i18n::tr(
+                "Name these masks so other meshes can clip by them too, and change with them",
+            ));
+        });
+    }
+
+    if want_inherit != inherit
+        && s.edit(|m| ayatsuri_core::edit::set_clip_inherit(m, mesh, want_inherit))
+    {
+        log::info!("{} inherits its masks' clip: {want_inherit}", s.mesh_name(mesh));
+    }
+    if delete_group {
+        if let Some(g) = group
+            && s.edit(|m| ayatsuri_core::edit::delete_clip_group(m, g as usize))
+        {
+            log::info!("clip group {g} deleted");
+        }
+    } else if want_group != group
+        && s.edit(|m| ayatsuri_core::edit::set_clip_group(m, mesh, want_group.map(|g| g as usize)))
+    {
+        log::info!("{} clip group: {want_group:?}", s.mesh_name(mesh));
+    }
+    if let Some(name) = save_as
+        && s.edit(|m| ayatsuri_core::edit::create_clip_group(m, mesh, name.clone()).is_some())
+    {
+        log::info!("clip group {name} saved from {}", s.mesh_name(mesh));
+        name_buf.clear();
+    }
+}
 
 /// The Inspector's Blend mode and Alpha blend rows, for a mesh or an
 /// offscreen part's layer. The two modes from before 5.3 ignore the alpha

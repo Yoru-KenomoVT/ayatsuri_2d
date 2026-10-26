@@ -1346,11 +1346,20 @@ pub fn delete_art_meshes(model: &mut Model, meshes: &[usize]) -> bool {
         index += 1;
         keep
     });
-    for m in &mut model.art_meshes {
-        m.masks.retain(|&x| !is_gone(x));
-        for x in &mut m.masks {
+    let remap = |masks: &mut Vec<u32>| {
+        masks.retain(|&x| !is_gone(x));
+        for x in masks.iter_mut() {
             *x = new_index(*x);
         }
+    };
+    for m in &mut model.art_meshes {
+        remap(&mut m.masks);
+    }
+    for g in &mut model.clip_groups {
+        remap(&mut g.masks);
+    }
+    for o in model.parts.iter_mut().filter_map(|p| p.offscreen.as_mut()) {
+        remap(&mut o.masks);
     }
     let ids: std::collections::HashSet<&str> =
         model.art_meshes.iter().map(|m| m.id.as_str()).collect();
@@ -1384,6 +1393,9 @@ pub fn insert_art_mesh(
     }
     let count = model.art_meshes.len() as u32;
     mesh.masks.retain(|&x| x < count);
+    if mesh.clip_group.is_some_and(|g| g as usize >= model.clip_groups.len()) {
+        mesh.clip_group = None;
+    }
     if mesh.parent_part.is_some_and(|p| p as usize >= model.parts.len()) {
         mesh.parent_part = None;
     }
@@ -1539,6 +1551,8 @@ pub fn create_art_path(
         draw_orders: vec![order],
         positions,
         blend_shapes: Vec::new(),
+        clip_group: None,
+        clip_inherit: false,
     });
     let index = model.art_meshes.len() - 1;
     if let Some(root) = model.draw_groups.first_mut() {
@@ -1598,20 +1612,114 @@ pub fn update_art_path(
 }
 
 /// Set which art meshes clip `mesh` (its masks). Itself, unknown indices
-/// and repeats are dropped. False when nothing changed.
+/// and repeats are dropped. A mesh in a clip group sets the group's masks,
+/// so every mesh in it follows. False when nothing changed.
 pub fn set_masks(model: &mut Model, mesh: usize, masks: &[u32]) -> bool {
-    let n = model.art_meshes.len();
-    let mut clean: Vec<u32> = Vec::with_capacity(masks.len());
-    for &x in masks {
-        if (x as usize) < n && x as usize != mesh && !clean.contains(&x) {
-            clean.push(x);
-        }
+    if let Some(g) = model.art_meshes.get(mesh).and_then(|m| m.clip_group) {
+        return set_group_masks(model, g as usize, masks);
     }
+    let clean = clean_masks(model, masks, Some(mesh));
     let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
     if m.masks == clean {
         return false;
     }
     m.masks = clean;
+    true
+}
+
+/// `masks` without unknown meshes, repeats, or `own` (no mesh clips itself).
+fn clean_masks(model: &Model, masks: &[u32], own: Option<usize>) -> Vec<u32> {
+    let n = model.art_meshes.len();
+    let mut clean: Vec<u32> = Vec::with_capacity(masks.len());
+    for &x in masks {
+        if (x as usize) < n && Some(x as usize) != own && !clean.contains(&x) {
+            clean.push(x);
+        }
+    }
+    clean
+}
+
+/// Copy every clip group's masks into the meshes in it: groups are the
+/// source, `ArtMesh::masks` what every renderer and export reads.
+fn sync_clip_groups(model: &mut Model) {
+    let groups = model.clip_groups.clone();
+    for (mi, m) in model.art_meshes.iter_mut().enumerate() {
+        let Some(g) = m.clip_group.and_then(|g| groups.get(g as usize)) else { continue };
+        m.masks = g.masks.iter().copied().filter(|&x| x as usize != mi).collect();
+    }
+}
+
+/// Set a clip group's masks; every mesh in it follows. False when nothing
+/// changed.
+pub fn set_group_masks(model: &mut Model, group: usize, masks: &[u32]) -> bool {
+    let clean = clean_masks(model, masks, None);
+    let Some(g) = model.clip_groups.get_mut(group) else { return false };
+    if g.masks == clean {
+        return false;
+    }
+    g.masks = clean;
+    sync_clip_groups(model);
+    true
+}
+
+/// Make a clip group named `name` from `mesh`'s masks, with the mesh in it.
+/// The new group's index, or None when the mesh has no masks to share.
+pub fn create_clip_group(model: &mut Model, mesh: usize, name: String) -> Option<usize> {
+    let masks = model.art_meshes.get(mesh)?.masks.clone();
+    if masks.is_empty() {
+        return None;
+    }
+    model.clip_groups.push(ayatsuri_format::model::ClipGroup { name, masks });
+    let g = model.clip_groups.len() - 1;
+    if let Some(m) = model.art_meshes.get_mut(mesh) {
+        m.clip_group = Some(g as u32);
+    }
+    Some(g)
+}
+
+/// Put `mesh` in clip group `group` (its masks become the group's), or
+/// with None take it out (it keeps the masks it has). False when nothing
+/// changed.
+pub fn set_clip_group(model: &mut Model, mesh: usize, group: Option<usize>) -> bool {
+    if group.is_some_and(|g| g >= model.clip_groups.len()) {
+        return false;
+    }
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    let group = group.map(|g| g as u32);
+    if m.clip_group == group {
+        return false;
+    }
+    m.clip_group = group;
+    sync_clip_groups(model);
+    true
+}
+
+/// Delete a clip group. Its meshes leave it keeping their masks; later
+/// groups shift down by one.
+pub fn delete_clip_group(model: &mut Model, group: usize) -> bool {
+    if group >= model.clip_groups.len() {
+        return false;
+    }
+    model.clip_groups.remove(group);
+    let g32 = group as u32;
+    for m in &mut model.art_meshes {
+        m.clip_group = match m.clip_group {
+            Some(g) if g == g32 => None,
+            Some(g) if g > g32 => Some(g - 1),
+            other => other,
+        };
+    }
+    true
+}
+
+/// Also clip `mesh` by what its masks are clipped by (see `clip`). False
+/// when nothing changed.
+pub fn set_clip_inherit(model: &mut Model, mesh: usize, on: bool) -> bool {
+    let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+    if m.clip_inherit == on {
+        return false;
+    }
+    m.clip_inherit = on;
     true
 }
 
@@ -3162,6 +3270,8 @@ mod tests {
                 // the single vertex slides from x=0 to x=2
                 positions: vec![0.0, 0.0, 2.0, 0.0],
                 blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
             }],
             glues: vec![],
             draw_groups: vec![],
@@ -3169,6 +3279,7 @@ mod tests {
             art_paths: Vec::new(),
             art_path_colors: Vec::new(),
             art_path_page: None,
+            clip_groups: Vec::new(),
         }
     }
 

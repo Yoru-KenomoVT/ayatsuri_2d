@@ -103,6 +103,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![x0, 0.0, x1, 0.0, x1, 8.0, x0, 8.0],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         }
     }
 
@@ -166,5 +168,34 @@ mod tests {
         let (inside, outside) = (alpha_at(&px, 2), alpha_at(&px, 6));
         assert!((120..=136).contains(&inside), "inside the mask: {inside}");
         assert!(outside < 8, "outside the mask: {outside}");
+    }
+
+    #[test]
+    fn an_inherited_clip_keeps_a_highlight_inside_the_eye_white() {
+        let Some(mut f) = frames() else { return };
+        let mut m = Model {
+            canvas: Canvas { width: 8.0, height: 8.0, pixels_per_unit: 1.0, ..Canvas::default() },
+            ..Model::default()
+        };
+        // eye white and iris drawn at 0% (masks only), the highlight shows
+        m.art_meshes.push(quad("white", 0.0, 4.0, None, 0.0));
+        let mut iris = quad("iris", 2.0, 8.0, None, 0.0);
+        iris.masks = vec![0];
+        m.art_meshes.push(iris);
+        let mut highlight = quad("highlight", 0.0, 8.0, None, 1.0);
+        highlight.masks = vec![1];
+        m.art_meshes.push(highlight);
+        let shown = |f: &mut Frames, m: &Model| -> Vec<bool> {
+            let mut p = Puppet::new(m.clone());
+            p.update();
+            let px = f.draw(&p, 8).map(|(_, _, px)| px).unwrap_or_default();
+            (0..8).map(|x| alpha_at(&px, x) > 128).collect()
+        };
+        // as every runtime clips today: inside the iris, eye white or not
+        let plain = shown(&mut f, &m);
+        assert_eq!(plain, vec![false, false, true, true, true, true, true, true]);
+        m.art_meshes[2].clip_inherit = true;
+        let inherited = shown(&mut f, &m);
+        assert_eq!(inherited, vec![false, false, true, true, false, false, false, false]);
     }
 }

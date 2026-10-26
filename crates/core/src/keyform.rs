@@ -680,6 +680,8 @@ mod tests {
                 draw_orders: vec![500.0; 9],
                 positions,
                 blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
             }],
             ..Model::new()
         }
