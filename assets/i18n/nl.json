@@ -1458,5 +1458,6 @@
   "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "Maakt donkerder: wit laat de tekening zoals ze is. Wordt van een deformer doorgegeven aan alles eronder",
   "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "Maakt lichter: zwart laat de tekening zoals ze is. Wordt van een deformer doorgegeven aan alles eronder",
   "Between keys. Move the parameters onto a key to set the color there.": "Tussen sleutels. Zet de parameters op een sleutel om daar de kleur in te stellen.",
-  "Back to the color that leaves the art as it is": "Terug naar de kleur die de tekening laat zoals ze is"
+  "Back to the color that leaves the art as it is": "Terug naar de kleur die de tekening laat zoals ze is",
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "Toont Overerven in de clipping van de Inspector: een mesh wordt ook geclipt door wat zijn maskers clipt. De moc3-export draagt dit met verborgen hulpmaskers, dus het werkt in elke versie en in VTube Studio"
 }

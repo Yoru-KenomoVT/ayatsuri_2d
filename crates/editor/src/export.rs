@@ -135,7 +135,17 @@ fn write(path: &Path, bytes: &[u8], written: &mut Vec<PathBuf>) -> Result<(), St
 
 pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, String> {
     let name = safe(&opt.name);
-    let model = s.puppet.model();
+    // inherited clips go out as hidden helper masks, on copies
+    let expanded = crate::inherit_export::expand(s.puppet.model(), &s.texture_pngs)?;
+    if let Some(e) = &expanded {
+        log::info!(
+            "export: {} inherited clip(s) carried by {} helper mask(s)",
+            e.meshes,
+            e.helpers
+        );
+    }
+    let model = expanded.as_ref().map_or(s.puppet.model(), |e| &e.model);
+    let pngs = expanded.as_ref().map_or(&s.texture_pngs, |e| &e.pngs);
     let mut written = Vec::new();
 
     let moc = ayatsuri_import::to_moc3(model, opt.version).map_err(|e| e.to_string())?;
@@ -146,7 +156,7 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     let tex_dir = dir.join(&tex_dir_name);
     std::fs::create_dir_all(&tex_dir).map_err(|e| format!("{}: {e}", tex_dir.display()))?;
     let mut tex_refs = Vec::new();
-    for (i, png) in s.texture_pngs.iter().enumerate() {
+    for (i, png) in pngs.iter().enumerate() {
         let file = format!("texture_{i:02}.png");
         write(&tex_dir.join(&file), png, &mut written)?;
         tex_refs.push(format!("{tex_dir_name}/{file}"));

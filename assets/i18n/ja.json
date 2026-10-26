@@ -1458,5 +1458,6 @@
   "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "暗くします。白なら元の絵のままです。デフォーマに設定すると配下のすべてに反映されます",
   "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "明るくします。黒なら元の絵のままです。デフォーマに設定すると配下のすべてに反映されます",
   "Between keys. Move the parameters onto a key to set the color there.": "キーの間です。色を設定するにはパラメータをキーの上に移動してください。",
-  "Back to the color that leaves the art as it is": "元の絵のままになる色に戻す"
+  "Back to the color that leaves the art as it is": "元の絵のままになる色に戻す",
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "インスペクタのクリッピングに「継承」を表示します。メッシュはマスク自身のクリッピングでも切り抜かれます。moc3書き出しでは隠しヘルパーマスクで再現するため、すべてのバージョンとVTube Studioで動作します"
 }

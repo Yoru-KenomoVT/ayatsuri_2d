@@ -18,6 +18,7 @@ mod ffmpeg;
 mod gpu_frames;
 mod gpu_view;
 pub(crate) mod i18n;
+mod inherit_export;
 pub mod logging;
 mod mesh_clip;
 mod mixer;
