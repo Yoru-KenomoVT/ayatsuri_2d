@@ -1447,5 +1447,10 @@
   "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "每页占用 {mb} MB 显存。部分应用和 GPU 无法载入超过 8192 px 的页面",
   "Support (optional)": "支持(可选)",
   "Support Ayatsuri2D (optional)": "支持 Ayatsuri2D(可选)",
-  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee。Ayatsuri2D 免费且永远免费,只在你愿意时支持即可"
+  "Buy Me a Coffee. Ayatsuri2D is free and stays free; this is only if you want to": "Buy Me a Coffee。Ayatsuri2D 免费且永远免费,只在你愿意时支持即可",
+  "Highlight Overlapping Polygons": "高亮重叠的多边形",
+  "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "在使用高级混合模式的网格中,标出与同一网格其他三角形重叠的三角形:重叠处会被混合两次,移动时会闪烁",
+  "  With overlapping polygons": "  含重叠多边形",
+  "Overlapping polygons": "重叠的多边形",
+  "The color View > Highlight Overlapping Polygons marks them with": "视图 > 高亮重叠的多边形 使用的颜色"
 }

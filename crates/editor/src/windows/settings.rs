@@ -709,6 +709,23 @@ impl EditorUi {
         );
         row(
             ui,
+            crate::i18n::tr("Overlapping polygons"),
+            crate::i18n::tr("The color View > Highlight Overlapping Polygons marks them with"),
+            |ui| {
+                if ui.small_button(crate::i18n::tr("Reset")).clicked() {
+                    self.prefs.overlap_color = None;
+                    save = true;
+                }
+                let [r, g, b, a] = self.prefs.overlap_color.unwrap_or(crate::panels::OVERLAP_COLOR);
+                let mut pick = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                if ui.color_edit_button_srgba(&mut pick).changed() {
+                    self.prefs.overlap_color = Some(pick.to_srgba_unmultiplied());
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
             crate::i18n::tr("Smooth movement"),
             crate::i18n::tr(
                 "Points and objects follow the pointer softly while dragged; they land where you let go",
