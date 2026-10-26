@@ -402,7 +402,8 @@ pub struct EditorUi {
     glue_compat: Option<f32>,
     /// New points close a face onto the nearest edge when on.
     mesh_autoconnect: bool,
-    /// The edge tool's first pick.
+    /// The edge tool's first pick, and in Add vertex the point the next
+    /// one draws its line from (Cubism's chain; Esc ends it).
     edge_first: Option<usize>,
     /// Lines drawn with the edge tool that have not closed a face yet,
     /// per mesh; they turn into faces as soon as a triangle closes.
@@ -5292,12 +5293,13 @@ impl EditorUi {
                     })
                     .collect();
                 let mut added = 0;
+                let lines: Vec<Vec<(u16, u16)>> = pages
+                    .iter()
+                    .map(|(mi, _)| self.pending_edges.get(mi).cloned().unwrap_or_default())
+                    .collect();
                 s.edit(|m| {
-                    for (mi, page) in &pages {
-                        let keep = |u: f32, v: f32| -> bool {
-                            if !protect {
-                                return true;
-                            }
+                    for ((mi, page), lines) in pages.iter().zip(&lines) {
+                        let solid = |u: f32, v: f32| -> bool {
                             let Some(t) = page else { return true };
                             let x =
                                 ((u * t.width as f32) as i64).clamp(0, t.width as i64 - 1) as usize;
@@ -5306,12 +5308,19 @@ impl EditorUi {
                             t.rgba.get((y * t.width as usize + x) * 4 + 3).copied().unwrap_or(255)
                                 > 8
                         };
-                        added += ayatsuri_core::edit::auto_connect(m, *mi, rebuild, &keep);
+                        let opaque: Option<&dyn Fn(f32, f32) -> bool> =
+                            protect.then_some(&solid as &dyn Fn(f32, f32) -> bool);
+                        added += ayatsuri_core::edit::auto_connect(m, *mi, rebuild, lines, opaque);
                     }
                     added > 0
                 });
+                // lines that became face edges are done; the rest stay drawn
                 for &mi in &targets {
-                    self.pending_edges.remove(&mi);
+                    if let Some(list) = self.pending_edges.get_mut(&mi) {
+                        list.retain(|&(x, y)| {
+                            !ayatsuri_core::edit::has_edge(s.puppet.model(), mi, x, y)
+                        });
+                    }
                 }
                 log::info!("auto connect: {added} face(s) on {} mesh(es)", targets.len());
             }
@@ -11604,7 +11613,10 @@ impl EditorUi {
             /// Mesh Edit's move: the vertex slides over the art (new uv).
             Slide(usize, usize, f32, f32, (f32, f32)),
             Add(usize, usize, [f32; 3]),
-            AddFree(usize, [usize; 3], [f32; 3], Option<(u16, u16)>, Vec<u16>),
+            /// A point placed by weights on three others, optionally
+            /// closing a face onto an edge, with lines to `links`; `follow`
+            /// makes it the start of the next line.
+            AddFree(usize, [usize; 3], [f32; 3], Option<(u16, u16)>, Vec<u16>, bool),
             Connect(usize, u16, u16),
             Cut(usize, u16, u16),
             EraseMany(usize, Vec<usize>),
@@ -11664,16 +11676,114 @@ impl EditorUi {
                     }
                 }
 
+                let (alt, ctrl, shift) =
+                    ui.ctx().input(|i| (i.modifiers.alt, i.modifiers.ctrl, i.modifiers.shift));
+                // the edge (face edge or drawn line) under the pointer
+                let edge_at = |ptr: Pos2| -> Option<(u16, u16)> {
+                    let (tris, _) = g.indices.as_chunks::<3>();
+                    let lines = self.pending_edges.get(&mi).map(Vec::as_slice).unwrap_or(&[]);
+                    tris.iter()
+                        .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+                        .chain(lines.iter().copied())
+                        .filter_map(|(a, b)| {
+                            let pa = *screen_pts.get(a as usize)?;
+                            let pb = *screen_pts.get(b as usize)?;
+                            let seg = pb - pa;
+                            let k =
+                                ((ptr - pa).dot(seg) / seg.length_sq().max(1e-6)).clamp(0.0, 1.0);
+                            Some(((a, b), ptr.distance(pa + seg * k)))
+                        })
+                        .filter(|&(_, d)| d < 6.0)
+                        .min_by(|x, y| x.1.total_cmp(&y.1))
+                        .map(|(e, _)| e)
+                };
+                // whether a new line from a to the pointer would cross an
+                // edge or line already there (Cubism leaves the point single)
+                let crosses_any = |a: usize, ptr: Pos2| -> bool {
+                    let Some(&pa) = screen_pts.get(a) else { return true };
+                    let (tris, _) = g.indices.as_chunks::<3>();
+                    let lines = self.pending_edges.get(&mi).map(Vec::as_slice).unwrap_or(&[]);
+                    let o =
+                        |p: Pos2, q: Pos2, r: Pos2| (q - p).x * (r - p).y - (q - p).y * (r - p).x;
+                    tris.iter()
+                        .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+                        .chain(lines.iter().copied())
+                        .any(|(x, y)| {
+                            if x as usize == a || y as usize == a {
+                                return false;
+                            }
+                            let (Some(&px), Some(&py)) =
+                                (screen_pts.get(x as usize), screen_pts.get(y as usize))
+                            else {
+                                return false;
+                            };
+                            o(pa, ptr, px) * o(pa, ptr, py) < 0.0
+                                && o(px, py, pa) * o(px, py, ptr) < 0.0
+                        })
+                };
+                if self.edge_first.is_some_and(|v| v >= screen_pts.len()) {
+                    self.edge_first = None;
+                }
+                // Alt+click deletes, as in Cubism: the point under the
+                // pointer, or else the edge or line
+                let editing_lines = matches!(self.mesh_mode, 1 | 3 | 4);
+                if !space && editing_lines && alt && resp.clicked() {
+                    if let Some((vi, _)) = near {
+                        mesh_op = Some(MeshOp::Del(mi, vi));
+                    } else if let Some(ptr) = resp.interact_pointer_pos()
+                        && let Some((a, b)) = edge_at(ptr)
+                    {
+                        mesh_op = Some(MeshOp::Cut(mi, a, b));
+                    }
+                    self.edge_first = None;
+                }
+                // the cut tool takes a line with one click
+                if !space
+                    && self.mesh_mode == 4
+                    && !alt
+                    && resp.clicked()
+                    && near.is_none()
+                    && let Some(ptr) = resp.interact_pointer_pos()
+                    && let Some((a, b)) = edge_at(ptr)
+                {
+                    mesh_op = Some(MeshOp::Cut(mi, a, b));
+                }
+                // Add vertex on an existing point: the chain moves to it,
+                // drawing a line from the chain's end first
                 if !space
                     && self.mesh_mode == 1
+                    && !alt
+                    && resp.clicked()
+                    && let Some((vi, _)) = near
+                {
+                    match self.edge_first {
+                        Some(first) if first == vi => self.edge_first = None,
+                        Some(first) if !ctrl => {
+                            mesh_op = Some(MeshOp::Connect(mi, first as u16, vi as u16));
+                            if !shift {
+                                self.edge_first = Some(vi);
+                            }
+                        }
+                        _ => self.edge_first = Some(vi),
+                    }
+                }
+                if !space
+                    && self.mesh_mode == 1
+                    && !alt
                     && resp.clicked()
                     && near.is_none()
                     && let Some(ptr) = resp.interact_pointer_pos()
                 {
+                    // the line from the chain's end, as Cubism draws it:
+                    // not with Ctrl (a single point) and not across an edge
+                    let chain = self
+                        .edge_first
+                        .filter(|&c| self.mesh_autoconnect && !ctrl && !crosses_any(c, ptr));
                     // add: inside a face splits it (or drops a loose point
                     // with auto connect off); outside, the point closes a face
                     // onto the nearest open edge; with no faces at all it is
-                    // placed against the three nearest points, for planning
+                    // placed against the three nearest points. A point drawn
+                    // from the chain is always loose, joined by its line only
                     let (tris, _) = g.indices.as_chunks::<3>();
                     let bary = |c: [usize; 3]| -> Option<[f32; 3]> {
                         let s0 = *screen_pts.get(c[0])?;
@@ -11703,14 +11813,15 @@ impl EditorUi {
                             closest = Some((c, w, worst));
                         }
                     }
+                    let links: Vec<u16> = chain.map(|c| c as u16).into_iter().collect();
                     if let Some((ti, c, w)) = inside {
-                        mesh_op = Some(if self.mesh_autoconnect {
+                        mesh_op = Some(if self.mesh_autoconnect && chain.is_none() {
                             MeshOp::Add(mi, ti, w)
                         } else {
-                            MeshOp::AddFree(mi, c, w, None, Vec::new())
+                            MeshOp::AddFree(mi, c, w, None, links, !shift)
                         });
                     } else if let Some((c, w, _)) = closest {
-                        let connect = if self.mesh_autoconnect {
+                        let connect = if self.mesh_autoconnect && chain.is_none() {
                             // open edges belong to exactly one face
                             let mut count: std::collections::HashMap<(u16, u16), u32> =
                                 std::collections::HashMap::new();
@@ -11741,7 +11852,7 @@ impl EditorUi {
                         } else {
                             None
                         };
-                        mesh_op = Some(MeshOp::AddFree(mi, c, w, connect, Vec::new()));
+                        mesh_op = Some(MeshOp::AddFree(mi, c, w, connect, links, !shift));
                     } else {
                         // no faces: the nearest three points that are not in
                         // a line give the placement
@@ -11760,12 +11871,7 @@ impl EditorUi {
                         };
                         match basis {
                             Some((c, w)) => {
-                                let links = if self.mesh_autoconnect {
-                                    vec![c[0] as u16, c[1] as u16]
-                                } else {
-                                    Vec::new()
-                                };
-                                mesh_op = Some(MeshOp::AddFree(mi, c, w, None, links));
+                                mesh_op = Some(MeshOp::AddFree(mi, c, w, None, links, !shift));
                             }
                             None => log::warn!(
                                 "add point: the mesh's points all lie on one line; place one off it first"
@@ -11802,7 +11908,7 @@ impl EditorUi {
                 // connect and cut both work on a pair: first click picks a
                 // point, second click acts; clicking empty space resets
                 let pairing = matches!(self.mesh_mode, 3 | 4);
-                if !space && pairing && resp.clicked() {
+                if !space && pairing && !alt && resp.clicked() {
                     match (near, self.edge_first) {
                         (Some((vi, _)), None) => self.edge_first = Some(vi),
                         (Some((vi, _)), Some(first)) if vi == first => self.edge_first = None,
@@ -11819,7 +11925,7 @@ impl EditorUi {
                         (None, _) => self.edge_first = None,
                     }
                 }
-                if !pairing {
+                if !pairing && self.mesh_mode != 1 {
                     self.edge_first = None;
                 }
                 if !space
@@ -12156,7 +12262,12 @@ impl EditorUi {
                 FontId::proportional(11.0),
                 Color32::WHITE,
             );
-            let esc = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+            let mut esc = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+            if esc && self.edge_first.is_some() {
+                // the first Esc only lets go of the chain (Cubism's deselect)
+                self.edge_first = None;
+                esc = false;
+            }
             if (dresp.clicked() || esc)
                 && let Some(why) = why_not
             {
@@ -12178,19 +12289,26 @@ impl EditorUi {
                     s.edit(|m| ayatsuri_core::edit::slide_vertex(m, mi, vi, dx, dy, uv))
                 }
                 MeshOp::Add(mi, ti, w) => {
-                    s.edit(|m| ayatsuri_core::edit::add_vertex(m, mi, ti, w).is_some())
+                    let n = s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count);
+                    let ok = s.edit(|m| ayatsuri_core::edit::add_vertex(m, mi, ti, w).is_some());
+                    if ok && self.mesh_mode == 1 {
+                        self.edge_first = Some(n as usize);
+                    }
+                    ok
                 }
-                MeshOp::AddFree(mi, corners, w, connect, links) => {
+                MeshOp::AddFree(mi, corners, w, connect, links, follow) => {
                     let n =
                         s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count) as u16;
                     let ok = s.edit(|m| {
                         ayatsuri_core::edit::add_free_vertex(m, mi, corners, w, connect).is_some()
                     });
-                    // auto connect on a faceless mesh: lines to the two
-                    // nearest points, closing a face if those two are joined
+                    // the chain's line, closing a face if it makes a triangle
                     if ok {
                         for l in links {
                             connect_pair(&mut self.pending_edges, s, mi, n, l);
+                        }
+                        if follow && self.mesh_mode == 1 {
+                            self.edge_first = Some(n as usize);
                         }
                     }
                     ok
@@ -12213,6 +12331,7 @@ impl EditorUi {
                 }
                 MeshOp::EraseMany(mi, marked) => {
                     self.pending_edges.remove(&mi);
+                    self.edge_first = None;
                     self.mesh_picked.clear();
                     let n = marked.len();
                     let done = s.edit(|m| ayatsuri_core::edit::delete_vertices(m, mi, &marked));
@@ -12229,6 +12348,7 @@ impl EditorUi {
                 MeshOp::Del(mi, vi) => {
                     // indices shift on delete, so pending lines can't survive it
                     self.pending_edges.remove(&mi);
+                    self.edge_first = None;
                     self.mesh_picked.clear();
                     let done = s.edit(|m| ayatsuri_core::edit::delete_vertex(m, mi, vi));
                     if !done {

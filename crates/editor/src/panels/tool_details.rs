@@ -375,7 +375,8 @@ impl EditorUi {
                         crate::i18n::tr("Protect edge exterior"),
                     )
                     .on_hover_text(crate::i18n::tr(
-                        "No faces over empty texture, so hair and lashes don't get bridged",
+                        "Keep faces inside the outline you drew with lines; with none drawn, no \
+                         faces over empty texture, so hair and lashes don't get bridged",
                     ));
                 });
             });
@@ -391,10 +392,16 @@ impl EditorUi {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (mode, glyph, tip) in [
-                (1u8, ph::PLUS_CIRCLE, "Add vertex"),
+                (
+                    1u8,
+                    ph::PLUS_CIRCLE,
+                    "Add vertex: each click draws a line from the last point. Ctrl+click adds \
+                     a single point, Shift+click keeps the line's start, Esc ends the line, \
+                     Alt+click deletes a point or line",
+                ),
                 (2, ph::MINUS_CIRCLE, "Delete vertex"),
                 (3, ph::LINE_SEGMENT, "Connect two points with an edge"),
-                (4, ph::SCISSORS, "Delete edge (line)"),
+                (4, ph::SCISSORS, "Delete edge (line): click a line, or its two points"),
             ] {
                 if icon(ui, self.mesh_mode == mode, true, glyph, tip).clicked() {
                     self.mesh_mode = mode;

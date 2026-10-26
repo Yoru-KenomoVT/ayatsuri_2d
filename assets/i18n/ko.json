@@ -152,7 +152,6 @@
   "Mesh reconstruction": "메시 재구성",
   "On: redo every face from the points. Off: keep the lines you built": "켬: 점에서 모든 면을 다시 생성. 끔: 만든 선을 유지",
   "Protect edge exterior": "가장자리 외부 보호",
-  "No faces over empty texture, so hair and lashes don't get bridged": "빈 텍스처 위에 면을 만들지 않아 머리카락과 속눈썹이 이어지지 않음",
   "New points": "새 점",
   "Connect automatically": "자동으로 연결",
   "Selection range on click": "클릭 시 선택 범위",
@@ -791,10 +790,8 @@
   "Level 1 (refine): division points only": "레벨 1 (세밀): 분할점만",
   "Level 2 (normal): Bezier control points at the warp's Bezier division": "레벨 2 (보통): 워프의 베지어 분할 위치의 베지어 제어점",
   "Level 3 (rough): one Bezier patch on the outer frame": "레벨 3 (대략): 외곽 프레임의 베지어 패치 하나",
-  "Add vertex": "정점 추가",
   "Delete vertex": "정점 삭제",
   "Connect two points with an edge": "두 점을 변으로 연결",
-  "Delete edge (line)": "변(선) 삭제",
   "Glue weight A:B: drag favours red A, Shift+drag green B": "글루 가중치 A:B: 드래그는 빨간 A, Shift+드래그는 초록 B 쪽으로",
   "Glue weight A: only the red mesh's weight": "글루 가중치 A: 빨간 메시의 가중치만",
   "Glue weight B: only the green mesh's weight": "글루 가중치 B: 초록 메시의 가중치만",
@@ -1355,5 +1352,8 @@
   "Turns every feature below on or off at once": "아래 모든 기능을 한꺼번에 켜거나 끕니다",
   "FEATURES": "기능",
   "Clip groups": "클립 그룹",
-  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "인스펙터에서 마스크 묶음에 이름을 붙이면 여러 메시가 함께 그것으로 클리핑되고 함께 바뀝니다"
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "인스펙터에서 마스크 묶음에 이름을 붙이면 여러 메시가 함께 그것으로 클리핑되고 함께 바뀝니다",
+  "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "정점 추가: 클릭할 때마다 직전 점에서 선을 긋습니다. Ctrl+클릭은 단독 점, Shift+클릭은 선의 시작점 유지, Esc는 선 종료, Alt+클릭은 점이나 선 삭제",
+  "Delete edge (line): click a line, or its two points": "변(선) 삭제: 선을 클릭하거나 양 끝 점을 클릭",
+  "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "선으로 그린 외곽 안쪽에만 면을 만듭니다. 선이 없으면 빈 텍스처 위에 면을 만들지 않아 머리카락과 속눈썹이 이어지지 않습니다"
 }

@@ -78,14 +78,6 @@ impl Grid {
         let gy = (py / self.cell + 1.0).floor() as i64;
         self.at(gx, gy)
     }
-
-    /// The same with a one-cell allowance: outline triangles straddle the
-    /// contour, and the strict test would nibble teeth out of the edge.
-    fn near(&self, px: f32, py: f32) -> bool {
-        let gx = (px / self.cell + 1.0).floor() as i64;
-        let gy = (py / self.cell + 1.0).floor() as i64;
-        (-1..=1).any(|dy| (-1..=1).any(|dx| self.at(gx + dx, gy + dy)))
-    }
 }
 
 fn build_grid(alpha: &[u8], w: usize, h: usize, p: &Params) -> Grid {
@@ -368,6 +360,158 @@ pub fn delaunay(pts: &[(f32, f32)]) -> Vec<[usize; 3]> {
     tris.into_iter().map(|(t, _)| t).filter(|t| t.iter().all(|&v| v < n)).collect()
 }
 
+/// Which side of the line a-b the point c is on, with a tolerance scaled to
+/// the coordinates so pixel and uv spaces both work: 1 left, -1 right, 0 on it.
+fn side(a: (f64, f64), b: (f64, f64), c: (f64, f64), eps: f64) -> i8 {
+    let o = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+    if o > eps {
+        1
+    } else if o < -eps {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Segments a-b and c-d cross at a point inside both (touching ends or a
+/// point lying on the other segment does not count).
+fn crossing(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64), eps: f64) -> bool {
+    let (s1, s2) = (side(a, b, c, eps), side(a, b, d, eps));
+    let (s3, s4) = (side(c, d, a, eps), side(c, d, b, eps));
+    s1 * s2 < 0 && s3 * s4 < 0
+}
+
+fn key(a: usize, b: usize) -> (usize, usize) {
+    (a.min(b), a.max(b))
+}
+
+/// Delaunay with `edges` forced in, each a pair of point indices: the edges
+/// crossing one are flipped away until it appears (Sloan's method). An edge
+/// that cannot go in (a point lying on it, or two forced edges crossing)
+/// is left out rather than breaking one already in.
+pub fn constrained(pts: &[(f32, f32)], edges: &[(usize, usize)]) -> Vec<[usize; 3]> {
+    let mut tris = delaunay(pts);
+    let p: Vec<(f64, f64)> = pts.iter().map(|&(x, y)| (x as f64, y as f64)).collect();
+    let span = p.iter().fold(1e-9f64, |m, &(x, y)| m.max(x.abs()).max(y.abs()));
+    let eps = span * span * 1e-12;
+    let at = |i: usize| p.get(i).copied().unwrap_or((0.0, 0.0));
+    let has = |tris: &[[usize; 3]], a: usize, b: usize| {
+        tris.iter().any(|t| t.contains(&a) && t.contains(&b))
+    };
+    let mut fixed: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    for &(a, b) in edges {
+        if a == b || a >= p.len() || b >= p.len() {
+            continue;
+        }
+        let limit = tris.len() * 4 + 64;
+        for _ in 0..limit {
+            if has(&tris, a, b) {
+                fixed.insert(key(a, b));
+                break;
+            }
+            // flip the first crossing edge whose two faces make a convex quad
+            let mut flipped = false;
+            'scan: for ti in 0..tris.len() {
+                let Some(t) = tris.get(ti).copied() else { continue };
+                for (u, v) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    if [u, v].iter().any(|x| *x == a || *x == b)
+                        || fixed.contains(&key(u, v))
+                        || !crossing(at(a), at(b), at(u), at(v), eps)
+                    {
+                        continue;
+                    }
+                    let Some(tj) = (0..tris.len()).find(|&j| {
+                        j != ti && tris.get(j).is_some_and(|o| o.contains(&u) && o.contains(&v))
+                    }) else {
+                        continue;
+                    };
+                    let third = |t: [usize; 3]| t.into_iter().find(|&x| x != u && x != v);
+                    let (Some(pp), Some(q)) = (third(t), tris.get(tj).copied().and_then(third))
+                    else {
+                        continue;
+                    };
+                    if !crossing(at(pp), at(q), at(u), at(v), eps) {
+                        continue;
+                    }
+                    if let Some(s) = tris.get_mut(ti) {
+                        *s = [pp, q, u];
+                    }
+                    if let Some(s) = tris.get_mut(tj) {
+                        *s = [q, pp, v];
+                    }
+                    flipped = true;
+                    break 'scan;
+                }
+            }
+            if !flipped {
+                break;
+            }
+        }
+    }
+    tris
+}
+
+/// Per triangle, whether it lies outside every closed run of `edges`: a
+/// flood from the hull that stops at those edges. All true when they close
+/// nothing off.
+pub fn outside(tris: &[[usize; 3]], edges: &[(usize, usize)]) -> Vec<bool> {
+    let walls: std::collections::HashSet<(usize, usize)> =
+        edges.iter().map(|&(a, b)| key(a, b)).collect();
+    let mut faces_of: std::collections::HashMap<(usize, usize), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (ti, t) in tris.iter().enumerate() {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            faces_of.entry(key(a, b)).or_default().push(ti);
+        }
+    }
+    let mut out = vec![false; tris.len()];
+    let mut queue: Vec<usize> = Vec::new();
+    for (e, faces) in &faces_of {
+        if let [only] = faces.as_slice()
+            && !walls.contains(e)
+            && let Some(o) = out.get_mut(*only)
+            && !*o
+        {
+            *o = true;
+            queue.push(*only);
+        }
+    }
+    while let Some(ti) = queue.pop() {
+        let Some(t) = tris.get(ti).copied() else { continue };
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let e = key(a, b);
+            if walls.contains(&e) {
+                continue;
+            }
+            for &n in faces_of.get(&e).map(Vec::as_slice).unwrap_or(&[]) {
+                if let Some(o) = out.get_mut(n)
+                    && !*o
+                {
+                    *o = true;
+                    queue.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Even-odd test against closed loops: inside the outlines and out of
+/// their holes.
+fn inside_rings(rings: &[Vec<(f32, f32)>], x: f32, y: f32) -> bool {
+    let mut inside = false;
+    for r in rings {
+        let n = r.len();
+        for i in 0..n {
+            let (Some(&a), Some(&b)) = (r.get(i), r.get((i + 1) % n)) else { continue };
+            if (a.1 > y) != (b.1 > y) && x < a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0) {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
 /// Mesh one layer's alpha. `alpha` is `w * h`, row-major.
 pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
     if w == 0 || h == 0 || alpha.len() < w * h {
@@ -402,7 +546,7 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
     if points.len() >= u16::MAX as usize {
         points.truncate(u16::MAX as usize - 1);
     }
-    triangulate(points, &grid)
+    triangulate(points, &rings)
 }
 
 /// Cubism's inside: points on a staggered grid, kept `clear` outline
@@ -496,21 +640,32 @@ fn face_inside(
     }
 }
 
-/// Delaunay over the points, then everything outside the shape carved away
-/// and points no triangle uses dropped.
-fn triangulate(points: Vec<(f32, f32)>, grid: &Grid) -> Mesh {
-    // triangulate, then carve away whatever falls outside the shape
+/// Delaunay over the points with the outline rings forced in as edges, so
+/// no triangle can bridge a notch or a gap between strokes, then everything
+/// outside the rings carved away and points no triangle uses dropped. The
+/// rings' points come first in `points`, ring after ring.
+fn triangulate(points: Vec<(f32, f32)>, rings: &[Vec<(f32, f32)>]) -> Mesh {
+    let mut edges = Vec::new();
+    let mut start = 0;
+    for r in rings {
+        let n = r.len();
+        for i in 0..n {
+            edges.push((start + i, start + (i + 1) % n));
+        }
+        start += n;
+    }
+    edges.retain(|&(a, b)| a < points.len() && b < points.len());
     let mut triangles: Vec<[u16; 3]> = Vec::new();
-    for t in delaunay(&points) {
+    for t in constrained(&points, &edges) {
         let (Some(a), Some(b), Some(c)) = (points.get(t[0]), points.get(t[1]), points.get(t[2]))
         else {
             continue;
         };
+        // with the rings in as edges a triangle is wholly in or wholly out,
+        // so its centroid decides
         let cx = (a.0 + b.0 + c.0) / 3.0;
         let cy = (a.1 + b.1 + c.1) / 3.0;
-        // the centroid decides, with a cell of allowance so the outline ring
-        // stays whole; triangles spanning a real gap still land far outside
-        if grid.near(cx, cy) {
+        if inside_rings(rings, cx, cy) {
             triangles.push([t[0] as u16, t[1] as u16, t[2] as u16]);
         }
     }
@@ -688,6 +843,66 @@ mod tests {
             assert!(r > 25.0, "triangle centred at radius {r} fills the hole");
         }
         assert!(m.triangles.len() > 30);
+    }
+
+    #[test]
+    fn a_narrow_notch_is_not_bridged() {
+        // a block with a V cut in from the left, 40px open at the edge and
+        // closing 150px in: the inner corner of an eyelash
+        let (w, h) = (240usize, 140usize);
+        let solid = |x: f32, y: f32| {
+            let in_block = (20.0..220.0).contains(&x) && (20.0..120.0).contains(&y);
+            let half = 20.0 * (1.0 - (x - 20.0) / 150.0);
+            in_block && !(half > 0.0 && (y - 70.0).abs() < half)
+        };
+        let a: Vec<u8> = (0..w * h)
+            .map(|i| if solid((i % w) as f32 + 0.5, (i / w) as f32 + 0.5) { 255 } else { 0 })
+            .collect();
+        let p =
+            Params { outline_spacing: 12.0, inner_spacing: 24.0, margin: 3.0, ..Params::default() };
+        let m = generate(&a, w, h, &p);
+        assert!(m.triangles.len() > 20);
+        let opaque: Vec<(f32, f32)> = (0..w * h)
+            .filter(|&i| a[i] > 0)
+            .map(|i| ((i % w) as f32 + 0.5, (i / w) as f32 + 0.5))
+            .collect();
+        let off = |q: (f32, f32)| {
+            opaque
+                .iter()
+                .map(|o| (o.0 - q.0).powi(2) + (o.1 - q.1).powi(2))
+                .fold(f32::MAX, f32::min)
+                .sqrt()
+        };
+        let mut worst = 0.0f32;
+        for t in &m.triangles {
+            let c = t.iter().fold((0.0, 0.0), |s, &v| {
+                (s.0 + m.points[v as usize].0 / 3.0, s.1 + m.points[v as usize].1 / 3.0)
+            });
+            worst = worst.max(off(c));
+            for (x, y) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let (p0, p1) = (m.points[x as usize], m.points[y as usize]);
+                worst = worst.max(off(((p0.0 + p1.0) / 2.0, (p0.1 + p1.1) / 2.0)));
+            }
+        }
+        assert!(worst < 7.0, "a face reaches {worst}px into the notch");
+    }
+
+    #[test]
+    fn forced_edges_go_in_and_close_off_the_outside() {
+        // a drawn diamond with a point in its middle and one in the corner
+        // outside it
+        let pts = vec![(0.0, 5.0), (5.0, 0.0), (10.0, 5.0), (5.0, 10.0), (5.0, 5.0), (0.0, 0.0)];
+        let edges = [(0, 1), (1, 2), (2, 3), (3, 0)];
+        let t = constrained(&pts, &edges);
+        for &(a, b) in &edges {
+            assert!(t.iter().any(|f| f.contains(&a) && f.contains(&b)), "edge {a}-{b} missing");
+        }
+        // only the corner triangle outside the diamond is outside
+        let out = outside(&t, &edges);
+        let kept: Vec<[usize; 3]> =
+            t.iter().zip(&out).filter(|(_, o)| !**o).map(|(f, _)| *f).collect();
+        assert!(kept.iter().all(|f| !f.contains(&5)));
+        assert_eq!(kept.len(), 4);
     }
 
     #[test]

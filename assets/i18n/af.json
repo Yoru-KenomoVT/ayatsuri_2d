@@ -152,7 +152,6 @@
   "Mesh reconstruction": "Mesh-herbou",
   "On: redo every face from the points. Off: keep the lines you built": "Aan: herbou elke vlak uit die punte. Af: hou die lyne wat jy gebou het",
   "Protect edge exterior": "Beskerm buiterand",
-  "No faces over empty texture, so hair and lashes don't get bridged": "Geen vlakke oor leë tekstuur nie, sodat hare en wimpers nie oorbrug word nie",
   "New points": "Nuwe punte",
   "Connect automatically": "Koppel outomaties",
   "Selection range on click": "Seleksiebereik by klik",
@@ -791,10 +790,8 @@
   "Level 1 (refine): division points only": "Vlak 1 (verfyn): net verdelingspunte",
   "Level 2 (normal): Bezier control points at the warp's Bezier division": "Vlak 2 (normaal): Bezier-beheerpunte by die warp se Bezier-verdeling",
   "Level 3 (rough): one Bezier patch on the outer frame": "Vlak 3 (rof): een Bezier-lap op die buiteraam",
-  "Add vertex": "Voeg hoekpunt by",
   "Delete vertex": "Skrap hoekpunt",
   "Connect two points with an edge": "Verbind twee punte met 'n rand",
-  "Delete edge (line)": "Skrap rand (lyn)",
   "Glue weight A:B: drag favours red A, Shift+drag green B": "Lymgewig A:B: sleep bevoordeel rooi A, Shift+sleep groen B",
   "Glue weight A: only the red mesh's weight": "Lymgewig A: net die rooi mesh se gewig",
   "Glue weight B: only the green mesh's weight": "Lymgewig B: net die groen mesh se gewig",
@@ -1355,5 +1352,8 @@
   "Turns every feature below on or off at once": "Skakel al die funksies hieronder gelyk aan of af",
   "FEATURES": "FUNKSIES",
   "Clip groups": "Knipgroepe",
-  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "Gee in die Inspekteur 'n stel maskers 'n naam sodat verskeie meshes saam daarmee knip en saam verander"
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "Gee in die Inspekteur 'n stel maskers 'n naam sodat verskeie meshes saam daarmee knip en saam verander",
+  "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "Voeg punt by: elke klik trek 'n lyn vanaf die vorige punt. Ctrl+klik voeg 'n enkele punt by, Shift+klik hou die lyn se beginpunt, Esc beëindig die lyn, Alt+klik verwyder 'n punt of lyn",
+  "Delete edge (line): click a line, or its two points": "Verwyder rand (lyn): klik op 'n lyn, of op sy twee punte",
+  "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "Hou vlakke binne die buitelyn wat jy met lyne geteken het; sonder lyne geen vlakke oor leë tekstuur nie, sodat hare en wimpers nie oorbrug word nie"
 }

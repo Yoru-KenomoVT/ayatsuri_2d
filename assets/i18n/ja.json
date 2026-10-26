@@ -152,7 +152,6 @@
   "Mesh reconstruction": "メッシュの再構築",
   "On: redo every face from the points. Off: keep the lines you built": "オン：点から全ての面を再生成。オフ：作成した線を維持",
   "Protect edge exterior": "外側の辺を保護",
-  "No faces over empty texture, so hair and lashes don't get bridged": "空のテクスチャ上に面を作らず、髪やまつ毛がつながらないようにする",
   "New points": "新しい点",
   "Connect automatically": "自動で接続",
   "Selection range on click": "クリック時の選択範囲",
@@ -791,10 +790,8 @@
   "Level 1 (refine): division points only": "レベル1（精細）: 分割点のみ",
   "Level 2 (normal): Bezier control points at the warp's Bezier division": "レベル2（標準）: ワープのベジェ分割数に応じたベジェ制御点",
   "Level 3 (rough): one Bezier patch on the outer frame": "レベル3（大まか）: 外枠に1つのベジェパッチ",
-  "Add vertex": "頂点を追加",
   "Delete vertex": "頂点を削除",
   "Connect two points with an edge": "2点を辺で接続",
-  "Delete edge (line)": "辺（線）を削除",
   "Glue weight A:B: drag favours red A, Shift+drag green B": "グルーのウェイトA:B: ドラッグで赤のA側、Shift+ドラッグで緑のB側",
   "Glue weight A: only the red mesh's weight": "グルーのウェイトA: 赤のメッシュのウェイトのみ",
   "Glue weight B: only the green mesh's weight": "グルーのウェイトB: 緑のメッシュのウェイトのみ",
@@ -1355,5 +1352,8 @@
   "Turns every feature below on or off at once": "下のすべての機能をまとめてオン・オフします",
   "FEATURES": "機能",
   "Clip groups": "クリップグループ",
-  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "インスペクターでマスクのセットに名前を付けると、複数のメッシュがそれでまとめてクリッピングされ、一緒に変更されます"
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "インスペクターでマスクのセットに名前を付けると、複数のメッシュがそれでまとめてクリッピングされ、一緒に変更されます",
+  "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "頂点の追加：クリックごとに直前の点から線を引きます。Ctrl+クリックで単独の点、Shift+クリックで線の始点を保持、Escで線を終了、Alt+クリックで点や線を削除",
+  "Delete edge (line): click a line, or its two points": "辺（線）を削除：線をクリック、またはその両端の点をクリック",
+  "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "線で描いた外周の内側だけに面を作ります。線がない場合は空のテクスチャ上に面を作らず、髪やまつ毛がつながらないようにします"
 }
