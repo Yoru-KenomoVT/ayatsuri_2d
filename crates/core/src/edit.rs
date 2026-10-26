@@ -2863,70 +2863,112 @@ pub fn unbind_parameter_everywhere(model: &mut Model, param: usize) -> bool {
 }
 
 /// Cubism's Auto connect: triangulate the mesh's points (in uv space, so
-/// the result does not depend on the pose). With `rebuild` every face is
-/// redone from the points alone; without it the faces already there stay
-/// and only triangles that overlap none of them are added. `keep` filters
-/// candidate triangles by their centroid uv (the editor passes a texture
-/// alpha test for "Protect edge exterior"). Returns the faces added.
+/// the result does not depend on the pose), keeping every line drawn in
+/// `lines` as an edge. With `rebuild` every face is redone from the points
+/// and lines; without it the faces already there stay, their edges kept too,
+/// and only the gaps fill. `opaque` (the texture's alpha at a uv) turns on
+/// Protect edge exterior: when the lines close off a perimeter nothing goes
+/// outside it, and otherwise no face may sit on empty texture or stretch an
+/// edge across a gap in the art. Returns the faces added.
 pub fn auto_connect(
     model: &mut Model,
     mesh: usize,
     rebuild: bool,
-    keep: &dyn Fn(f32, f32) -> bool,
+    lines: &[(u16, u16)],
+    opaque: Option<&dyn Fn(f32, f32) -> bool>,
 ) -> usize {
     let Some(m) = model.art_meshes.get_mut(mesh) else { return 0 };
     let (uvp, _) = m.uvs.as_chunks::<2>();
     let pts: Vec<(f32, f32)> = uvp.iter().map(|&[u, v]| (u, v)).collect();
-    let fresh = crate::automesh::delaunay(&pts);
     let existing: Vec<[u16; 3]> = if rebuild {
         Vec::new()
     } else {
         let (t, _) = m.indices.as_chunks::<3>();
         t.to_vec()
     };
-    // the existing edges, for the overlap test
-    let mut edges: Vec<(u16, u16)> = Vec::new();
+    let mut forced: Vec<(usize, usize)> =
+        lines.iter().map(|&(a, b)| (a as usize, b as usize)).collect();
     for t in &existing {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
-            edges.push((a.min(b), a.max(b)));
+            forced.push((a as usize, b as usize));
         }
     }
-    let p = |i: u16| pts.get(i as usize).copied().unwrap_or((0.0, 0.0));
-    let cross = |a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)| {
-        // proper crossing only; shared endpoints are fine
-        let o = |p: (f32, f32), q: (f32, f32), r: (f32, f32)| {
-            (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+    let fresh = crate::automesh::constrained(&pts, &forced);
+    let p = |i: usize| pts.get(i).copied().unwrap_or((0.0, 0.0));
+    let mut drop = vec![false; fresh.len()];
+    if let Some(opaque) = opaque {
+        // a drawn perimeter is the outline to keep (Cubism asks for one)
+        let fenced = !lines.is_empty() && {
+            let out = crate::automesh::outside(&fresh, &forced);
+            let any_in = out.iter().any(|o| !o);
+            if any_in {
+                drop = out;
+            }
+            any_in
         };
-        let (o1, o2, o3, o4) = (o(a, b, c), o(a, b, d), o(c, d, a), o(c, d, b));
-        o1 * o2 < -1e-12 && o3 * o4 < -1e-12
+        if !fenced {
+            // no perimeter: the art decides. An edge whose middle runs over
+            // empty texture between art on both ends bridges a gap (the
+            // eyelash chord over the eye); the allowance is most of a
+            // typical edge, so outline edges just off the art still pass
+            let mut lens: Vec<f32> = fresh
+                .iter()
+                .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+                .map(|(a, b)| ((p(a).0 - p(b).0).powi(2) + (p(a).1 - p(b).1).powi(2)).sqrt())
+                .collect();
+            lens.sort_by(f32::total_cmp);
+            let allowance = lens.get(lens.len() / 2).copied().unwrap_or(0.0) * 0.75;
+            let gap = |a: (f32, f32), b: (f32, f32)| {
+                const STEPS: usize = 48;
+                let solid: Vec<bool> = (0..=STEPS)
+                    .map(|k| {
+                        let f = k as f32 / STEPS as f32;
+                        opaque(a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+                    })
+                    .collect();
+                let (Some(first), Some(last)) =
+                    (solid.iter().position(|&o| o), solid.iter().rposition(|&o| o))
+                else {
+                    return 0.0;
+                };
+                let mut longest = 0usize;
+                let mut run = 0usize;
+                for &o in solid.get(first..=last).unwrap_or(&[]) {
+                    run = if o { 0 } else { run + 1 };
+                    longest = longest.max(run);
+                }
+                let len = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                len * longest as f32 / STEPS as f32
+            };
+            for (t, d) in fresh.iter().zip(drop.iter_mut()) {
+                let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+                *d = !opaque((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0)
+                    || [(a, b), (b, c), (c, a)].iter().any(|&(x, y)| gap(x, y) > allowance);
+            }
+        }
+    }
+    // inside a kept face: with its edges forced in, a centroid inside means
+    // the new triangle lies within it
+    let in_face = |x: f32, y: f32| {
+        existing.iter().any(|t| {
+            let (a, b, c) = (p(t[0] as usize), p(t[1] as usize), p(t[2] as usize));
+            let s =
+                |p: (f32, f32), q: (f32, f32)| (q.0 - p.0) * (y - p.1) - (q.1 - p.1) * (x - p.0);
+            let (s1, s2, s3) = (s(a, b), s(b, c), s(c, a));
+            (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
+        })
     };
     let mut indices: Vec<u16> = existing.iter().flat_map(|t| t.iter().copied()).collect();
     let mut added = 0;
-    for t in fresh {
-        let tri = [t[0] as u16, t[1] as u16, t[2] as u16];
-        let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
-        if !keep((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0) {
+    for (t, d) in fresh.iter().zip(&drop) {
+        if *d {
             continue;
         }
-        if !rebuild {
-            let mut sorted = tri;
-            sorted.sort_unstable();
-            let duplicate = existing.iter().any(|e| {
-                let mut s = *e;
-                s.sort_unstable();
-                s == sorted
-            });
-            let overlaps =
-                [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])].iter().any(|&(x, y)| {
-                    edges.iter().any(|&(e0, e1)| {
-                        e0 != x && e0 != y && e1 != x && e1 != y && cross(p(x), p(y), p(e0), p(e1))
-                    })
-                });
-            if duplicate || overlaps {
-                continue;
-            }
+        let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+        if !existing.is_empty() && in_face((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0) {
+            continue;
         }
-        indices.extend_from_slice(&tri);
+        indices.extend_from_slice(&[t[0] as u16, t[1] as u16, t[2] as u16]);
         added += 1;
     }
     m.indices = indices;
@@ -3603,10 +3645,42 @@ mod tests {
         if let Some(am) = m.art_meshes.get_mut(0) {
             am.indices.clear();
         }
-        let added = auto_connect(&mut m, 0, true, &|_, _| true);
+        let added = auto_connect(&mut m, 0, true, &[], None);
         assert_eq!(added, 2);
         // keeping the existing faces adds nothing that overlaps them
-        assert_eq!(auto_connect(&mut m, 0, false, &|_, _| true), 0);
+        assert_eq!(auto_connect(&mut m, 0, false, &[], None), 0);
+    }
+
+    #[test]
+    fn auto_connect_keeps_inside_a_drawn_perimeter() {
+        // a U of eight points, its outline drawn as lines: the notch
+        // (x 1..2, y 0..2) is outside it and must stay open
+        let mut m = test_model();
+        let u = [(0.0, 0.0), (0.0, 3.0), (3.0, 3.0), (3.0, 0.0)];
+        let notch = [(2.0, 0.0), (2.0, 2.0), (1.0, 2.0), (1.0, 0.0)];
+        let pts: Vec<(f32, f32)> =
+            u.iter().chain(&notch).map(|&(x, y)| (x / 3.0, y / 3.0)).collect();
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.vertex_count = 8;
+            am.uvs = pts.iter().flat_map(|&(x, y)| [x, y]).collect();
+            am.positions = am.uvs.clone();
+            am.indices.clear();
+        }
+        let lines: Vec<(u16, u16)> = (0..8u16).map(|i| (i, (i + 1) % 8)).collect();
+        let solid = |_: f32, _: f32| true;
+        let added = auto_connect(&mut m, 0, true, &lines, Some(&solid));
+        assert_eq!(added, 6, "an eight-point outline holds six faces");
+        let am = &m.art_meshes[0];
+        for t in am.indices.chunks(3) {
+            let c = t.iter().fold((0.0, 0.0), |a, &v| {
+                (a.0 + pts[v as usize].0 / 3.0, a.1 + pts[v as usize].1 / 3.0)
+            });
+            let in_notch = c.0 > 1.0 / 3.0 && c.0 < 2.0 / 3.0 && c.1 < 2.0 / 3.0;
+            assert!(!in_notch, "a face fills the notch at {c:?}");
+        }
+        // with protection off the hull fills, notch and all
+        let added = auto_connect(&mut m, 0, true, &lines, None);
+        assert!(added > 6);
     }
 
     #[test]

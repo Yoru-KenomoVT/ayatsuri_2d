@@ -152,7 +152,6 @@
   "Mesh reconstruction": "Mesh-reconstructie",
   "On: redo every face from the points. Off: keep the lines you built": "Aan: alle vlakken opnieuw vanuit de punten. Uit: je eigen lijnen behouden",
   "Protect edge exterior": "Buitenrand beschermen",
-  "No faces over empty texture, so hair and lashes don't get bridged": "Geen vlakken over lege textuur, zodat haar en wimpers niet overbrugd worden",
   "New points": "Nieuwe punten",
   "Connect automatically": "Automatisch verbinden",
   "Selection range on click": "Selectiebereik bij klikken",
@@ -791,10 +790,8 @@
   "Level 1 (refine): division points only": "Niveau 1 (verfijnen): alleen delingspunten",
   "Level 2 (normal): Bezier control points at the warp's Bezier division": "Niveau 2 (normaal): Bezier-controlepunten op de Bezier-deling van de warp",
   "Level 3 (rough): one Bezier patch on the outer frame": "Niveau 3 (grof): één Bezier-vlak op het buitenkader",
-  "Add vertex": "Vertex toevoegen",
   "Delete vertex": "Vertex verwijderen",
   "Connect two points with an edge": "Twee punten met een rand verbinden",
-  "Delete edge (line)": "Rand (lijn) verwijderen",
   "Glue weight A:B: drag favours red A, Shift+drag green B": "Lijmgewicht A:B: slepen bevoordeelt rode A, Shift+slepen groene B",
   "Glue weight A: only the red mesh's weight": "Lijmgewicht A: alleen het gewicht van de rode mesh",
   "Glue weight B: only the green mesh's weight": "Lijmgewicht B: alleen het gewicht van de groene mesh",
@@ -1355,5 +1352,8 @@
   "Turns every feature below on or off at once": "Zet alle functies hieronder in één keer aan of uit",
   "FEATURES": "FUNCTIES",
   "Clip groups": "Knipgroepen",
-  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "Geef in de Inspector een set maskers een naam, zodat meerdere meshes er samen mee uitknippen en samen veranderen"
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "Geef in de Inspector een set maskers een naam, zodat meerdere meshes er samen mee uitknippen en samen veranderen",
+  "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "Punt toevoegen: elke klik trekt een lijn vanaf het vorige punt. Ctrl+klik voegt een los punt toe, Shift+klik houdt het beginpunt van de lijn, Esc beëindigt de lijn, Alt+klik verwijdert een punt of lijn",
+  "Delete edge (line): click a line, or its two points": "Rand (lijn) verwijderen: klik op een lijn, of op de twee punten ervan",
+  "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "Houd vlakken binnen de omtrek die je met lijnen tekende; zonder lijnen geen vlakken over lege textuur, zodat haar en wimpers niet overbrugd worden"
 }

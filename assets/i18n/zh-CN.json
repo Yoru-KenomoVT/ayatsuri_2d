@@ -152,7 +152,6 @@
   "Mesh reconstruction": "网格重建",
   "On: redo every face from the points. Off: keep the lines you built": "开: 根据点重建所有面。关: 保留已建的线",
   "Protect edge exterior": "保护边缘外侧",
-  "No faces over empty texture, so hair and lashes don't get bridged": "不在空白纹理上生成面，避免头发和睫毛被连接",
   "New points": "新点",
   "Connect automatically": "自动连接",
   "Selection range on click": "单击选择范围",
@@ -791,10 +790,8 @@
   "Level 1 (refine): division points only": "等级 1 (精细): 仅分割点",
   "Level 2 (normal): Bezier control points at the warp's Bezier division": "等级 2 (标准): 弯曲变形器贝塞尔分割处的贝塞尔控制点",
   "Level 3 (rough): one Bezier patch on the outer frame": "等级 3 (粗略): 外框上的单个贝塞尔面片",
-  "Add vertex": "添加顶点",
   "Delete vertex": "删除顶点",
   "Connect two points with an edge": "用边连接两点",
-  "Delete edge (line)": "删除边 (线)",
   "Glue weight A:B: drag favours red A, Shift+drag green B": "胶水权重 A:B: 拖动偏向红色 A，Shift+拖动偏向绿色 B",
   "Glue weight A: only the red mesh's weight": "胶水权重 A: 仅红色网格的权重",
   "Glue weight B: only the green mesh's weight": "胶水权重 B: 仅绿色网格的权重",
@@ -1355,5 +1352,8 @@
   "Turns every feature below on or off at once": "一次开启或关闭下面的所有功能",
   "FEATURES": "功能",
   "Clip groups": "剪贴组",
-  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "在检查器中为一组遮罩命名，多个网格即可一起用它剪贴并一起更改"
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "在检查器中为一组遮罩命名，多个网格即可一起用它剪贴并一起更改",
+  "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "添加顶点：每次点击都会从上一个点画线。Ctrl+点击添加单独的点，Shift+点击保持线的起点，Esc 结束画线，Alt+点击删除点或线",
+  "Delete edge (line): click a line, or its two points": "删除边（线）：点击线，或点击它的两个端点",
+  "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "只在用线画出的外轮廓内生成面；没有画线时，不在空白纹理上生成面，避免头发和睫毛被连在一起"
 }
