@@ -181,6 +181,9 @@ pub struct Prefs {
     pub smooth_drag_amount: u32,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
+    /// Don't lay the atlas out again on leaving Mesh Edit when a mesh has
+    /// grown past its own art (keeps a layout arranged by hand).
+    pub atlas_repack_off: bool,
     /// Experimental features (Settings > Experimental): the master switch,
     /// then one per feature; a feature is on only with both.
     pub experimental: bool,

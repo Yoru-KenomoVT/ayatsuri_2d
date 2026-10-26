@@ -298,6 +298,8 @@ pub struct EditorUi {
     stroke_edit: Option<stroke_tool::StrokeEdit>,
     /// Confirm asked for on the canvas: applied once it lets go.
     stroke_confirm: bool,
+    /// The mesh Mesh Edit was on last frame, to notice it closing.
+    mesh_edit_was: Option<usize>,
     /// The Mesh Edit dev hook has run, and has logged its vertices.
     dev_mesh_done: bool,
     dev_mesh_logged: bool,
@@ -1198,6 +1200,7 @@ impl Default for EditorUi {
             mesh_art: None,
             stroke_edit: None,
             stroke_confirm: false,
+            mesh_edit_was: None,
             dev_mesh_logged: false,
             rot_live: None,
             api: Default::default(),
@@ -2147,6 +2150,11 @@ impl EditorUi {
         self.def_rename_window(&ui.ctx().clone());
         if std::mem::take(&mut self.stroke_confirm) {
             self.apply_stroke_mesh();
+        }
+        if self.mesh_edit.is_some() {
+            self.mesh_edit_was = self.mesh_edit;
+        } else if self.mesh_edit_was.take().is_some() && !self.prefs.atlas_repack_off {
+            self.repack_if_outgrown(&ui.ctx().clone());
         }
         self.def_division_window(&ui.ctx().clone());
         self.whats_new_window(&ui.ctx().clone());
@@ -8768,6 +8776,47 @@ impl EditorUi {
         }
     }
 
+    /// Lay the atlas out again when a mesh reaches past its own art, so the
+    /// pages hold only each mesh's own pixels and no export shows a
+    /// neighbour's: one undo step, at the size of the biggest page now.
+    fn repack_if_outgrown(&mut self, ctx: &egui::Context) {
+        let Some(s) = &mut self.session else { return };
+        let sizes = s.page_sizes();
+        let art = s.art_boxes();
+        let model = s.puppet.model();
+        let outgrown: Vec<usize> = model
+            .art_meshes
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| {
+                let Some(b) = art.get(*i).filter(|b| b[0] > -1.0) else { return false };
+                let Some(&(pw, ph)) = sizes.get(m.texture as usize) else { return false };
+                // half a pixel past the art counts
+                let (tu, tv) = (0.5 / pw.max(1) as f32, 0.5 / ph.max(1) as f32);
+                m.uvs.as_chunks::<2>().0.iter().any(|uv| {
+                    uv[0] < b[0] - tu || uv[0] > b[2] + tu || uv[1] < b[1] - tv || uv[1] > b[3] + tv
+                })
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if outgrown.is_empty() {
+            return;
+        }
+        let pieces = crate::atlas::pieces(model, &sizes, &art);
+        let page = sizes.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(4096).clamp(256, 16384);
+        let names: Vec<String> = outgrown.iter().take(3).map(|&i| s.mesh_name(i)).collect();
+        match crate::atlas::auto_layout(&pieces, page, true)
+            .and_then(|layout| s.apply_atlas(ctx, &pieces, &layout))
+        {
+            Ok(()) => log::info!(
+                "atlas laid out again: {} mesh(es) outgrew their art ({})",
+                outgrown.len(),
+                names.join(", ")
+            ),
+            Err(e) => log::warn!("atlas: could not lay it out again: {e}"),
+        }
+    }
+
     /// Open Rename Deformer on a deformer's current name and ID.
     fn open_def_rename(&mut self, i: usize) {
         let Some(s) = &self.session else { return };
@@ -9870,6 +9919,7 @@ impl EditorUi {
                 scale,
                 ui.ctx().pixels_per_point(),
                 solo_view(s, &self.prefs).as_ref(),
+                &s.art_boxes(),
             );
             vp.add(cb);
         } else {
@@ -16896,4 +16946,80 @@ fn paint_picked_row(ui: &Ui, rect: Rect) {
     ui.painter().rect_filled(rect, 0.0, pal.select);
     let bar = Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
     ui.painter().rect_filled(bar, 0.0, pal.accent);
+}
+
+#[cfg(test)]
+mod atlas_leak_tests {
+    use super::*;
+    use crate::session::Session;
+    use ayatsuri_import::{Document, Layer};
+
+    fn layer(name: &str, x: i32, rgb: [u8; 3]) -> Layer {
+        Layer {
+            name: name.into(),
+            groups: vec![],
+            x,
+            y: 10,
+            width: 30,
+            height: 30,
+            rgba: [rgb[0], rgb[1], rgb[2], 255].repeat(30 * 30),
+            visible: true,
+            opacity: 1.0,
+            clip_to_below: false,
+            blend: ayatsuri_import::Blend::NORMAL,
+        }
+    }
+
+    #[test]
+    fn a_mesh_grown_over_its_neighbour_is_repacked_with_only_its_own_art() {
+        let ctx = egui::Context::default();
+        let doc = Document {
+            width: 200,
+            height: 100,
+            layers: vec![layer("Red", 10, [255, 0, 0]), layer("Blue", 60, [0, 0, 255])],
+        };
+        let art = ayatsuri_import::from_layers(&doc).unwrap();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        s.add_imported(&ctx, art, std::path::Path::new("a.psd")).unwrap();
+        let red = (0..2).find(|&i| s.mesh_name(i) == "Red").unwrap();
+        let blue = 1 - red;
+        // the red mesh's right edge moves out over the blue layer's art
+        let blue_u1 =
+            s.puppet.model().art_meshes[blue].uvs.chunks(2).map(|p| p[0]).fold(0.0f32, f32::max);
+        assert!(s.edit(|m| {
+            let r = &mut m.art_meshes[red];
+            let right = r.uvs.chunks(2).map(|p| p[0]).fold(0.0f32, f32::max);
+            for uv in r.uvs.chunks_mut(2) {
+                if (uv[0] - right).abs() < 1e-6 {
+                    uv[0] = blue_u1;
+                }
+            }
+            true
+        }));
+        let mut ed = EditorUi::new();
+        ed.session = Some(s);
+        ed.repack_if_outgrown(&ctx);
+        let s = ed.session.as_ref().unwrap();
+        let m = &s.puppet.model().art_meshes[red];
+        let page = image::load_from_memory(&s.texture_pngs[m.texture as usize]).unwrap().to_rgba8();
+        let (w, h) = (page.width() as f32, page.height() as f32);
+        let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for uv in m.uvs.chunks(2) {
+            (u0, v0, u1, v1) = (u0.min(uv[0]), v0.min(uv[1]), u1.max(uv[0]), v1.max(uv[1]));
+        }
+        let (mut reds, mut blues) = (0, 0);
+        for y in (v0 * h) as u32..(v1 * h) as u32 {
+            for x in (u0 * w) as u32..(u1 * w) as u32 {
+                let p = page.get_pixel(x, y);
+                if p[3] > 0 && p[2] > 128 {
+                    blues += 1;
+                }
+                if p[3] > 0 && p[0] > 128 {
+                    reds += 1;
+                }
+            }
+        }
+        assert!(reds > 0, "its own art came along");
+        assert_eq!(blues, 0, "the neighbour's did not");
+    }
 }

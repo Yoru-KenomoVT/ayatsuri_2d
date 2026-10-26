@@ -35,7 +35,7 @@ const SIZES: [u32; 5] = [1024, 2048, 4096, 6144, 8192];
 impl AtlasWin {
     pub fn new(s: &crate::session::Session) -> Self {
         let sizes = s.page_sizes();
-        let pieces = crate::atlas::pieces(s.puppet.model(), &sizes);
+        let pieces = crate::atlas::pieces(s.puppet.model(), &sizes, &s.art_boxes());
         // the current state as the starting layout: pages at their largest size
         let page_size =
             sizes.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(4096).clamp(256, 16384);

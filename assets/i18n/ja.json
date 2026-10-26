@@ -1439,5 +1439,8 @@
   "Repeated density": "繰り返し密度",
   "Stroke mesh-mapping": "ストロークメッシュマッピング",
   "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "ストロークメッシュマッピング(実験的): ドラッグでストロークに沿ったメッシュを作ります。Shift+Eで確定、Deleteで取り消し",
-  "With 2 vertices across: flip the diagonal of the first and last cells": "幅の頂点数が2のとき: 最初と最後のセルの対角線を反転します"
+  "With 2 vertices across: flip the diagonal of the first and last cells": "幅の頂点数が2のとき: 最初と最後のセルの対角線を反転します",
+  "TEXTURE ATLAS": "テクスチャアトラス",
+  "Repack when a mesh outgrows its art": "メッシュが絵からはみ出したら再配置",
+  "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "メッシュ編集を終えたとき、メッシュが自分の絵の外まで広がっていればアトラスを配置し直し、書き出しに隣の絵が映らないようにします。手で並べた配置を保つにはオフにします"
 }

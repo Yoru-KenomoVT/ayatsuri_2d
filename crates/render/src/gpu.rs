@@ -14,7 +14,14 @@ pub struct Vertex {
     pub pos: [f32; 2],
     pub uv: [f32; 2],
     pub color: [f32; 4],
+    /// The texture box this vertex's mesh may show (u0, v0, u1, v1):
+    /// samples outside it are transparent, so a mesh grown past its own
+    /// art never shows a neighbour's. [`NO_CLIP`] shows everything.
+    pub clip: [f32; 4],
 }
+
+/// A clip box that clips nothing.
+pub const NO_CLIP: [f32; 4] = [-1.0e6, -1.0e6, 1.0e6, 1.0e6];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BlendMode {
@@ -120,15 +127,24 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) clip: vec4<f32>,
 }
 
 @vertex
-fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>) -> VsOut {
+fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) clip: vec4<f32>) -> VsOut {
     var o: VsOut;
     o.pos = vec4<f32>(pos.x * uni.to_ndc.x + uni.to_ndc.z, pos.y * uni.to_ndc.y + uni.to_ndc.w, 0.0, 1.0);
     o.uv = uv;
     o.color = color;
+    o.clip = clip;
     return o;
+}
+
+// the texture, transparent outside the mesh's own art box
+fn art(in: VsOut) -> vec4<f32> {
+    let t = textureSample(tex, smp, in.uv);
+    let inside = all(in.uv >= in.clip.xy) && all(in.uv <= in.clip.zw);
+    return select(vec4<f32>(0.0), t, inside);
 }
 
 @group(1) @binding(0) var tex: texture_2d<f32>;
@@ -138,7 +154,7 @@ fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2)
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, smp, in.uv);
+    let t = art(in);
     let muv = in.pos.xy / uni.view.xy;
     let m = textureSample(mask_tex, smp, muv).r;
     var f = 1.0;
@@ -219,7 +235,7 @@ fn unpremul(c: vec4<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_advanced(in: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, smp, in.uv);
+    let t = art(in);
     let muv = in.pos.xy / uni.view.xy;
     let m = textureSample(mask_tex, smp, muv).r;
     var f = 1.0;
@@ -245,7 +261,7 @@ fn fs_advanced(in: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_mask(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(tex, smp, in.uv).a * in.color.a;
+    let a = art(in).a * in.color.a;
     return vec4<f32>(a, 0.0, 0.0, 1.0);
 }
 "#;
@@ -479,7 +495,7 @@ impl GpuRenderer {
         let vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4],
         };
 
         let mask_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -703,6 +719,10 @@ impl GpuRenderer {
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             anisotropy_clamp: 4,
+            // mip level 3 averages 8 px blocks: the 16 px the atlas leaves
+            // between pieces keeps neighbours out of it; smaller levels
+            // would mix them in when zoomed far out
+            lod_max_clamp: 3.0,
             ..Default::default()
         });
         let uni_buf = device.create_buffer(&wgpu::BufferDescriptor {

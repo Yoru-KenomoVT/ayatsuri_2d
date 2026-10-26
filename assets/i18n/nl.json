@@ -1439,5 +1439,8 @@
   "Repeated density": "Herhaaldichtheid",
   "Stroke mesh-mapping": "Streek-mesh-mapping",
   "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "Streek-mesh-mapping (experimenteel): sleep om een mesh langs een streek te bouwen. Shift+E bevestigt, Delete annuleert",
-  "With 2 vertices across: flip the diagonal of the first and last cells": "Met 2 hoekpunten in de breedte: de diagonaal van de eerste en laatste cel omdraaien"
+  "With 2 vertices across: flip the diagonal of the first and last cells": "Met 2 hoekpunten in de breedte: de diagonaal van de eerste en laatste cel omdraaien",
+  "TEXTURE ATLAS": "TEXTUURATLAS",
+  "Repack when a mesh outgrows its art": "Opnieuw indelen als een mesh buiten zijn tekening groeit",
+  "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "Bij het verlaten van Mesh bewerken wordt de atlas opnieuw ingedeeld als een mesh nu buiten zijn eigen tekening reikt, zodat geen export ooit die van een buur toont. Zet uit om een handmatige indeling te behouden"
 }
