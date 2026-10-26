@@ -628,7 +628,22 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
             cell = cell.min(m / 1.5);
         }
     }
-    let art = art_grid(alpha, w, h, cell.clamp(1.0, 32.0), p.threshold);
+    let mut art = art_grid(alpha, w, h, cell.clamp(1.0, 32.0), p.threshold);
+    // thin strokes need finer cells than the spacing gives, or their middle
+    // and edges blur into one cell: four cells across at least
+    let across = art.depth().iter().fold(0.0f32, |m, &d| m.max(d)) * 2.0 + art.cell;
+    if art.cell > 1.0 && across < art.cell * 6.0 {
+        art = art_grid(alpha, w, h, (across / 6.0).clamp(1.0, 32.0), p.threshold);
+    }
+    // a margin wider than the stroke swallows it: a brow or lash would grow
+    // into a block. The outline stays within about half the art's
+    // thickness of it, which is how Cubism's meshes hug thin strokes
+    let thick = art.depth().iter().fold(0.0f32, |m, &d| m.max(d)) * 2.0 + art.cell;
+    let p = Params {
+        margin: p.margin.min((thick * 0.5).max(2.0)),
+        min_margin: p.min_margin.min((thick * 0.25).max(1.0)),
+        ..p
+    };
     let outer = art.grown(p.margin);
     // the minimum margin can't ask for more room than the margin gives, and
     // the grid's cells blur both by a cell or so, which must not count
@@ -671,7 +686,9 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
                 }
             }
         }
-        spine_inside(&mut points, &art, &p, clear);
+        // the middle row sits half a stroke plus the margin from the
+        // outline, which on thin art is nearer than `clear`
+        spine_inside(&mut points, &art, &p, clear.min((thick * 0.5 + p.margin) * 0.6));
         lattice_inside(
             &mut points,
             inner.as_ref().unwrap_or(&outer),
