@@ -1373,5 +1373,6 @@
   "Part ID": "Onderdeel-ID",
   "Put selected objects into children": "Sit gekose voorwerpe in as kinders",
   "IDs take letters, digits and _ only.": "ID's bevat net letters, syfers en _.",
-  "That Part ID is empty, taken or has characters IDs can't use.": "Daardie onderdeel-ID is leeg, reeds gebruik of bevat karakters wat ID's nie mag hê nie."
+  "That Part ID is empty, taken or has characters IDs can't use.": "Daardie onderdeel-ID is leeg, reeds gebruik of bevat karakters wat ID's nie mag hê nie.",
+  "Clear mesh: remove every point to draw your own": "Vee mesh uit: verwyder elke punt om jou eie te teken"
 }

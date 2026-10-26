@@ -362,6 +362,11 @@ impl EditorUi {
             {
                 *action = Some(MeshAction::Reset);
             }
+            if icon(ui, false, true, ph::BROOM, "Clear mesh: remove every point to draw your own")
+                .clicked()
+            {
+                *action = Some(MeshAction::Clear);
+            }
         });
         grid(ui, "td-mesh", |ui| {
             row(ui, crate::i18n::tr("Auto connect"), |ui| {

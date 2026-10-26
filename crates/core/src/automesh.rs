@@ -874,14 +874,16 @@ fn triangulate(points: Vec<(f32, f32)>, rings: &[Vec<(f32, f32)>]) -> Mesh {
 
 /// Mesh one layer's patch of a texture atlas. `alpha_at` reads the page's
 /// alpha, `page` is its size in pixels and `patch` the layer's uv box
-/// (u0, v0, u1, v1). Pixels outside the patch belong to neighbouring layers
-/// (imported layers sit two pixels apart), so they read as empty and every
-/// point is clamped inside: a triangle reaching past the patch would sample
-/// the next layer's art and smear it. Returns uvs and triangle indices.
+/// (u0, v0, u1, v1): only art inside it counts. `room` is the uv box the
+/// mesh may reach into, the patch grown over the page's empty space up to
+/// the neighbouring layers, so the outline can keep its margin; a triangle
+/// reaching past it would sample the next layer's art and smear it, so
+/// every point is clamped inside. Returns uvs and triangle indices.
 pub fn for_patch(
     alpha_at: &dyn Fn(u32, u32) -> u8,
     page: (u32, u32),
     patch: (f32, f32, f32, f32),
+    room: (f32, f32, f32, f32),
     p: &Params,
 ) -> Option<(Vec<f32>, Vec<u16>)> {
     let (tw, th) = (page.0 as f32, page.1 as f32);
@@ -889,6 +891,8 @@ pub fn for_patch(
     if !(u0 < u1 && v0 < v1) || tw < 1.0 || th < 1.0 {
         return None;
     }
+    // the room never shrinks the patch
+    let room = (room.0.min(u0), room.1.min(v0), room.2.max(u1), room.3.max(v1));
     // the patch, padded so the margin has room to work out the outline
     let pad = p.margin + 2.0;
     let x0 = (u0 * tw - pad).max(0.0).floor() as u32;
@@ -898,6 +902,12 @@ pub fn for_patch(
     let (w, h) = (x1.saturating_sub(x0) as usize, y1.saturating_sub(y0) as usize);
     let (tx0, ty0, tx1, ty1) =
         ((u0 * tw).floor(), (v0 * th).floor(), (u1 * tw).ceil(), (v1 * th).ceil());
+    let (rx0, ry0, rx1, ry1) = (
+        (room.0 * tw).max(0.0),
+        (room.1 * th).max(0.0),
+        (room.2 * tw).min(tw),
+        (room.3 * th).min(th),
+    );
     let mut alpha = vec![0u8; w.checked_mul(h)?];
     for y in 0..h {
         for x in 0..w {
@@ -919,7 +929,7 @@ pub fn for_patch(
         .points
         .iter()
         .flat_map(|&(x, y)| {
-            [(x0 as f32 + x).clamp(tx0, tx1) / tw, (y0 as f32 + y).clamp(ty0, ty1) / th]
+            [(x0 as f32 + x).clamp(rx0, rx1) / tw, (y0 as f32 + y).clamp(ry0, ry1) / th]
         })
         .collect();
     let indices = mesh.triangles.iter().flat_map(|t| t.iter().copied()).collect();
@@ -1098,13 +1108,32 @@ mod tests {
     }
 
     #[test]
+    fn the_outline_keeps_its_margin_where_the_page_has_room() {
+        // a layer cut tight to its art, alone on the page: the outline may
+        // stand off it, past the layer's own box
+        let alpha_at =
+            |x: u32, y: u32| if (40..80).contains(&x) && (40..80).contains(&y) { 255 } else { 0 };
+        let patch = (40.0 / 128.0, 40.0 / 128.0, 80.0 / 128.0, 80.0 / 128.0);
+        let room = (0.0, 0.0, 1.0, 1.0);
+        let p =
+            Params { outline_spacing: 10.0, inner_spacing: 10.0, margin: 6.0, ..Params::default() };
+        let (uvs, _) = for_patch(&alpha_at, (128, 128), patch, room, &p).unwrap();
+        let left = uvs.chunks(2).map(|uv| uv[0] * 128.0).fold(f32::MAX, f32::min);
+        assert!(left < 37.0, "the outline stops at the box: {left}");
+        // with no room it stays on the box
+        let (uvs, _) = for_patch(&alpha_at, (128, 128), patch, patch, &p).unwrap();
+        let left = uvs.chunks(2).map(|uv| uv[0] * 128.0).fold(f32::MAX, f32::min);
+        assert!(left >= 40.0 - 1e-3);
+    }
+
+    #[test]
     fn patch_mesh_stays_on_its_layer() {
         // two opaque layers side by side in a 64x32 page, two pixels apart:
         // A covers x 0..30, B covers x 32..64
         let alpha_at = |x: u32, _y: u32| if !(30..32).contains(&x) { 255u8 } else { 0 };
         let patch = (0.0, 0.0, 30.0 / 64.0, 1.0);
         let p = Params { margin: 6.0, ..Params::default() };
-        let (uvs, idx) = for_patch(&alpha_at, (64, 32), patch, &p).unwrap();
+        let (uvs, idx) = for_patch(&alpha_at, (64, 32), patch, patch, &p).unwrap();
         assert!(!idx.is_empty());
         for uv in uvs.chunks(2) {
             assert!(uv[0] <= 30.0 / 64.0 + 1e-6, "point at u {} reaches layer B", uv[0]);
