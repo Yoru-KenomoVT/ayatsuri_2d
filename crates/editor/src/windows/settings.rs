@@ -834,16 +834,34 @@ impl EditorUi {
         ui.add_space(4.0);
         row(
             ui,
-            crate::i18n::tr("Inherited clipping"),
-            crate::i18n::tr(
+            crate::i18n::tr("Experimental features"),
+            crate::i18n::tr("Turns every feature below on or off at once"),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.experimental, "").changed();
+            },
+        );
+        section(ui, crate::i18n::tr("FEATURES"));
+        let master = self.prefs.experimental;
+        let features: [(&str, &str, &mut bool); 2] = [
+            (
+                "Clip groups",
+                "Name a set of masks in the Inspector so several meshes clip by it together, \
+                 and change together",
+                &mut self.prefs.experimental_clip_groups,
+            ),
+            (
+                "Inherited clipping",
                 "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its \
                  masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its \
                  own masks only for now",
+                &mut self.prefs.experimental_inherit_clip,
             ),
-            |ui| {
-                save |= ui.checkbox(&mut self.prefs.experimental_inherit_clip, "").changed();
-            },
-        );
+        ];
+        for (name, hint, on) in features {
+            row(ui, crate::i18n::tr(name), crate::i18n::tr(hint), |ui| {
+                save |= ui.add_enabled(master, egui::Checkbox::without_text(on)).changed();
+            });
+        }
         if save {
             self.prefs.save();
         }

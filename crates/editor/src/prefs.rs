@@ -103,8 +103,13 @@ pub struct Prefs {
     pub smooth_drag_amount: u32,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
-    /// Experimental: the Inspector offers inherited clipping (a mesh also
-    /// clipped by what its masks are clipped by).
+    /// Experimental features (Settings > Experimental): the master switch,
+    /// then one per feature; a feature is on only with both.
+    pub experimental: bool,
+    /// Named clip groups in the Inspector's clipping.
+    pub experimental_clip_groups: bool,
+    /// Inherited clipping: a mesh also clipped by what its masks are
+    /// clipped by.
     pub experimental_inherit_clip: bool,
     /// The Render window as it was last used: folder, format and settings.
     pub render: RenderPrefs,
@@ -163,6 +168,14 @@ impl Prefs {
     /// seconds; 0 when smooth movement is off. 100 is a fifth of a second.
     pub fn smooth_drag_seconds(&self) -> f32 {
         if self.smooth_drag { self.smooth_drag_amount() as f32 / 500.0 } else { 0.0 }
+    }
+
+    pub fn clip_groups_on(&self) -> bool {
+        self.experimental && self.experimental_clip_groups
+    }
+
+    pub fn inherit_clip_on(&self) -> bool {
+        self.experimental && self.experimental_inherit_clip
     }
 
     /// The saved colour of the canvas page, if one was picked.

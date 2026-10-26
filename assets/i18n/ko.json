@@ -1350,5 +1350,10 @@
   "experimental": "실험적",
   "Features still being tested. They may change, and a model that uses one may look different in other apps until it is finished.": "아직 테스트 중인 기능입니다. 바뀔 수 있으며, 이를 사용한 모델은 완성될 때까지 다른 앱에서 다르게 보일 수 있습니다.",
   "Inherited clipping": "클리핑 상속",
-  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "인스펙터의 클리핑에 '상속'을 표시합니다. 메시는 마스크를 클리핑하는 것으로도 클리핑됩니다. 에디터에서는 정확히 그려지며, moc3 내보내기는 지금은 자신의 마스크로만 클리핑합니다"
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "인스펙터의 클리핑에 '상속'을 표시합니다. 메시는 마스크를 클리핑하는 것으로도 클리핑됩니다. 에디터에서는 정확히 그려지며, moc3 내보내기는 지금은 자신의 마스크로만 클리핑합니다",
+  "Experimental features": "실험적 기능",
+  "Turns every feature below on or off at once": "아래 모든 기능을 한꺼번에 켜거나 끕니다",
+  "FEATURES": "기능",
+  "Clip groups": "클립 그룹",
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "인스펙터에서 마스크 묶음에 이름을 붙이면 여러 메시가 함께 그것으로 클리핑되고 함께 바뀝니다"
 }

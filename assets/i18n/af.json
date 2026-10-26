@@ -1350,5 +1350,10 @@
   "experimental": "eksperimenteel",
   "Features still being tested. They may change, and a model that uses one may look different in other apps until it is finished.": "Funksies wat nog getoets word. Hulle kan verander, en 'n model wat een gebruik kan in ander toepassings anders lyk totdat dit klaar is.",
   "Inherited clipping": "Geërfde knip",
-  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "Wys Erf by die knip in die Inspekteur: 'n mesh word ook geknip deur wat sy maskers knip. Presies geteken in die redigeerder; moc3-uitvoer knip dit vir nou net met sy eie maskers"
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "Wys Erf by die knip in die Inspekteur: 'n mesh word ook geknip deur wat sy maskers knip. Presies geteken in die redigeerder; moc3-uitvoer knip dit vir nou net met sy eie maskers",
+  "Experimental features": "Eksperimentele funksies",
+  "Turns every feature below on or off at once": "Skakel al die funksies hieronder gelyk aan of af",
+  "FEATURES": "FUNKSIES",
+  "Clip groups": "Knipgroepe",
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "Gee in die Inspekteur 'n stel maskers 'n naam sodat verskeie meshes saam daarmee knip en saam verander"
 }

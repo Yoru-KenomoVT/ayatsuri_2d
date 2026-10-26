@@ -1350,5 +1350,10 @@
   "experimental": "实验性",
   "Features still being tested. They may change, and a model that uses one may look different in other apps until it is finished.": "仍在测试的功能。它们可能会改变，使用了它们的模型在完成之前在其他应用中可能显示不同。",
   "Inherited clipping": "继承剪贴",
-  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "在检查器的剪贴中显示“继承”：网格还会被其遮罩所受的剪贴所剪贴。编辑器中精确绘制；moc3 导出目前只按其自身遮罩剪贴"
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its own masks only for now": "在检查器的剪贴中显示“继承”：网格还会被其遮罩所受的剪贴所剪贴。编辑器中精确绘制；moc3 导出目前只按其自身遮罩剪贴",
+  "Experimental features": "实验性功能",
+  "Turns every feature below on or off at once": "一次开启或关闭下面的所有功能",
+  "FEATURES": "功能",
+  "Clip groups": "剪贴组",
+  "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "在检查器中为一组遮罩命名，多个网格即可一起用它剪贴并一起更改"
 }
