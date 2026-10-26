@@ -1442,5 +1442,7 @@
   "With 2 vertices across: flip the diagonal of the first and last cells": "宽度顶点数为 2 时:翻转首尾单元格的对角线",
   "TEXTURE ATLAS": "纹理图集",
   "Repack when a mesh outgrows its art": "网格超出其图像时重新排布",
-  "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "退出网格编辑时,若有网格超出了自己的图像范围,就重新排布图集,使导出中永远不会出现相邻图像。若要保留手动排布的布局请关闭"
+  "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "退出网格编辑时,若有网格超出了自己的图像范围,就重新排布图集,使导出中永远不会出现相邻图像。若要保留手动排布的布局请关闭",
+  "Custom…": "自定义…",
+  "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "每页占用 {mb} MB 显存。部分应用和 GPU 无法载入超过 8192 px 的页面"
 }

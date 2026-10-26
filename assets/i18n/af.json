@@ -1442,5 +1442,7 @@
   "With 2 vertices across: flip the diagonal of the first and last cells": "Met 2 hoekpunte oor die breedte: draai die diagonaal van die eerste en laaste selle om",
   "TEXTURE ATLAS": "TEKSTUURATLAS",
   "Repack when a mesh outgrows its art": "Herpak wanneer 'n mesh verby sy kuns groei",
-  "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "Wanneer jy Mesh Edit verlaat, word die atlas weer uitgelê as 'n mesh nou verby sy eie kuns strek, sodat geen uitvoer ooit 'n buurman s'n wys nie. Skakel af om 'n uitleg wat met die hand gerangskik is, te behou"
+  "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "Wanneer jy Mesh Edit verlaat, word die atlas weer uitgelê as 'n mesh nou verby sy eie kuns strek, sodat geen uitvoer ooit 'n buurman s'n wys nie. Skakel af om 'n uitleg wat met die hand gerangskik is, te behou",
+  "Custom…": "Pasgemaak…",
+  "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px": "{mb} MB GPU-geheue per bladsy. Sommige programme en GPU's kan nie bladsye bo 8192 px laai nie"
 }

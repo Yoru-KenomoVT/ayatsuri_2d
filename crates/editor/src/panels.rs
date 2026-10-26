@@ -8803,7 +8803,12 @@ impl EditorUi {
             return;
         }
         let pieces = crate::atlas::pieces(model, &sizes, &art);
-        let page = sizes.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(4096).clamp(256, 16384);
+        let page = sizes
+            .iter()
+            .map(|&(w, h)| w.max(h))
+            .max()
+            .unwrap_or(4096)
+            .clamp(crate::atlas::MIN_PAGE, crate::atlas::MAX_PAGE);
         let names: Vec<String> = outgrown.iter().take(3).map(|&i| s.mesh_name(i)).collect();
         match crate::atlas::auto_layout(&pieces, page, true)
             .and_then(|layout| s.apply_atlas(ctx, &pieces, &layout))
