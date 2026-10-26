@@ -335,6 +335,8 @@ pub struct EditorUi {
     part_pick: Vec<usize>,
     /// Cubism's Prohibit drag and drop for the Parts palette.
     parts_dnd_off: bool,
+    /// Show > Highlight Deformer's Child Elements.
+    highlight_children: bool,
     part_anchor: Option<usize>,
     /// The Parts palette row under the pointer, outlined on the canvas.
     palette_hover: Option<Sel>,
@@ -1169,6 +1171,7 @@ impl Default for EditorUi {
             multi_sel: Vec::new(),
             part_pick: Vec::new(),
             parts_dnd_off: false,
+            highlight_children: false,
             part_anchor: None,
             palette_hover: None,
             part_search: String::new(),
@@ -2218,7 +2221,9 @@ impl EditorUi {
                     continue;
                 }
                 // S keys the parameter in Animation; Solo is a modeling view
-                if id == "solo" && self.workspace == Workspace::Animation {
+                if matches!(id, "solo" | "highlight-children")
+                    && self.workspace == Workspace::Animation
+                {
                     continue;
                 }
                 if ui.ctx().input_mut(|i| i.consume_shortcut(&sc)) {
@@ -2689,6 +2694,13 @@ impl EditorUi {
                         self.toggle_solo();
                         ui.close();
                     }
+                    ui.checkbox(
+                        &mut self.highlight_children,
+                        crate::i18n::tr("Highlight Deformer's Child Elements"),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        "Outline every art mesh under the selected deformer (Ctrl+Shift+D)",
+                    ));
                     ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit"))
                         .on_hover_text(crate::i18n::tr(
                             "Moving a point also moves its mirror across the vertical axis: \
@@ -5240,30 +5252,15 @@ impl EditorUi {
         if let Some(Sel::Part(p)) = self.selected {
             parts.push(p);
         }
+        let under_deformer = match self.selected {
+            Some(Sel::Deformer(d)) => meshes_under_deformer(model, d),
+            _ => Vec::new(),
+        };
         for (mi, m) in model.art_meshes.iter().enumerate() {
             let in_part = m.parent_part.is_some_and(|q| {
                 parts.iter().any(|&p| ayatsuri_core::palette::within(model, q as usize, p))
             });
-            let under = match self.selected {
-                Some(Sel::Deformer(d)) => {
-                    let mut at = m.parent_deformer;
-                    let mut found = false;
-                    for _ in 0..=model.deformers.len() {
-                        match at {
-                            Some(x) if x as usize == d => {
-                                found = true;
-                                break;
-                            }
-                            Some(x) => {
-                                at = model.deformers.get(x as usize).and_then(|q| q.parent_deformer)
-                            }
-                            None => break,
-                        }
-                    }
-                    found
-                }
-                _ => false,
-            };
+            let under = under_deformer.contains(&mi);
             if in_part || under {
                 meshes.insert(mi);
             }
@@ -6328,6 +6325,7 @@ impl EditorUi {
             "focus" => self.focus_request = true,
             "mirror-edit" => self.mirror_edit = !self.mirror_edit,
             "solo" => self.toggle_solo(),
+            "highlight-children" => self.highlight_children = !self.highlight_children,
             "guides-clear" => {
                 if let Some(s) = &mut self.session
                     && !s.guides.is_empty()
@@ -9774,6 +9772,35 @@ impl EditorUi {
                     vp.line_segment([s0, s1], stroke);
                     vp.line_segment([s1, s2], stroke);
                     vp.line_segment([s2, s0], stroke);
+                }
+            }
+        }
+
+        // Highlight Deformer's Child Elements: every mesh under the selected
+        // deformer, its faces washed and its edges drawn
+        if self.highlight_children
+            && let Some(Sel::Deformer(d)) = self.selected
+        {
+            let fill = theme::pal().accent.gamma_multiply(0.18);
+            let stroke = Stroke::new(1.2, theme::pal().accent);
+            for mi in meshes_under_deformer(s.puppet.model(), d) {
+                let Some(g) = s.puppet.mesh_geometry(mi) else { continue };
+                let (pos, _) = g.positions.as_chunks::<2>();
+                let mut mesh = egui::Mesh::default();
+                for p in pos {
+                    mesh.colored_vertex(to_screen(p[0], p[1]), fill);
+                }
+                mesh.indices.extend(g.indices.iter().map(|&i| i as u32));
+                add_mesh_shape(&vp, mesh);
+                for &[a, b, cx] in g.indices.as_chunks::<3>().0 {
+                    for (x, y) in [(a, b), (b, cx), (cx, a)] {
+                        if let (Some(p0), Some(p1)) = (pos.get(x as usize), pos.get(y as usize)) {
+                            vp.line_segment(
+                                [to_screen(p0[0], p0[1]), to_screen(p1[0], p1[1])],
+                                stroke,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -13625,6 +13652,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("View", "focus", "Focus on the selected object", N, K::F),
         ("View", "mirror-edit", "Mirror edit", CS, K::M),
         ("View", "solo", "Solo: show only the selected objects", N, K::S),
+        ("View", "highlight-children", "Highlight deformer's child elements", CS, K::D),
         ("View", "zoom-in", "Zoom in", C, K::Equals),
         ("View", "zoom-out", "Zoom out", C, K::Minus),
         ("View", "guide-h-mouse", "Horizontal guide line at the mouse", N, K::H),
@@ -15009,6 +15037,24 @@ fn mesh_unfinished(verts: usize, tris: usize) -> Option<&'static str> {
 }
 
 /// A mesh the canvas may pick: shown, and every part above it shown.
+/// Every art mesh under deformer `d`, however deep, walking up each mesh's
+/// deformer chain at most once per deformer so a loop cannot spin.
+fn meshes_under_deformer(model: &Model, d: usize) -> Vec<usize> {
+    (0..model.art_meshes.len())
+        .filter(|&mi| {
+            let mut at = model.art_meshes.get(mi).and_then(|m| m.parent_deformer);
+            for _ in 0..=model.deformers.len() {
+                match at {
+                    Some(x) if x as usize == d => return true,
+                    Some(x) => at = model.deformers.get(x as usize).and_then(|q| q.parent_deformer),
+                    None => return false,
+                }
+            }
+            false
+        })
+        .collect()
+}
+
 /// Solo as this frame draws it: the soloed meshes by index and the
 /// inactive color, or None when Solo is off.
 fn solo_view(s: &Session, prefs: &Prefs) -> Option<crate::gpu_view::Solo> {

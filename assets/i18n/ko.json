@@ -1381,5 +1381,8 @@
   "Select what to solo first.": "먼저 솔로로 볼 대상을 선택하세요.",
   "Leave Solo (S)": "솔로 종료(S)",
   "Inactive color": "비활성 색",
-  "Solo: show only the selected objects": "솔로: 선택한 오브젝트만 표시"
+  "Solo: show only the selected objects": "솔로: 선택한 오브젝트만 표시",
+  "Highlight Deformer's Child Elements": "디포머의 자식 요소 강조",
+  "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "선택한 디포머 아래의 모든 아트메시를 강조합니다(Ctrl+Shift+D)",
+  "Highlight deformer's child elements": "디포머의 자식 요소 강조"
 }

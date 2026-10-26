@@ -1381,5 +1381,8 @@
   "Select what to solo first.": "Selecteer eerst wat je solo wilt tonen.",
   "Leave Solo (S)": "Solo verlaten (S)",
   "Inactive color": "Inactieve kleur",
-  "Solo: show only the selected objects": "Solo: alleen de geselecteerde objecten tonen"
+  "Solo: show only the selected objects": "Solo: alleen de geselecteerde objecten tonen",
+  "Highlight Deformer's Child Elements": "Kindelementen van de deformer markeren",
+  "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "Elke art mesh onder de geselecteerde deformer markeren (Ctrl+Shift+D)",
+  "Highlight deformer's child elements": "Kindelementen van de deformer markeren"
 }
