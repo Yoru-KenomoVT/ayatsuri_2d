@@ -1425,5 +1425,6 @@
   "Step1": "계단1",
   "Step2": "계단2",
   "Weight Limit Graph": "웨이트 제한 그래프",
-  "Weight limit (%)": "웨이트 제한 (%)"
+  "Weight limit (%)": "웨이트 제한 (%)",
+  "Rename Art Mesh": "아트메시 이름 변경"
 }
