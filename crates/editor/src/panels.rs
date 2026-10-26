@@ -9103,6 +9103,7 @@ impl EditorUi {
                 let targets: Vec<ayatsuri_core::edit::Target> =
                     picked.iter().map(|&m| ayatsuri_core::edit::Target::ArtMesh(m)).collect();
                 opacity_row(ui, s, &targets, self.sel_param);
+                color_rows(ui, s, &targets, self.sel_param);
                 use ayatsuri_format::model::{Blend, flags};
                 let blend = Blend::of(m.blend, m.flags);
                 let mut new_blend = blend;
@@ -9322,6 +9323,7 @@ impl EditorUi {
                 );
                 ui.separator();
                 opacity_row(ui, s, &[ayatsuri_core::edit::Target::Deformer(i)], self.sel_param);
+                color_rows(ui, s, &[ayatsuri_core::edit::Target::Deformer(i)], self.sel_param);
             }
             Some(Sel::Part(i)) => {
                 let Some(p) = s.puppet.model().parts.get(i) else { return };
@@ -14267,24 +14269,20 @@ fn add_mesh_shape(painter: &egui::Painter, mesh: egui::Mesh) {
 
 /// One mesh row in the Parts palette: eye, dot, name, live stack position.
 #[allow(clippy::too_many_arguments)]
-/// Properties' Opacity slider for a mesh or deformer, on the keyform the
-/// parameters sit on (as in Cubism: move the parameters onto a key, then
-/// set it). Dragging previews live in place; letting go puts the stored
-/// number back and commits one edit, so undo sees a single change.
-fn opacity_row(
-    ui: &mut Ui,
-    s: &mut Session,
+/// Which keyforms an Inspector edit sets, per object: with a parameter
+/// selected that the object is keyed on, every keyform at that parameter's
+/// current key (a toggle reads the same at every head angle and physics
+/// swing); otherwise the one keyform the parameters sit on. None for an
+/// object between keys. The flag says whether any edit spreads.
+fn keyform_sets(
+    s: &Session,
     targets: &[ayatsuri_core::edit::Target],
     across: Option<usize>,
-) {
+) -> (Vec<Option<Vec<usize>>>, bool) {
     let values: Vec<f32> =
         (0..s.puppet.model().parameters.len()).map(|p| s.puppet.value(p)).collect();
-    // which keyforms an edit sets, per object: with a parameter selected that
-    // the object is keyed on, every keyform at that parameter's current key
-    // (a toggle reads the same at every head angle and physics swing);
-    // otherwise the one keyform the parameters sit on
     let mut spread = false;
-    let sets: Vec<Option<Vec<usize>>> = targets
+    let sets = targets
         .iter()
         .map(|&t| {
             let model = s.puppet.model();
@@ -14297,6 +14295,139 @@ fn opacity_row(
             ayatsuri_core::keyform::keyform_at(model, t, &values).map(|k| vec![k])
         })
         .collect();
+    (sets, spread)
+}
+
+/// Properties' Multiply and Screen colour for meshes and deformers, on the
+/// keyforms an edit sets (see `keyform_sets`), as in Cubism's Inspector.
+/// The picker previews live in place; when it closes, the stored colours
+/// go back and one edit commits, so undo sees a single change.
+fn color_rows(
+    ui: &mut Ui,
+    s: &mut Session,
+    targets: &[ayatsuri_core::edit::Target],
+    across: Option<usize>,
+) {
+    use ayatsuri_core::edit::{ColorKind, Target};
+    let (sets, _) = keyform_sets(s, targets, across);
+    let pairs: Vec<(Target, usize)> = targets
+        .iter()
+        .copied()
+        .zip(sets.iter())
+        .flat_map(|(t, ks)| ks.iter().flatten().map(move |&k| (t, k)))
+        .collect();
+    let all_on_keys = !targets.is_empty() && sets.iter().all(Option::is_some);
+    for (kind, name, hint) in [
+        (
+            ColorKind::Multiply,
+            "Multiply color",
+            "Darkens: white leaves the art as it is. Passed down from a deformer to all under it",
+        ),
+        (
+            ColorKind::Screen,
+            "Screen color",
+            "Lightens: black leaves the art as it is. Passed down from a deformer to all under it",
+        ),
+    ] {
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [74.0, 16.0],
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::tr(name))
+                        .color(theme::pal().text_faint)
+                        .size(11.0),
+                ),
+            )
+            .on_hover_text(crate::i18n::tr(hint));
+            let Some(&(t0, k0)) = pairs.first().filter(|_| all_on_keys) else {
+                ui.add_enabled(false, egui::Button::new("   ")).on_disabled_hover_text(
+                    crate::i18n::tr(
+                        "Between keys. Move the parameters onto a key to set the color there.",
+                    ),
+                );
+                return;
+            };
+            let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let now = ayatsuri_core::edit::color_at(s.puppet.model(), t0, k0, kind);
+            let mut rgb = now.map(to8);
+            let live_id = egui::Id::new(("color-live", kind == ColorKind::Multiply, pairs.clone()));
+            let resp = ui.color_edit_button_srgb(&mut rgb);
+            let value = rgb.map(|c| c as f32 / 255.0);
+            type Saved = Vec<(Target, Vec<f32>)>;
+            if resp.changed() {
+                if ui.ctx().data(|d| d.get_temp::<Saved>(live_id)).is_none() {
+                    let before: Saved = targets
+                        .iter()
+                        .filter_map(|&t| Some((t, s.puppet.color_pool_mut(t, kind)?.0.clone())))
+                        .collect();
+                    ui.ctx().data_mut(|d| d.insert_temp(live_id, before));
+                }
+                // live: neutral pools filled as needed, numbers set in place
+                for &(t, k) in &pairs {
+                    if let Some((pool, n)) = s.puppet.color_pool_mut(t, kind) {
+                        if pool.len() != n * 3 {
+                            pool.resize(n * 3, kind.neutral());
+                        }
+                        for (c, v) in value.iter().enumerate() {
+                            if let Some(slot) = pool.get_mut(k * 3 + c) {
+                                *slot = *v;
+                            }
+                        }
+                    }
+                }
+                s.dirty = true;
+            }
+            let reset = ui
+                .small_button("↺")
+                .on_hover_text(crate::i18n::tr("Back to the color that leaves the art as it is"))
+                .clicked();
+            // the picker closed (or reset): put the numbers back, one edit
+            let open = egui::Popup::is_any_open(ui.ctx());
+            let saved: Option<Saved> = ui.ctx().data(|d| d.get_temp(live_id));
+            if let Some(before) = saved.filter(|_| !open || reset) {
+                ui.ctx().data_mut(|d| d.remove::<Saved>(live_id));
+                for (t, pool) in before {
+                    if let Some((p, _)) = s.puppet.color_pool_mut(t, kind) {
+                        *p = pool;
+                    }
+                }
+                let set = if reset { [kind.neutral(); 3] } else { value };
+                if s.edit(|m| {
+                    let mut any = false;
+                    for &(t, k) in &pairs {
+                        any |= ayatsuri_core::edit::set_color(m, t, k, kind, set);
+                    }
+                    any
+                }) {
+                    log::info!("{name} of {} keyform(s) set", pairs.len());
+                }
+                s.dirty = true;
+            } else if reset
+                && s.edit(|m| {
+                    let mut any = false;
+                    for &(t, k) in &pairs {
+                        any |= ayatsuri_core::edit::set_color(m, t, k, kind, [kind.neutral(); 3]);
+                    }
+                    any
+                })
+            {
+                log::info!("{name} of {} keyform(s) reset", pairs.len());
+            }
+        });
+    }
+}
+
+/// Properties' Opacity slider for a mesh or deformer, on the keyform the
+/// parameters sit on (as in Cubism: move the parameters onto a key, then
+/// set it). Dragging previews live in place; letting go puts the stored
+/// number back and commits one edit, so undo sees a single change.
+fn opacity_row(
+    ui: &mut Ui,
+    s: &mut Session,
+    targets: &[ayatsuri_core::edit::Target],
+    across: Option<usize>,
+) {
+    let (sets, spread) = keyform_sets(s, targets, across);
     let first = targets
         .first()
         .copied()
@@ -16167,6 +16298,8 @@ mod drag_tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         let w = ayatsuri_core::edit::create_deformer(
             &mut m,
@@ -16261,6 +16394,8 @@ mod mesh_delete_tests {
                 blend_shapes: Vec::new(),
                 clip_group: None,
                 clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             });
         }
         let ctx = egui::Context::default();
@@ -16389,6 +16524,8 @@ mod key_cmd_tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         let ctx = egui::Context::default();
         let s = Session::create(&ctx, "t".into(), String::new(), model).unwrap();
@@ -16695,6 +16832,8 @@ mod eyedropper_tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         let mut puppet = ayatsuri_core::Puppet::new(m);
         puppet.update();

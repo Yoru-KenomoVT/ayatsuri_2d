@@ -15,6 +15,7 @@ pub mod bezier;
 pub mod blend;
 pub mod blendshape;
 pub mod clip;
+pub mod color;
 pub mod comp;
 pub mod compose;
 pub mod deform;
@@ -65,6 +66,9 @@ pub struct Puppet {
     def_enabled: Vec<bool>,
     def_user_visible: Vec<bool>,
     def_opacity: Vec<f32>,
+    /// Per deformer: its multiply and screen colour this frame, its
+    /// parents' folded in.
+    def_color: Vec<color::Tint>,
     def_scale: Vec<f32>,
     /// Which warp/rotation each deformer is, locally.
     def_local: Vec<u32>,
@@ -78,6 +82,9 @@ pub struct Puppet {
     mesh_pos: Vec<f32>,
     mesh_pos_off: Vec<usize>,
     mesh_opacity: Vec<f32>,
+    /// Per mesh: its multiply and screen colour this frame, its parent
+    /// deformer's folded in.
+    mesh_color: Vec<color::Tint>,
     mesh_draw_order: Vec<f32>,
     mesh_visible: Vec<bool>,
     mesh_user_visible: Vec<bool>,
@@ -325,6 +332,7 @@ impl Puppet {
             def_enabled: vec![true; n_defs],
             def_user_visible: vec![true; n_defs],
             def_opacity: vec![1.0; n_defs],
+            def_color: vec![color::Tint::NEUTRAL; n_defs],
             def_scale: vec![1.0; n_defs],
             def_local,
             warp_grid: vec![0.0; grid_total],
@@ -334,6 +342,7 @@ impl Puppet {
             mesh_pos: vec![0.0; pos_total],
             mesh_pos_off,
             mesh_opacity: vec![0.0; n_meshes],
+            mesh_color: vec![color::Tint::NEUTRAL; n_meshes],
             mesh_draw_order: vec![500.0; n_meshes],
             mesh_visible: vec![false; n_meshes],
             mesh_user_visible: vec![true; n_meshes],
@@ -438,6 +447,18 @@ impl Puppet {
     pub fn mesh_keyform_mut(&mut self, mesh: usize, keyform: usize) -> Option<&mut [f32]> {
         self.cache.valid = false;
         keyform::mesh_form_mut(self.model.art_meshes.get_mut(mesh)?, keyform)
+    }
+
+    /// An art mesh's or deformer's whole colour pool of `kind`, editable in
+    /// place for a live colour picker preview (see `edit::set_color`, which
+    /// the caller commits through after putting it back).
+    pub fn color_pool_mut(
+        &mut self,
+        target: edit::Target,
+        kind: edit::ColorKind,
+    ) -> Option<(&mut Vec<f32>, usize)> {
+        self.cache.valid = false;
+        edit::color_pool_mut(&mut self.model, target, kind)
     }
 
     /// One keyform's opacity of an art mesh or deformer, editable in place
@@ -858,6 +879,12 @@ impl Puppet {
                     }
                 }
             }
+            let parent_color = parent.map_or(color::Tint::NEUTRAL, |p| {
+                self.def_color.get(p).copied().unwrap_or_default()
+            });
+            if let Some(c) = self.def_color.get_mut(di) {
+                *c = color::Tint::blend(&corners, &d.multiply, &d.screen).under(parent_color);
+            }
         }
 
         self.corners = corners;
@@ -971,6 +998,12 @@ impl Puppet {
             }
             if let Some(o) = self.mesh_opacity.get_mut(mi) {
                 *o = opacity.clamp(0.0, 1.0);
+            }
+            let parent_color = m.parent_deformer.map_or(color::Tint::NEUTRAL, |pd| {
+                self.def_color.get(pd as usize).copied().unwrap_or_default()
+            });
+            if let Some(c) = self.mesh_color.get_mut(mi) {
+                *c = color::Tint::blend(&corners, &m.multiply, &m.screen).under(parent_color);
             }
             let draw_order = Self::blend_scalar(&corners, &m.draw_orders);
             if let Some(d) = self.mesh_draw_order.get_mut(mi) {
@@ -1362,6 +1395,7 @@ impl Puppet {
                 flags: m.flags,
                 blend: Blend::of(m.blend, m.flags),
                 opacity: self.mesh_opacity.get(mi).copied().unwrap_or(0.0),
+                color: self.mesh_color.get(mi).copied().unwrap_or_default(),
                 positions: self.mesh_pos.get(off..off.saturating_add(len)).unwrap_or(&[]),
                 uvs: &m.uvs,
                 indices: &m.indices,
@@ -1398,6 +1432,8 @@ pub struct Drawable<'a> {
     /// Colour and alpha blend, from the mesh or its flag bits.
     pub blend: Blend,
     pub opacity: f32,
+    /// Multiply and screen colour, its deformers' folded in.
+    pub color: color::Tint,
     /// xy pairs, `vertex_count * 2`.
     pub positions: &'a [f32],
     pub uvs: &'a [f32],
@@ -1464,6 +1500,8 @@ mod tests {
                 blend_shapes: Vec::new(),
                 clip_group: None,
                 clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             }],
             glues: vec![],
             draw_groups: vec![],
@@ -1549,6 +1587,26 @@ mod tests {
         // the editor's local probe sees the same points
         let local = p.mesh_local_positions(0).unwrap_or_default();
         assert!((local[1] - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_keyform_colour_fills_neutral_then_clears_when_neutral_again() {
+        use edit::{ColorKind, Target};
+        let mut model = one_param_model();
+        let t = Target::ArtMesh(0);
+        assert!(edit::set_color(&mut model, t, 1, ColorKind::Screen, [0.0, 0.0, 1.0]));
+        let m = &model.art_meshes[0];
+        assert_eq!(m.screen.len(), m.opacities.len() * 3);
+        assert_eq!(edit::color_at(&model, t, 1, ColorKind::Screen), [0.0, 0.0, 1.0]);
+        assert_eq!(edit::color_at(&model, t, 0, ColorKind::Screen), [0.0; 3]);
+        assert_eq!(edit::color_at(&model, t, 0, ColorKind::Multiply), [1.0; 3]);
+        // the screen shows on the drawable at that keyform's value
+        let mut p = Puppet::new(model.clone());
+        p.set_value(0, 1.0);
+        p.update();
+        assert_eq!(p.drawables().next().map(|d| d.color.screen), Some([0.0, 0.0, 1.0]));
+        assert!(edit::set_color(&mut model, t, 1, ColorKind::Screen, [0.0; 3]));
+        assert!(model.art_meshes[0].screen.is_empty(), "all neutral again: nothing stored");
     }
 
     #[test]

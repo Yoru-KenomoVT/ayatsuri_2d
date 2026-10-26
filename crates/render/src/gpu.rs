@@ -18,6 +18,9 @@ pub struct Vertex {
     /// samples outside it are transparent, so a mesh grown past its own
     /// art never shows a neighbour's. [`NO_CLIP`] shows everything.
     pub clip: [f32; 4],
+    /// Screen colour rgb (the multiply rides in `color`); a fourth float
+    /// for alignment. Black leaves the art as it is.
+    pub screen: [f32; 4],
 }
 
 /// A clip box that clips nothing.
@@ -128,16 +131,25 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) clip: vec4<f32>,
+    @location(3) screen: vec4<f32>,
 }
 
 @vertex
-fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) clip: vec4<f32>) -> VsOut {
+fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) clip: vec4<f32>, @location(4) screen: vec4<f32>) -> VsOut {
     var o: VsOut;
     o.pos = vec4<f32>(pos.x * uni.to_ndc.x + uni.to_ndc.z, pos.y * uni.to_ndc.y + uni.to_ndc.w, 0.0, 1.0);
     o.uv = uv;
     o.color = color;
     o.clip = clip;
+    o.screen = screen;
     return o;
+}
+
+// the texel (premultiplied) through the multiply colour, then the screen
+// colour, as Cubism draws them; alpha is left to the caller
+fn tinted(t: vec4<f32>, in: VsOut) -> vec4<f32> {
+    let m = t.rgb * in.color.rgb;
+    return vec4<f32>(m + in.screen.rgb * t.a - m * in.screen.rgb, t.a);
 }
 
 // the texture, transparent outside the mesh's own art box
@@ -160,7 +172,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var f = 1.0;
     if mask_mode.x == 1u { f = m; }
     if mask_mode.x == 2u { f = 1.0 - m; }
-    return vec4<f32>(t.rgb * in.color.rgb, t.a) * in.color.a * f;
+    return tinted(t, in) * in.color.a * f;
 }
 
 @group(3) @binding(0) var backdrop: texture_2d<f32>;
@@ -241,7 +253,7 @@ fn fs_advanced(in: VsOut) -> @location(0) vec4<f32> {
     var f = 1.0;
     if mask_mode.x == 1u { f = m; }
     if mask_mode.x == 2u { f = 1.0 - m; }
-    let src = vec4<f32>(t.rgb * in.color.rgb, t.a) * in.color.a * f;
+    let src = tinted(t, in) * in.color.a * f;
     let dst = textureLoad(backdrop, vec2<i32>(in.pos.xy), 0);
     let sa = src.a;
     let da = dst.a;
@@ -495,7 +507,13 @@ impl GpuRenderer {
         let vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![
+                0 => Float32x2,
+                1 => Float32x2,
+                2 => Float32x4,
+                3 => Float32x4,
+                4 => Float32x4
+            ],
         };
 
         let mask_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

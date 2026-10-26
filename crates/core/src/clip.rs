@@ -89,6 +89,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![],
             blend_shapes: Vec::new(),
+            multiply: Vec::new(),
+            screen: Vec::new(),
         }
     }
 

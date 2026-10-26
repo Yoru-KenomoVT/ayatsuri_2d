@@ -120,6 +120,8 @@ mod tests {
                 opacities: vec![1.0, 1.0],
                 positions: grid.iter().chain(bulged.iter()).copied().collect(),
             }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         model.deformers.push(Deformer {
             id: "Rotation".into(),
@@ -138,6 +140,8 @@ mod tests {
                 reflect_x: vec![false],
                 reflect_y: vec![false],
             }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         // the red mesh under the warp, in grid space, two keyforms
         {

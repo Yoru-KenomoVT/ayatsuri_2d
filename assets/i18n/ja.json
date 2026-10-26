@@ -1452,5 +1452,11 @@
   "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "拡張ブレンドモードのメッシュで、同じメッシュの他の三角形に重なっている三角形を示します。重なった部分は二重に合成され、動くとちらつきます",
   "  With overlapping polygons": "  ポリゴンが重なっているもの",
   "Overlapping polygons": "重なっているポリゴン",
-  "The color View > Highlight Overlapping Polygons marks them with": "表示 > 重なっているポリゴンを強調表示 で使う色"
+  "The color View > Highlight Overlapping Polygons marks them with": "表示 > 重なっているポリゴンを強調表示 で使う色",
+  "Multiply color": "乗算色",
+  "Screen color": "スクリーン色",
+  "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "暗くします。白なら元の絵のままです。デフォーマに設定すると配下のすべてに反映されます",
+  "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "明るくします。黒なら元の絵のままです。デフォーマに設定すると配下のすべてに反映されます",
+  "Between keys. Move the parameters onto a key to set the color there.": "キーの間です。色を設定するにはパラメータをキーの上に移動してください。",
+  "Back to the color that leaves the art as it is": "元の絵のままになる色に戻す"
 }

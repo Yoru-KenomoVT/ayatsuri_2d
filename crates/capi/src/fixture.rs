@@ -72,6 +72,8 @@ pub fn small_aom() -> Vec<u8> {
         blend_shapes: Vec::new(),
         clip_group: None,
         clip_inherit: false,
+        multiply: Vec::new(),
+        screen: Vec::new(),
     });
     model.physics = Some(PhysicsRig {
         fps: 60.0,

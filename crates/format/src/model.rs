@@ -236,6 +236,12 @@ pub struct Deformer {
     pub enabled: bool,
     pub binding: Binding,
     pub kind: DeformerKind,
+    /// Multiply and screen colour per keyform, as on art meshes: passed
+    /// down to everything under the deformer.
+    #[serde(default, with = "f32_bin")]
+    pub multiply: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub screen: Vec<f32>,
 }
 
 /// Drawable flag bits, matching moc3 slot 42.
@@ -437,8 +443,18 @@ pub struct ArtMesh {
     #[serde(with = "f32_bin")]
     pub positions: Vec<f32>,
     /// Shapes added on top of the blended keyform, in no particular order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // always written: a field after it must not shift in the timelapse's
+    // positional arrays (see `clip_group`)
+    #[serde(default)]
     pub blend_shapes: Vec<BlendShape>,
+    /// Multiply colour per keyform, rgb (`keyforms * 3`), 0 to 1; empty is
+    /// white, which leaves the art as it is (Cubism 4.2).
+    #[serde(default, with = "f32_bin")]
+    pub multiply: Vec<f32>,
+    /// Screen colour per keyform, rgb; empty is black, which leaves the art
+    /// as it is.
+    #[serde(default, with = "f32_bin")]
+    pub screen: Vec<f32>,
 }
 
 /// Keyforms added on top of an object's normal blend instead of multiplied

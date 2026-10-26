@@ -1452,5 +1452,11 @@
   "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "고급 블렌드 모드가 설정된 메시에서, 같은 메시의 다른 삼각형과 겹치는 삼각형을 표시합니다. 겹친 곳은 두 번 합성되어 움직일 때 깜빡입니다",
   "  With overlapping polygons": "  폴리곤이 겹치는 것",
   "Overlapping polygons": "겹치는 폴리곤",
-  "The color View > Highlight Overlapping Polygons marks them with": "보기 > 겹치는 폴리곤 강조 표시에서 쓰는 색"
+  "The color View > Highlight Overlapping Polygons marks them with": "보기 > 겹치는 폴리곤 강조 표시에서 쓰는 색",
+  "Multiply color": "곱하기 색",
+  "Screen color": "스크린 색",
+  "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "어둡게 합니다. 흰색이면 원래 그림 그대로입니다. 디포머에 설정하면 그 아래 모두에 적용됩니다",
+  "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "밝게 합니다. 검은색이면 원래 그림 그대로입니다. 디포머에 설정하면 그 아래 모두에 적용됩니다",
+  "Between keys. Move the parameters onto a key to set the color there.": "키 사이입니다. 색을 설정하려면 파라미터를 키 위로 옮기세요.",
+  "Back to the color that leaves the art as it is": "원래 그림 그대로가 되는 색으로 되돌리기"
 }

@@ -118,6 +118,21 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
             ));
         }
     }
+    if version.max_slot() < 108 {
+        let tinted = model
+            .art_meshes
+            .iter()
+            .map(|m| (&m.multiply, &m.screen))
+            .chain(model.deformers.iter().map(|d| (&d.multiply, &d.screen)))
+            .filter(|(m, s)| m.iter().any(|&v| v != 1.0) || s.iter().any(|&v| v != 0.0))
+            .count();
+        if tinted > 0 {
+            out.push(format!(
+                "{tinted} object(s) use multiply or screen colours, which moc3 stores from 4.2 \
+                 on; this version draws them without"
+            ));
+        }
+    }
     let offscreen = model.parts.iter().filter(|p| p.offscreen.is_some()).count();
     if offscreen > 0 && version.max_slot() >= 152 && !model.draw_groups.is_empty() {
         let grouped: std::collections::HashSet<u32> = model
@@ -222,6 +237,23 @@ fn ids(names: &[String]) -> Vec<u8> {
 
 /// The shared binding machinery: parameter bindings grouped per parameter,
 /// keyform bindings deduped across objects, all four pools at once.
+/// One keyform's multiply and screen colour, rgb.
+type KeyColor = ([f32; 3], [f32; 3]);
+
+/// An object's `n` keyforms' colours from its pools (three floats per
+/// keyform; empty or short is neutral).
+fn key_colors<'a>(
+    multiply: &'a [f32],
+    screen: &'a [f32],
+    n: usize,
+) -> impl Iterator<Item = KeyColor> + 'a {
+    let rgb = |pool: &[f32], k: usize, neutral: f32| -> [f32; 3] {
+        let at = |c: usize| pool.get(k * 3 + c).copied().unwrap_or(neutral);
+        [at(0), at(1), at(2)]
+    };
+    (0..n).map(move |k| (rgb(multiply, k, 1.0), rgb(screen, k, 0.0)))
+}
+
 /// The blend shape weight limit pools (slots 131-136).
 #[derive(Default)]
 struct Limits {
@@ -421,6 +453,10 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let mut w_cols = Vec::new();
     let mut w_quad = Vec::new();
     let mut w_opac: Vec<f32> = Vec::new();
+    // each keyform's multiply and screen colour, in the order of the
+    // opacities beside them: the colour pool is warps, rotations, meshes
+    let mut w_col: Vec<KeyColor> = Vec::new();
+    let mut r_col: Vec<KeyColor> = Vec::new();
     let mut w_pos_begin = Vec::new();
     let mut r_kb = Vec::new();
     let mut r_kf_begin = Vec::new();
@@ -460,6 +496,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                 w_cols.push(w.cols as i32);
                 w_quad.push(w.quad);
                 w_opac.extend_from_slice(&w.opacities);
+                w_col.extend(key_colors(&d.multiply, &d.screen, expected));
                 // one begin per keyform even when the grid is empty
                 for k in 0..expected {
                     w_pos_begin.push(coords.len() as i32);
@@ -484,6 +521,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                 r_kf_count.push(expected as i32);
                 r_base.push(r.base_angle);
                 r_opac.extend_from_slice(&r.opacities);
+                r_col.extend(key_colors(&d.multiply, &d.screen, expected));
                 r_angles.extend_from_slice(&r.angles);
                 r_ox.extend_from_slice(&r.origins_x);
                 r_oy.extend_from_slice(&r.origins_y);
@@ -581,6 +619,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let mut m_mask_begin = Vec::new();
     let mut m_mask_count = Vec::new();
     let mut m_opac: Vec<f32> = Vec::new();
+    let mut m_col: Vec<KeyColor> = Vec::new();
     let mut m_orders: Vec<f32> = Vec::new();
     let mut m_pos_begin = Vec::new();
     let mut uv_pool: Vec<f32> = Vec::new();
@@ -613,6 +652,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         m_kf_begin.push(m_opac.len() as i32);
         m_kf_count.push(expected as i32);
         m_opac.extend_from_slice(&m.opacities);
+        m_col.extend(key_colors(&m.multiply, &m.screen, expected));
         m_orders.extend_from_slice(&m.draw_orders);
         for k in 0..expected {
             m_pos_begin.push(coords.len() as i32);
@@ -625,7 +665,6 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     // binding with a keyform for each key of its table, base included, each
     // holding what the shape adds there (runtimes add it; opacity and draw
     // order add nothing, and the colours they link to are zero)
-    let m_normal_keyforms = m_opac.len();
     let mut bs_bindings: Vec<(i32, i32, i32)> = Vec::new();
     let mut bs_meshes: Vec<(i32, i32, i32)> = Vec::new();
     // weight limits (131-136): per binding a run of constraint indices, one
@@ -667,6 +706,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                     }
                 }
                 m_opac.push(0.0);
+                m_col.push(([0.0; 3], [0.0; 3]));
                 m_orders.push(0.0);
                 m_pos_begin.push(coords.len() as i32);
                 coords.extend_from_slice(&delta);
@@ -937,19 +977,33 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
             107,
             i32s(&m_kf_begin.iter().map(|b| b + w_total + r_total).collect::<Vec<_>>()),
         );
-        // neutral means multiply by white (108-110 RGB = 1) and screen
-        // with black (111-113 RGB = 0); a white screen colour lifts every
-        // pixel to white and the model renders as a silhouette
-        // ...except a blend shape's keyforms, whose colours are added: zero
-        let shape_colors = w_opac.len() + r_opac.len() + m_normal_keyforms
-            ..w_opac.len() + r_opac.len() + m_opac.len();
-        let multiply: Vec<f32> =
-            (0..color_total).map(|k| if shape_colors.contains(&k) { 0.0 } else { 1.0 }).collect();
-        for slot in 108..=110usize {
-            sect.insert(slot, f32s(&multiply));
+        // each keyform's own multiply (108-110 RGB) and screen (111-113);
+        // neutral is a white multiply and a black screen (a white screen
+        // lifts every pixel to white: a silhouette). A blend shape's
+        // keyforms hold zeros, as their colours are added. Offscreen
+        // keyforms take neutral colours after the meshes'.
+        let neutral: KeyColor = ([1.0; 3], [0.0; 3]);
+        let pool: Vec<KeyColor> = w_col
+            .iter()
+            .chain(&r_col)
+            .chain(&m_col)
+            .copied()
+            .chain(core::iter::repeat_n(neutral, off_opac.len()))
+            .collect();
+        if pool.len() != color_total {
+            return Err(err("keyform colours disagree with the keyforms"));
         }
-        for slot in 111..=113usize {
-            sect.insert(slot, f32s(&vec![0.0f32; color_total]));
+        for (c, slot) in (108..=110usize).enumerate() {
+            sect.insert(
+                slot,
+                f32s(&pool.iter().map(|k| k.0.get(c).copied().unwrap_or(1.0)).collect::<Vec<_>>()),
+            );
+        }
+        for (c, slot) in (111..=113usize).enumerate() {
+            sect.insert(
+                slot,
+                f32s(&pool.iter().map(|k| k.1.get(c).copied().unwrap_or(0.0)).collect::<Vec<_>>()),
+            );
         }
         // blend shape parameters: type 1 and their key table
         let table_of = |p: usize| bs_tables.iter().position(|(q, _)| *q as usize == p);
@@ -1222,6 +1276,8 @@ mod tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         for v in ExportVersion::ALL.into_iter().filter(|v| v.max_slot() >= 113) {
             let file = to_moc3(&model, v).unwrap();
@@ -1233,6 +1289,90 @@ mod tests {
                 assert!(floats(&file, slot, 1).iter().all(|&c| c == 0.0), "{} screen", v.label());
             }
         }
+    }
+
+    #[test]
+    fn keyform_colours_round_trip_and_pass_down() {
+        use ayatsuri_format::model::{
+            ArtMesh, BindingAxis, Deformer, DeformerKind, Parameter, WarpData,
+        };
+        let mut model = Model::new();
+        model.parameters.push(Parameter {
+            id: "ParamX".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: false,
+        });
+        let on_x = || Binding {
+            axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }],
+            curves: Vec::new(),
+        };
+        // a warp that darkens to half at x = 1, and a mesh in it that
+        // screens in blue at x = 1
+        let grid = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        model.deformers.push(Deformer {
+            id: "W".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: on_x(),
+            kind: DeformerKind::Warp(WarpData {
+                rows: 1,
+                cols: 1,
+                quad: false,
+                opacities: vec![1.0, 1.0],
+                positions: [grid.clone(), grid].concat(),
+            }),
+            multiply: vec![1.0, 1.0, 1.0, 0.5, 0.5, 0.5],
+            screen: Vec::new(),
+        });
+        let tri = vec![0.1, 0.1, 0.9, 0.1, 0.1, 0.9];
+        model.art_meshes.push(ArtMesh {
+            id: "M".into(),
+            parent_part: None,
+            parent_deformer: Some(0),
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: on_x(),
+            opacities: vec![1.0, 1.0],
+            draw_orders: vec![500.0, 500.0],
+            positions: [tri.clone(), tri].concat(),
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        });
+        let color = |m: &Model, x: f32| {
+            let mut p = ayatsuri_core::Puppet::new(m.clone());
+            p.set_value(0, x);
+            p.update();
+            p.drawables().next().map(|d| d.color).unwrap_or_default()
+        };
+        let mid = color(&model, 0.5);
+        assert_eq!(mid.multiply, [0.75; 3], "the warp's multiply passes down");
+        assert_eq!(mid.screen, [0.0, 0.0, 0.5]);
+        for v in [ExportVersion::V4_02, ExportVersion::V5_00, ExportVersion::V5_03] {
+            let back = crate::moc3::from_moc3(&to_moc3(&model, v).unwrap()).unwrap();
+            assert_eq!(back.deformers[0].multiply, model.deformers[0].multiply, "{v:?}");
+            assert!(back.deformers[0].screen.is_empty(), "{v:?}: neutral stays empty");
+            assert_eq!(back.art_meshes[0].screen, model.art_meshes[0].screen, "{v:?}");
+            assert_eq!(color(&back, 0.5), mid, "{v:?}");
+        }
+        let w = export_warnings(&model, ExportVersion::V4_00).join(" ");
+        assert!(w.contains("2 object(s) use multiply or screen colours"), "{w}");
+        assert!(export_warnings(&model, ExportVersion::V4_02).join(" ").find("colours").is_none());
     }
 
     #[test]
@@ -1258,6 +1398,8 @@ mod tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         };
         let mut model = Model::new();
         model.art_meshes.push(mesh("Overlay", ColorBlend::Overlay));
@@ -1326,6 +1468,8 @@ mod tests {
                     weights: vec![1.0, 1.0, 0.0],
                 }],
             }],
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         let drawn = |m: &Model, x: f32, smile: f32| {
             let mut p = ayatsuri_core::Puppet::new(m.clone());
@@ -1408,6 +1552,8 @@ mod tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         };
         model.art_meshes.push(mesh("Strand", Some(0)));
         model.art_meshes.push(mesh("Head", None));
@@ -1472,6 +1618,8 @@ mod tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         model.draw_groups.push(DrawGroup {
             total: 1,

@@ -78,6 +78,7 @@ fn push_mesh(
     tris: &[u16],
     color: [f32; 4],
     clip: [f32; 4],
+    screen: [f32; 3],
 ) -> std::ops::Range<u32> {
     let base = verts.len() as u32;
     let start = indices.len() as u32;
@@ -89,6 +90,7 @@ fn push_mesh(
             uv: [uv[0], uv[1]],
             color,
             clip,
+            screen: [screen[0], screen[1], screen[2], 0.0],
         });
     }
     indices.extend(tris.iter().map(|&i| base + i as u32));
@@ -179,6 +181,7 @@ impl Frame<'_> {
                     g.indices,
                     [1.0; 4],
                     self.art.get(src as usize).copied().unwrap_or(NO_CLIP),
+                    [0.0; 3],
                 );
                 shapes.push((range, g.texture));
             }
@@ -210,6 +213,7 @@ impl Frame<'_> {
                 uv,
                 color,
                 clip: NO_CLIP,
+                screen: [0.0; 4],
             });
         }
         let start = self.indices.len() as u32;
@@ -287,7 +291,8 @@ pub fn packet(
                 MaskMode::Normal
             };
         }
-        let color = [tint[0], tint[1], tint[2], d.opacity * tint[3]];
+        let [mr, mg, mb] = d.color.multiply;
+        let color = [tint[0] * mr, tint[1] * mg, tint[2] * mb, d.opacity * tint[3]];
         let clip = art.get(d.mesh).copied().unwrap_or(NO_CLIP);
         let range = push_mesh(
             &mut f.verts,
@@ -298,6 +303,7 @@ pub fn packet(
             d.indices,
             color,
             clip,
+            d.color.screen,
         );
         f.cmds.push(Cmd::Draw {
             indices: range,
@@ -319,7 +325,8 @@ pub fn packet(
                 MaskMode::Normal
             };
         }
-        let color = [1.0, 1.0, 1.0, d.opacity];
+        let [mr, mg, mb] = d.color.multiply;
+        let color = [mr, mg, mb, d.opacity];
         let clip = art.get(d.mesh).copied().unwrap_or(NO_CLIP);
         let range = push_mesh(
             &mut f.verts,
@@ -330,6 +337,7 @@ pub fn packet(
             d.indices,
             color,
             clip,
+            d.color.screen,
         );
         f.cmds.push(Cmd::Draw {
             indices: range,
