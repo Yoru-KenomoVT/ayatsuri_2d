@@ -157,6 +157,13 @@ pub fn tr(en: &'static str) -> &'static str {
     }
 }
 
+/// Interface text that is not a literal (a built-in template's name): its
+/// translation when the table has one, else the text as given.
+pub fn tr_text(en: &str) -> String {
+    let table = ACTIVE.read().ok().and_then(|a| *a);
+    table.and_then(|t| t.get(en)).cloned().unwrap_or_else(|| en.to_string())
+}
+
 /// Interface text whose English is ambiguous, keyed with its context
 /// (`"blend|Add"`): the translation of the whole key, or the English after
 /// the bar.

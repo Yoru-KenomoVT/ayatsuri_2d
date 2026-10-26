@@ -238,7 +238,6 @@
   "Edit Level": "Wysigvlak",
   "Physics Settings…": "Fisika-instellings…",
   "Texture Atlas…": "Tekstuuratlas…",
-  "Model Template…": "Modelsjabloon…",
   "Animation": "Animasie",
   "Animation Workspace": "Animasiewerkruimte",
   "Auto key": "Outo-sleutel",
@@ -1384,5 +1383,18 @@
   "Solo: show only the selected objects": "Solo: wys net die gekose voorwerpe",
   "Highlight Deformer's Child Elements": "Merk die vervormer se kindelemente",
   "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "Merk elke kunsmesh onder die gekose vervormer (Ctrl+Shift+D)",
-  "Highlight deformer's child elements": "Merk die vervormer se kindelemente"
+  "Highlight deformer's child elements": "Merk die vervormer se kindelemente",
+  "Model Template": "Modelsjabloon",
+  "Apply Parameter Template…": "Pas parametersjabloon toe…",
+  "Save Parameters as Template…": "Stoor parameters as sjabloon…",
+  "The artwork came in without parameters. Start from a template?": "Die kunswerk het sonder parameters ingekom. Begin met 'n sjabloon?",
+  "{count} parameters": "{count} parameters",
+  "Parameters the model already has (by ID) are left as they are.": "Parameters wat die model reeds het (volgens ID) bly soos hulle is.",
+  "No Template": "Geen sjabloon",
+  "Description": "Beskrywing",
+  "Saves the parameters, their ranges and folders. Apply it to any model from Modeling > Model Template.": "Stoor die parameters, hul bereik en vouers. Pas dit op enige model toe via Modellering > Modelsjabloon.",
+  "Standard parameters": "Standaardparameters",
+  "Standard parameters (all)": "Standaardparameters (almal)",
+  "Live2D's Standard Parameter List: face, eyes, brows, mouth, body, breath and hair sway, filed into the standard groups. The ids face trackers and VTube Studio expect.": "Live2D se standaardparameterlys: gesig, oë, wenkbroue, mond, lyf, asemhaling en haarswaai, in die standaardgroepe. Die ID's wat gesigvolgers en VTube Studio verwag.",
+  "The whole Standard Parameter List, the optional ones too: eyeball scaling, shoulders, arms, hands, fluffy hair, breast physics and overall movement.": "Die hele standaardparameterlys, ook die opsionele: oogbalskaal, skouers, arms, hande, donsige hare, borsfisika en algehele beweging."
 }
