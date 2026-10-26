@@ -270,6 +270,8 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
             enabled: true,
             binding,
             kind,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
     }
 

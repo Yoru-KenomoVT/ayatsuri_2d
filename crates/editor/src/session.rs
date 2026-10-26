@@ -2368,6 +2368,8 @@ mod import_paint_tests {
                 opacities: vec![1.0],
                 positions: grid,
             }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         let ctx = Context::default();
         let mut s = Session::create(&ctx, "t".into(), String::new(), m).unwrap();
@@ -2485,6 +2487,8 @@ mod import_paint_tests {
                 blend_shapes: Vec::new(),
                 clip_group: None,
                 clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             });
             m
         };
@@ -2522,6 +2526,8 @@ mod import_paint_tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         };
         let mut m = Model::new();
         m.art_meshes = vec![mesh("A", 0), mesh("B", 2), mesh("C", 2)];
@@ -2665,6 +2671,8 @@ mod deformer_name_tests {
                     opacities: vec![1.0],
                     positions: vec![0.0; 8],
                 }),
+                multiply: Vec::new(),
+                screen: Vec::new(),
             })
             .collect();
         m

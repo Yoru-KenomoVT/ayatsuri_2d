@@ -111,6 +111,8 @@ mod tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         }
     }
 

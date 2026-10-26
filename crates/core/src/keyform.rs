@@ -71,19 +71,19 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
         Target::ArtMesh(i) => {
             let m = model.art_meshes.get_mut(i)?;
             let n = m.vertex_count as usize * 2;
-            Some((
-                m.binding.clone(),
-                vec![
-                    Chan { data: &mut m.positions, elems: n, kind: Kind::Points { grid: None } },
-                    Chan { data: &mut m.opacities, elems: 1, kind: Kind::Plain },
-                    Chan { data: &mut m.draw_orders, elems: 1, kind: Kind::Plain },
-                ],
-            ))
+            let mut chans = vec![
+                Chan { data: &mut m.positions, elems: n, kind: Kind::Points { grid: None } },
+                Chan { data: &mut m.opacities, elems: 1, kind: Kind::Plain },
+                Chan { data: &mut m.draw_orders, elems: 1, kind: Kind::Plain },
+            ];
+            colour_chans(&mut chans, &mut m.multiply, &mut m.screen);
+            Some((m.binding.clone(), chans))
         }
         Target::Deformer(i) => {
             let d = model.deformers.get_mut(i)?;
             let binding = d.binding.clone();
-            let chans = match &mut d.kind {
+            let ayatsuri_format::model::Deformer { kind, multiply, screen, .. } = d;
+            let mut chans = match kind {
                 DeformerKind::Warp(w) => {
                     let grid = Some((w.cols as usize + 1, w.rows as usize + 1));
                     let n = w.grid_points() * 2;
@@ -100,6 +100,7 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
                     Chan { data: &mut r.opacities, elems: 1, kind: Kind::Plain },
                 ],
             };
+            colour_chans(&mut chans, multiply, screen);
             Some((binding, chans))
         }
         Target::Part(i) => {
@@ -109,6 +110,20 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
                 chans.push(Chan { data: &mut o.opacities, elems: 1, kind: Kind::Plain });
             }
             Some((p.binding.clone(), chans))
+        }
+    }
+}
+
+/// Multiply and screen colours, when the object has any: three plain
+/// floats per keyform, carried over unchanged by mirroring.
+fn colour_chans<'a>(
+    chans: &mut Vec<Chan<'a>>,
+    multiply: &'a mut Vec<f32>,
+    screen: &'a mut Vec<f32>,
+) {
+    for data in [multiply, screen] {
+        if !data.is_empty() {
+            chans.push(Chan { data, elems: 3, kind: Kind::Plain });
         }
     }
 }
@@ -686,6 +701,8 @@ mod tests {
                 blend_shapes: Vec::new(),
                 clip_group: None,
                 clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             }],
             ..Model::new()
         }

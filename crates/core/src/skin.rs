@@ -430,6 +430,8 @@ mod tests {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         m.draw_groups.push(DrawGroup {
             total: 1,
@@ -534,6 +536,8 @@ mod tests {
                     reflect_x: vec![false],
                     reflect_y: vec![false],
                 }),
+                multiply: Vec::new(),
+                screen: Vec::new(),
             });
         }
         m

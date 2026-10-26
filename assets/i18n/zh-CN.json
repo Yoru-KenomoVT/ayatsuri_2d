@@ -1452,5 +1452,11 @@
   "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "在使用高级混合模式的网格中,标出与同一网格其他三角形重叠的三角形:重叠处会被混合两次,移动时会闪烁",
   "  With overlapping polygons": "  含重叠多边形",
   "Overlapping polygons": "重叠的多边形",
-  "The color View > Highlight Overlapping Polygons marks them with": "视图 > 高亮重叠的多边形 使用的颜色"
+  "The color View > Highlight Overlapping Polygons marks them with": "视图 > 高亮重叠的多边形 使用的颜色",
+  "Multiply color": "正片叠底色",
+  "Screen color": "滤色",
+  "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "变暗:白色保持原图不变。设在变形器上会传给其下的所有对象",
+  "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "变亮:黑色保持原图不变。设在变形器上会传给其下的所有对象",
+  "Between keys. Move the parameters onto a key to set the color there.": "位于关键帧之间。请把参数移到关键点上再设置颜色。",
+  "Back to the color that leaves the art as it is": "恢复为保持原图不变的颜色"
 }

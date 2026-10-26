@@ -274,11 +274,17 @@ fn draw(r: &Raster, puppet: &Puppet, textures: &[TexData]) -> Vec<f32> {
                 });
             }
         }
-        let opacity = d.opacity;
+        let (opacity, tint) = (d.opacity, d.color);
         r.tris(d.positions, d.uvs, d.indices, |px, py, w0, w1, w2, uv, _| {
             let u = uv[0][0] * w0 + uv[1][0] * w1 + uv[2][0] * w2;
             let v = uv[0][1] * w0 + uv[1][1] * w1 + uv[2][1] * w2;
             let mut src = sample(tex, u, v);
+            if !tint.is_neutral() {
+                let [r, g, b] = tint.apply([src[0], src[1], src[2]]);
+                src[0] = r;
+                src[1] = g;
+                src[2] = b;
+            }
             let mut a = src[3] * opacity;
             if masked {
                 let cv = coverage.get(py * width + px).copied().unwrap_or(0.0);
@@ -365,11 +371,17 @@ pub fn render_filtered(
                 });
             }
         }
-        let opacity = d.opacity;
+        let (opacity, tint) = (d.opacity, d.color);
         r.tris(d.positions, d.uvs, d.indices, |px, py, w0, w1, w2, uv, _| {
             let u = uv[0][0] * w0 + uv[1][0] * w1 + uv[2][0] * w2;
             let v = uv[0][1] * w0 + uv[1][1] * w1 + uv[2][1] * w2;
             let mut src = sample(tex, u, v);
+            if !tint.is_neutral() {
+                let [r, g, b] = tint.apply([src[0], src[1], src[2]]);
+                src[0] = r;
+                src[1] = g;
+                src[2] = b;
+            }
             let mut a = src[3] * opacity;
             if masked {
                 let cv = coverage.get(py * width + px).copied().unwrap_or(0.0);

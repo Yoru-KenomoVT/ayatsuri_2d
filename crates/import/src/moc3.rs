@@ -49,6 +49,76 @@ fn collect_f32(pool: &F32s<'_>, range: core::ops::Range<usize>) -> Vec<f32> {
     range.filter_map(|i| pool.get(i)).collect()
 }
 
+/// moc3 4.2+'s multiply and screen colours per keyform: pools of rgb
+/// (108-113), reached per keyform through 5.0's own indices (137-142) or,
+/// before that, each object's first entry (105-107) and its keyform number.
+struct KeyColors<'a> {
+    multiply: [Option<F32s<'a>>; 3],
+    screen: [Option<F32s<'a>>; 3],
+    /// Warps, rotations, meshes.
+    begin: [Option<I32s<'a>>; 3],
+    keyform_multiply: [Option<I32s<'a>>; 3],
+    keyform_screen: [Option<I32s<'a>>; 3],
+}
+
+#[derive(Clone, Copy)]
+enum ColorOwner {
+    Warp = 0,
+    Rotation = 1,
+    Mesh = 2,
+}
+
+impl<'a> KeyColors<'a> {
+    fn new(moc: &Moc3<'a>) -> Self {
+        let f = |s: usize| moc.f32s(s).ok();
+        let i = |s: usize| moc.i32s(s).ok();
+        KeyColors {
+            multiply: [f(108), f(109), f(110)],
+            screen: [f(111), f(112), f(113)],
+            begin: [i(105), i(106), i(107)],
+            keyform_multiply: [i(137), i(139), i(141)],
+            keyform_screen: [i(138), i(140), i(142)],
+        }
+    }
+
+    /// One object's keyforms' colours (`keyforms` are its global keyform
+    /// indices, `object` its index among its kind): three floats per
+    /// keyform, or empty when every one is neutral or the file has none.
+    fn of(
+        &self,
+        owner: ColorOwner,
+        object: usize,
+        keyforms: core::ops::Range<usize>,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let o = owner as usize;
+        let at = |per_keyform: &[Option<I32s<'a>>; 3], g: usize, k: usize| -> Option<usize> {
+            let idx = match per_keyform.get(o).and_then(Option::as_ref) {
+                Some(t) => t.get(g)?,
+                None => self.begin.get(o)?.as_ref()?.get(object)?.checked_add(k as i32)?,
+            };
+            usize::try_from(idx).ok()
+        };
+        let rgb = |pools: &[Option<F32s<'a>>; 3], i: Option<usize>, neutral: f32| -> [f32; 3] {
+            let c = |p: &Option<F32s<'a>>| {
+                i.and_then(|i| p.as_ref().and_then(|p| p.get(i))).unwrap_or(neutral)
+            };
+            [c(&pools[0]), c(&pools[1]), c(&pools[2])]
+        };
+        let (mut mul, mut scr) = (Vec::new(), Vec::new());
+        for (k, g) in keyforms.enumerate() {
+            mul.extend(rgb(&self.multiply, at(&self.keyform_multiply, g, k), 1.0));
+            scr.extend(rgb(&self.screen, at(&self.keyform_screen, g, k), 0.0));
+        }
+        if mul.iter().all(|&v| v == 1.0) {
+            mul.clear();
+        }
+        if scr.iter().all(|&v| v == 0.0) {
+            scr.clear();
+        }
+        (mul, scr)
+    }
+}
+
 /// The per-parameter axis tables, resolved once.
 struct Axes {
     /// Per parameterBinding: owning parameter and its key values.
@@ -261,6 +331,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         log::debug!("moc3: no quad transform section; every warp reads as not quad");
     }
     let w_opacities = moc.f32s(59)?;
+    let key_colors = KeyColors::new(&moc);
     let w_pos_begin = moc.i32s(60)?;
 
     let r_kf_begin = moc.i32s(26)?;
@@ -289,6 +360,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         }
         let binding = axes.binding("deformer binding", i, d_kb.get(i).unwrap_or(-1))?;
         let ty = d_types.get(i).unwrap_or(-1);
+        let colors;
         let kind = match ty {
             0 => {
                 let si =
@@ -310,6 +382,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
                     w_kf_count.get(si).unwrap_or(0),
                     w_opacities.len(),
                 )?;
+                colors = key_colors.of(ColorOwner::Warp, si, kf.clone());
                 let data = WarpData {
                     rows,
                     cols,
@@ -343,6 +416,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
                     r_kf_count.get(si).unwrap_or(0),
                     r_opacities.len(),
                 )?;
+                colors = key_colors.of(ColorOwner::Rotation, si, kf.clone());
                 let data = RotationData {
                     base_angle: r_base_angles.get(si).unwrap_or(0.0),
                     opacities: collect_f32(&r_opacities, kf.clone()),
@@ -370,6 +444,8 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             enabled: d_enabled.get(i).unwrap_or(1) != 0,
             binding,
             kind,
+            multiply: colors.0,
+            screen: colors.1,
         });
     }
 
@@ -461,6 +537,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             m_kf_count.get(i).unwrap_or(0),
             m_opacities.len(),
         )?;
+        let (multiply, screen) = key_colors.of(ColorOwner::Mesh, i, kf.clone());
         art_meshes.push(ArtMesh {
             id: (*id).to_string(),
             parent_part: opt_idx(
@@ -502,6 +579,8 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             blend_shapes: Vec::new(),
             clip_group: None,
             clip_inherit: false,
+            multiply,
+            screen,
         });
     }
 

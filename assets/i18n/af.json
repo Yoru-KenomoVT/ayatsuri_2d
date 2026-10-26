@@ -1452,5 +1452,11 @@
   "Mark triangles that cover others of the same mesh, in meshes with an advanced blend mode: they blend twice there and flicker as it moves": "Merk driehoeke wat ander van dieselfde mesh bedek, in meshes met 'n gevorderde mengmodus: daar meng hulle twee keer en flikker hulle wanneer dit beweeg",
   "  With overlapping polygons": "  Met oorvleuelende veelhoeke",
   "Overlapping polygons": "Oorvleuelende veelhoeke",
-  "The color View > Highlight Overlapping Polygons marks them with": "Die kleur waarmee Aansig > Merk oorvleuelende veelhoeke hulle merk"
+  "The color View > Highlight Overlapping Polygons marks them with": "Die kleur waarmee Aansig > Merk oorvleuelende veelhoeke hulle merk",
+  "Multiply color": "Vermenigvuldigkleur",
+  "Screen color": "Skermkleur",
+  "Darkens: white leaves the art as it is. Passed down from a deformer to all under it": "Maak donkerder: wit los die kuns soos dit is. Word van 'n vervormer oorgedra na alles daaronder",
+  "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "Maak ligter: swart los die kuns soos dit is. Word van 'n vervormer oorgedra na alles daaronder",
+  "Between keys. Move the parameters onto a key to set the color there.": "Tussen sleutels. Skuif die parameters op 'n sleutel om die kleur daar te stel.",
+  "Back to the color that leaves the art as it is": "Terug na die kleur wat die kuns los soos dit is"
 }

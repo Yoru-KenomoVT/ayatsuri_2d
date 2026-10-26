@@ -168,38 +168,53 @@ pub(crate) fn with_object<R>(
         Target::ArtMesh(i) => {
             let m = model.art_meshes.get_mut(i)?;
             let elems = (m.vertex_count as usize) * 2;
-            let channels = vec![
+            let mut channels = vec![
                 Channel::F32 { elems: 1, data: &mut m.opacities },
                 Channel::F32 { elems: 1, data: &mut m.draw_orders },
                 Channel::F32 { elems, data: &mut m.positions },
             ];
+            colour_channels(&mut channels, &mut m.multiply, &mut m.screen);
             Some(f(&mut m.binding, channels))
         }
         Target::Deformer(i) => {
             let d = model.deformers.get_mut(i)?;
-            match &mut d.kind {
+            let ayatsuri_format::model::Deformer { binding, kind, multiply, screen, .. } = d;
+            let mut channels = match kind {
                 DeformerKind::Warp(w) => {
                     let elems = w.grid_points() * 2;
-                    let channels = vec![
+                    vec![
                         Channel::F32 { elems: 1, data: &mut w.opacities },
                         Channel::F32 { elems, data: &mut w.positions },
-                    ];
-                    Some(f(&mut d.binding, channels))
+                    ]
                 }
-                DeformerKind::Rotation(r) => {
-                    let channels = vec![
-                        Channel::F32 { elems: 1, data: &mut r.opacities },
-                        Channel::F32 { elems: 1, data: &mut r.angles },
-                        Channel::F32 { elems: 1, data: &mut r.origins_x },
-                        Channel::F32 { elems: 1, data: &mut r.origins_y },
-                        Channel::F32 { elems: 1, data: &mut r.scales },
-                        Channel::Bool { data: &mut r.reflect_x },
-                        Channel::Bool { data: &mut r.reflect_y },
-                    ];
-                    Some(f(&mut d.binding, channels))
-                }
-            }
+                DeformerKind::Rotation(r) => vec![
+                    Channel::F32 { elems: 1, data: &mut r.opacities },
+                    Channel::F32 { elems: 1, data: &mut r.angles },
+                    Channel::F32 { elems: 1, data: &mut r.origins_x },
+                    Channel::F32 { elems: 1, data: &mut r.origins_y },
+                    Channel::F32 { elems: 1, data: &mut r.scales },
+                    Channel::Bool { data: &mut r.reflect_x },
+                    Channel::Bool { data: &mut r.reflect_y },
+                ],
+            };
+            colour_channels(&mut channels, multiply, screen);
+            Some(f(binding, channels))
         }
+    }
+}
+
+/// An object's multiply and screen colours ride along with its other
+/// keyform data, when it has any (empty means neutral at every keyform).
+fn colour_channels<'a>(
+    channels: &mut Vec<Channel<'a>>,
+    multiply: &'a mut Vec<f32>,
+    screen: &'a mut Vec<f32>,
+) {
+    if !multiply.is_empty() {
+        channels.push(Channel::F32 { elems: 3, data: multiply });
+    }
+    if !screen.is_empty() {
+        channels.push(Channel::F32 { elems: 3, data: screen });
     }
 }
 
@@ -762,6 +777,8 @@ pub fn create_warp_deformer(
                 opacities: alloc_one(),
                 positions: grid,
             }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
 
         for &mi in meshes {
@@ -819,6 +836,8 @@ pub fn create_rotation_deformer(
                 reflect_x: vec![false],
                 reflect_y: vec![false],
             }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
 
         for &mi in meshes {
@@ -1106,6 +1125,8 @@ pub fn create_deformer(
                 enabled: true,
                 binding: Binding::default(),
                 kind: deformer_kind,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             },
         );
         for &c in &children {
@@ -1631,6 +1652,8 @@ pub fn create_art_path(
         blend_shapes: Vec::new(),
         clip_group: None,
         clip_inherit: false,
+        multiply: Vec::new(),
+        screen: Vec::new(),
     });
     let index = model.art_meshes.len() - 1;
     if let Some(root) = model.draw_groups.first_mut() {
@@ -1804,6 +1827,98 @@ pub fn set_clip_inherit(model: &mut Model, mesh: usize, on: bool) -> bool {
 /// Set the opacity an art mesh or deformer has on one keyform (the one the
 /// parameters sit on, from `keyform::keyform_at`). Parts have no opacity
 /// keyforms in the model, so they are refused.
+/// Which of an object's two keyform colours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColorKind {
+    Multiply,
+    Screen,
+}
+
+impl ColorKind {
+    /// The colour that leaves the art as it is.
+    pub fn neutral(self) -> f32 {
+        match self {
+            ColorKind::Multiply => 1.0,
+            ColorKind::Screen => 0.0,
+        }
+    }
+}
+
+/// An art mesh's or deformer's colour pool of `kind` and how many
+/// keyforms it has. Parts have none.
+pub fn color_pool_mut(
+    model: &mut Model,
+    target: Target,
+    kind: ColorKind,
+) -> Option<(&mut Vec<f32>, usize)> {
+    let (multiply, screen, keyforms) = match target {
+        Target::ArtMesh(i) => {
+            let m = model.art_meshes.get_mut(i)?;
+            let n = m.opacities.len();
+            (&mut m.multiply, &mut m.screen, n)
+        }
+        Target::Deformer(i) => {
+            let d = model.deformers.get_mut(i)?;
+            let n = match &d.kind {
+                DeformerKind::Warp(w) => w.opacities.len(),
+                DeformerKind::Rotation(r) => r.opacities.len(),
+            };
+            (&mut d.multiply, &mut d.screen, n)
+        }
+        Target::Part(_) => return None,
+    };
+    Some((if kind == ColorKind::Multiply { multiply } else { screen }, keyforms))
+}
+
+/// One keyform's colour of `kind` (neutral when the object has none set).
+pub fn color_at(model: &Model, target: Target, keyform: usize, kind: ColorKind) -> [f32; 3] {
+    let n = kind.neutral();
+    let pool = match target {
+        Target::ArtMesh(i) => model.art_meshes.get(i).map(|m| match kind {
+            ColorKind::Multiply => &m.multiply,
+            ColorKind::Screen => &m.screen,
+        }),
+        Target::Deformer(i) => model.deformers.get(i).map(|d| match kind {
+            ColorKind::Multiply => &d.multiply,
+            ColorKind::Screen => &d.screen,
+        }),
+        Target::Part(_) => None,
+    };
+    let at = |c: usize| pool.and_then(|p| p.get(keyform * 3 + c)).copied().unwrap_or(n);
+    [at(0), at(1), at(2)]
+}
+
+/// Set one keyform's colour. An object with no colours yet gets neutral
+/// ones at every keyform first; one left all neutral drops them again.
+pub fn set_color(
+    model: &mut Model,
+    target: Target,
+    keyform: usize,
+    kind: ColorKind,
+    rgb: [f32; 3],
+) -> bool {
+    let Some((pool, keyforms)) = color_pool_mut(model, target, kind) else { return false };
+    if keyform >= keyforms {
+        return false;
+    }
+    let neutral = kind.neutral();
+    if pool.len() != keyforms * 3 {
+        pool.resize(keyforms * 3, neutral);
+    }
+    let mut changed = false;
+    for (c, v) in rgb.into_iter().enumerate() {
+        if let Some(slot) = pool.get_mut(keyform * 3 + c) {
+            let v = v.clamp(0.0, 1.0);
+            changed |= (*slot - v).abs() > 1e-6;
+            *slot = v;
+        }
+    }
+    if pool.iter().all(|&v| v == neutral) {
+        pool.clear();
+    }
+    changed
+}
+
 pub fn set_opacity(model: &mut Model, target: Target, keyform: usize, opacity: f32) -> bool {
     let slot = match target {
         Target::ArtMesh(i) => {
@@ -3602,6 +3717,8 @@ mod tests {
                 blend_shapes: Vec::new(),
                 clip_group: None,
                 clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             }],
             glues: vec![],
             draw_groups: vec![],

@@ -472,6 +472,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
             blend_shapes: Vec::new(),
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         let ctx = egui::Context::default();
         let s = Session::create(&ctx, "t".into(), String::new(), model).unwrap();
