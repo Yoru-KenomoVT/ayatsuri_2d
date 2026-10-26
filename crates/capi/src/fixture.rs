@@ -46,6 +46,7 @@ pub fn small_aom() -> Vec<u8> {
         enabled: true,
         binding: Binding::default(),
         draw_orders: vec![500.0],
+        offscreen: None,
     });
     let quad = |dx: f32| vec![dx, 0.0, dx + 0.5, 0.0, dx + 0.5, 0.5, dx, 0.5];
     model.art_meshes.push(ArtMesh {

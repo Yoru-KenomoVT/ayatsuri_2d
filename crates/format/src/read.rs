@@ -48,7 +48,7 @@ mod tests {
             default: 0.5,
             repeat: false,
             decimals: 3,
-            blend_shape: false,
+            blend_shape: true,
         });
         model.art_meshes.push(ArtMesh {
             id: "M".into(),
@@ -67,7 +67,11 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
-            blend_shapes: Vec::new(),
+            blend_shapes: vec![crate::model::BlendShape {
+                parameter: 0,
+                keys: vec![1.0],
+                positions: vec![0.0, 3.0, 1.0, 0.0, 0.0, 1.0],
+            }],
         });
         let payload = AomPayload {
             meta: Meta {
@@ -100,6 +104,9 @@ mod tests {
         let m = &back.model.art_meshes[0];
         assert_eq!(m.positions, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
         assert_eq!(m.indices, vec![0, 1, 2]);
+        assert!(back.model.parameters[0].blend_shape);
+        assert_eq!(m.blend_shapes[0].keys, vec![1.0]);
+        assert_eq!(m.blend_shapes[0].positions, vec![0.0, 3.0, 1.0, 0.0, 0.0, 1.0]);
         assert_eq!(back.textures[0].as_ref(), &[1u8, 2, 3]);
         assert_eq!(back.expressions, payload.expressions);
     }

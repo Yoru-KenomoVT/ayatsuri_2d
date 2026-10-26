@@ -104,10 +104,11 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
         }
         Target::Part(i) => {
             let p = model.parts.get_mut(i)?;
-            Some((
-                p.binding.clone(),
-                vec![Chan { data: &mut p.draw_orders, elems: 1, kind: Kind::Plain }],
-            ))
+            let mut chans = vec![Chan { data: &mut p.draw_orders, elems: 1, kind: Kind::Plain }];
+            if let Some(o) = &mut p.offscreen {
+                chans.push(Chan { data: &mut o.opacities, elems: 1, kind: Kind::Plain });
+            }
+            Some((p.binding.clone(), chans))
         }
     }
 }

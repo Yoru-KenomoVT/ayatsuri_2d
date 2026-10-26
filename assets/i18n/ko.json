@@ -518,7 +518,6 @@
   "Warp {cols}x{rows}": "워프 {cols}x{rows}",
   "Rotation": "회전",
   "{count} meshes": "메시 {count}개",
-  "Only changes what you see while editing; it is not saved or exported, because moc3 parts have no opacity. To fade a part by a parameter, put its meshes under a deformer and key that deformer's Opacity.": "편집 중 보이는 모습만 바뀌며 저장되거나 내보내지지 않습니다. moc3 파츠에는 불투명도가 없기 때문입니다. 파라미터로 파츠를 페이드하려면 메시를 디포머 아래에 두고 그 디포머의 불투명도에 키를 지정하세요.",
   "{from} to {to}": "{from}에서 {to}로",
   "yes": "예",
   "no": "아니요",
@@ -1324,5 +1323,12 @@
   "No art mesh here": "여기에 아트메시가 없습니다",
   "Blend Shape": "블렌드 셰이프",
   "Its keyforms add on top of the others instead of multiplying them": "키폼을 곱하지 않고 다른 키폼 위에 더합니다",
-  "Blend Shape is editable": "블렌드 셰이프 편집 가능"
+  "Blend Shape is editable": "블렌드 셰이프 편집 가능",
+  "Offscreen drawing": "오프스크린 드로잉",
+  "Draws the part's contents as one layer first, so its opacity, clipping and blend mode apply to the group as a whole. Its contents keep together in the draw order. Exports as moc3 5.3.": "파츠의 내용을 먼저 하나의 레이어로 그리므로 불투명도, 클리핑, 블렌드 모드가 그룹 전체에 적용됩니다. 내용은 그리기 순서에서 함께 묶입니다. moc3 5.3으로 내보냅니다.",
+  "Reverse mask": "마스크 반전",
+  "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "편집 중에 보이는 것만 바꾸며 저장하거나 내보내지 않습니다. 파라미터로 파츠를 페이드하려면 오프스크린 드로잉을 켜고 불투명도에 키를 넣거나, 메시를 디포머 아래에 두고 그 디포머의 불투명도에 키를 넣으세요.",
+  "  Offscreen drawing": "  오프스크린 드로잉",
+  "  Most nested offscreen layers": "  오프스크린 최대 중첩 수",
+  "Blend shapes": "블렌드 셰이프"
 }

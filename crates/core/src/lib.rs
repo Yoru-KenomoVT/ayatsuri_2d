@@ -38,6 +38,16 @@ pub struct Puppet {
     part_opacity: Vec<f32>,
     part_enabled: Vec<bool>,
     part_draw_order: Vec<f32>,
+    /// Per part: an offscreen part's layer opacity this frame (1.0 for the
+    /// rest).
+    layer_opacity: Vec<f32>,
+    /// Per mesh: the offscreen parts it draws inside, outermost first.
+    mesh_layers: Vec<Vec<u32>>,
+    /// The deepest offscreen nesting any mesh has (0: no layers at all).
+    layer_depth: usize,
+    // layer grouping workspace, sized at load
+    layer_first: Vec<u32>,
+    render_pos: Vec<u32>,
     /// Per deformer: chain state.
     def_enabled: Vec<bool>,
     def_user_visible: Vec<bool>,
@@ -185,13 +195,34 @@ impl Puppet {
             pos_total = pos_total.saturating_add((m.vertex_count as usize).saturating_mul(2));
         }
         let mut mask_source = vec![false; n_meshes];
-        for m in &model.art_meshes {
-            for &src in &m.masks {
-                if let Some(f) = mask_source.get_mut(src as usize) {
-                    *f = true;
-                }
+        let layer_masks =
+            model.parts.iter().filter_map(|p| p.offscreen.as_ref()).flat_map(|o| &o.masks);
+        for &src in model.art_meshes.iter().flat_map(|m| &m.masks).chain(layer_masks) {
+            if let Some(f) = mask_source.get_mut(src as usize) {
+                *f = true;
             }
         }
+        // each mesh's offscreen parts, walking up (bounded, so a parent loop
+        // in a broken file cannot spin)
+        let mesh_layers: Vec<Vec<u32>> = model
+            .art_meshes
+            .iter()
+            .map(|m| {
+                let mut chain = Vec::new();
+                let mut at = m.parent_part;
+                for _ in 0..n_parts {
+                    let Some(pi) = at else { break };
+                    let Some(p) = model.parts.get(pi as usize) else { break };
+                    if p.offscreen.is_some() {
+                        chain.push(pi);
+                    }
+                    at = p.parent_part;
+                }
+                chain.reverse();
+                chain
+            })
+            .collect();
+        let layer_depth = mesh_layers.iter().map(Vec::len).max().unwrap_or(0);
 
         let max_corners = model
             .parts
@@ -222,6 +253,11 @@ impl Puppet {
             part_opacity: vec![1.0; n_parts],
             part_enabled: vec![true; n_parts],
             part_draw_order: vec![500.0; n_parts],
+            layer_opacity: vec![1.0; n_parts],
+            mesh_layers,
+            layer_depth,
+            layer_first: vec![u32::MAX; n_parts],
+            render_pos: vec![0; n_meshes],
             dog_first: vec![-1; max_level],
             dog_last: vec![-1; max_level],
             dog_next: vec![-1; max_items],
@@ -381,7 +417,9 @@ impl Puppet {
                 DeformerKind::Warp(w) => w.opacities.get_mut(keyform),
                 DeformerKind::Rotation(r) => r.opacities.get_mut(keyform),
             },
-            edit::Target::Part(_) => None,
+            edit::Target::Part(i) => {
+                self.model.parts.get_mut(i)?.offscreen.as_mut()?.opacities.get_mut(keyform)
+            }
         }
     }
 
@@ -494,7 +532,21 @@ impl Puppet {
                 *d = order;
             }
             let mut enabled = part.visible && part.enabled;
-            let mut opacity = self.part_user_opacity.get(i).copied().unwrap_or(1.0);
+            let own = self.part_user_opacity.get(i).copied().unwrap_or(1.0);
+            // an offscreen part's opacity applies to its layer as a whole,
+            // so overlapping children show no seams; its children only get
+            // what it inherits
+            let (mut opacity, layer) = match &part.offscreen {
+                Some(o) => {
+                    let keyed =
+                        if in_range { Self::blend_scalar(&corners, &o.opacities) } else { 1.0 };
+                    (1.0, own * keyed.clamp(0.0, 1.0))
+                }
+                None => (own, 1.0),
+            };
+            if let Some(l) = self.layer_opacity.get_mut(i) {
+                *l = layer;
+            }
             if let Some(parent) = part.parent_part {
                 enabled =
                     enabled && self.part_enabled.get(parent as usize).copied().unwrap_or(true);
@@ -950,6 +1002,49 @@ impl Puppet {
     }
 
     fn sort_render_order(&mut self) {
+        self.sort_by_draw_order();
+        self.group_layers();
+    }
+
+    /// Keep each offscreen part's meshes together, as a draw order group
+    /// does: they move to where the first of them sorted, nested layers
+    /// inside it the same way, everything else keeping its order.
+    fn group_layers(&mut self) {
+        if self.layer_depth == 0 {
+            return;
+        }
+        for (pos, &mi) in self.render_order.iter().enumerate() {
+            if let Some(p) = self.render_pos.get_mut(mi as usize) {
+                *p = pos as u32;
+            }
+        }
+        self.layer_first.fill(u32::MAX);
+        for (mi, chain) in self.mesh_layers.iter().enumerate() {
+            let pos = self.render_pos.get(mi).copied().unwrap_or(0);
+            for &part in chain {
+                if let Some(f) = self.layer_first.get_mut(part as usize) {
+                    *f = (*f).min(pos);
+                }
+            }
+        }
+        let (layers, first, pos) = (&self.mesh_layers, &self.layer_first, &self.render_pos);
+        let pos_of = |mi: u32| pos.get(mi as usize).copied().unwrap_or(0);
+        // level by level: inside a layer, its first member's slot; outside
+        // any, the mesh's own
+        let key = |mi: u32, level: usize| match layers.get(mi as usize).and_then(|c| c.get(level)) {
+            Some(&part) => first.get(part as usize).copied().unwrap_or(0),
+            None => pos_of(mi),
+        };
+        let depth = self.layer_depth;
+        self.render_order.sort_unstable_by(|&a, &b| {
+            (0..depth)
+                .map(|level| key(a, level).cmp(&key(b, level)))
+                .find(|o| o.is_ne())
+                .unwrap_or_else(|| pos_of(a).cmp(&pos_of(b)))
+        });
+    }
+
+    fn sort_by_draw_order(&mut self) {
         if self.model.draw_groups.is_empty() {
             // draw orders are whole numbers, as in the grouped walk below:
             // a blend that lands on 500.00003 must still tie with 500
@@ -1173,6 +1268,25 @@ impl Puppet {
     /// The meshes to draw, back to front. Positions are model units in the
     /// canvas frame: screen position is origin + xy * pixels_per_unit, no
     /// axis flip. UVs address the texture top-down, also unflipped.
+    /// The offscreen parts a mesh draws inside, outermost first: a renderer
+    /// opens a layer for each on the way in and lands it on the way out.
+    pub fn layers_of(&self, mesh: usize) -> &[u32] {
+        self.mesh_layers.get(mesh).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// How an offscreen part's layer lands this frame; None for a part that
+    /// is not drawn offscreen.
+    pub fn layer(&self, part: usize) -> Option<Layer<'_>> {
+        let o = self.model.parts.get(part)?.offscreen.as_ref()?;
+        Some(Layer {
+            part,
+            blend: o.blend,
+            opacity: self.layer_opacity.get(part).copied().unwrap_or(1.0),
+            masks: &o.masks,
+            inverted: o.inverted,
+        })
+    }
+
     pub fn drawables(&self) -> impl Iterator<Item = Drawable<'_>> {
         self.render_order.iter().filter_map(move |&mi| {
             let mi = mi as usize;
@@ -1204,6 +1318,18 @@ impl Vec2 {
 }
 
 /// One mesh, evaluated and ready to draw.
+/// An offscreen part's layer as it lands on what is beneath it.
+#[derive(Clone, Copy, Debug)]
+pub struct Layer<'a> {
+    pub part: usize,
+    pub blend: Blend,
+    pub opacity: f32,
+    /// Meshes whose texture alpha clips the layer.
+    pub masks: &'a [u32],
+    /// Shown outside the masks instead of inside.
+    pub inverted: bool,
+}
+
 pub struct Drawable<'a> {
     pub mesh: usize,
     pub texture: u32,
@@ -1355,6 +1481,49 @@ mod tests {
         // the editor's local probe sees the same points
         let local = p.mesh_local_positions(0).unwrap_or_default();
         assert!((local[1] - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_offscreen_part_keeps_its_meshes_together_and_owns_its_opacity() {
+        use ayatsuri_format::model::{Offscreen, Part};
+        // three meshes drawn a, x, b; a and b sit in an offscreen part
+        let mut model = one_param_model();
+        let mesh = model.art_meshes[0].clone();
+        model.art_meshes.clear();
+        for (id, order, part) in [("a", 100.0, Some(0)), ("x", 200.0, None), ("b", 300.0, Some(0))]
+        {
+            let mut m = mesh.clone();
+            m.id = id.into();
+            m.parent_part = part;
+            m.draw_orders = vec![order, order];
+            model.art_meshes.push(m);
+        }
+        model.parts.push(Part {
+            id: "P".into(),
+            parent_part: None,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            draw_orders: vec![500.0],
+            offscreen: Some(Offscreen {
+                masks: vec![1],
+                inverted: true,
+                blend: Default::default(),
+                opacities: vec![0.5],
+            }),
+        });
+        let mut p = Puppet::new(model);
+        p.set_part_opacity(0, 0.8);
+        p.update();
+        let order: Vec<usize> = p.drawables().map(|d| d.mesh).collect();
+        assert_eq!(order, vec![0, 2, 1]);
+        assert_eq!(p.layers_of(0), &[0]);
+        assert!(p.layers_of(1).is_empty());
+        let layer = p.layer(0).unwrap_or_else(|| unreachable!());
+        assert!((layer.opacity - 0.4).abs() < 1e-6);
+        assert_eq!((layer.masks, layer.inverted), (&[1u32][..], true));
+        // the layer carries the part's opacity, its meshes don't
+        assert!(p.drawables().all(|d| (d.opacity - 1.0).abs() < 1e-6));
     }
 
     #[test]

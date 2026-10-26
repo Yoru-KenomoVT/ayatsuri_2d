@@ -518,7 +518,6 @@
   "Warp {cols}x{rows}": "Warp {cols}x{rows}",
   "Rotation": "Rotasie",
   "{count} meshes": "{count} meshes",
-  "Only changes what you see while editing; it is not saved or exported, because moc3 parts have no opacity. To fade a part by a parameter, put its meshes under a deformer and key that deformer's Opacity.": "Verander net wat jy sien terwyl jy wysig; dit word nie gestoor of uitgevoer nie, want moc3-dele het geen ondeursigtigheid nie. Om 'n deel met 'n parameter te laat vervaag, plaas sy meshes onder 'n vervormer en sleutel daardie vervormer se Ondeursigtigheid.",
   "{from} to {to}": "{from} tot {to}",
   "yes": "ja",
   "no": "nee",
@@ -1324,5 +1323,12 @@
   "No art mesh here": "Hier is geen art mesh nie",
   "Blend Shape": "Mengvorm",
   "Its keyforms add on top of the others instead of multiplying them": "Sy sleutelvorms word by die ander getel in plaas daarvan om hulle te vermenigvuldig",
-  "Blend Shape is editable": "Mengvorm is wysigbaar"
+  "Blend Shape is editable": "Mengvorm is wysigbaar",
+  "Offscreen drawing": "Buiteskerm-teken",
+  "Draws the part's contents as one layer first, so its opacity, clipping and blend mode apply to the group as a whole. Its contents keep together in the draw order. Exports as moc3 5.3.": "Teken die deel se inhoud eers as een laag, sodat sy deursigtigheid, knip en mengmodus op die hele groep van toepassing is. Die inhoud bly bymekaar in die tekenvolgorde. Voer uit as moc3 5.3.",
+  "Reverse mask": "Keer masker om",
+  "Only changes what you see while editing; it is not saved or exported. To fade a part by a parameter, turn on Offscreen drawing and key its Opacity, or put its meshes under a deformer and key that deformer's Opacity.": "Verander net wat jy sien terwyl jy wysig; dit word nie gestoor of uitgevoer nie. Om 'n deel met 'n parameter te laat vervaag: skakel Buiteskerm-teken aan en sleutel sy deursigtigheid, of plaas sy meshes onder 'n vervormer en sleutel daardie vervormer se deursigtigheid.",
+  "  Offscreen drawing": "  Buiteskerm-teken",
+  "  Most nested offscreen layers": "  Diepste geneste buiteskerm-lae",
+  "Blend shapes": "Mengvorms"
 }
