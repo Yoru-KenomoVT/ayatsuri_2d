@@ -1426,5 +1426,18 @@
   "Step2": "Stap2",
   "Weight Limit Graph": "Gewigslimietgrafiek",
   "Weight limit (%)": "Gewigslimiet (%)",
-  "Rename Art Mesh": "Hernoem art mesh"
+  "Rename Art Mesh": "Hernoem art mesh",
+  "A pen in Mesh Edit's tool details: drag along a strand of hair or a line and get a mesh built along it, with width handles to shape it": "'n Pen in Mesh Edit se gereedskapbesonderhede: sleep langs 'n haarlok of 'n lyn en kry 'n mesh daarlangs gebou, met breedtehandvatsels om dit te vorm",
+  "Confirm stroke being edited (Click here [Shift+E])": "Bevestig die haal wat gewysig word (klik hier [Shift+E])",
+  "Drag to draw a stroke; drag away from it to redraw it, Shift+drag for another. Click the line to add a control point, Alt+click one to delete it. Ctrl+click the line adds a width handle (orange), Ctrl+drag one sets the width, Ctrl+Alt+click deletes it. Shift+E confirms, Delete cancels.": "Sleep om 'n haal te teken; sleep weg daarvan om dit oor te teken, Shift+sleep vir nog een. Klik op die lyn om 'n beheerpunt by te voeg, Alt+klik om een te skrap. Ctrl+klik op die lyn voeg 'n breedtehandvatsel (oranje) by, Ctrl+sleep stel die breedte, Ctrl+Alt+klik skrap dit. Shift+E bevestig, Delete kanselleer.",
+  "Invert mesh": "Keer mesh om",
+  "Maintain current mesh": "Behou huidige mesh",
+  "Mesh width": "Meshbreedte",
+  "Mesh-mapping settings": "Mesh-mapping-instellings",
+  "Number of vertices in mesh width": "Aantal hoekpunte in die meshbreedte",
+  "Off: the points and edges the stroke mesh covers are removed": "Af: die punte en rande wat die haalmesh bedek, word verwyder",
+  "Repeated density": "Herhaaldigtheid",
+  "Stroke mesh-mapping": "Haal-mesh-mapping",
+  "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "Haal-mesh-mapping (eksperimenteel): sleep om 'n mesh langs 'n haal te bou. Shift+E bevestig, Delete kanselleer",
+  "With 2 vertices across: flip the diagonal of the first and last cells": "Met 2 hoekpunte oor die breedte: draai die diagonaal van die eerste en laaste selle om"
 }

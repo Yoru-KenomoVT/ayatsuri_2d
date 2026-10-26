@@ -329,6 +329,19 @@ impl EditorUi {
             {
                 self.mesh_mode = 5;
             }
+            if self.prefs.stroke_mesh_on()
+                && icon(
+                    ui,
+                    self.mesh_mode == 7,
+                    true,
+                    ph::PEN_NIB,
+                    "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. \
+                     Shift+E confirms, Delete cancels",
+                )
+                .clicked()
+            {
+                self.mesh_mode = 7;
+            }
         });
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -427,6 +440,50 @@ impl EditorUi {
                 )),
                 None => ui.weak(crate::i18n::tr("Nothing copied yet.")),
             };
+        }
+        if self.mesh_mode == 7 {
+            section(
+                ui,
+                crate::i18n::tr("Mesh-mapping settings"),
+                "Drag to draw a stroke; drag away from it to redraw it, Shift+drag for another. Click the line to add a control point, Alt+click one to delete it. Ctrl+click the line adds a width handle (orange), Ctrl+drag one sets the width, Ctrl+Alt+click deletes it. Shift+E confirms, Delete cancels.",
+            );
+            let o = &mut self.tool_opts.stroke;
+            grid(ui, "td-stroke", |ui| {
+                row(ui, crate::i18n::tr("Mesh width"), |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut o.settings.width).range(0.5..=500.0).speed(0.2),
+                    );
+                });
+                row(ui, crate::i18n::tr("Repeated density"), |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut o.settings.density).range(2.0..=500.0).speed(0.2),
+                    );
+                });
+                row(ui, crate::i18n::tr("Number of vertices in mesh width"), |ui| {
+                    egui::ComboBox::from_id_salt("td-stroke-across")
+                        .width(48.0)
+                        .selected_text(o.settings.across.to_string())
+                        .show_ui(ui, |ui| {
+                            for n in 1..=3u8 {
+                                ui.selectable_value(&mut o.settings.across, n, n.to_string());
+                            }
+                        });
+                });
+                row(ui, crate::i18n::tr("Invert mesh"), |ui| {
+                    ui.add_enabled(
+                        o.settings.across == 2,
+                        egui::Checkbox::without_text(&mut o.settings.invert),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        "With 2 vertices across: flip the diagonal of the first and last cells",
+                    ));
+                });
+                row(ui, crate::i18n::tr("Maintain current mesh"), |ui| {
+                    ui.checkbox(&mut o.maintain, "").on_hover_text(crate::i18n::tr(
+                        "Off: the points and edges the stroke mesh covers are removed",
+                    ));
+                });
+            });
         }
         if self.mesh_mode == 5 {
             section(ui, crate::i18n::tr("Eraser"), "");

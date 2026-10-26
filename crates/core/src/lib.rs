@@ -24,6 +24,7 @@ pub mod keyform;
 pub mod palette;
 pub mod physics;
 pub mod skin;
+pub mod stroke_mesh;
 
 use ayatsuri_format::model::{ArtMesh, Blend, BlendShape, DeformerKind, Model, Parameter};
 use deform::{Rotation, Vec2, rotation_transform, signed_angle, v2, warp_transform};

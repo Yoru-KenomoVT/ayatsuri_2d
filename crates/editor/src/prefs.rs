@@ -189,6 +189,9 @@ pub struct Prefs {
     /// Inherited clipping: a mesh also clipped by what its masks are
     /// clipped by.
     pub experimental_inherit_clip: bool,
+    /// Stroke mesh-mapping in Mesh Edit: a mesh built along a dragged stroke.
+    #[serde(default)]
+    pub experimental_stroke_mesh: bool,
     /// Solo's inactive color, rgba; None for the default.
     pub solo_tint: Option<[u8; 4]>,
     /// Automatic mesh generator presets the user added (Cubism's Add).
@@ -258,6 +261,10 @@ impl Prefs {
 
     pub fn inherit_clip_on(&self) -> bool {
         self.experimental && self.experimental_inherit_clip
+    }
+
+    pub fn stroke_mesh_on(&self) -> bool {
+        self.experimental && self.experimental_stroke_mesh
     }
 
     /// The saved colour of the canvas page, if one was picked.

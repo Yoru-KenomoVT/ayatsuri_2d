@@ -1426,5 +1426,18 @@
   "Step2": "Stap2",
   "Weight Limit Graph": "Gewichtslimietgrafiek",
   "Weight limit (%)": "Gewichtslimiet (%)",
-  "Rename Art Mesh": "Art mesh hernoemen"
+  "Rename Art Mesh": "Art mesh hernoemen",
+  "A pen in Mesh Edit's tool details: drag along a strand of hair or a line and get a mesh built along it, with width handles to shape it": "Een pen in de gereedschapsdetails van Mesh bewerken: sleep langs een pluk haar of een lijn en er wordt een mesh langs gebouwd, met breedtegrepen om die vorm te geven",
+  "Confirm stroke being edited (Click here [Shift+E])": "Bewerkte streek bevestigen (klik hier [Shift+E])",
+  "Drag to draw a stroke; drag away from it to redraw it, Shift+drag for another. Click the line to add a control point, Alt+click one to delete it. Ctrl+click the line adds a width handle (orange), Ctrl+drag one sets the width, Ctrl+Alt+click deletes it. Shift+E confirms, Delete cancels.": "Sleep om een streek te tekenen; sleep er ver vandaan om hem opnieuw te tekenen, Shift+slepen voor nog een. Klik op de lijn voor een controlepunt, Alt+klik om er een te verwijderen. Ctrl+klik op de lijn voegt een breedtegreep (oranje) toe, Ctrl+slepen stelt de breedte in, Ctrl+Alt+klik verwijdert hem. Shift+E bevestigt, Delete annuleert.",
+  "Invert mesh": "Mesh omkeren",
+  "Maintain current mesh": "Huidige mesh behouden",
+  "Mesh width": "Meshbreedte",
+  "Mesh-mapping settings": "Mesh-mapping-instellingen",
+  "Number of vertices in mesh width": "Aantal hoekpunten in de meshbreedte",
+  "Off: the points and edges the stroke mesh covers are removed": "Uit: de punten en randen die de streekmesh bedekt worden verwijderd",
+  "Repeated density": "Herhaaldichtheid",
+  "Stroke mesh-mapping": "Streek-mesh-mapping",
+  "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "Streek-mesh-mapping (experimenteel): sleep om een mesh langs een streek te bouwen. Shift+E bevestigt, Delete annuleert",
+  "With 2 vertices across: flip the diagonal of the first and last cells": "Met 2 hoekpunten in de breedte: de diagonaal van de eerste en laatste cel omdraaien"
 }
