@@ -957,6 +957,16 @@ struct AnimNew {
     comp: bool,
 }
 
+/// A menu button whose popup holds a text box: clicks inside (typing in
+/// it) keep it open, a click outside or `ui.close()` shuts it.
+fn search_menu<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> egui::Response {
+    use egui::containers::menu::{MenuButton, MenuConfig};
+    MenuButton::new(label)
+        .config(MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+        .ui(ui, add)
+        .0
+}
+
 /// Layers that played `old` play `new` from now on, so a renamed scene
 /// or composition keeps its place in every composition.
 fn rename_source(s: &mut crate::session::Session, old: &str, new: &str, comp: bool) {
@@ -9123,7 +9133,7 @@ impl EditorUi {
                         self.clip_pick = if picking { None } else { Some(i) };
                         self.tool = Tool::Arrow;
                     }
-                    ui.menu_button("+", |ui| {
+                    search_menu(ui, "+", |ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.clip_search)
                                 .hint_text(crate::i18n::tr("Search meshes"))
@@ -9159,7 +9169,6 @@ impl EditorUi {
                             }
                         });
                     })
-                    .response
                     .on_hover_text(crate::i18n::tr("Add a clipping mask from the list"));
                 });
                 if changed_masks && s.edit(|model| ayatsuri_core::edit::set_masks(model, i, &masks))
@@ -9425,7 +9434,7 @@ impl EditorUi {
             if let Some(at) = drop {
                 masks.remove(at);
             }
-            ui.menu_button("+", |ui| {
+            search_menu(ui, "+", |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.clip_search)
                         .hint_text(crate::i18n::tr("Search meshes"))
@@ -9447,7 +9456,6 @@ impl EditorUi {
                     }
                 });
             })
-            .response
             .on_hover_text(crate::i18n::tr("Add a clipping mask from the list"));
         });
         if (blend != o.blend || inverted != o.inverted || masks != o.masks)
@@ -16722,7 +16730,7 @@ fn clip_rows(
     if groups_on && group.is_none() && !masks.is_empty() {
         ui.horizontal(|ui| {
             ui.add_space(78.0);
-            ui.menu_button(crate::i18n::tr("Save as group…"), |ui| {
+            search_menu(ui, crate::i18n::tr("Save as group…"), |ui| {
                 ui.add(
                     egui::TextEdit::singleline(name_buf)
                         .hint_text(crate::i18n::tr("Group name, e.g. Eye L"))
@@ -16737,7 +16745,6 @@ fn clip_rows(
                     ui.close();
                 }
             })
-            .response
             .on_hover_text(crate::i18n::tr(
                 "Name these masks so other meshes can clip by them too, and change with them",
             ));
