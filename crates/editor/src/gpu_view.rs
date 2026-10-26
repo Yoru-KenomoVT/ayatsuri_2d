@@ -129,16 +129,25 @@ struct Frame<'a> {
     verts: Vec<Vertex>,
     indices: Vec<u32>,
     cmds: Vec<Cmd>,
-    last_masks: Option<Vec<u32>>,
+    /// The masks the buffer holds by now, with their inherited sets.
+    last_masks: Option<(Vec<u32>, Vec<Vec<u32>>)>,
 }
 
 impl Frame<'_> {
-    /// Fill the mask buffer with `masks`, unless it already holds them.
-    fn mask_set(&mut self, masks: &[u32]) {
-        if self.last_masks.as_deref() == Some(masks) {
+    /// Fill the mask buffer with `masks`, cut down to inside `and`'s sets
+    /// too (inherited clips), unless it already holds exactly that.
+    fn mask_set(&mut self, masks: &[u32], and: &[Vec<u32>]) {
+        if self.last_masks.as_ref().is_some_and(|(m, a)| m == masks && a == and) {
             return;
         }
-        self.last_masks = Some(masks.to_vec());
+        self.last_masks = Some((masks.to_vec(), and.to_vec()));
+        let shapes = self.mask_shapes(masks);
+        let and = and.iter().map(|set| self.mask_shapes(set)).collect();
+        self.cmds.push(Cmd::MaskSet { shapes, and });
+    }
+
+    /// One mask set's meshes as geometry and their textures.
+    fn mask_shapes(&mut self, masks: &[u32]) -> Vec<(std::ops::Range<u32>, u32)> {
         let mut shapes = Vec::new();
         for &src in masks {
             if let Some(g) = self.puppet.mesh_geometry(src as usize) {
@@ -154,7 +163,7 @@ impl Frame<'_> {
                 shapes.push((range, g.texture));
             }
         }
-        self.cmds.push(Cmd::MaskSet { shapes });
+        shapes
     }
 
     /// Land an offscreen part's layer: a quad over the whole target, its
@@ -163,7 +172,7 @@ impl Frame<'_> {
         let Some(layer) = self.puppet.layer(part as usize) else { return };
         let mut mask = MaskMode::None;
         if !layer.masks.is_empty() {
-            self.mask_set(layer.masks);
+            self.mask_set(layer.masks, &[]);
             mask = if layer.inverted { MaskMode::Inverted } else { MaskMode::Normal };
         }
         let [sx, sy, ox, oy] = self.to_ndc;
@@ -222,7 +231,7 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4]) -> Packet {
         }
         let mut mask = MaskMode::None;
         if !d.masks.is_empty() {
-            f.mask_set(d.masks);
+            f.mask_set(d.masks, d.clip_and);
             mask = if d.flags & flags::INVERTED_MASK != 0 {
                 MaskMode::Inverted
             } else {

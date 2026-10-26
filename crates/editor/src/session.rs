@@ -256,12 +256,24 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
     let (from, to) = (add.canvas, base.canvas);
     let part_offset = base.parts.len() as u32;
     let mesh_offset = base.art_meshes.len() as u32;
+    let group_offset = base.clip_groups.len() as u32;
+    for mut g in add.clip_groups {
+        for m in &mut g.masks {
+            *m += mesh_offset;
+        }
+        base.clip_groups.push(g);
+    }
 
     let mut part_ids: std::collections::HashSet<String> =
         base.parts.iter().map(|p| p.id.clone()).collect();
     for mut part in add.parts {
         part.id = free_id("Part", &mut part_ids);
         part.parent_part = part.parent_part.map(|p| p + part_offset);
+        if let Some(o) = &mut part.offscreen {
+            for m in &mut o.masks {
+                *m += mesh_offset;
+            }
+        }
         base.parts.push(part);
     }
     let mut mesh_ids: std::collections::HashSet<String> =
@@ -274,6 +286,7 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
         for m in &mut mesh.masks {
             *m += mesh_offset;
         }
+        mesh.clip_group = mesh.clip_group.map(|g| g + group_offset);
         if !fresh {
             for [x, y] in mesh.positions.as_chunks_mut::<2>().0 {
                 let px = *x * from.pixels_per_unit + from.origin_x;
@@ -2404,6 +2417,8 @@ mod import_paint_tests {
                 draw_orders: vec![500.0],
                 positions: vec![0.0; 25_000],
                 blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
             });
             m
         };
@@ -2439,6 +2454,8 @@ mod import_paint_tests {
             draw_orders: vec![500.0],
             positions: vec![],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         };
         let mut m = Model::new();
         m.art_meshes = vec![mesh("A", 0), mesh("B", 2), mesh("C", 2)];

@@ -47,6 +47,9 @@ pub enum Cmd {
     /// each shape pairs an index range with the mask mesh's texture.
     MaskSet {
         shapes: Vec<(Range<u32>, u32)>,
+        /// Further sets the mask must also be inside (inherited clips): the
+        /// buffer ends as the product of every set's coverage.
+        and: Vec<Vec<(Range<u32>, u32)>>,
     },
     Draw {
         indices: Range<u32>,
@@ -312,6 +315,8 @@ pub struct GpuRenderer {
     /// Every colour and alpha mode pair, one per `MODE_STRIDE` slot.
     advanced_modes: wgpu::Buffer,
     blit_pipeline: wgpu::RenderPipeline,
+    /// Multiplies the mask buffer by the scratch one: an inherited clip.
+    mask_and_pipeline: wgpu::RenderPipeline,
     mode_bufs: [wgpu::Buffer; 3],
     // bound as group 2 during mask passes, where the real mask buffer is the
     // render target and must not also be sampled
@@ -333,6 +338,10 @@ struct Offscreen {
     blit_bind: wgpu::BindGroup,
     mode_binds: [wgpu::BindGroup; 3],
     mask: wgpu::TextureView,
+    /// Scratch mask for one further set of an inherited clip, bound for
+    /// sampling as `mask2_bind`.
+    mask2: wgpu::TextureView,
+    mask2_bind: wgpu::BindGroup,
     /// A copy of the frame so far, for the advanced blend modes to read.
     backdrop_tex: wgpu::Texture,
     backdrop_bind: wgpu::BindGroup,
@@ -655,6 +664,40 @@ impl GpuRenderer {
             cache: None,
         });
 
+        let mask_and_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ayatsuri-mask-and"),
+            layout: Some(&blit_pl),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: MASK_FORMAT,
+                    // mask = mask * scratch
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::Src,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent::REPLACE,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
@@ -698,6 +741,7 @@ impl GpuRenderer {
             backdrop_layout,
             advanced_modes,
             blit_pipeline,
+            mask_and_pipeline,
             mode_bufs,
             dummy_mode_bind: None,
             textures: Vec::new(),
@@ -889,6 +933,21 @@ impl GpuRenderer {
         );
         let color = color_tex.create_view(&Default::default());
         let mask = make("ayatsuri-maskbuf", MASK_FORMAT, 1, att_bind);
+        let mask2 = make("ayatsuri-maskbuf-and", MASK_FORMAT, 1, att_bind);
+        let mask2_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.blit_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&mask2),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
         let backdrop_tex = make_tex(
             "ayatsuri-backdrop",
             OFFSCREEN_FORMAT,
@@ -954,6 +1013,8 @@ impl GpuRenderer {
             blit_bind,
             mode_binds,
             mask,
+            mask2,
+            mask2_bind,
             backdrop_tex,
             backdrop_bind,
             layers: Vec::new(),
@@ -1189,41 +1250,70 @@ impl GpuRenderer {
         let mut pass: Option<wgpu::RenderPass<'static>> = None;
         for cmd in &packet.cmds {
             let (indices, bind, blend, mask) = match cmd {
-                Cmd::MaskSet { shapes } => {
+                Cmd::MaskSet { shapes, and } => {
                     drop(pass.take());
-                    let mut mp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("ayatsuri-maskset"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &o.mask,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    mp.set_pipeline(&self.mask_pipeline);
-                    mp.set_bind_group(0, &self.uni_bind, &[]);
-                    let Some(dummy) = &self.dummy_mode_bind else { continue };
-                    mp.set_bind_group(2, dummy, &[]);
-                    mp.set_vertex_buffer(0, vbuf.slice(..));
-                    mp.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                    for (range, texture) in shapes {
-                        let Some(bind) = self
-                            .textures
-                            .get(*texture as usize)
-                            .and_then(Slot::bind)
-                            .or(self.white.as_ref())
-                        else {
-                            continue;
-                        };
-                        mp.set_bind_group(1, bind, &[]);
-                        mp.draw_indexed(range.clone(), 0, 0..1);
+                    // the set's coverage into `view`, cleared first
+                    let fill = |encoder: &mut wgpu::CommandEncoder,
+                                view: &wgpu::TextureView,
+                                shapes: &[(Range<u32>, u32)]| {
+                        let mut mp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("ayatsuri-maskset"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        mp.set_pipeline(&self.mask_pipeline);
+                        mp.set_bind_group(0, &self.uni_bind, &[]);
+                        let Some(dummy) = &self.dummy_mode_bind else { return };
+                        mp.set_bind_group(2, dummy, &[]);
+                        mp.set_vertex_buffer(0, vbuf.slice(..));
+                        mp.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                        for (range, texture) in shapes {
+                            let Some(bind) = self
+                                .textures
+                                .get(*texture as usize)
+                                .and_then(Slot::bind)
+                                .or(self.white.as_ref())
+                            else {
+                                continue;
+                            };
+                            mp.set_bind_group(1, bind, &[]);
+                            mp.draw_indexed(range.clone(), 0, 0..1);
+                        }
+                    };
+                    fill(encoder, &o.mask, shapes);
+                    // each inherited set: draw it aside, multiply it in
+                    for set in and {
+                        fill(encoder, &o.mask2, set);
+                        let mut mp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("ayatsuri-mask-and"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &o.mask,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        mp.set_pipeline(&self.mask_and_pipeline);
+                        mp.set_bind_group(0, &o.mask2_bind, &[]);
+                        mp.draw(0..3, 0..1);
                     }
                     continue;
                 }

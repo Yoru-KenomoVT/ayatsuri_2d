@@ -103,6 +103,9 @@ pub struct Prefs {
     pub smooth_drag_amount: u32,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
+    /// Experimental: the Inspector offers inherited clipping (a mesh also
+    /// clipped by what its masks are clipped by).
+    pub experimental_inherit_clip: bool,
     /// The Render window as it was last used: folder, format and settings.
     pub render: RenderPrefs,
     /// Where the last moc3 or image export went.

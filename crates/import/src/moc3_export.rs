@@ -146,6 +146,15 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
              draws their contents directly, without the layer's opacity, clipping or blend mode"
         ));
     }
+    let inherited = (0..model.art_meshes.len())
+        .filter(|&mi| ayatsuri_core::clip::chain_of(model, mi).0.len() > 1)
+        .count();
+    if inherited > 0 {
+        out.push(format!(
+            "{inherited} mesh(es) inherit their masks' clip, which moc3 cannot store yet; they \
+             export clipped by their own masks only"
+        ));
+    }
     let shaped = model.art_meshes.iter().filter(|m| !m.blend_shapes.is_empty()).count();
     if shaped > 0 {
         out.push(format!(
@@ -1063,6 +1072,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         });
         for v in ExportVersion::ALL.into_iter().filter(|v| v.max_slot() >= 113) {
             let file = to_moc3(&model, v).unwrap();
@@ -1097,6 +1108,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         };
         let mut model = Model::new();
         model.art_meshes.push(mesh("Overlay", ColorBlend::Overlay));
@@ -1152,6 +1165,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         };
         model.art_meshes.push(mesh("Strand", Some(0)));
         model.art_meshes.push(mesh("Head", None));
@@ -1214,6 +1229,8 @@ mod tests {
             draw_orders: vec![500.0],
             positions,
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         });
         model.draw_groups.push(DrawGroup {
             total: 1,

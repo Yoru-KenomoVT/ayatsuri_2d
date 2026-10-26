@@ -70,6 +70,8 @@ pub fn small_aom() -> Vec<u8> {
         draw_orders: vec![500.0, 500.0],
         positions: quad(0.0).into_iter().chain(quad(1.0)).collect(),
         blend_shapes: Vec::new(),
+        clip_group: None,
+        clip_inherit: false,
     });
     model.physics = Some(PhysicsRig {
         fps: 60.0,

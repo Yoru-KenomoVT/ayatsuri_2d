@@ -13,7 +13,8 @@ use crate::theme;
 const W: f32 = 760.0;
 const H: f32 = 520.0;
 const RAIL: f32 = 170.0;
-const PAGES: [&str; 6] = ["General", "Appearance", "Performance", "Audio", "Keyboard", "API"];
+const PAGES: [&str; 7] =
+    ["General", "Appearance", "Performance", "Audio", "Keyboard", "API", "Experimental"];
 
 /// Settings tabs by name, for the menus that open one: their place in
 /// `PAGES`, so adding a tab cannot send a menu to the wrong one.
@@ -179,7 +180,8 @@ impl EditorUi {
                             2 => self.settings_performance(ui),
                             3 => self.settings_audio(ui),
                             TAB_KEYBOARD => self.settings_keyboard(ui),
-                            _ => self.settings_api(ui),
+                            TAB_API => self.settings_api(ui),
+                            _ => self.settings_experimental(ui),
                         }
                     });
             });
@@ -811,6 +813,37 @@ impl EditorUi {
             };
             ui.label(RichText::new(r).color(theme::pal().text_faint));
         });
+        if save {
+            self.prefs.save();
+        }
+    }
+
+    /// Features still being proven: off until turned on here, and what a
+    /// model already uses keeps working either way.
+    fn settings_experimental(&mut self, ui: &mut Ui) {
+        let mut save = false;
+        section(ui, crate::i18n::tr("EXPERIMENTAL"));
+        ui.label(
+            RichText::new(crate::i18n::tr(
+                "Features still being tested. They may change, and a model that uses one may look \
+                 different in other apps until it is finished.",
+            ))
+            .size(11.0)
+            .color(theme::pal().text_faint),
+        );
+        ui.add_space(4.0);
+        row(
+            ui,
+            crate::i18n::tr("Inherited clipping"),
+            crate::i18n::tr(
+                "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its \
+                 masks are clipped by. Drawn exactly in the editor; moc3 export clips it by its \
+                 own masks only for now",
+            ),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.experimental_inherit_clip, "").changed();
+            },
+        );
         if save {
             self.prefs.save();
         }

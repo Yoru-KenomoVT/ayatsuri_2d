@@ -185,6 +185,8 @@ mod tests {
             draw_orders: vec![order],
             positions: vec![],
             blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
         }
     }
 

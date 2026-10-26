@@ -72,6 +72,8 @@ mod tests {
                 keys: vec![1.0],
                 positions: vec![0.0, 3.0, 1.0, 0.0, 0.0, 1.0],
             }],
+            clip_group: None,
+            clip_inherit: false,
         });
         let payload = AomPayload {
             meta: Meta {
