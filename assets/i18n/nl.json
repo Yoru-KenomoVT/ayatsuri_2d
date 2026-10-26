@@ -238,7 +238,6 @@
   "Edit Level": "Bewerkniveau",
   "Physics Settings…": "Fysica-instellingen…",
   "Texture Atlas…": "Textuuratlas…",
-  "Model Template…": "Modelsjabloon…",
   "Animation": "Animatie",
   "Animation Workspace": "Animatiewerkruimte",
   "Auto key": "Auto-sleutel",
@@ -1384,5 +1383,18 @@
   "Solo: show only the selected objects": "Solo: alleen de geselecteerde objecten tonen",
   "Highlight Deformer's Child Elements": "Kindelementen van de deformer markeren",
   "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "Elke art mesh onder de geselecteerde deformer markeren (Ctrl+Shift+D)",
-  "Highlight deformer's child elements": "Kindelementen van de deformer markeren"
+  "Highlight deformer's child elements": "Kindelementen van de deformer markeren",
+  "Model Template": "Modelsjabloon",
+  "Apply Parameter Template…": "Parametersjabloon toepassen…",
+  "Save Parameters as Template…": "Parameters opslaan als sjabloon…",
+  "The artwork came in without parameters. Start from a template?": "Het kunstwerk kwam binnen zonder parameters. Beginnen met een sjabloon?",
+  "{count} parameters": "{count} parameters",
+  "Parameters the model already has (by ID) are left as they are.": "Parameters die het model al heeft (op ID) blijven zoals ze zijn.",
+  "No Template": "Geen sjabloon",
+  "Description": "Beschrijving",
+  "Saves the parameters, their ranges and folders. Apply it to any model from Modeling > Model Template.": "Slaat de parameters, hun bereik en mappen op. Pas het toe op elk model via Modelleren > Modelsjabloon.",
+  "Standard parameters": "Standaardparameters",
+  "Standard parameters (all)": "Standaardparameters (alle)",
+  "Live2D's Standard Parameter List: face, eyes, brows, mouth, body, breath and hair sway, filed into the standard groups. The ids face trackers and VTube Studio expect.": "Live2D's standaardparameterlijst: gezicht, ogen, wenkbrauwen, mond, lichaam, ademhaling en haarzwaai, in de standaardgroepen. De ID's die gezichtstrackers en VTube Studio verwachten.",
+  "The whole Standard Parameter List, the optional ones too: eyeball scaling, shoulders, arms, hands, fluffy hair, breast physics and overall movement.": "De hele standaardparameterlijst, ook de optionele: oogbolschaal, schouders, armen, handen, luchtig haar, borstfysica en algehele beweging."
 }

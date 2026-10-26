@@ -238,7 +238,6 @@
   "Edit Level": "편집 레벨",
   "Physics Settings…": "물리 연산 설정…",
   "Texture Atlas…": "텍스처 아틀라스…",
-  "Model Template…": "모델 템플릿…",
   "Animation": "애니메이션",
   "Animation Workspace": "애니메이션 워크스페이스",
   "Auto key": "자동 키",
@@ -1384,5 +1383,18 @@
   "Solo: show only the selected objects": "솔로: 선택한 오브젝트만 표시",
   "Highlight Deformer's Child Elements": "디포머의 자식 요소 강조",
   "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "선택한 디포머 아래의 모든 아트메시를 강조합니다(Ctrl+Shift+D)",
-  "Highlight deformer's child elements": "디포머의 자식 요소 강조"
+  "Highlight deformer's child elements": "디포머의 자식 요소 강조",
+  "Model Template": "모델 템플릿",
+  "Apply Parameter Template…": "파라미터 템플릿 적용…",
+  "Save Parameters as Template…": "파라미터를 템플릿으로 저장…",
+  "The artwork came in without parameters. Start from a template?": "가져온 그림에 파라미터가 없습니다. 템플릿으로 시작할까요?",
+  "{count} parameters": "파라미터 {count}개",
+  "Parameters the model already has (by ID) are left as they are.": "모델에 이미 있는 파라미터(같은 ID)는 그대로 둡니다.",
+  "No Template": "템플릿 없음",
+  "Description": "설명",
+  "Saves the parameters, their ranges and folders. Apply it to any model from Modeling > Model Template.": "파라미터와 범위, 폴더를 저장합니다. 모델링 > 모델 템플릿에서 어떤 모델에도 적용할 수 있습니다.",
+  "Standard parameters": "표준 파라미터",
+  "Standard parameters (all)": "표준 파라미터(전체)",
+  "Live2D's Standard Parameter List: face, eyes, brows, mouth, body, breath and hair sway, filed into the standard groups. The ids face trackers and VTube Studio expect.": "Live2D 표준 파라미터 목록: 얼굴, 눈, 눈썹, 입, 몸, 호흡, 머리 흔들림을 표준 그룹으로 정리. 페이스 트래커와 VTube Studio가 기대하는 ID입니다.",
+  "The whole Standard Parameter List, the optional ones too: eyeball scaling, shoulders, arms, hands, fluffy hair, breast physics and overall movement.": "표준 파라미터 목록 전체(선택 항목 포함): 눈동자 크기, 어깨, 팔, 손, 머리 부풀림, 가슴 물리, 전체 이동."
 }

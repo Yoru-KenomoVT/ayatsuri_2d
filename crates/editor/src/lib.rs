@@ -30,6 +30,7 @@ mod pulse;
 mod recovery;
 mod residency;
 mod session;
+mod templates;
 pub mod theme;
 mod thumb;
 pub(crate) mod timelapse;

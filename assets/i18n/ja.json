@@ -238,7 +238,6 @@
   "Edit Level": "編集レベル",
   "Physics Settings…": "物理演算設定…",
   "Texture Atlas…": "テクスチャアトラス…",
-  "Model Template…": "モデルテンプレート…",
   "Animation": "アニメーション",
   "Animation Workspace": "アニメーションワークスペース",
   "Auto key": "自動キー",
@@ -1384,5 +1383,18 @@
   "Solo: show only the selected objects": "ソロ表示：選択したオブジェクトだけを表示",
   "Highlight Deformer's Child Elements": "デフォーマの子要素をハイライト",
   "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "選択したデフォーマの下にあるすべてのアートメッシュを強調表示します（Ctrl+Shift+D）",
-  "Highlight deformer's child elements": "デフォーマの子要素をハイライト"
+  "Highlight deformer's child elements": "デフォーマの子要素をハイライト",
+  "Model Template": "モデルテンプレート",
+  "Apply Parameter Template…": "パラメータテンプレートを適用…",
+  "Save Parameters as Template…": "パラメータをテンプレートとして保存…",
+  "The artwork came in without parameters. Start from a template?": "読み込んだ素材にはパラメータがありません。テンプレートから始めますか？",
+  "{count} parameters": "{count} 個のパラメータ",
+  "Parameters the model already has (by ID) are left as they are.": "モデルに既にあるパラメータ（ID が同じもの）はそのままです。",
+  "No Template": "テンプレートなし",
+  "Description": "説明",
+  "Saves the parameters, their ranges and folders. Apply it to any model from Modeling > Model Template.": "パラメータとその範囲、フォルダを保存します。モデリング > モデルテンプレートから任意のモデルに適用できます。",
+  "Standard parameters": "標準パラメータ",
+  "Standard parameters (all)": "標準パラメータ（すべて）",
+  "Live2D's Standard Parameter List: face, eyes, brows, mouth, body, breath and hair sway, filed into the standard groups. The ids face trackers and VTube Studio expect.": "Live2D の標準パラメータリスト：顔、目、眉、口、体、呼吸、髪揺れを標準グループに整理。フェイストラッカーや VTube Studio が期待する ID です。",
+  "The whole Standard Parameter List, the optional ones too: eyeball scaling, shoulders, arms, hands, fluffy hair, breast physics and overall movement.": "標準パラメータリストのすべて（任意項目を含む）：眼球の拡縮、肩、腕、手、髪のふわっと、胸の物理、全体の移動。"
 }

@@ -238,7 +238,6 @@
   "Edit Level": "编辑等级",
   "Physics Settings…": "物理演算设置…",
   "Texture Atlas…": "纹理集…",
-  "Model Template…": "模型模板…",
   "Animation": "动画",
   "Animation Workspace": "动画工作区",
   "Auto key": "自动关键",
@@ -1384,5 +1383,18 @@
   "Solo: show only the selected objects": "单独显示：只显示选中的对象",
   "Highlight Deformer's Child Elements": "高亮变形器的子元素",
   "Outline every art mesh under the selected deformer (Ctrl+Shift+D)": "高亮所选变形器下的所有图形网格（Ctrl+Shift+D）",
-  "Highlight deformer's child elements": "高亮变形器的子元素"
+  "Highlight deformer's child elements": "高亮变形器的子元素",
+  "Model Template": "模型模板",
+  "Apply Parameter Template…": "应用参数模板…",
+  "Save Parameters as Template…": "将参数保存为模板…",
+  "The artwork came in without parameters. Start from a template?": "导入的素材没有参数。要从模板开始吗？",
+  "{count} parameters": "{count} 个参数",
+  "Parameters the model already has (by ID) are left as they are.": "模型中已有的参数（按 ID）保持不变。",
+  "No Template": "不使用模板",
+  "Description": "描述",
+  "Saves the parameters, their ranges and folders. Apply it to any model from Modeling > Model Template.": "保存参数及其范围和文件夹。可在 建模 > 模型模板 中应用到任意模型。",
+  "Standard parameters": "标准参数",
+  "Standard parameters (all)": "标准参数（全部）",
+  "Live2D's Standard Parameter List: face, eyes, brows, mouth, body, breath and hair sway, filed into the standard groups. The ids face trackers and VTube Studio expect.": "Live2D 标准参数列表：脸、眼、眉、嘴、身体、呼吸和头发摇摆，归入标准分组。面部追踪器和 VTube Studio 期望的 ID。",
+  "The whole Standard Parameter List, the optional ones too: eyeball scaling, shoulders, arms, hands, fluffy hair, breast physics and overall movement.": "完整的标准参数列表，含可选项：眼球缩放、肩、手臂、手、头发蓬松、胸部物理和整体移动。"
 }

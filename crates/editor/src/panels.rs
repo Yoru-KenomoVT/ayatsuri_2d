@@ -265,6 +265,8 @@ pub struct EditorUi {
     new_folder: Option<String>,
     /// Cubism's New Part dialog, while it is open.
     new_part: Option<NewPartDlg>,
+    /// Model Template: applying or saving a parameter template.
+    template_dlg: Option<TemplateDlg>,
     /// Parameters the New Folder dialog files into the folder it makes.
     folder_from: Vec<usize>,
     new_model: Option<ModelNew>,
@@ -805,6 +807,22 @@ struct PathPin {
 /// Results coming back from background threads.
 /// A Deformer palette menu choice, run once the palette is drawn.
 /// What a Parts palette mesh row's menu asked for.
+/// Model Template's dialog: pick a template to apply (the built-in ones
+/// first, then those saved in the templates folder), or name one to save
+/// from this model. `after_import` words it as the start of a new model.
+enum TemplateDlg {
+    Apply { list: Vec<crate::templates::Template>, pick: usize, after_import: bool },
+    Save { name: String, description: String },
+}
+
+impl TemplateDlg {
+    fn apply(after_import: bool) -> TemplateDlg {
+        let mut list = crate::templates::built_in();
+        list.extend(crate::templates::saved().into_iter().map(|(_, t)| t));
+        TemplateDlg::Apply { list, pick: 0, after_import }
+    }
+}
+
 /// Cubism's New Part dialog as it is filled in.
 struct NewPartDlg {
     name: String,
@@ -1131,6 +1149,7 @@ impl Default for EditorUi {
             new_param: None,
             new_folder: None,
             new_part: None,
+            template_dlg: None,
             folder_from: Vec::new(),
             new_model: None,
             show_model_info: false,
@@ -1542,6 +1561,9 @@ impl EditorUi {
         match done {
             Some(Some((path, Ok(mut s)))) => {
                 self.loading = None;
+                let from_art = path.extension().is_some_and(|e| {
+                    matches!(e.to_string_lossy().to_lowercase().as_str(), "psd" | "kra" | "clip")
+                });
                 if self.recovering.as_ref() == Some(&path) {
                     // recovered work is unsaved work: no file of its own, not
                     // a recent; its autosave takes over from the copy
@@ -1571,10 +1593,17 @@ impl EditorUi {
                         s.animations.len()
                     );
                 }
+                // a model straight from artwork has no parameters yet:
+                // offer a template to start from
+                let fresh =
+                    s.puppet.model().parameters.is_empty() && s.aom_path.is_none() && from_art;
                 self.session = Some(s);
                 self.selected = None;
                 self.view_zoom = 1.0;
                 self.view_pan = Vec2::ZERO;
+                if fresh {
+                    self.template_dlg = Some(TemplateDlg::apply(true));
+                }
             }
             Some(Some((_, Err(e)))) => {
                 self.loading = None;
@@ -1614,7 +1643,7 @@ impl EditorUi {
     /// frame. One comparison a frame and a line only on a change, so the
     /// log says what the user did without a line per frame.
     fn log_state_changes(&mut self) {
-        let states: [(&str, bool); 27] = [
+        let states: [(&str, bool); 28] = [
             ("Settings", self.show_settings),
             ("API window", self.show_api_window),
             ("Model Statistics", self.show_stats),
@@ -1629,6 +1658,7 @@ impl EditorUi {
             ("New Parameter", self.new_param.is_some()),
             ("New Folder", self.new_folder.is_some()),
             ("New Part", self.new_part.is_some()),
+            ("Model Template", self.template_dlg.is_some()),
             ("New Project", self.new_model.is_some()),
             ("Project", self.show_model_info),
             ("Save Workspace", self.show_ws_save),
@@ -3142,8 +3172,24 @@ impl EditorUi {
                         ui.close();
                     }
                     ui.separator();
-                    let _ = ui
-                        .add_enabled(false, egui::Button::new(crate::i18n::tr("Model Template…")));
+                    ui.add_enabled_ui(self.session.is_some(), |ui| {
+                        ui.menu_button(crate::i18n::tr("Model Template"), |ui| {
+                            if ui.button(crate::i18n::tr("Apply Parameter Template…")).clicked() {
+                                self.template_dlg = Some(TemplateDlg::apply(false));
+                                ui.close();
+                            }
+                            if ui
+                                .button(crate::i18n::tr("Save Parameters as Template…"))
+                                .clicked()
+                            {
+                                self.template_dlg = Some(TemplateDlg::Save {
+                                    name: String::new(),
+                                    description: String::new(),
+                                });
+                                ui.close();
+                            }
+                        });
+                    });
                 });
                 ui.menu_button(crate::i18n::tr("Animation"), |ui| {
                     if ui.button(crate::i18n::tr("Animation Workspace")).clicked() {
@@ -3918,6 +3964,7 @@ impl EditorUi {
         self.param_new_window(ui);
         self.folder_new_window(ui);
         self.part_new_window(ui);
+        self.template_window(ui);
         self.model_new_window(ui);
         self.model_info_window(ui);
         self.new_anim_window(ui);
@@ -6037,6 +6084,97 @@ impl EditorUi {
         } else if !open {
             self.new_folder = None;
             self.folder_from.clear();
+        }
+    }
+
+    /// Model Template: apply a parameter template, or save this model's
+    /// parameters as one.
+    fn template_window(&mut self, ui: &mut Ui) {
+        let Some(dlg) = &mut self.template_dlg else { return };
+        let mut open = true;
+        let mut go = false;
+        let mut skip = false;
+        crate::windows::Dialog::new(crate::i18n::tr("Model Template")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(360.0);
+                match dlg {
+                    TemplateDlg::Apply { list, pick, after_import } => {
+                        if *after_import {
+                            ui.label(crate::i18n::tr(
+                                "The artwork came in without parameters. Start from a template?",
+                            ));
+                            ui.add_space(4.0);
+                        }
+                        for (i, t) in list.iter().enumerate() {
+                            let label = format!(
+                                "{}  ({})",
+                                crate::i18n::tr_text(&t.name),
+                                crate::i18n::trf(
+                                    "{count} parameters",
+                                    &[("count", &t.parameters.len())]
+                                )
+                            );
+                            ui.radio_value(pick, i, label);
+                        }
+                        if let Some(t) = list.get(*pick) {
+                            ui.add_space(4.0);
+                            ui.weak(crate::i18n::tr_text(&t.description));
+                        }
+                        ui.add_space(4.0);
+                        ui.weak(crate::i18n::tr(
+                            "Parameters the model already has (by ID) are left as they are.",
+                        ));
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            go = ui.button(crate::i18n::tr("Apply")).clicked();
+                            if *after_import {
+                                skip = ui.button(crate::i18n::tr("No Template")).clicked();
+                            }
+                        });
+                    }
+                    TemplateDlg::Save { name, description } => {
+                        crate::windows::form(ui, "tsave", |ui| {
+                            ui.label(crate::i18n::tr("Name"));
+                            ui.text_edit_singleline(name);
+                            ui.end_row();
+                            ui.label(crate::i18n::tr("Description"));
+                            ui.text_edit_singleline(description);
+                            ui.end_row();
+                        });
+                        ui.weak(crate::i18n::tr(
+                            "Saves the parameters, their ranges and folders. Apply it to any model \
+                             from Modeling > Model Template.",
+                        ));
+                        go = ui.button(crate::i18n::tr("Save")).clicked();
+                    }
+                }
+            },
+        );
+        if !open || skip {
+            self.template_dlg = None;
+            return;
+        }
+        if !go {
+            return;
+        }
+        let Some(dlg) = self.template_dlg.take() else { return };
+        let Some(s) = &mut self.session else { return };
+        match dlg {
+            TemplateDlg::Apply { list, pick, .. } => {
+                if let Some(t) = list.get(pick) {
+                    let n = crate::templates::apply(s, t);
+                    log::info!("template {}: {n} parameter(s) added", t.name);
+                }
+            }
+            TemplateDlg::Save { name, description } => {
+                let name = if name.trim().is_empty() { s.name.clone() } else { name.trim().into() };
+                let t = crate::templates::from_session(s, &name, &description);
+                match crate::templates::save(&t) {
+                    Ok(p) => log::info!("template saved to {}", p.display()),
+                    Err(e) => log::error!("template not saved: {e}"),
+                }
+            }
         }
     }
 
