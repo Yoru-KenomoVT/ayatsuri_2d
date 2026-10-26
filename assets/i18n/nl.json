@@ -1376,5 +1376,10 @@
   "That Part ID is empty, taken or has characters IDs can't use.": "Dat onderdeel-ID is leeg, al in gebruik of bevat tekens die ID's niet mogen hebben.",
   "Clear mesh: remove every point to draw your own": "Mesh wissen: alle punten weghalen om er zelf een te tekenen",
   "Group {count} Objects into New Part…": "{count} objecten groeperen in nieuw onderdeel…",
-  "Group into New Part…": "Groeperen in nieuw onderdeel…"
+  "Group into New Part…": "Groeperen in nieuw onderdeel…",
+  "Show the selected objects in front and keep the rest from being picked (S)": "De geselecteerde objecten vooraan tonen en de rest onselecteerbaar maken (S)",
+  "Select what to solo first.": "Selecteer eerst wat je solo wilt tonen.",
+  "Leave Solo (S)": "Solo verlaten (S)",
+  "Inactive color": "Inactieve kleur",
+  "Solo: show only the selected objects": "Solo: alleen de geselecteerde objecten tonen"
 }

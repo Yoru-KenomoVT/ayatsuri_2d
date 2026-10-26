@@ -2217,6 +2217,10 @@ impl EditorUi {
                 if typing && weight(sc.modifiers) == 0 {
                     continue;
                 }
+                // S keys the parameter in Animation; Solo is a modeling view
+                if id == "solo" && self.workspace == Workspace::Animation {
+                    continue;
+                }
                 if ui.ctx().input_mut(|i| i.consume_shortcut(&sc)) {
                     fired.push(id);
                 }
@@ -2673,6 +2677,18 @@ impl EditorUi {
                         ui.close();
                     }
                     ui.separator();
+                    let solo_on = self.session.as_ref().is_some_and(|s| s.solo.is_some());
+                    if ui
+                        .add_enabled(has, egui::Button::selectable(solo_on, crate::i18n::tr("Solo")))
+                        .on_hover_text(crate::i18n::tr(
+                            "Show the selected objects in front and keep the rest from being \
+                             picked (S)",
+                        ))
+                        .clicked()
+                    {
+                        self.toggle_solo();
+                        ui.close();
+                    }
                     ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit"))
                         .on_hover_text(crate::i18n::tr(
                             "Moving a point also moves its mirror across the vertical axis: \
@@ -5205,6 +5221,67 @@ impl EditorUi {
         );
     }
 
+    /// Cubism's Solo on or off. On, it takes the selection: meshes, every
+    /// mesh inside a selected part, and every mesh under a selected
+    /// deformer, however deep.
+    fn toggle_solo(&mut self) {
+        let Some(s) = &self.session else { return };
+        if s.solo.is_some() {
+            if let Some(s) = &mut self.session {
+                s.solo = None;
+            }
+            log::info!("solo off");
+            return;
+        }
+        let model = s.puppet.model();
+        let mut meshes: std::collections::HashSet<usize> =
+            self.selection_meshes().into_iter().collect();
+        let mut parts = self.part_pick.clone();
+        if let Some(Sel::Part(p)) = self.selected {
+            parts.push(p);
+        }
+        for (mi, m) in model.art_meshes.iter().enumerate() {
+            let in_part = m.parent_part.is_some_and(|q| {
+                parts.iter().any(|&p| ayatsuri_core::palette::within(model, q as usize, p))
+            });
+            let under = match self.selected {
+                Some(Sel::Deformer(d)) => {
+                    let mut at = m.parent_deformer;
+                    let mut found = false;
+                    for _ in 0..=model.deformers.len() {
+                        match at {
+                            Some(x) if x as usize == d => {
+                                found = true;
+                                break;
+                            }
+                            Some(x) => {
+                                at = model.deformers.get(x as usize).and_then(|q| q.parent_deformer)
+                            }
+                            None => break,
+                        }
+                    }
+                    found
+                }
+                _ => false,
+            };
+            if in_part || under {
+                meshes.insert(mi);
+            }
+        }
+        if meshes.is_empty() {
+            set_notice(&mut self.notice, crate::i18n::tr("Select what to solo first."));
+            return;
+        }
+        let ids: std::collections::HashSet<String> = meshes
+            .iter()
+            .filter_map(|&mi| model.art_meshes.get(mi).map(|m| m.id.clone()))
+            .collect();
+        log::info!("solo on: {} mesh(es)", ids.len());
+        if let Some(s) = &mut self.session {
+            s.solo = Some(ids);
+        }
+    }
+
     fn selection_meshes(&self) -> Vec<usize> {
         if !self.multi_sel.is_empty() {
             self.multi_sel.clone()
@@ -6250,6 +6327,7 @@ impl EditorUi {
             }
             "focus" => self.focus_request = true,
             "mirror-edit" => self.mirror_edit = !self.mirror_edit,
+            "solo" => self.toggle_solo(),
             "guides-clear" => {
                 if let Some(s) = &mut self.session
                     && !s.guides.is_empty()
@@ -9598,15 +9676,36 @@ impl EditorUi {
                 pos2(origin.x, origin.y),
                 scale,
                 ui.ctx().pixels_per_point(),
+                solo_view(s, &self.prefs).as_ref(),
             );
             vp.add(cb);
         } else {
-            for d in s.puppet.drawables() {
+            // Solo: the others first behind the inactive color, then the
+            // soloed meshes in front as they are
+            let solo = solo_view(s, &self.prefs);
+            let draws: Vec<_> = s.puppet.drawables().collect();
+            let soloed = |mi: usize| solo.as_ref().is_some_and(|v| v.meshes.contains(&mi));
+            let order = draws
+                .iter()
+                .filter(|d| !soloed(d.mesh))
+                .map(|d| (d, false))
+                .chain(draws.iter().filter(|d| soloed(d.mesh)).map(|d| (d, true)));
+            for (d, front) in order {
                 if d.opacity <= 0.0 || d.indices.is_empty() {
                     continue;
                 }
                 let texture = s.textures.get(d.texture as usize).and_then(|t| t.as_ref());
-                let tint = Color32::from_white_alpha((d.opacity * 255.0) as u8);
+                let k = match (&solo, front) {
+                    (Some(v), false) => v.tint,
+                    _ => [1.0; 4],
+                };
+                let a = d.opacity * k[3];
+                let tint = Color32::from_rgba_premultiplied(
+                    (k[0] * a * 255.0) as u8,
+                    (k[1] * a * 255.0) as u8,
+                    (k[2] * a * 255.0) as u8,
+                    (a * 255.0) as u8,
+                );
                 let mut mesh = match texture {
                     Some(t) => egui::Mesh::with_texture(t.id()),
                     None => egui::Mesh::default(),
@@ -9629,6 +9728,10 @@ impl EditorUi {
                 mesh.indices.extend(d.indices.iter().map(|&i| i as u32));
                 add_mesh_shape(&vp, mesh);
             }
+        }
+
+        if solo_badge(ui, view, s, &mut self.prefs) {
+            self.prefs.save();
         }
 
         // a Parts palette row under the pointer: outline its meshes here, a
@@ -13521,6 +13624,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("View", "display-all", "Display all (fit)", C, K::Num0),
         ("View", "focus", "Focus on the selected object", N, K::F),
         ("View", "mirror-edit", "Mirror edit", CS, K::M),
+        ("View", "solo", "Solo: show only the selected objects", N, K::S),
         ("View", "zoom-in", "Zoom in", C, K::Equals),
         ("View", "zoom-out", "Zoom out", C, K::Minus),
         ("View", "guide-h-mouse", "Horizontal guide line at the mouse", N, K::H),
@@ -14905,8 +15009,71 @@ fn mesh_unfinished(verts: usize, tris: usize) -> Option<&'static str> {
 }
 
 /// A mesh the canvas may pick: shown, and every part above it shown.
+/// Solo as this frame draws it: the soloed meshes by index and the
+/// inactive color, or None when Solo is off.
+fn solo_view(s: &Session, prefs: &Prefs) -> Option<crate::gpu_view::Solo> {
+    let ids = s.solo.as_ref()?;
+    let meshes = s
+        .puppet
+        .model()
+        .art_meshes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| ids.contains(&m.id))
+        .map(|(i, _)| i)
+        .collect();
+    let [r, g, b, a] = prefs.solo_tint.unwrap_or(SOLO_TINT);
+    let f = |x: u8| x as f32 / 255.0;
+    Some(crate::gpu_view::Solo { meshes, tint: [f(r), f(g), f(b), f(a)] })
+}
+
+/// While Solo is on, a badge in the view's lower left: click it to leave
+/// Solo, or set the inactive color beside it. True when the color changed
+/// (the caller saves the preferences).
+fn solo_badge(ui: &mut Ui, view: Rect, s: &mut Session, prefs: &mut Prefs) -> bool {
+    if s.solo.is_none() {
+        return false;
+    }
+    let at = Rect::from_min_size(view.left_bottom() + vec2(12.0, -36.0), vec2(220.0, 24.0));
+    let mut changed = false;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+        ui.horizontal(|ui| {
+            let off = ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(format!("{}  ✕", crate::i18n::tr("Solo"))).strong(),
+                    )
+                    .fill(theme::pal().accent),
+                )
+                .on_hover_text(crate::i18n::tr("Leave Solo (S)"));
+            if off.clicked() {
+                s.solo = None;
+            }
+            let mut c = prefs.solo_tint.unwrap_or(SOLO_TINT);
+            let mut color = Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+            ui.label(crate::i18n::tr("Inactive color"));
+            if ui.color_edit_button_srgba(&mut color).changed() {
+                c = color.to_srgba_unmultiplied();
+                prefs.solo_tint = Some(c);
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
+/// The inactive color Solo puts over everything else: dimmed and faded.
+const SOLO_TINT: [u8; 4] = [90, 90, 100, 110];
+
+/// While Solo is on, only the soloed meshes can be picked (Cubism's Solo
+/// keeps the rest from being deformed by mistake).
 fn mesh_pickable(s: &Session, mi: usize) -> bool {
-    s.mesh_shown.get(mi).copied().unwrap_or(true)
+    let soloed = s
+        .solo
+        .as_ref()
+        .is_none_or(|ids| s.puppet.model().art_meshes.get(mi).is_some_and(|m| ids.contains(&m.id)));
+    soloed
+        && s.mesh_shown.get(mi).copied().unwrap_or(true)
         && ancestors_shown(s, s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_part))
 }
 
