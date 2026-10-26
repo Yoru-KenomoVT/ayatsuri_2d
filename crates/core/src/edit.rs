@@ -2868,8 +2868,8 @@ pub fn unbind_parameter_everywhere(model: &mut Model, param: usize) -> bool {
 /// and lines; without it the faces already there stay, their edges kept too,
 /// and only the gaps fill. `opaque` (the texture's alpha at a uv) turns on
 /// Protect edge exterior: when the lines close off a perimeter nothing goes
-/// outside it, and otherwise no face may sit on empty texture or stretch an
-/// edge across a gap in the art. Returns the faces added.
+/// outside it, and otherwise a face goes when it holds no art, or little
+/// art with an edge stretched across a gap in it. Returns the faces added.
 pub fn auto_connect(
     model: &mut Model,
     mesh: usize,
@@ -2940,10 +2940,30 @@ pub fn auto_connect(
                 let len = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
                 len * longest as f32 / STEPS as f32
             };
+            // how much of a triangle is art, sampled on a barycentric grid
+            let coverage = |a: (f32, f32), b: (f32, f32), c: (f32, f32)| {
+                const N: usize = 12;
+                let (mut hit, mut all) = (0usize, 0usize);
+                for i in 0..=N {
+                    for j in 0..=N - i {
+                        let (wa, wb) = (i as f32 / N as f32, j as f32 / N as f32);
+                        let wc = 1.0 - wa - wb;
+                        all += 1;
+                        if opaque(a.0 * wa + b.0 * wb + c.0 * wc, a.1 * wa + b.1 * wb + c.1 * wc) {
+                            hit += 1;
+                        }
+                    }
+                }
+                hit as f32 / all.max(1) as f32
+            };
+            // a face holding art stays, so no art is ever cut off; only one
+            // on empty texture goes, or a mostly empty one bridging a gap
             for (t, d) in fresh.iter().zip(drop.iter_mut()) {
                 let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
-                *d = !opaque((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0)
-                    || [(a, b), (b, c), (c, a)].iter().any(|&(x, y)| gap(x, y) > allowance);
+                let art = coverage(a, b, c);
+                *d = art == 0.0
+                    || (art < 0.35
+                        && [(a, b), (b, c), (c, a)].iter().any(|&(x, y)| gap(x, y) > allowance));
             }
         }
     }
@@ -3649,6 +3669,25 @@ mod tests {
         assert_eq!(added, 2);
         // keeping the existing faces adds nothing that overlaps them
         assert_eq!(auto_connect(&mut m, 0, false, &[], None), 0);
+    }
+
+    #[test]
+    fn auto_connect_keeps_every_face_that_holds_art() {
+        // an imported rectangle over a strip of art in its lower right: the
+        // lower left face's centre is on empty texture, but the strip
+        // reaches into it, so it must stay
+        let mut m = test_model();
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.vertex_count = 4;
+            am.uvs = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+            am.positions = am.uvs.clone();
+            am.indices.clear();
+        }
+        let strip = |u: f32, v: f32| (0.6..0.95).contains(&u) && v > 0.3;
+        assert_eq!(auto_connect(&mut m, 0, true, &[], Some(&strip)), 2);
+        // and faces over nothing at all go
+        let empty = |_: f32, _: f32| false;
+        assert_eq!(auto_connect(&mut m, 0, true, &[], Some(&empty)), 0);
     }
 
     #[test]
