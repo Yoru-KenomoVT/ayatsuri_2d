@@ -90,7 +90,9 @@ type Spot = (usize, u32, u32);
 /// The atlas page side; 4096 keeps big illustrations to few pages and is
 /// what every GPU the editor runs on accepts.
 pub(crate) const PAGE: u32 = 4096;
-const GAP: u32 = 2;
+/// Room between layers on a page, so mip levels down to the one the canvas
+/// stops at never mix in a neighbour (see the renderer's sampler).
+const GAP: u32 = 16;
 
 /// Model-safe ids: ASCII letters, digits and underscores.
 fn id_of(prefix: &str, n: usize) -> String {

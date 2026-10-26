@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use ayatsuri_core::Puppet;
 use ayatsuri_format::model::{Canvas, ColorBlend, flags};
-use ayatsuri_render::{BlendMode, Cmd, GpuRenderer, MaskMode, Packet, TexData, Vertex};
+use ayatsuri_render::{BlendMode, Cmd, GpuRenderer, MaskMode, NO_CLIP, Packet, TexData, Vertex};
 
 pub struct ModelPaint {
     packet: Mutex<Option<Packet>>,
@@ -63,6 +63,7 @@ fn push_mesh(
     uvs: &[f32],
     tris: &[u16],
     color: [f32; 4],
+    clip: [f32; 4],
 ) -> std::ops::Range<u32> {
     let base = verts.len() as u32;
     let start = indices.len() as u32;
@@ -73,6 +74,7 @@ fn push_mesh(
             pos: [c.origin_x + xy[0] * c.pixels_per_unit, c.origin_y + xy[1] * c.pixels_per_unit],
             uv: [uv[0], uv[1]],
             color,
+            clip,
         });
     }
     indices.extend(tris.iter().map(|&i| base + i as u32));
@@ -94,6 +96,7 @@ pub fn callback(
     scale: f32,
     pixels_per_point: f32,
     solo: Option<&Solo>,
+    art: &[[f32; 4]],
 ) -> egui::PaintCallback {
     let w = ((rect.width() * pixels_per_point) as u32).max(1);
     let h = ((rect.height() * pixels_per_point) as u32).max(1);
@@ -101,7 +104,7 @@ pub fn callback(
     let sy = -(scale * pixels_per_point / h as f32 * 2.0);
     let ox = (screen_origin.x - rect.min.x) * pixels_per_point / w as f32 * 2.0 - 1.0;
     let oy = 1.0 - (screen_origin.y - rect.min.y) * pixels_per_point / h as f32 * 2.0;
-    let mut packet = packet(puppet, w, h, [sx, sy, ox, oy], solo);
+    let mut packet = packet(puppet, w, h, [sx, sy, ox, oy], solo, art);
     packet.textures = textures;
     packet.uploaded = Some(uploaded);
     packet.pages = pages;
@@ -124,6 +127,8 @@ fn blend_mode(b: ayatsuri_format::model::Blend) -> BlendMode {
 /// the mask buffer holds by then.
 struct Frame<'a> {
     puppet: &'a Puppet,
+    /// Each mesh's own art on its page (see `Session::art_boxes`).
+    art: &'a [[f32; 4]],
     c: Canvas,
     to_ndc: [f32; 4],
     verts: Vec<Vertex>,
@@ -159,6 +164,7 @@ impl Frame<'_> {
                     g.uvs,
                     g.indices,
                     [1.0; 4],
+                    self.art.get(src as usize).copied().unwrap_or(NO_CLIP),
                 );
                 shapes.push((range, g.texture));
             }
@@ -185,7 +191,12 @@ impl Frame<'_> {
             ([-1.0, -1.0], [0.0, 1.0]),
         ];
         for ([nx, ny], uv) in corners {
-            self.verts.push(Vertex { pos: [(nx - ox) / sx, (ny - oy) / sy], uv, color });
+            self.verts.push(Vertex {
+                pos: [(nx - ox) / sx, (ny - oy) / sy],
+                uv,
+                color,
+                clip: NO_CLIP,
+            });
         }
         let start = self.indices.len() as u32;
         self.indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
@@ -208,10 +219,19 @@ pub struct Solo {
 /// The frame as the renderer takes it: every drawable's triangles in
 /// order, mask sets where they change, offscreen part layers opened and
 /// landed around their meshes, and how canvas pixels map to the target.
-/// Textures and pages are left for the caller to attach.
-pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4], solo: Option<&Solo>) -> Packet {
+/// Textures and pages are left for the caller to attach. Each mesh shows
+/// only its own art, `art[mesh]` (none given: everything).
+pub fn packet(
+    puppet: &Puppet,
+    w: u32,
+    h: u32,
+    to_ndc: [f32; 4],
+    solo: Option<&Solo>,
+    art: &[[f32; 4]],
+) -> Packet {
     let mut f = Frame {
         puppet,
+        art,
         c: puppet.model().canvas,
         to_ndc,
         verts: Vec::new(),
@@ -254,8 +274,17 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4], solo: Option<&S
             };
         }
         let color = [tint[0], tint[1], tint[2], d.opacity * tint[3]];
-        let range =
-            push_mesh(&mut f.verts, &mut f.indices, &f.c, d.positions, d.uvs, d.indices, color);
+        let clip = art.get(d.mesh).copied().unwrap_or(NO_CLIP);
+        let range = push_mesh(
+            &mut f.verts,
+            &mut f.indices,
+            &f.c,
+            d.positions,
+            d.uvs,
+            d.indices,
+            color,
+            clip,
+        );
         f.cmds.push(Cmd::Draw {
             indices: range,
             texture: d.texture,
@@ -277,8 +306,17 @@ pub fn packet(puppet: &Puppet, w: u32, h: u32, to_ndc: [f32; 4], solo: Option<&S
             };
         }
         let color = [1.0, 1.0, 1.0, d.opacity];
-        let range =
-            push_mesh(&mut f.verts, &mut f.indices, &f.c, d.positions, d.uvs, d.indices, color);
+        let clip = art.get(d.mesh).copied().unwrap_or(NO_CLIP);
+        let range = push_mesh(
+            &mut f.verts,
+            &mut f.indices,
+            &f.c,
+            d.positions,
+            d.uvs,
+            d.indices,
+            color,
+            clip,
+        );
         f.cmds.push(Cmd::Draw {
             indices: range,
             texture: d.texture,

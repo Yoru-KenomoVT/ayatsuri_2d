@@ -46,14 +46,19 @@ impl Frames {
     }
 
     /// The puppet as it stands, `width` pixels wide, as straight RGBA.
-    pub fn draw(&mut self, puppet: &Puppet, width: usize) -> Option<(usize, usize, Vec<u8>)> {
+    pub fn draw(
+        &mut self,
+        puppet: &Puppet,
+        width: usize,
+        art: &[[f32; 4]],
+    ) -> Option<(usize, usize, Vec<u8>)> {
         let c = puppet.model().canvas;
         let (cw, ch) = (c.width.max(1.0), c.height.max(1.0));
         let w = (width.max(1) as u32).min(self.max_side);
         let h = ((ch * (w as f32 / cw)) as u32).clamp(1, self.max_side);
         // canvas pixels to clip space: the whole canvas fills the frame
         let to_ndc = [2.0 / cw, -2.0 / ch, -1.0, 1.0];
-        let mut packet = crate::gpu_view::packet(puppet, w, h, to_ndc, None);
+        let mut packet = crate::gpu_view::packet(puppet, w, h, to_ndc, None, art);
         packet.textures = self.textures.take();
         let mut enc = self.device.create_command_encoder(&Default::default());
         self.renderer.prepare(&self.device, &self.queue, &mut enc, &packet);
@@ -151,7 +156,7 @@ mod tests {
         let Some(mut f) = frames() else { return };
         let mut p = Puppet::new(layered(vec![]));
         p.update();
-        let Some((_, _, px)) = f.draw(&p, 8) else { return };
+        let Some((_, _, px)) = f.draw(&p, 8, &[]) else { return };
         // one layer at 50%: the overlap is no darker than the rest
         for x in [1, 4, 7] {
             let a = alpha_at(&px, x);
@@ -160,11 +165,29 @@ mod tests {
     }
 
     #[test]
+    fn a_mesh_shows_only_its_own_art() {
+        let Some(mut f) = frames() else { return };
+        let mut m = Model {
+            canvas: Canvas { width: 8.0, height: 8.0, pixels_per_unit: 1.0, ..Canvas::default() },
+            ..Model::default()
+        };
+        m.art_meshes.push(quad("grown", 0.0, 8.0, None, 1.0));
+        let mut p = Puppet::new(m);
+        p.update();
+        // its art is the left half of the page: the right half is a neighbour's
+        let Some((_, _, px)) = f.draw(&p, 8, &[[0.0, 0.0, 0.5, 1.0]]) else { return };
+        assert!(alpha_at(&px, 2) > 200, "its own art shows");
+        assert!(alpha_at(&px, 6) < 8, "the neighbour's does not");
+        let Some((_, _, px)) = f.draw(&p, 8, &[]) else { return };
+        assert!(alpha_at(&px, 6) > 200, "with no boxes everything shows");
+    }
+
+    #[test]
     fn an_offscreen_layer_is_clipped_by_its_masks() {
         let Some(mut f) = frames() else { return };
         let mut p = Puppet::new(layered(vec![2]));
         p.update();
-        let Some((_, _, px)) = f.draw(&p, 8) else { return };
+        let Some((_, _, px)) = f.draw(&p, 8, &[]) else { return };
         let (inside, outside) = (alpha_at(&px, 2), alpha_at(&px, 6));
         assert!((120..=136).contains(&inside), "inside the mask: {inside}");
         assert!(outside < 8, "outside the mask: {outside}");
@@ -188,7 +211,7 @@ mod tests {
         let shown = |f: &mut Frames, m: &Model| -> Vec<bool> {
             let mut p = Puppet::new(m.clone());
             p.update();
-            let px = f.draw(&p, 8).map(|(_, _, px)| px).unwrap_or_default();
+            let px = f.draw(&p, 8, &[]).map(|(_, _, px)| px).unwrap_or_default();
             (0..8).map(|x| alpha_at(&px, x) > 128).collect()
         };
         // as every runtime clips today: inside the iris, eye white or not

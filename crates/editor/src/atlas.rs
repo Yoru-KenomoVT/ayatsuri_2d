@@ -9,8 +9,10 @@ use std::collections::HashMap;
 
 use ayatsuri_format::model::Model;
 
-/// Room around a piece, so filtering never samples a neighbour.
-pub const GAP: u32 = 4;
+/// Room around a piece, so filtering never samples a neighbour, down to
+/// the smallest mip level the canvas draws with (see the renderer's
+/// sampler).
+pub const GAP: u32 = 16;
 
 /// One mesh's rectangle on its page, in page pixels.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,7 +23,15 @@ pub struct Piece {
     pub y: u32,
     pub w: u32,
     pub h: u32,
+    /// The mesh's own art on the old page (x0, y0, x1, y1, page pixels):
+    /// the rest of the piece is copied as transparent, so a mesh grown
+    /// over a neighbour's art carries none of it. None copies it all.
+    pub art: Option<[u32; 4]>,
 }
+
+/// What makes two pieces the same rectangle of pixels: copies of a mesh
+/// share one place.
+type PieceKey = (usize, u32, u32, u32, u32, Option<[u32; 4]>);
 
 /// Where a piece goes: page and top-left, in page pixels of the new size.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,9 +50,10 @@ pub struct Layout {
 }
 
 /// Every mesh's piece: the box around its uvs on its page, padded, and
-/// clamped to the page. Meshes on pages the model has no image for, and
-/// ArtPath meshes (their page is the swatch), are left out.
-pub fn pieces(model: &Model, page_sizes: &[(u32, u32)]) -> Vec<Piece> {
+/// clamped to the page, keeping only its own art, `art[mesh]` (uv boxes,
+/// see `Session::art_boxes`). Meshes on pages the model has no image for,
+/// and ArtPath meshes (their page is the swatch), are left out.
+pub fn pieces(model: &Model, page_sizes: &[(u32, u32)], art: &[[f32; 4]]) -> Vec<Piece> {
     let swatch = model.art_path_page.map(|p| p as usize);
     let mut out = Vec::new();
     for (mi, m) in model.art_meshes.iter().enumerate() {
@@ -68,7 +79,15 @@ pub fn pieces(model: &Model, page_sizes: &[(u32, u32)]) -> Vec<Piece> {
         if x1 <= x0 || y1 <= y0 {
             continue;
         }
-        out.push(Piece { mesh: mi, page, x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+        let own = art.get(mi).filter(|b| b[0] > -1.0 && b[2] < 2.0).map(|b| {
+            [
+                (b[0] * pw as f32).floor().clamp(0.0, pw as f32) as u32,
+                (b[1] * ph as f32).floor().clamp(0.0, ph as f32) as u32,
+                (b[2] * pw as f32).ceil().clamp(0.0, pw as f32) as u32,
+                (b[3] * ph as f32).ceil().clamp(0.0, ph as f32) as u32,
+            ]
+        });
+        out.push(Piece { mesh: mi, page, x: x0, y: y0, w: x1 - x0, h: y1 - y0, art: own });
     }
     out
 }
@@ -80,11 +99,11 @@ pub fn pieces(model: &Model, page_sizes: &[(u32, u32)]) -> Vec<Piece> {
 /// else it is reported as the error.
 pub fn auto_layout(pieces: &[Piece], page_size: u32, fit: bool) -> Result<Layout, String> {
     let page_size = page_size.clamp(256, 16384);
-    let mut key_of: HashMap<(usize, u32, u32, u32, u32), usize> = HashMap::new();
+    let mut key_of: HashMap<PieceKey, usize> = HashMap::new();
     let mut unique: Vec<(u32, u32)> = Vec::new();
     let mut slot: Vec<usize> = Vec::with_capacity(pieces.len());
     for p in pieces {
-        let k = (p.page, p.x, p.y, p.w, p.h);
+        let k = (p.page, p.x, p.y, p.w, p.h, p.art);
         let i = *key_of.entry(k).or_insert_with(|| {
             unique.push((p.w, p.h));
             unique.len() - 1
@@ -172,10 +191,9 @@ pub fn build_pages(
             .collect();
         by_src.sort_by_key(|(src, _, _)| *src);
         let mut cache: Option<(usize, image::RgbaImage)> = None;
-        let mut done: std::collections::HashSet<(usize, u32, u32, u32, u32)> =
-            std::collections::HashSet::new();
+        let mut done: std::collections::HashSet<PieceKey> = std::collections::HashSet::new();
         for (src, p, pl) in by_src {
-            if !done.insert((p.page, p.x, p.y, p.w, p.h)) {
+            if !done.insert((p.page, p.x, p.y, p.w, p.h, p.art)) {
                 continue;
             }
             if cache.as_ref().is_none_or(|(s, _)| *s != src) {
@@ -183,11 +201,19 @@ pub fn build_pages(
             }
             let Some((_, source)) = &cache else { continue };
             let (w, h) = (p.w.min(n), p.h.min(n));
+            let mut view = image::imageops::crop_imm(source, p.x, p.y, p.w, p.h).to_image();
+            // only the mesh's own art comes along
+            if let Some([x0, y0, x1, y1]) = p.art {
+                for (x, y, px) in view.enumerate_pixels_mut() {
+                    let (sx, sy) = (p.x + x, p.y + y);
+                    if sx < x0 || sx >= x1 || sy < y0 || sy >= y1 {
+                        *px = image::Rgba([0, 0, 0, 0]);
+                    }
+                }
+            }
             if w == p.w && h == p.h {
-                let view = image::imageops::crop_imm(source, p.x, p.y, p.w, p.h).to_image();
                 image::imageops::replace(&mut img, &view, pl.x as i64, pl.y as i64);
             } else {
-                let view = image::imageops::crop_imm(source, p.x, p.y, p.w, p.h).to_image();
                 let small =
                     image::imageops::resize(&view, w, h, image::imageops::FilterType::Triangle);
                 image::imageops::replace(&mut img, &small, pl.x as i64, pl.y as i64);
@@ -232,7 +258,7 @@ mod tests {
     fn pieces_are_padded_uv_boxes_on_their_page() {
         let mut m = Model::new();
         m.art_meshes.push(mesh(0, &[0.25, 0.25, 0.5, 0.25, 0.5, 0.5]));
-        let p = pieces(&m, &[(1024, 1024)]);
+        let p = pieces(&m, &[(1024, 1024)], &[]);
         assert_eq!(
             p,
             vec![Piece {
@@ -241,7 +267,8 @@ mod tests {
                 x: 256 - GAP,
                 y: 256 - GAP,
                 w: 256 + 2 * GAP,
-                h: 256 + 2 * GAP
+                h: 256 + 2 * GAP,
+                art: None,
             }]
         );
     }
@@ -249,15 +276,15 @@ mod tests {
     #[test]
     fn auto_layout_packs_and_shares_identical_rectangles() {
         let ps = vec![
-            Piece { mesh: 0, page: 0, x: 0, y: 0, w: 300, h: 300 },
-            Piece { mesh: 1, page: 0, x: 0, y: 0, w: 300, h: 300 },
-            Piece { mesh: 2, page: 1, x: 10, y: 10, w: 300, h: 100 },
+            Piece { mesh: 0, page: 0, x: 0, y: 0, w: 300, h: 300, art: None },
+            Piece { mesh: 1, page: 0, x: 0, y: 0, w: 300, h: 300, art: None },
+            Piece { mesh: 2, page: 1, x: 10, y: 10, w: 300, h: 100, art: None },
         ];
         let l = auto_layout(&ps, 512, false).unwrap();
         assert_eq!(l.pages, 1);
         assert_eq!(l.places[0], l.places[1]);
         assert_ne!(l.places[0], l.places[2]);
-        let too_big = vec![Piece { mesh: 0, page: 0, x: 0, y: 0, w: 600, h: 10 }];
+        let too_big = vec![Piece { mesh: 0, page: 0, x: 0, y: 0, w: 600, h: 10, art: None }];
         assert!(auto_layout(&too_big, 512, false).is_err());
         assert_eq!(auto_layout(&too_big, 512, true).unwrap().pages, 1);
     }
@@ -267,7 +294,7 @@ mod tests {
         let mut m = Model::new();
         m.art_meshes.push(mesh(0, &[0.25, 0.25, 0.5, 0.25, 0.5, 0.5]));
         let sizes = [(1024, 1024)];
-        let ps = pieces(&m, &sizes);
+        let ps = pieces(&m, &sizes, &[]);
         let layout =
             Layout { page_size: 512, pages: 1, places: vec![Place { page: 0, x: 100, y: 200 }] };
         apply_to_model(&mut m, &ps, &layout, &sizes, 3);
@@ -280,8 +307,28 @@ mod tests {
     }
 
     #[test]
+    fn a_grown_mesh_carries_only_its_own_art() {
+        // a red layer at 0..4 with a blue neighbour at 4..8; the mesh grew
+        // over both, its art is the red one
+        let src = image::RgbaImage::from_fn(8, 8, |x, _| {
+            if x < 4 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) }
+        });
+        let ps = vec![Piece { mesh: 0, page: 0, x: 0, y: 0, w: 8, h: 8, art: Some([0, 0, 4, 8]) }];
+        let layout =
+            Layout { page_size: 16, pages: 1, places: vec![Place { page: 0, x: 0, y: 0 }] };
+        let out = build_pages(&ps, &layout, |_| Some(src.clone()));
+        assert_eq!(out[0].get_pixel(2, 2), &image::Rgba([255, 0, 0, 255]));
+        assert_eq!(out[0].get_pixel(6, 2), &image::Rgba([0, 0, 0, 0]));
+        // and pieces work the box out from uvs
+        let mut m = Model::new();
+        m.art_meshes.push(mesh(0, &[0.0, 0.0, 1.0, 0.0, 1.0, 1.0]));
+        let p = pieces(&m, &[(8, 8)], &[[0.0, 0.0, 0.5, 1.0]]);
+        assert_eq!(p[0].art, Some([0, 0, 4, 8]));
+    }
+
+    #[test]
     fn pages_are_rebuilt_from_the_pieces() {
-        let ps = vec![Piece { mesh: 0, page: 0, x: 2, y: 2, w: 4, h: 4 }];
+        let ps = vec![Piece { mesh: 0, page: 0, x: 2, y: 2, w: 4, h: 4, art: None }];
         let layout =
             Layout { page_size: 16, pages: 1, places: vec![Place { page: 0, x: 8, y: 8 }] };
         let src = image::RgbaImage::from_fn(8, 8, |x, y| {

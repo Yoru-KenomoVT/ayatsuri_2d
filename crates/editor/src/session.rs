@@ -593,6 +593,36 @@ fn reimport_into(
 }
 
 impl Session {
+    /// Each mesh's own art on its page, (u0, v0, u1, v1): the box its
+    /// points had when its art came in (import, or the last atlas layout).
+    /// A mesh grown past it shows nothing there, not a neighbour's art.
+    /// ArtPath meshes, drawn from the swatch page, are not clipped.
+    pub fn art_boxes(&self) -> Vec<[f32; 4]> {
+        let model = self.puppet.model();
+        model
+            .art_meshes
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                if model.art_path_page.is_some_and(|p| p == m.texture) {
+                    return ayatsuri_render::NO_CLIP;
+                }
+                let uvs = self.original_meshes.get(i).map_or(&m.uvs, |o| &o.0);
+                let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+                for uv in uvs.as_chunks::<2>().0 {
+                    b = [b[0].min(uv[0]), b[1].min(uv[1]), b[2].max(uv[0]), b[3].max(uv[1])];
+                }
+                // a hair over, so the art's own edge pixels stay whole
+                let e = 1e-4;
+                if b[0] <= b[2] && b[1] <= b[3] {
+                    [b[0] - e, b[1] - e, b[2] + e, b[3] + e]
+                } else {
+                    ayatsuri_render::NO_CLIP
+                }
+            })
+            .collect()
+    }
+
     /// A mesh's display name: its layer name, else its ID.
     pub fn mesh_name(&self, i: usize) -> String {
         self.mesh_names

@@ -8,5 +8,7 @@
 
 pub mod gpu;
 
-pub use gpu::{BlendMode, Cmd, GpuRenderer, MaskMode, Packet, TexData, Vertex, supported_samples};
+pub use gpu::{
+    BlendMode, Cmd, GpuRenderer, MaskMode, NO_CLIP, Packet, TexData, Vertex, supported_samples,
+};
 pub use wgpu;

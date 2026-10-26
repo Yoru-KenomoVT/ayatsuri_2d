@@ -1439,5 +1439,8 @@
   "Repeated density": "반복 밀도",
   "Stroke mesh-mapping": "스트로크 메시 매핑",
   "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. Shift+E confirms, Delete cancels": "스트로크 메시 매핑 (실험적): 드래그하여 스트로크를 따라 메시를 만듭니다. Shift+E로 확정, Delete로 취소",
-  "With 2 vertices across: flip the diagonal of the first and last cells": "폭 정점이 2개일 때: 첫 번째와 마지막 칸의 대각선을 뒤집습니다"
+  "With 2 vertices across: flip the diagonal of the first and last cells": "폭 정점이 2개일 때: 첫 번째와 마지막 칸의 대각선을 뒤집습니다",
+  "TEXTURE ATLAS": "텍스처 아틀라스",
+  "Repack when a mesh outgrows its art": "메시가 그림을 벗어나면 다시 배치",
+  "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand": "메시 편집을 마칠 때 메시가 자기 그림 밖으로 뻗어 있으면 아틀라스를 다시 배치해, 내보내기에 이웃 그림이 비치지 않게 합니다. 직접 배치한 레이아웃을 유지하려면 끄세요"
 }
