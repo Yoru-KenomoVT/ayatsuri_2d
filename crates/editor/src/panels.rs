@@ -2724,12 +2724,12 @@ impl EditorUi {
                     let has = self.session.is_some();
                     if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Zoom In"))).clicked()
                     {
-                        self.view_zoom = (self.view_zoom * 1.25).clamp(0.02, 40.0);
+                        self.view_zoom = (self.view_zoom * 1.25).clamp(ZOOM_MIN, ZOOM_MAX);
                         ui.close();
                     }
                     if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Zoom Out"))).clicked()
                     {
-                        self.view_zoom = (self.view_zoom / 1.25).clamp(0.02, 40.0);
+                        self.view_zoom = (self.view_zoom / 1.25).clamp(ZOOM_MIN, ZOOM_MAX);
                         ui.close();
                     }
                     if ui.add_enabled(has, egui::Button::new(crate::i18n::tr("Fit"))).clicked() {
@@ -6509,8 +6509,8 @@ impl EditorUi {
                     self.pending_guide = Some(GuideCmd::Mouse(which, p));
                 }
             }
-            "zoom-in" => self.view_zoom = (self.view_zoom * 1.25).clamp(0.02, 40.0),
-            "zoom-out" => self.view_zoom = (self.view_zoom / 1.25).clamp(0.02, 40.0),
+            "zoom-in" => self.view_zoom = (self.view_zoom * 1.25).clamp(ZOOM_MIN, ZOOM_MAX),
+            "zoom-out" => self.view_zoom = (self.view_zoom / 1.25).clamp(ZOOM_MIN, ZOOM_MAX),
             "search" => self.focus_search = true,
             "select-all" if have => {
                 if let Some(s) = &self.session {
@@ -9650,11 +9650,14 @@ impl EditorUi {
         }
         let scroll = ui.ctx().input(|i| if resp.hovered() { i.smooth_scroll_delta.y } else { 0.0 });
         if scroll != 0.0 {
-            let factor = (scroll * 0.0015).exp();
             let pivot = ui.ctx().input(|i| i.pointer.latest_pos()).unwrap_or(view.center());
-            let center = view.center() + self.view_pan;
-            self.view_pan += (center - pivot) * (factor - 1.0);
-            self.view_zoom = (self.view_zoom * factor).clamp(0.02, 40.0);
+            (self.view_zoom, self.view_pan) = zoom_about(
+                self.view_zoom,
+                self.view_pan,
+                view.center(),
+                pivot,
+                (scroll * 0.0015).exp(),
+            );
         }
 
         let c = s.puppet.model().canvas;
@@ -9703,7 +9706,7 @@ impl EditorUi {
                 }
                 let (w, h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
                 let want = (view.width() * 0.7 / w).min(view.height() * 0.7 / h);
-                self.view_zoom = (want / fit).clamp(0.02, 40.0);
+                self.view_zoom = (want / fit).clamp(ZOOM_MIN, ZOOM_MAX);
                 let sc = fit * self.view_zoom;
                 self.view_pan = vec2(cw / 2.0 - (x0 + x1) / 2.0, ch / 2.0 - (y0 + y1) / 2.0) * sc;
             }
@@ -13624,10 +13627,10 @@ impl EditorUi {
         sb.horizontal_centered(|ui| {
             ui.label(egui::RichText::new(format!("{:.1} %", scale * 100.0)).size(11.0));
             if ui.small_button("−").clicked() {
-                self.view_zoom = (self.view_zoom / 1.25).clamp(0.02, 40.0);
+                self.view_zoom = (self.view_zoom / 1.25).clamp(ZOOM_MIN, ZOOM_MAX);
             }
             if ui.small_button("+").clicked() {
-                self.view_zoom = (self.view_zoom * 1.25).clamp(0.02, 40.0);
+                self.view_zoom = (self.view_zoom * 1.25).clamp(ZOOM_MIN, ZOOM_MAX);
             }
             if ui.small_button("1:1").clicked() {
                 self.view_zoom = 1.0 / fit;
@@ -15216,6 +15219,20 @@ fn cycle_pick(
 }
 
 /// The scale that fits the canvas in the view, at zoom 1.
+/// The canvas zoom's range, as a multiple of the size that fits the view.
+const ZOOM_MIN: f32 = 0.02;
+const ZOOM_MAX: f32 = 400.0;
+
+/// Zoom by `factor` keeping the canvas point under `pivot` where it is:
+/// the new zoom and pan. The pan follows the zoom that happened, so at a
+/// limit, where the zoom stops, the view stays put instead of flying off.
+fn zoom_about(zoom: f32, pan: Vec2, view_center: Pos2, pivot: Pos2, factor: f32) -> (f32, Vec2) {
+    let want = (zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
+    let done = want / zoom.max(1e-6);
+    let center = view_center + pan;
+    (want, pan + (center - pivot) * (done - 1.0))
+}
+
 fn fit_scale(view: Rect, c: ayatsuri_format::model::Canvas) -> f32 {
     let (cw, ch) = (c.width.max(1.0), c.height.max(1.0));
     ((view.width() / cw).min(view.height() / ch) * 0.92).max(1e-4)
@@ -16276,6 +16293,20 @@ mod key_cmd_tests {
 
     fn mesh(ed: &EditorUi) -> ArtMesh {
         ed.session.as_ref().unwrap().puppet.model().art_meshes[0].clone()
+    }
+
+    #[test]
+    fn zooming_at_the_limit_leaves_the_view_where_it_is() {
+        let (c, pivot) = (pos2(400.0, 300.0), pos2(700.0, 100.0));
+        // below the limit the point under the pointer stays under it
+        let (z, pan) = zoom_about(2.0, vec2(10.0, -5.0), c, pivot, 1.5);
+        assert_eq!(z, 3.0);
+        let under = |z: f32, pan: Vec2| (pivot - (c + pan)) / z;
+        let before = under(2.0, vec2(10.0, -5.0));
+        assert!((under(z, pan) - before).length() < 1e-3);
+        // at the limit nothing moves, however hard the wheel turns
+        let (z, pan) = zoom_about(ZOOM_MAX, vec2(10.0, -5.0), c, pivot, 1.5);
+        assert_eq!((z, pan), (ZOOM_MAX, vec2(10.0, -5.0)));
     }
 
     #[test]
