@@ -3071,12 +3071,56 @@ pub fn auto_connect(
             };
             // a face holding art stays, so no art is ever cut off; only one
             // on empty texture goes, or a mostly empty one bridging a gap
+            let mut art = Vec::with_capacity(fresh.len());
             for (t, d) in fresh.iter().zip(drop.iter_mut()) {
                 let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
-                let art = coverage(a, b, c);
-                *d = art == 0.0
-                    || (art < 0.35
+                let k = coverage(a, b, c);
+                art.push(k);
+                *d = k == 0.0
+                    || (k < 0.35
                         && [(a, b), (b, c), (c, a)].iter().any(|&(x, y)| gap(x, y) > allowance));
+            }
+            // the hull's slivers: the triangulation fills the whole convex
+            // hull, so along a concave run of the outline it strings long thin
+            // faces over empty texture. Peel them from the outside in: a face
+            // on the edge of what is left, holding under half art, with an
+            // edge over twice a typical one. Faces inside are never peeled,
+            // so the art the outline holds stays covered.
+            let long = lens.get(lens.len() / 2).copied().unwrap_or(0.0) * 2.0;
+            let len =
+                |x: (f32, f32), y: (f32, f32)| ((x.0 - y.0).powi(2) + (x.1 - y.1).powi(2)).sqrt();
+            for _ in 0..fresh.len() {
+                let mut uses: std::collections::HashMap<(usize, usize), u32> =
+                    std::collections::HashMap::new();
+                for (t, d) in fresh.iter().zip(&drop) {
+                    if !*d {
+                        for (x, y) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                            *uses.entry((x.min(y), x.max(y))).or_insert(0) += 1;
+                        }
+                    }
+                }
+                let mut peeled = false;
+                for (i, t) in fresh.iter().enumerate() {
+                    if drop.get(i).copied().unwrap_or(true)
+                        || art.get(i).copied().unwrap_or(1.0) >= 0.5
+                    {
+                        continue;
+                    }
+                    let edges = [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])];
+                    let outer = edges
+                        .iter()
+                        .any(|&(x, y)| uses.get(&(x.min(y), x.max(y))).copied().unwrap_or(0) == 1);
+                    let stretched = edges.iter().any(|&(x, y)| len(p(x), p(y)) > long);
+                    if outer && stretched {
+                        if let Some(d) = drop.get_mut(i) {
+                            *d = true;
+                        }
+                        peeled = true;
+                    }
+                }
+                if !peeled {
+                    break;
+                }
             }
         }
     }
@@ -3851,6 +3895,43 @@ mod tests {
         // and faces over nothing at all go
         let empty = |_: f32, _: f32| false;
         assert_eq!(auto_connect(&mut m, 0, true, &[], Some(&empty)), 0);
+    }
+
+    #[test]
+    fn auto_connect_peels_hull_slivers_off_a_concave_edge() {
+        // a fringe of hair: art left of a right edge that curves in, its
+        // outline points placed just off the art (as auto mesh and hand
+        // placing both do), and a lattice inside. The convex hull strings
+        // long thin faces down the curve over empty texture
+        let edge = |v: f32| 0.3 + 0.25 * (2.0 * v - 1.0).powi(2);
+        let mut pts = Vec::new();
+        for k in 0..=10 {
+            let v = k as f32 / 10.0;
+            pts.push((edge(v) + 0.02, v));
+            pts.push((0.0, v));
+            pts.push((edge(v) * 0.5, v));
+        }
+        let mut m = test_model();
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.vertex_count = pts.len() as u32;
+            am.uvs = pts.iter().flat_map(|&(x, y)| [x, y]).collect();
+            am.positions = am.uvs.clone();
+            am.indices.clear();
+        }
+        // plus a stray streak far out on the hull line (anti-aliasing, a
+        // neighbouring stroke's dust): enough that the slivers hold a
+        // little art and no edge of theirs runs art to art across a gap
+        let hair =
+            |u: f32, v: f32| u <= edge(v) || ((u - 0.57).abs() < 0.004 && (0.4..0.6).contains(&v));
+        auto_connect(&mut m, 0, true, &[], Some(&hair));
+        let am = &m.art_meshes[0];
+        for t in am.indices.chunks(3) {
+            let c = t.iter().fold((0.0, 0.0), |s, &v| {
+                (s.0 + pts[v as usize].0 / 3.0, s.1 + pts[v as usize].1 / 3.0)
+            });
+            assert!(c.0 < edge(c.1) + 0.03, "a face sits out past the curve at {c:?}");
+        }
+        assert!(am.indices.len() / 3 >= 30, "the fringe itself stays filled");
     }
 
     #[test]
