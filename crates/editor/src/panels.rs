@@ -817,6 +817,8 @@ enum MeshRowCmd {
     Click(usize),
     Delete(usize),
     ClipBy(usize),
+    /// Group into New Part: this mesh, or the pick it is in.
+    Group(usize),
 }
 
 enum DefCmd {
@@ -5964,6 +5966,17 @@ impl EditorUi {
         }
     }
 
+    /// Open New Part, with Put selected objects into children set to `take`.
+    fn open_new_part(&mut self, take: bool) {
+        let Some(s) = &self.session else { return };
+        self.new_part = Some(NewPartDlg {
+            name: crate::i18n::tr("New Part").to_string(),
+            id: ayatsuri_core::palette::free_part_id(s.puppet.model()),
+            order: 500.0,
+            take,
+        });
+    }
+
     /// Cubism's New Part: name, ID, draw order, and whether the selected
     /// objects go in. Without them the part goes inside the selected part
     /// (or beside the selected mesh); with them, where they were.
@@ -7110,10 +7123,10 @@ impl EditorUi {
         if self.tdeform.is_some() {
             ui.disable();
         }
-        let Some(s) = &mut self.session else {
+        if self.session.is_none() {
             ui.weak(crate::i18n::tr("No model loaded."));
             return;
-        };
+        }
         let field =
             search_box(ui, &mut self.part_search, crate::i18n::tr("Search parts and meshes"));
         if std::mem::take(&mut self.focus_search)
@@ -7121,19 +7134,14 @@ impl EditorUi {
         {
             f.request_focus();
         }
+        let mut take_new: Option<bool> = None;
         ui.horizontal(|ui| {
             let new = ui.small_button(egui_phosphor::regular::FOLDER_PLUS).on_hover_text(
                 crate::i18n::tr("New Part. Shift+click puts the selected objects in it"),
             );
             if new.clicked() {
                 let picked = self.part_pick.len() + self.multi_sel.len();
-                let take = picked > 1 || ui.input(|i| i.modifiers.shift);
-                self.new_part = Some(NewPartDlg {
-                    name: crate::i18n::tr("New Part").to_string(),
-                    id: ayatsuri_core::palette::free_part_id(s.puppet.model()),
-                    order: 500.0,
-                    take,
-                });
+                take_new = Some(picked > 1 || ui.input(|i| i.modifiers.shift));
             }
             let lock = if self.parts_dnd_off {
                 egui_phosphor::regular::LOCK_SIMPLE
@@ -7148,6 +7156,10 @@ impl EditorUi {
                 self.parts_dnd_off = !self.parts_dnd_off;
             }
         });
+        if let Some(take) = take_new {
+            self.open_new_part(take);
+        }
+        let Some(s) = &mut self.session else { return };
         let query = self.part_search.trim().to_lowercase();
         let searching = !query.is_empty();
         let (part_shown_by_search, mesh_shown_by_search) = if searching {
@@ -7259,6 +7271,7 @@ impl EditorUi {
         let dnd = !self.parts_dnd_off && self.mesh_edit.is_none();
         let mut drop_cmd: Option<(Dragged, PDrop)> = None;
         let mut part_click: Option<usize> = None;
+        let mut group_part: Option<usize> = None;
         let mut part_double = false;
         ScrollArea::vertical().id_salt("parts").show(ui, |ui| {
             for (row, depth) in visible {
@@ -7439,6 +7452,18 @@ impl EditorUi {
                         self.selected = Some(Sel::Part(i));
                         ui.close();
                     }
+                    ui.separator();
+                    let picked = self.part_pick.contains(&i);
+                    let n = if picked { self.part_pick.len() + self.multi_sel.len() } else { 1 };
+                    let label = if n > 1 {
+                        crate::i18n::trf("Group {count} Objects into New Part…", &[("count", &n)])
+                    } else {
+                        crate::i18n::tr("Group into New Part…").to_string()
+                    };
+                    if ui.button(label).clicked() {
+                        group_part = Some(i);
+                        ui.close();
+                    }
                 });
 
                 if dnd {
@@ -7528,7 +7553,24 @@ impl EditorUi {
                 self.delete_meshes(meshes);
             }
             Some(MeshRowCmd::ClipBy(mi)) => self.start_clip_pick(mi),
+            Some(MeshRowCmd::Group(mi)) => {
+                // a mesh outside the pick groups alone
+                if !self.multi_sel.contains(&mi) {
+                    self.multi_sel = vec![mi];
+                    self.part_pick.clear();
+                }
+                self.selected = Some(Sel::Mesh(mi));
+                self.open_new_part(true);
+            }
             None => {}
+        }
+        if let Some(i) = group_part {
+            if !self.part_pick.contains(&i) {
+                self.part_pick = vec![i];
+                self.multi_sel.clear();
+            }
+            self.selected = Some(Sel::Part(i));
+            self.open_new_part(true);
         }
     }
 
@@ -14110,6 +14152,16 @@ fn parts_mesh_row(
         }
         if ui.button(crate::i18n::tr("Select")).clicked() {
             *selected = Some(Sel::Mesh(mi));
+            ui.close();
+        }
+        let n = if picked.contains(&mi) { picked.len().max(1) } else { 1 };
+        let label = if n > 1 {
+            crate::i18n::trf("Group {count} Objects into New Part…", &[("count", &n)])
+        } else {
+            crate::i18n::tr("Group into New Part…").to_string()
+        };
+        if ui.button(label).clicked() {
+            *cmd = Some(MeshRowCmd::Group(mi));
             ui.close();
         }
         if ui

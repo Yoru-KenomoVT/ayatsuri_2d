@@ -1374,5 +1374,7 @@
   "Put selected objects into children": "선택한 오브젝트를 자식으로 넣기",
   "IDs take letters, digits and _ only.": "ID에는 영문자, 숫자, _만 쓸 수 있습니다.",
   "That Part ID is empty, taken or has characters IDs can't use.": "그 파츠 ID는 비어 있거나, 이미 쓰였거나, ID에 쓸 수 없는 문자가 있습니다.",
-  "Clear mesh: remove every point to draw your own": "메시 지우기: 모든 점을 지우고 직접 다시 그립니다"
+  "Clear mesh: remove every point to draw your own": "메시 지우기: 모든 점을 지우고 직접 다시 그립니다",
+  "Group {count} Objects into New Part…": "오브젝트 {count}개를 새 파츠로 묶기…",
+  "Group into New Part…": "새 파츠로 묶기…"
 }
