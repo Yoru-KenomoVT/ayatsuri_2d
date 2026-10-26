@@ -541,12 +541,89 @@ pub fn generate(alpha: &[u8], w: usize, h: usize, p: &Params) -> Mesh {
         face_inside(&mut points, &rings, &grid, alpha, w, &p);
         lattice_inside(&mut points, &grid, w, h, &p, 0.7);
     } else {
+        spine_inside(&mut points, &grid, &p);
         lattice_inside(&mut points, &grid, w, h, &p, 0.6);
     }
     if points.len() >= u16::MAX as usize {
         points.truncate(u16::MAX as usize - 1);
     }
     triangulate(points, &rings)
+}
+
+/// A row of points down the middle of the thin parts (a lash, a strand),
+/// as Cubism lays them: outline, spine, outline, so the strip can bend
+/// along its length. The middle is where the distance to the edge peaks
+/// across the stroke; parts wider than the inner spacing are left to the
+/// lattice.
+fn spine_inside(points: &mut Vec<(f32, f32)>, grid: &Grid, p: &Params) {
+    let (gw, gh) = (grid.w, grid.h);
+    // distance in cells to the nearest empty cell, two chamfer passes
+    let big = f32::MAX / 4.0;
+    let mut d: Vec<f32> = grid.on.iter().map(|&o| if o { big } else { 0.0 }).collect();
+    let get = |d: &[f32], x: i64, y: i64| {
+        if x < 0 || y < 0 || x as usize >= gw || y as usize >= gh {
+            0.0
+        } else {
+            d.get(y as usize * gw + x as usize).copied().unwrap_or(0.0)
+        }
+    };
+    let diag = std::f32::consts::SQRT_2;
+    let back = [(-1i64, 0i64, 1.0f32), (0, -1, 1.0), (-1, -1, diag), (1, -1, diag)];
+    for pass in 0..2 {
+        let order: Vec<(i64, i64)> = if pass == 0 {
+            (0..gh as i64).flat_map(|y| (0..gw as i64).map(move |x| (x, y))).collect()
+        } else {
+            (0..gh as i64).rev().flat_map(|y| (0..gw as i64).rev().map(move |x| (x, y))).collect()
+        };
+        for (x, y) in order {
+            let i = y as usize * gw + x as usize;
+            if d.get(i).copied().unwrap_or(0.0) == 0.0 {
+                continue;
+            }
+            let mut v = d.get(i).copied().unwrap_or(big);
+            for &(dx, dy, c) in &back {
+                let (dx, dy) = if pass == 0 { (dx, dy) } else { (-dx, -dy) };
+                v = v.min(get(&d, x + dx, y + dy) + c);
+            }
+            if let Some(s) = d.get_mut(i) {
+                *s = v;
+            }
+        }
+    }
+    // ridge cells: not lower than both neighbours across some direction
+    let thin = p.inner_spacing * 0.5 / grid.cell;
+    let mut ridge: Vec<(f32, f32, f32)> = Vec::new();
+    for y in 0..gh as i64 {
+        for x in 0..gw as i64 {
+            let v = get(&d, x, y);
+            if v < 1.5 || v > thin {
+                continue;
+            }
+            let peak = [(1, 0), (0, 1), (1, 1), (1, -1)]
+                .iter()
+                .any(|&(dx, dy)| v >= get(&d, x + dx, y + dy) && v >= get(&d, x - dx, y - dy));
+            if peak {
+                // cell gx covers pixels (gx - 1) * cell up to gx * cell
+                let px = (x as f32 - 0.5) * grid.cell;
+                let py = (y as f32 - 0.5) * grid.cell;
+                ridge.push((px, py, v));
+            }
+        }
+    }
+    // thickest first, so the row settles on the stroke's true middle
+    ridge.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let clear = p.outline_spacing * 0.6;
+    let gap = p.outline_spacing;
+    let outline = points.clone();
+    let mut row: Vec<(f32, f32)> = Vec::new();
+    for (x, y, _) in ridge {
+        let near = |q: &(f32, f32), r: f32| (q.0 - x).powi(2) + (q.1 - y).powi(2) < r * r;
+        if outline.iter().any(|q| near(q, clear)) || row.iter().any(|q| near(q, gap)) {
+            continue;
+        }
+        row.push((x, y));
+    }
+    points.extend(row);
 }
 
 /// Cubism's inside: points on a staggered grid, kept `clear` outline
