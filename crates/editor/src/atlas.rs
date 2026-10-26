@@ -9,6 +9,11 @@ use std::collections::HashMap;
 
 use ayatsuri_format::model::Model;
 
+/// The smallest and largest page sides a layout takes; the GPU's own
+/// limit (see `gpu_view::max_texture_side`) is usually lower.
+pub const MIN_PAGE: u32 = 256;
+pub const MAX_PAGE: u32 = 65536;
+
 /// Room around a piece, so filtering never samples a neighbour, down to
 /// the smallest mip level the canvas draws with (see the renderer's
 /// sampler).
@@ -98,7 +103,7 @@ pub fn pieces(model: &Model, page_sizes: &[(u32, u32)], art: &[[f32; 4]]) -> Vec
 /// A piece bigger than a page is scaled down to fit when `fit` is set,
 /// else it is reported as the error.
 pub fn auto_layout(pieces: &[Piece], page_size: u32, fit: bool) -> Result<Layout, String> {
-    let page_size = page_size.clamp(256, 16384);
+    let page_size = page_size.clamp(MIN_PAGE, MAX_PAGE);
     let mut key_of: HashMap<PieceKey, usize> = HashMap::new();
     let mut unique: Vec<(u32, u32)> = Vec::new();
     let mut slot: Vec<usize> = Vec::with_capacity(pieces.len());
@@ -287,6 +292,9 @@ mod tests {
         let too_big = vec![Piece { mesh: 0, page: 0, x: 0, y: 0, w: 600, h: 10, art: None }];
         assert!(auto_layout(&too_big, 512, false).is_err());
         assert_eq!(auto_layout(&too_big, 512, true).unwrap().pages, 1);
+        // a custom size past the old 16384 cap is kept as asked
+        assert_eq!(auto_layout(&too_big, 20000, false).unwrap().page_size, 20000);
+        assert_eq!(auto_layout(&too_big, 100, true).unwrap().page_size, MIN_PAGE);
     }
 
     #[test]

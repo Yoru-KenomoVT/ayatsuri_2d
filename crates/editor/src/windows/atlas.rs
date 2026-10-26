@@ -27,18 +27,24 @@ pub struct AtlasWin {
     pan: Vec2,
     /// Dragging empty space or with the middle button moves the view.
     panning: bool,
+    /// A page size typed in rather than picked from the list.
+    custom: bool,
 }
 
 /// The sizes the page picker offers.
-const SIZES: [u32; 5] = [1024, 2048, 4096, 6144, 8192];
+const SIZES: [u32; 6] = [1024, 2048, 4096, 6144, 8192, 16384];
 
 impl AtlasWin {
     pub fn new(s: &crate::session::Session) -> Self {
         let sizes = s.page_sizes();
         let pieces = crate::atlas::pieces(s.puppet.model(), &sizes, &s.art_boxes());
         // the current state as the starting layout: pages at their largest size
-        let page_size =
-            sizes.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(4096).clamp(256, 16384);
+        let page_size = sizes
+            .iter()
+            .map(|&(w, h)| w.max(h))
+            .max()
+            .unwrap_or(4096)
+            .clamp(crate::atlas::MIN_PAGE, crate::atlas::MAX_PAGE);
         let swatch = s.puppet.model().art_path_page.map(|p| p as usize);
         let page_count = sizes.len().saturating_sub(usize::from(swatch.is_some())).max(1);
         let places = pieces.iter().map(|p| Place { page: p.page, x: p.x, y: p.y }).collect();
@@ -54,6 +60,7 @@ impl AtlasWin {
             zoom: 1.0,
             pan: Vec2::ZERO,
             panning: false,
+            custom: false,
         }
     }
 
@@ -90,22 +97,58 @@ impl EditorUi {
                 // controls across the top, wrapping when the window is narrow
                 ui.horizontal_wrapped(|ui| {
                     ui.label(tr("Page size"));
+                    // the GPU's own limit, or a safe guess before it has drawn
+                    let gpu_max = crate::gpu_view::max_texture_side()
+                        .unwrap_or(16384)
+                        .clamp(crate::atlas::MIN_PAGE, crate::atlas::MAX_PAGE);
+                    let custom = !SIZES.contains(&win.layout.page_size) || win.custom;
                     egui::ComboBox::from_id_salt("atlas-size")
-                        .selected_text(format!("{} px", win.layout.page_size))
+                        .selected_text(if custom {
+                            tr("Custom").to_string()
+                        } else {
+                            format!("{} px", win.layout.page_size)
+                        })
                         .show_ui(ui, |ui| {
-                            for sz in SIZES {
+                            for sz in SIZES.into_iter().filter(|&sz| sz <= gpu_max) {
                                 if ui
                                     .selectable_label(
-                                        win.layout.page_size == sz,
+                                        !custom && win.layout.page_size == sz,
                                         format!("{sz} px"),
                                     )
                                     .clicked()
                                 {
+                                    win.custom = false;
                                     win.layout.page_size = sz;
                                     win.auto();
                                 }
                             }
+                            if ui.selectable_label(custom, tr("Custom…")).clicked() {
+                                win.custom = true;
+                            }
                         });
+                    if custom {
+                        let r = ui.add(
+                            egui::DragValue::new(&mut win.layout.page_size)
+                                .range(crate::atlas::MIN_PAGE..=gpu_max)
+                                .speed(16.0)
+                                .suffix(" px"),
+                        );
+                        if r.drag_stopped() || r.lost_focus() {
+                            win.auto();
+                        }
+                    }
+                    let side = win.layout.page_size;
+                    if side > 8192 {
+                        // RGBA, plus about a third more for the mip levels
+                        let mb = (side as u64 * side as u64 * 4) * 4 / 3 / (1024 * 1024);
+                        ui.colored_label(
+                            crate::theme::pal().rotation_red,
+                            crate::i18n::trf(
+                                "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px",
+                                &[("mb", &mb)],
+                            ),
+                        );
+                    }
                     ui.checkbox(&mut win.fit, tr("Scale pieces that don't fit"));
                     if ui.button(tr("Auto layout")).clicked() {
                         win.auto();

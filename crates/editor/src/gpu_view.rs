@@ -12,6 +12,18 @@ pub struct ModelPaint {
     packet: Mutex<Option<Packet>>,
 }
 
+/// The largest texture side the canvas's GPU takes, once it has drawn; 0
+/// before that.
+static MAX_TEXTURE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The largest texture side this GPU takes, if the canvas has drawn yet.
+pub fn max_texture_side() -> Option<u32> {
+    match MAX_TEXTURE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        n => Some(n),
+    }
+}
+
 impl egui_wgpu::CallbackTrait for ModelPaint {
     fn prepare(
         &self,
@@ -21,6 +33,8 @@ impl egui_wgpu::CallbackTrait for ModelPaint {
         encoder: &mut egui_wgpu::wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<egui_wgpu::wgpu::CommandBuffer> {
+        MAX_TEXTURE
+            .store(device.limits().max_texture_dimension_2d, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut guard) = self.packet.lock()
             && let Some(packet) = guard.take()
             && let Some(renderer) = resources.get_mut::<GpuRenderer>()
