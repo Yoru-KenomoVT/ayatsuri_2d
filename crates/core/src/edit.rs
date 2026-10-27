@@ -2905,6 +2905,99 @@ pub fn move_warp_points(
     touched
 }
 
+/// Cubism's Ctrl+drag on a warp: its grid points move by `moves` (parent
+/// space) in one keyform, and everything it holds is carried back into the
+/// moved grid, so nothing inside moves on screen. Children are re-placed
+/// through that keyform's grid, in all of their own keyforms. A blend shape
+/// keyform has no grid of its own to carry through and moves plainly.
+pub fn move_warp_points_keep_children(
+    model: &mut Model,
+    deformer: usize,
+    keyform: usize,
+    moves: &[(usize, f32, f32)],
+) -> bool {
+    let target = Target::Deformer(deformer);
+    if keyform >= crate::shapes::normal_count(model, target) {
+        return move_warp_points(model, deformer, Some(keyform), moves);
+    }
+    let grid_of = |model: &Model| match model.deformers.get(deformer).map(|d| &d.kind) {
+        Some(DeformerKind::Warp(w)) => {
+            let stride = w.grid_points() * 2;
+            let at = keyform.checked_mul(stride)?;
+            let form = w.positions.get(at..at.checked_add(stride)?)?;
+            Some((form.to_vec(), w.rows as usize, w.cols as usize, w.quad))
+        }
+        _ => None,
+    };
+    let Some((old, rows, cols, quad)) = grid_of(model) else { return false };
+    if !move_warp_points(model, deformer, Some(keyform), moves) {
+        return false;
+    }
+    let Some((new, ..)) = grid_of(model) else { return true };
+    let d32 = Some(deformer as u32);
+    let mut children: Vec<Child> = model
+        .art_meshes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.parent_deformer == d32)
+        .map(|(i, _)| Child::Mesh(i))
+        .collect();
+    children.extend(
+        model
+            .deformers
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.parent_deformer == d32)
+            .map(|(i, _)| Child::Deformer(i)),
+    );
+    let remap = |u: f32, v: f32| {
+        let mut io = [u, v];
+        crate::deform::warp_transform(&old, rows, cols, quad, &mut io);
+        warp_inverse(&new, rows, cols, quad, (io[0], io[1]), (u, v))
+    };
+    with_shapes(model, |model| {
+        for &c in &children {
+            map_child(model, c, &remap);
+        }
+    });
+    true
+}
+
+/// The point of a warp's unit square that `grid` sends to `world`, by
+/// Newton steps from `guess` (a finite difference jacobian, as `to_local`).
+fn warp_inverse(
+    grid: &[f32],
+    rows: usize,
+    cols: usize,
+    quad: bool,
+    world: (f32, f32),
+    guess: (f32, f32),
+) -> (f32, f32) {
+    let fwd = |x: f32, y: f32| {
+        let mut io = [x, y];
+        crate::deform::warp_transform(grid, rows, cols, quad, &mut io);
+        (io[0], io[1])
+    };
+    let mut p = guess;
+    for _ in 0..40 {
+        let (fx, fy) = fwd(p.0, p.1);
+        let (ex, ey) = (world.0 - fx, world.1 - fy);
+        if ex.abs() + ey.abs() < 1e-7 {
+            break;
+        }
+        let h = 1e-3;
+        let (ax, ay) = fwd(p.0 + h, p.1);
+        let (bx, by) = fwd(p.0, p.1 + h);
+        let (j00, j10, j01, j11) = ((ax - fx) / h, (ay - fy) / h, (bx - fx) / h, (by - fy) / h);
+        let det = j00 * j11 - j01 * j10;
+        if det.abs() < 1e-12 || !det.is_finite() {
+            break;
+        }
+        p = (p.0 + (j11 * ex - j01 * ey) / det, p.1 + (-j10 * ex + j00 * ey) / det);
+    }
+    p
+}
+
 /// Edit Form > Flip: mirror a mesh or warp across its own centre, every
 /// keyform, horizontally or vertically. A warp's children flip with it.
 /// Rotation deformers and parts are refused (false).
@@ -4840,6 +4933,53 @@ mod tests {
         assert!(!rename_deformer(&mut m, b, "  "));
         assert!(rename_deformer(&mut m, a, " Face "));
         assert_eq!(m.deformers[a].id, "Face");
+    }
+
+    #[test]
+    fn ctrl_moving_a_warp_leaves_what_it_holds_in_place() {
+        let mut m = test_model();
+        let outer = create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 2, cols: 2 },
+            &[],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "Outer".into(),
+        )
+        .unwrap();
+        let inner = create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 1, cols: 1 },
+            &[],
+            Some(outer as u32),
+            (0.25, 0.25, 0.75, 0.75),
+            None,
+            "Inner".into(),
+        )
+        .unwrap();
+        let world = |m: &Model| {
+            let p = rest_puppet(m);
+            let (g, _, _) = p.warp_grid(inner).unwrap();
+            g.to_vec()
+        };
+        let before = world(&m);
+        // stretch the outer warp: every point right and down, more on the right
+        let n = match &m.deformers[outer].kind {
+            DeformerKind::Warp(w) => w.grid_points(),
+            _ => unreachable!(),
+        };
+        let moves: Vec<(usize, f32, f32)> =
+            (0..n).map(|i| (i, 0.1 + 0.05 * (i % 3) as f32, 0.07)).collect();
+        assert!(move_warp_points_keep_children(&mut m, outer, 0, &moves));
+        let after = world(&m);
+        for (a, b) in before.iter().zip(&after) {
+            assert!((a - b).abs() < 1e-3, "the inner warp stays put: {a} vs {b}");
+        }
+        // a plain move carries it along
+        let mut plain = m.clone();
+        assert!(move_warp_points(&mut plain, outer, Some(0), &moves));
+        assert!(world(&plain).iter().zip(&after).any(|(a, b)| (a - b).abs() > 0.05));
     }
 
     #[test]

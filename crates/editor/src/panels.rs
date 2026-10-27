@@ -11745,12 +11745,19 @@ impl EditorUi {
                         self.pts.picked.clear();
                     }
                     // the art follows the box while it is dragged
+                    // with Ctrl the deformers move without what they hold,
+                    // as in Cubism, so the art stays
                     group_live = true;
+                    let keep_children = ui.input(|i| i.modifiers.command);
                     let from = self
                         .pts
                         .drag
                         .as_ref()
-                        .filter(|d| d.grab != point_edit::Grab::Marquee && out.commit.is_none())
+                        .filter(|d| {
+                            d.grab != point_edit::Grab::Marquee
+                                && out.commit.is_none()
+                                && !keep_children
+                        })
                         .map(|d| d.from.clone());
                     let objs: Vec<(GroupObj, usize)> = owner
                         .iter()
@@ -11772,8 +11779,19 @@ impl EditorUi {
                             std::collections::BTreeMap::new();
                         let mut locals: std::collections::HashMap<usize, Vec<f32>> =
                             std::collections::HashMap::new();
+                        let mut pivots: Vec<(usize, PivotMove)> = Vec::new();
                         for &(i, dv) in &moved {
                             let Some(&(d, gi)) = owner.get(i) else { continue };
+                            // a rotation's centre moves as its pivot: what it
+                            // holds stays
+                            if gi == usize::MAX && keep_children {
+                                if let Some(pm) =
+                                    pivot_move(&s.puppet, d, dv.x * k_unit, dv.y * k_unit)
+                                {
+                                    pivots.push((d, pm));
+                                }
+                                continue;
+                            }
                             let (px, py) = if gi == usize::MAX {
                                 s.puppet.rotation_local_origin(d).unwrap_or((0.0, 0.0))
                             } else {
@@ -11810,16 +11828,27 @@ impl EditorUi {
                                 None => between += 1,
                             }
                         }
-                        let count = plan.len();
-                        if !plan.is_empty()
+                        let count = plan.len() + pivots.len();
+                        if count > 0
                             && s.edit(|m| {
                                 let mut any = false;
+                                for (d, (deltas, child)) in &pivots {
+                                    any |= ayatsuri_core::edit::move_rotation_pivot(
+                                        m, *d, deltas, *child,
+                                    );
+                                }
                                 for (d, k, moves) in &plan {
                                     match moves.first() {
                                         Some(&(usize::MAX, dx, dy)) => {
                                             any |= ayatsuri_core::edit::move_rotation_origin_in(
                                                 m, *d, *k, dx, dy,
                                             );
+                                        }
+                                        _ if keep_children => {
+                                            any |=
+                                                ayatsuri_core::edit::move_warp_points_keep_children(
+                                                    m, *d, *k, moves,
+                                                );
                                         }
                                         _ => {
                                             any |= ayatsuri_core::edit::move_warp_points(
@@ -12096,8 +12125,12 @@ impl EditorUi {
                         .as_ref()
                         .filter(|d| d.grab != point_edit::Grab::Marquee)
                         .map(|d| d.from.clone());
-                    let live_target = (self.bez_drag.is_some() || point_drag.is_some())
-                        .then_some(LiveTarget::Warp(di));
+                    // Ctrl moves the warp without what it holds, as in
+                    // Cubism: only the grid follows the drag, the art stays
+                    let keep_children = ui.input(|i| i.modifiers.command);
+                    let live_target = (!keep_children
+                        && (self.bez_drag.is_some() || point_drag.is_some()))
+                    .then_some(LiveTarget::Warp(di));
                     if std::env::var_os("AYATSURI_DEV_DEFORMER").is_some() {
                         if !self.dev_def_logged {
                             self.dev_def_logged = true;
@@ -12181,12 +12214,18 @@ impl EditorUi {
                             Some(k) => {
                                 if !moves.is_empty()
                                     && s.edit(|m| {
-                                        ayatsuri_core::edit::move_warp_points(
-                                            m,
-                                            di,
-                                            Some(k),
-                                            &moves,
-                                        )
+                                        if keep_children {
+                                            ayatsuri_core::edit::move_warp_points_keep_children(
+                                                m, di, k, &moves,
+                                            )
+                                        } else {
+                                            ayatsuri_core::edit::move_warp_points(
+                                                m,
+                                                di,
+                                                Some(k),
+                                                &moves,
+                                            )
+                                        }
                                     })
                                 {
                                     log::debug!(

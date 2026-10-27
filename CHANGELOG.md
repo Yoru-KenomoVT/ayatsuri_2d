@@ -107,6 +107,10 @@ meshes and the Parts palette, and the requests from Discord testing.
   scales and rotates in one box (the art follows live), takes keys
   together, and deletes, locks, hides and re-parents as a group; a new
   deformer made as their parent wraps all of them.
+- **Ctrl+drag moves a warp without what it holds**, as in Cubism: the box
+  or its points move, scale or rotate while the art and deformers inside
+  stay where they are, to fit a warp after it was made. Works on several
+  picked deformers too (a rotation's centre then moves as its pivot).
 - **The canvas right-click menu shows the deformers above** the mesh under
   the pointer as a tree to select from (Shift+click adds to the pick), as
   in Cubism; Settings > Canvas can turn it off.
