@@ -1469,5 +1469,12 @@
   "Copy this ID, to paste into another mesh's Clip IDs": "Kopieer hierdie ID om in 'n ander maas se Knip-ID's te plak",
   "Paste into another mesh's Clip IDs to clip by it": "Plak in 'n ander maas se Knip-ID's om daardeur te knip",
   "Change its conversion divisions; its shape is kept": "Verander sy omskakelingsverdelings; sy vorm bly behoue",
-  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "Die ID's van die mase waardeur hierdie een knip, geskei deur kommas. Gebruik Kopieer ID op 'n maas (of Ctrl+C) en plak hier."
+  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "Die ID's van die mase waardeur hierdie een knip, geskei deur kommas. Gebruik Kopieer ID op 'n maas (of Ctrl+C) en plak hier.",
+  "Type or paste an ID": "Tik of plak 'n ID",
+  "Type a mesh's name or ID and pick it from the list, or paste IDs separated by commas (Copy ID on a mesh, or Ctrl+C) and press Enter. Backspace on an empty field takes the last mask off.": "Tik 'n maas se naam of ID en kies dit uit die lys, of plak ID's geskei deur kommas (Kopieer ID op 'n maas, of Ctrl+C) en druk Enter. Backspace in 'n leë veld haal die laaste masker af.",
+  "No other mesh matches": "Geen ander maas pas nie",
+  "Pick on canvas: click the mask mesh. Shift+click adds several, Esc ends.": "Kies op die doek: klik die maskermaas. Shift+klik voeg meer by, Esc eindig.",
+  "Copy these masks' IDs, to paste into another mesh's Clip by": "Kopieer hierdie maskers se ID's om in 'n ander maas se Knip deur te plak",
+  "Paste into another mesh's Clip by to clip by it": "Plak in 'n ander maas se Knip deur om daardeur te knip",
+  "Copy this ID, to paste into another mesh's Clip by": "Kopieer hierdie ID om in 'n ander maas se Knip deur te plak"
 }

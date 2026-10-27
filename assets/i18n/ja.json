@@ -1469,5 +1469,12 @@
   "Copy this ID, to paste into another mesh's Clip IDs": "このIDをコピーして、別のメッシュのクリッピングIDに貼り付けます",
   "Paste into another mesh's Clip IDs to clip by it": "別のメッシュのクリッピングIDに貼り付けると、これでクリッピングされます",
   "Change its conversion divisions; its shape is kept": "変換分割数を変更します。形は保たれます",
-  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "このメッシュをクリッピングするメッシュのID（カンマ区切り）。メッシュで「IDをコピー」（またはCtrl+C）して、ここに貼り付けます。"
+  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "このメッシュをクリッピングするメッシュのID（カンマ区切り）。メッシュで「IDをコピー」（またはCtrl+C）して、ここに貼り付けます。",
+  "Type or paste an ID": "IDを入力または貼り付け",
+  "Type a mesh's name or ID and pick it from the list, or paste IDs separated by commas (Copy ID on a mesh, or Ctrl+C) and press Enter. Backspace on an empty field takes the last mask off.": "メッシュの名前かIDを入力して一覧から選ぶか、カンマ区切りのIDを貼り付けて（メッシュで「IDをコピー」またはCtrl+C）Enterを押します。空の欄でBackspaceを押すと最後のマスクを外します。",
+  "No other mesh matches": "一致する他のメッシュはありません",
+  "Pick on canvas: click the mask mesh. Shift+click adds several, Esc ends.": "キャンバスで選択：マスクにするメッシュをクリックします。Shift+クリックで複数追加、Escで終了。",
+  "Copy these masks' IDs, to paste into another mesh's Clip by": "これらのマスクのIDをコピーして、別のメッシュのクリッピングに貼り付けます",
+  "Paste into another mesh's Clip by to clip by it": "別のメッシュのクリッピングに貼り付けると、これでクリッピングされます",
+  "Copy this ID, to paste into another mesh's Clip by": "このIDをコピーして、別のメッシュのクリッピングに貼り付けます"
 }

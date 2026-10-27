@@ -438,7 +438,7 @@ pub struct EditorUi {
     art_pick: Option<u8>,
     clip_with: Option<usize>,
     clip_search: String,
-    /// The Clip IDs field while it is being typed in: the mesh and the text.
+    /// The Clip by field while it is being typed in: the mesh and the text.
     clip_ids: Option<(usize, String)>,
     /// The name typed for a new clip group.
     clip_group_name: String,
@@ -9082,7 +9082,7 @@ impl EditorUi {
                     if ui
                         .small_button(egui_phosphor::regular::COPY)
                         .on_hover_text(crate::i18n::tr(
-                            "Copy this ID, to paste into another mesh's Clip IDs",
+                            "Copy this ID, to paste into another mesh's Clip by",
                         ))
                         .clicked()
                     {
@@ -9179,99 +9179,17 @@ impl EditorUi {
                 if inverted {
                     new_flags |= flags::INVERTED_MASK;
                 }
-                // clipping: the masks as chips (x takes one off), pick more on
-                // the canvas or from the list
+                // clipping in one row, like Cubism's field: the masks as chips
+                // (x takes one off), a field to type or paste IDs into with
+                // suggestions, and picking on the canvas
                 let mut masks = m.masks.clone();
-                let mut changed_masks = false;
-                ui.horizontal_wrapped(|ui| {
-                    ui.add_sized(
-                        [74.0, 16.0],
-                        egui::Label::new(
-                            egui::RichText::new(crate::i18n::tr("Clip by"))
-                                .color(theme::pal().text_faint)
-                                .size(11.0),
-                        ),
-                    );
-                    if masks.is_empty() {
-                        ui.weak(crate::i18n::tr("none"));
-                    }
-                    let mut drop: Option<usize> = None;
-                    for (at, &x) in masks.iter().enumerate() {
-                        let chip = egui::Button::new(
-                            egui::RichText::new(format!(
-                                "{}  ×",
-                                truncate(&s.mesh_name(x as usize), 18)
-                            ))
-                            .size(10.5),
-                        )
-                        .corner_radius(8.0)
-                        .small();
-                        if ui
-                            .add(chip)
-                            .on_hover_text(crate::i18n::tr("Stop clipping by this mesh"))
-                            .clicked()
-                        {
-                            drop = Some(at);
-                        }
-                    }
-                    if let Some(at) = drop {
-                        masks.remove(at);
-                        changed_masks = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.add_space(78.0);
-                    let picking = self.clip_pick == Some(i);
-                    if ui
-                        .selectable_label(picking, crate::i18n::tr("Pick on canvas"))
-                        .on_hover_text(crate::i18n::tr("Click the mask mesh on the canvas. Shift+click adds several, Esc ends."))
-                        .clicked()
-                    {
-                        self.clip_pick = if picking { None } else { Some(i) };
-                        self.tool = Tool::Arrow;
-                    }
-                    search_menu(ui, "+", |ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.clip_search)
-                                .hint_text(crate::i18n::tr("Search meshes"))
-                                .desired_width(180.0),
-                        );
-                        let needle = self.clip_search.to_lowercase();
-                        let model = s.puppet.model();
-                        let is_path = |mi: usize| ayatsuri_core::edit::art_path_of(model, mi).is_some();
-                        let mut order: Vec<usize> = (0..model.art_meshes.len())
-                            .filter(|&mi| mi != i && !masks.contains(&(mi as u32)))
-                            .filter(|&mi| {
-                                needle.is_empty() || s.mesh_name(mi).to_lowercase().contains(&needle)
-                            })
-                            .collect();
-                        order.sort_by_key(|&mi| !is_path(mi));
-                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                            let mut heading = None;
-                            for mi in order {
-                                let path = is_path(mi);
-                                if heading != Some(path) {
-                                    heading = Some(path);
-                                    ui.weak(if path {
-                                        crate::i18n::tr("ArtPaths")
-                                    } else {
-                                        crate::i18n::tr("Meshes")
-                                    });
-                                }
-                                if ui.button(s.mesh_name(mi)).clicked() {
-                                    masks.push(mi as u32);
-                                    changed_masks = true;
-                                    ui.close();
-                                }
-                            }
-                        });
-                    })
-                    .on_hover_text(crate::i18n::tr("Add a clipping mask from the list"));
-                });
-                if let Some(want) = clip_ids_row(ui, s, i, &masks, &mut self.clip_ids) {
-                    masks = want;
-                    changed_masks = true;
+                let picking = self.clip_pick == Some(i);
+                let row = clip_by_row(ui, s, i, &masks, &mut self.clip_ids, picking);
+                if row.toggle_pick {
+                    self.clip_pick = if picking { None } else { Some(i) };
+                    self.tool = Tool::Arrow;
                 }
+                let changed_masks = row.masks.map(|w| masks = w).is_some();
                 if changed_masks && s.edit(|model| ayatsuri_core::edit::set_masks(model, i, &masks))
                 {
                     log::info!("{} clips by {} mesh(es)", s.mesh_name(i), masks.len());
@@ -14834,7 +14752,7 @@ fn parts_mesh_row(
         };
         if ui
             .button(label)
-            .on_hover_text(crate::i18n::tr("Paste into another mesh's Clip IDs to clip by it"))
+            .on_hover_text(crate::i18n::tr("Paste into another mesh's Clip by to clip by it"))
             .clicked()
         {
             ui.ctx().copy_text(ids.join(", "));
@@ -16966,31 +16884,44 @@ const COLOR_BLEND_MENU: [ayatsuri_format::model::ColorBlend; 18] = {
     ]
 };
 
-/// Clip IDs: a mesh's masks as text, like Cubism's clipping field, to type
-/// or paste IDs into (Copy ID on a mesh, or a mesh copied with Ctrl+C,
-/// which pastes as its ID here). Applied when the field is left; Esc
-/// leaves it unchanged. Gives the new masks when they changed.
-fn clip_ids_row(
+/// What the Clip by row asks for.
+struct ClipRow {
+    /// The masks after an edit, when they changed.
+    masks: Option<Vec<u32>>,
+    /// Pick on canvas was clicked.
+    toggle_pick: bool,
+}
+
+/// Clip by, in one row like Cubism's clipping field: the masks as chips,
+/// then a field to type a name or ID into (suggestions drop down, Enter
+/// adds the top one or every ID in an `A, B` list), paste IDs or a mesh
+/// copied with Ctrl+C into, Backspace on it empty to take the last mask
+/// off; then picking on the canvas and copying the masks' IDs.
+fn clip_by_row(
     ui: &mut Ui,
     s: &Session,
     mesh: usize,
     masks: &[u32],
     buf: &mut Option<(usize, String)>,
-) -> Option<Vec<u32>> {
+    picking: bool,
+) -> ClipRow {
     let model = s.puppet.model();
-    let shown = masks
-        .iter()
-        .filter_map(|&x| model.art_meshes.get(x as usize))
-        .map(|m| m.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let mut want: Vec<u32> = masks.to_vec();
+    let mut toggle_pick = false;
     let mut text = match buf {
         Some((m, t)) if *m == mesh => t.clone(),
-        _ => shown,
+        _ => String::new(),
     };
-    let id = ui.make_persistent_id(("clip-ids", mesh));
-    if ui.memory(|m| m.has_focus(id)) {
-        // a whole copied mesh would paste as its JSON; take its IDs instead
+    let field = ui.make_persistent_id(("clip-by", mesh));
+    let suggest = field.with("suggest");
+    let add = |want: &mut Vec<u32>, mi: usize| {
+        if mi != mesh && !want.contains(&(mi as u32)) {
+            want.push(mi as u32);
+        }
+    };
+    let index_of = |id: &str| model.art_meshes.iter().position(|m| m.id == id);
+    if ui.memory(|m| m.has_focus(field)) {
+        // a whole copied mesh would paste as its JSON: it adds its IDs
         let ids = ui.ctx().input_mut(|i| {
             let mut ids = Vec::new();
             i.events.retain(|e| match e {
@@ -17005,52 +16936,178 @@ fn clip_ids_row(
             });
             ids
         });
-        for add in ids {
-            if !text.trim().is_empty() {
-                text.push_str(", ");
+        for id in ids {
+            match index_of(&id) {
+                Some(mi) => add(&mut want, mi),
+                None => log::warn!("Clip by: no mesh has the ID {id}"),
             }
-            text.push_str(&add);
         }
     }
-    let mut out = None;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add_sized(
             [74.0, 16.0],
             egui::Label::new(
-                egui::RichText::new(crate::i18n::tr("Clip IDs"))
+                egui::RichText::new(crate::i18n::tr("Clip by"))
                     .color(theme::pal().text_faint)
                     .size(11.0),
             ),
         );
+        let mut drop: Option<usize> = None;
+        for (at, &x) in want.iter().enumerate() {
+            let name = s.mesh_name(x as usize);
+            let id = model.art_meshes.get(x as usize).map_or("", |m| m.id.as_str());
+            let chip = egui::Button::new(
+                egui::RichText::new(format!("{}  ×", truncate(&name, 18))).size(10.5),
+            )
+            .corner_radius(8.0)
+            .small();
+            if ui
+                .add(chip)
+                .on_hover_text(format!("{id}\n{}", crate::i18n::tr("Stop clipping by this mesh")))
+                .clicked()
+            {
+                drop = Some(at);
+            }
+        }
+        if let Some(at) = drop {
+            want.remove(at);
+        }
+        let hint = if want.is_empty() {
+            crate::i18n::tr("Type or paste an ID")
+        } else {
+            crate::i18n::tr("Add…")
+        };
         let r = ui
             .add(
                 egui::TextEdit::singleline(&mut text)
-                    .id(id)
-                    .hint_text(crate::i18n::tr("Paste or type mask IDs"))
-                    .desired_width(ui.available_width()),
+                    .id(field)
+                    .hint_text(hint)
+                    .desired_width(120.0),
             )
             .on_hover_text(crate::i18n::tr(
-                "The IDs of the meshes this one clips by, separated by commas. Copy ID on a \
-                 mesh (or Ctrl+C) and paste here.",
+                "Type a mesh's name or ID and pick it from the list, or paste IDs separated by \
+                 commas (Copy ID on a mesh, or Ctrl+C) and press Enter. Backspace on an empty \
+                 field takes the last mask off.",
             ));
-        if r.has_focus() {
-            *buf = Some((mesh, text.clone()));
+        let (enter, esc, back) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::Enter),
+                i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::Backspace),
+            )
+        });
+        if r.has_focus() && back && text.is_empty() && buf.as_ref().is_some_and(|b| b.1.is_empty())
+        {
+            want.pop();
         }
+        // the meshes the text matches, by name or ID; paths first
+        let needle = text.trim().to_lowercase();
+        let is_path = |mi: usize| ayatsuri_core::edit::art_path_of(model, mi).is_some();
+        let mut matches: Vec<usize> = (0..model.art_meshes.len())
+            .filter(|&mi| mi != mesh && !want.contains(&(mi as u32)))
+            .filter(|&mi| {
+                needle.is_empty()
+                    || s.mesh_name(mi).to_lowercase().contains(&needle)
+                    || model
+                        .art_meshes
+                        .get(mi)
+                        .is_some_and(|m| m.id.to_lowercase().contains(&needle))
+            })
+            .collect();
+        matches.sort_by_key(|&mi| !is_path(mi));
         if r.lost_focus() {
-            *buf = None;
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                return;
+            if esc {
+                text.clear();
+            } else if !text.trim().is_empty() {
+                let (found, unknown) = crate::mesh_clip::resolve_ids(model, mesh, &text);
+                if found.is_empty() && enter {
+                    // not an ID: the top suggestion
+                    if let Some(&mi) = matches.first() {
+                        add(&mut want, mi);
+                    }
+                } else {
+                    for mi in found {
+                        add(&mut want, mi as usize);
+                    }
+                    if !unknown.is_empty() {
+                        log::warn!("Clip by: no other mesh has the ID {}", unknown.join(", "));
+                    }
+                }
+                text.clear();
             }
-            let (found, unknown) = crate::mesh_clip::resolve_ids(model, mesh, &text);
-            if !unknown.is_empty() {
-                log::warn!("Clip IDs: no other mesh has the ID {}", unknown.join(", "));
-            }
-            if found != masks {
-                out = Some(found);
+            if enter {
+                r.request_focus();
+            } else {
+                egui::Popup::close_id(ui.ctx(), suggest);
             }
         }
+        if r.has_focus() {
+            egui::Popup::open_id(ui.ctx(), suggest);
+        }
+        let mut picked = None;
+        egui::Popup::from_response(&r)
+            .id(suggest)
+            .open_memory(None)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(200.0);
+                if matches.is_empty() {
+                    ui.weak(crate::i18n::tr("No other mesh matches"));
+                    return;
+                }
+                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                    let mut heading = None;
+                    for &mi in matches.iter().take(60) {
+                        let path = is_path(mi);
+                        if heading != Some(path) {
+                            heading = Some(path);
+                            ui.weak(if path {
+                                crate::i18n::tr("ArtPaths")
+                            } else {
+                                crate::i18n::tr("Meshes")
+                            });
+                        }
+                        let name = s.mesh_name(mi);
+                        let id = model.art_meshes.get(mi).map_or("", |m| m.id.as_str());
+                        let label = if name == id { name } else { format!("{name}   {id}") };
+                        if ui.button(label).clicked() {
+                            picked = Some(mi);
+                        }
+                    }
+                });
+            });
+        if let Some(mi) = picked {
+            add(&mut want, mi);
+            text.clear();
+            r.request_focus();
+        }
+        if ui
+            .selectable_label(picking, egui_phosphor::regular::CROSSHAIR)
+            .on_hover_text(crate::i18n::tr(
+                "Pick on canvas: click the mask mesh. Shift+click adds several, Esc ends.",
+            ))
+            .clicked()
+        {
+            toggle_pick = true;
+        }
+        if !want.is_empty()
+            && ui
+                .small_button(egui_phosphor::regular::COPY)
+                .on_hover_text(crate::i18n::tr(
+                    "Copy these masks' IDs, to paste into another mesh's Clip by",
+                ))
+                .clicked()
+        {
+            let ids: Vec<&str> = want
+                .iter()
+                .filter_map(|&x| model.art_meshes.get(x as usize))
+                .map(|m| m.id.as_str())
+                .collect();
+            ui.ctx().copy_text(ids.join(", "));
+        }
+        *buf = (r.has_focus() || !text.is_empty()).then(|| (mesh, text.clone()));
     });
-    out
+    ClipRow { masks: (want != masks).then_some(want), toggle_pick }
 }
 
 /// Below a mesh's Clip by: inheriting its masks' clip, the chain that

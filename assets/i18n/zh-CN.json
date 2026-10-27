@@ -1469,5 +1469,12 @@
   "Copy this ID, to paste into another mesh's Clip IDs": "复制此 ID，粘贴到另一个网格的剪贴 ID 中",
   "Paste into another mesh's Clip IDs to clip by it": "粘贴到另一个网格的剪贴 ID 中，即可用它剪贴",
   "Change its conversion divisions; its shape is kept": "更改其转换分割数，形状保持不变",
-  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "剪贴此网格的网格 ID，用逗号分隔。在网格上使用“复制 ID”（或 Ctrl+C），然后粘贴到这里。"
+  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "剪贴此网格的网格 ID，用逗号分隔。在网格上使用“复制 ID”（或 Ctrl+C），然后粘贴到这里。",
+  "Type or paste an ID": "输入或粘贴 ID",
+  "Type a mesh's name or ID and pick it from the list, or paste IDs separated by commas (Copy ID on a mesh, or Ctrl+C) and press Enter. Backspace on an empty field takes the last mask off.": "输入网格的名称或 ID 并从列表中选择，或粘贴用逗号分隔的 ID（在网格上“复制 ID”或 Ctrl+C）后按 Enter。在空白输入框中按 Backspace 会移除最后一个蒙版。",
+  "No other mesh matches": "没有匹配的其他网格",
+  "Pick on canvas: click the mask mesh. Shift+click adds several, Esc ends.": "在画布上选取：单击蒙版网格。Shift+单击可添加多个，Esc 结束。",
+  "Copy these masks' IDs, to paste into another mesh's Clip by": "复制这些蒙版的 ID，粘贴到另一个网格的剪贴中",
+  "Paste into another mesh's Clip by to clip by it": "粘贴到另一个网格的剪贴中，即可用它剪贴",
+  "Copy this ID, to paste into another mesh's Clip by": "复制此 ID，粘贴到另一个网格的剪贴中"
 }
