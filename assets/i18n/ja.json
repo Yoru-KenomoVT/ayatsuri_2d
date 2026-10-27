@@ -1488,5 +1488,18 @@
   "Rename the selected deformer, or the selected mesh's": "選択中のデフォーマ、または選択中のメッシュのデフォーマの名前を変更",
   "{count} deformers": "{count} 個のデフォーマ",
   "Show parent-child hierarchy of deformers": "デフォーマの親子階層を表示",
-  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "キャンバスの右クリックメニューの上部に、ポインタ下のメッシュの上にあるデフォーマを表示して選択できます"
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "キャンバスの右クリックメニューの上部に、ポインタ下のメッシュの上にあるデフォーマを表示して選択できます",
+  "PEN TABLET": "ペンタブレット",
+  "Pen mode": "ペンモード",
+  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "ペン向けにクリック判定をゆるめます：タップが少しずれても、ダブルタップが遅くても認識します",
+  "Pressure": "筆圧",
+  "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "筆圧が変形ブラシ、ブラシ選択、グルーのウェイトブラシ、メッシュ消しゴムで何を変えるか",
+  "On": "オン",
+  "Pressure curve": "筆圧カーブ",
+  "Left: a light touch already goes far. Right: it takes a firm press": "左：軽いタッチでも強く効きます。右：しっかり押す必要があります",
+  "Lightest touch": "最小の筆圧",
+  "How much the lightest press still gives, in percent": "いちばん軽く押したときの効き具合（パーセント）",
+  "Test": "テスト",
+  "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "ペンでキャンバスを押すと、報告された筆圧がバーに表示されます。筆圧はWindowsで使えます。Linuxでは今のところペンはマウスとして動作します",
+  "No pressure seen yet": "まだ筆圧を検出していません"
 }

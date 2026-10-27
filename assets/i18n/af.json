@@ -1488,5 +1488,18 @@
   "Rename the selected deformer, or the selected mesh's": "Hernoem die gekose vervormer, of dié van die gekose maas",
   "{count} deformers": "{count} vervormers",
   "Show parent-child hierarchy of deformers": "Wys die ouer-kind-hiërargie van vervormers",
-  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "Bo-aan die doek se regsklikkieslys: die vervormers bo die maas onder die wyser, om uit te kies"
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "Bo-aan die doek se regsklikkieslys: die vervormers bo die maas onder die wyser, om uit te kies",
+  "PEN TABLET": "PENTABLET",
+  "Pen mode": "Penmodus",
+  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "Losser klikke vir 'n pen: 'n tik mag effens skuif, 'n dubbeltik mag langer neem",
+  "Pressure": "Druk",
+  "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "Wat pendruk verander aan die vervormkwas, kwaskeuse, die gom-gewigkwas en die maas-uitveër",
+  "On": "Aan",
+  "Pressure curve": "Drukkurwe",
+  "Left: a light touch already goes far. Right: it takes a firm press": "Links: 'n ligte aanraking doen reeds baie. Regs: dit vra 'n ferm druk",
+  "Lightest touch": "Ligste aanraking",
+  "How much the lightest press still gives, in percent": "Hoeveel die ligste druk steeds gee, in persent",
+  "Test": "Toets",
+  "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "Druk met die pen op die doek: die balk wys die druk wat dit meld. Druk werk op Windows; op Linux werk die pen vir nou as 'n muis",
+  "No pressure seen yet": "Nog geen druk gesien nie"
 }

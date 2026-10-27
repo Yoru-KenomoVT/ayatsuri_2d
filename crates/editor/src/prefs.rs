@@ -182,6 +182,19 @@ pub struct Prefs {
     /// (1 to 100; 0 is the default, 40).
     pub smooth_drag: bool,
     pub smooth_drag_amount: u32,
+    /// Pen tablet: looser clicks for a pen hand (a tap may drift further,
+    /// a double tap take longer).
+    pub pen_mode: bool,
+    /// Ignore pen pressure altogether.
+    pub pen_pressure_off: bool,
+    /// Pressure sets brush size (off by default) and strength (on).
+    pub pen_size: bool,
+    pub pen_strength_off: bool,
+    /// The pressure curve, 0.3 to 3 (0 is the default, 1: linear).
+    pub pen_curve: f32,
+    /// What the lightest touch still gives, 1 to 100 percent (0 is the
+    /// default, 10).
+    pub pen_min: u32,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
     /// Don't lay the atlas out again on leaving Mesh Edit when a mesh has
@@ -253,6 +266,14 @@ impl Prefs {
     }
 
     /// Smooth movement's amount, 1 to 100.
+    pub fn pen_curve(&self) -> f32 {
+        if self.pen_curve <= 0.0 { 1.0 } else { self.pen_curve.clamp(0.3, 3.0) }
+    }
+
+    pub fn pen_min(&self) -> f32 {
+        if self.pen_min == 0 { 0.1 } else { self.pen_min.min(100) as f32 / 100.0 }
+    }
+
     pub fn smooth_drag_amount(&self) -> u32 {
         if self.smooth_drag_amount == 0 { 40 } else { self.smooth_drag_amount.min(100) }
     }

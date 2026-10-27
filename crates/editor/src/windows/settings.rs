@@ -755,6 +755,87 @@ impl EditorUi {
                 }
             },
         );
+        section(ui, crate::i18n::tr("PEN TABLET"));
+        row(
+            ui,
+            crate::i18n::tr("Pen mode"),
+            crate::i18n::tr(
+                "Looser clicks for a pen: a tap may drift a little, a double tap take longer",
+            ),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.pen_mode, "").changed();
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Pressure"),
+            crate::i18n::tr(
+                "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser",
+            ),
+            |ui| {
+                let mut on = !self.prefs.pen_pressure_off;
+                save |= ui.checkbox(&mut on, crate::i18n::tr("On")).changed();
+                self.prefs.pen_pressure_off = !on;
+                ui.add_enabled_ui(on, |ui| {
+                    save |=
+                        ui.checkbox(&mut self.prefs.pen_size, crate::i18n::tr("Size")).changed();
+                    let mut strength = !self.prefs.pen_strength_off;
+                    save |= ui.checkbox(&mut strength, crate::i18n::tr("Strength")).changed();
+                    self.prefs.pen_strength_off = !strength;
+                });
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Pressure curve"),
+            crate::i18n::tr("Left: a light touch already goes far. Right: it takes a firm press"),
+            |ui| {
+                let mut curve = self.prefs.pen_curve();
+                let slider = egui::Slider::new(&mut curve, 0.3..=3.0).logarithmic(true);
+                if ui.add_enabled(!self.prefs.pen_pressure_off, slider).changed() {
+                    self.prefs.pen_curve = curve;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Lightest touch"),
+            crate::i18n::tr("How much the lightest press still gives, in percent"),
+            |ui| {
+                let mut min = (self.prefs.pen_min() * 100.0).round() as u32;
+                let slider = egui::Slider::new(&mut min, 1..=100).suffix("%");
+                if ui.add_enabled(!self.prefs.pen_pressure_off, slider).changed() {
+                    self.prefs.pen_min = min;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Test"),
+            crate::i18n::tr(
+                "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now",
+            ),
+            |ui| {
+                let shaped = self.pen.pressure(&self.prefs);
+                let raw = self.pen.last;
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(160.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 3.0, theme::pal().header);
+                let fill = shaped.or(raw).unwrap_or(0.0).clamp(0.0, 1.0);
+                let mut bar = rect;
+                bar.set_width(rect.width() * fill);
+                ui.painter().rect_filled(bar, 3.0, theme::pal().accent);
+                match raw {
+                    Some(p) => ui.weak(format!("{:.0}%", p * 100.0)),
+                    None => ui.weak(crate::i18n::tr("No pressure seen yet")),
+                };
+                if shaped.is_some() {
+                    ui.ctx().request_repaint();
+                }
+            },
+        );
         section(ui, crate::i18n::tr("OVERLAYS"));
         ui.label(
             RichText::new(crate::i18n::tr(

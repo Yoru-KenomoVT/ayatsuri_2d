@@ -24,6 +24,7 @@ mod mesh_clip;
 mod mixer;
 mod model_diff;
 mod panels;
+mod pen;
 mod point_edit;
 mod prefs;
 #[cfg(target_os = "linux")]
