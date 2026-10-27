@@ -717,6 +717,10 @@ pub struct EditorUi {
     highlight_children: bool,
     /// View > Highlight Overlapping Polygons.
     highlight_overlap: bool,
+    /// Cubism's Texture Atlas View (T): meshes draw every pixel their uvs
+    /// cover on the atlas, as the export will, instead of only their own
+    /// art, so one grown over a neighbour shows it.
+    atlas_view: bool,
     part_anchor: Option<usize>,
     /// Deformers picked together in the Deformer palette (Ctrl or Shift
     /// click); see `def_group` for when it counts.
@@ -1770,6 +1774,7 @@ impl Default for EditorUi {
             parts_dnd_off: false,
             highlight_children: false,
             highlight_overlap: false,
+            atlas_view: false,
             part_anchor: None,
             def_pick: Vec::new(),
             def_anchor: None,
@@ -3318,6 +3323,15 @@ impl EditorUi {
                     .on_hover_text(crate::i18n::tr(
                         "Mark triangles that cover others of the same mesh, in meshes with an \
                          advanced blend mode: they blend twice there and flicker as it moves",
+                    ));
+                    ui.add(
+                        egui::Checkbox::new(
+                            &mut self.atlas_view,
+                            crate::i18n::tr("Texture Atlas View"),
+                        ),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)",
                     ));
                     ui.checkbox(&mut self.mirror_edit, crate::i18n::tr("Mirror Edit"))
                         .on_hover_text(crate::i18n::tr(
@@ -7178,6 +7192,10 @@ impl EditorUi {
             "settings" => self.show_settings = true,
             "exit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             "highlight-overlap" => self.highlight_overlap = !self.highlight_overlap,
+            "atlas-view" if have => {
+                self.atlas_view = !self.atlas_view;
+                log::info!("texture atlas view {}", if self.atlas_view { "on" } else { "off" });
+            }
             "guides-show" => self.show_guides = !self.show_guides,
             "guides-center" if have => self.pending_guide = Some(GuideCmd::Center),
             "guide-at-vertex" if have => self.pending_guide = Some(GuideCmd::AtVertex),
@@ -11272,7 +11290,8 @@ impl EditorUi {
                 scale,
                 ui.ctx().pixels_per_point(),
                 solo_view(s, &self.prefs).as_ref(),
-                &s.art_boxes(),
+                // the atlas view leaves the art unclipped, as exported
+                &if self.atlas_view { Vec::new() } else { s.art_boxes() },
             );
             vp.add(cb);
         } else {
@@ -11439,6 +11458,23 @@ impl EditorUi {
 
         // the Select tool: hover previews a mesh, click selects it, empty
         // click deselects, double-click jumps into mesh editing
+        // the texture atlas view is on: say so, so it's never mistaken for
+        // the model looking wrong
+        if self.atlas_view {
+            let text = crate::i18n::tr("Texture Atlas View  ·  T to switch back");
+            let galley = painter.layout_no_wrap(
+                text.to_string(),
+                FontId::proportional(11.5),
+                theme::pal().text,
+            );
+            let at = view.left_top() + vec2(10.0, 10.0);
+            painter.rect_filled(
+                Rect::from_min_size(at - vec2(6.0, 3.0), galley.size() + vec2(12.0, 6.0)),
+                4.0,
+                theme::pal().chrome.gamma_multiply(0.92),
+            );
+            painter.galley(at, galley, theme::pal().text);
+        }
         // the Inspector's eyedropper: a click on the art takes its colour
         // (and selects nothing); Esc lets go
         let eyedropping = self.color_pick.is_some();
@@ -15867,6 +15903,8 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("View", "guide-both-mouse", "Vertical and horizontal guide lines at the mouse", N, K::G),
         ("View", "guides-clear", "Clear guide lines", M::SHIFT, K::G),
         ("View", "highlight-overlap", "Highlight Overlapping Polygons", N, K::F35),
+        // Cubism's key for it
+        ("View", "atlas-view", "Switch between Source Image and Texture Atlas", N, K::T),
         ("View", "guides-show", "Show Guide Lines", N, K::F35),
         ("View", "guides-center", "Add Guide Lines in the Center", N, K::F35),
         ("View", "guide-at-vertex", "Add a Guide Line at the Selected Vertex", N, K::F35),

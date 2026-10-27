@@ -60,6 +60,12 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **View > Solo**, **Highlight Deformer's Child Elements** and **Highlight
   Overlapping Polygons**, as in Cubism.
 - **Custom texture atlas page sizes**, up to what your GPU takes.
+- **Verify placement** in the Texture Atlas, as in Cubism: pieces that
+  overlap another or reach past the page show in red, with a count, and
+  the button selects them one by one.
+- **Texture Atlas View** (T, or View menu), as in Cubism: the canvas shows
+  every pixel each mesh covers on the atlas, as the export will, so a
+  mesh grown over its neighbour shows it.
 - **A shortcut for every menu action** in Settings > Keyboard: tools such
   as the Deform Brush, Extended Interpolation and the other parameter
   commands, the File, View, Window and Help items, and more. New keys:

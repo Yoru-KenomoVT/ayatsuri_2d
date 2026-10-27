@@ -1525,5 +1525,13 @@
   "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "メッシュ編集を終えたとき、メッシュが自分のアートからはみ出していれば、すぐにアトラスを配置し直します。オフ：アトラスはエクスポートまで待ち、必要なときにエクスポートが配置を提案します",
   "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "{count} 個のメッシュがテクスチャアトラス上で自分のアートからはみ出しているため、隣のピクセルが表示されます",
   "Lay out the atlas": "アトラスを配置",
-  "Pack each mesh's own art again (one undo step), then export": "各メッシュのアートを詰め直します（1回で元に戻せます）。その後エクスポートしてください"
+  "Pack each mesh's own art again (one undo step), then export": "各メッシュのアートを詰め直します（1回で元に戻せます）。その後エクスポートしてください",
+  "Verify placement": "配置を検証",
+  "Select the pieces that overlap another or reach past the page, one at a time": "他と重なっている、またはページからはみ出しているピースを1つずつ選択します",
+  "{overlap} overlapping, {over} past the page: they would show other pixels on the model": "重なり {overlap} 件、はみ出し {over} 件：モデル上で他のピクセルが表示されます",
+  "Every piece has its own space": "すべてのピースが重ならずに配置されています",
+  "Switch between Source Image and Texture Atlas": "元画像とテクスチャアトラスを切り替え",
+  "Texture Atlas View": "テクスチャアトラス表示",
+  "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)": "各メッシュがテクスチャアトラス上で覆うすべてのピクセルを、エクスポートと同じように表示します。隣にはみ出したメッシュには隣の絵が表示されます（T）",
+  "Texture Atlas View  ·  T to switch back": "テクスチャアトラス表示  ·  T で戻る"
 }
