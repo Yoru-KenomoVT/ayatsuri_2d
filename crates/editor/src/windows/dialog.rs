@@ -99,7 +99,23 @@ impl<'a> Dialog<'a> {
         let out = window.show(ctx, |ui| {
             let width = if resize.is_some() { ui.available_width() } else { width };
             ui.set_width(width);
-            let (strip, _) = ui.allocate_exact_size(vec2(width, HEADER), Sense::hover());
+            let (reserved, _) = ui.allocate_exact_size(vec2(width, HEADER), Sense::hover());
+            let inner = egui::Frame::NONE
+                .inner_margin(Margin { left: 18, right: 18, top: 4, bottom: 16 })
+                .show(ui, |ui| {
+                    ui.set_width(width - 36.0);
+                    if resize.is_some() {
+                        ui.set_min_height(ui.available_height());
+                    }
+                    add(ui)
+                })
+                .inner;
+            // the header spans the window as it ended up, so content wider
+            // than asked for still has its close button in the corner
+            let strip = Rect::from_min_max(
+                reserved.min,
+                egui::pos2(ui.min_rect().right().max(reserved.right()), reserved.bottom()),
+            );
             // the strip is the handle; the close button sits on top
             let drag = ui.interact(strip, id.with("drag"), Sense::drag());
             if drag.dragged() {
@@ -131,16 +147,7 @@ impl<'a> Dialog<'a> {
                 );
                 close |= resp.clicked();
             }
-            egui::Frame::NONE
-                .inner_margin(Margin { left: 18, right: 18, top: 4, bottom: 16 })
-                .show(ui, |ui| {
-                    ui.set_width(width - 36.0);
-                    if resize.is_some() {
-                        ui.set_min_height(ui.available_height());
-                    }
-                    add(ui)
-                })
-                .inner
+            inner
         });
         if open.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             close = true;
