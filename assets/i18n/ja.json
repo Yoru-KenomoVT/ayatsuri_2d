@@ -1459,5 +1459,15 @@
   "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "明るくします。黒なら元の絵のままです。デフォーマに設定すると配下のすべてに反映されます",
   "Between keys. Move the parameters onto a key to set the color there.": "キーの間です。色を設定するにはパラメータをキーの上に移動してください。",
   "Back to the color that leaves the art as it is": "元の絵のままになる色に戻す",
-  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "インスペクタのクリッピングに「継承」を表示します。メッシュはマスク自身のクリッピングでも切り抜かれます。moc3書き出しでは隠しヘルパーマスクで再現するため、すべてのバージョンとVTube Studioで動作します"
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "インスペクタのクリッピングに「継承」を表示します。メッシュはマスク自身のクリッピングでも切り抜かれます。moc3書き出しでは隠しヘルパーマスクで再現するため、すべてのバージョンとVTube Studioで動作します",
+  "Copy ID": "IDをコピー",
+  "Copy {count} IDs": "{count} 個のIDをコピー",
+  "Divisions": "分割数",
+  "Warp": "ワープ",
+  "Clip IDs": "クリッピングID",
+  "Paste or type mask IDs": "マスクのIDを貼り付けまたは入力",
+  "Copy this ID, to paste into another mesh's Clip IDs": "このIDをコピーして、別のメッシュのクリッピングIDに貼り付けます",
+  "Paste into another mesh's Clip IDs to clip by it": "別のメッシュのクリッピングIDに貼り付けると、これでクリッピングされます",
+  "Change its conversion divisions; its shape is kept": "変換分割数を変更します。形は保たれます",
+  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "このメッシュをクリッピングするメッシュのID（カンマ区切り）。メッシュで「IDをコピー」（またはCtrl+C）して、ここに貼り付けます。"
 }

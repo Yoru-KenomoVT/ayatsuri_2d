@@ -438,6 +438,8 @@ pub struct EditorUi {
     art_pick: Option<u8>,
     clip_with: Option<usize>,
     clip_search: String,
+    /// The Clip IDs field while it is being typed in: the mesh and the text.
+    clip_ids: Option<(usize, String)>,
     /// The name typed for a new clip group.
     clip_group_name: String,
     dbrush: Option<DeformStroke>,
@@ -1269,6 +1271,7 @@ impl Default for EditorUi {
             art_pick: None,
             clip_with: None,
             clip_search: String::new(),
+            clip_ids: None,
             clip_group_name: String::new(),
             clip_invert: false,
             dbrush: None,
@@ -9066,7 +9069,26 @@ impl EditorUi {
             Some(Sel::Mesh(i)) => {
                 let Some(m) = s.puppet.model().art_meshes.get(i).cloned() else { return };
                 row(ui, crate::i18n::tr("Name"), s.mesh_name(i));
-                row(ui, crate::i18n::tr("ID"), m.id.clone());
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [74.0, 16.0],
+                        egui::Label::new(
+                            egui::RichText::new(crate::i18n::tr("ID"))
+                                .color(theme::pal().text_faint)
+                                .size(11.0),
+                        ),
+                    );
+                    ui.label(egui::RichText::new(&m.id).size(11.5));
+                    if ui
+                        .small_button(egui_phosphor::regular::COPY)
+                        .on_hover_text(crate::i18n::tr(
+                            "Copy this ID, to paste into another mesh's Clip IDs",
+                        ))
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(m.id.clone());
+                    }
+                });
                 row(
                     ui,
                     crate::i18n::tr("Part"),
@@ -9246,6 +9268,10 @@ impl EditorUi {
                     })
                     .on_hover_text(crate::i18n::tr("Add a clipping mask from the list"));
                 });
+                if let Some(want) = clip_ids_row(ui, s, i, &masks, &mut self.clip_ids) {
+                    masks = want;
+                    changed_masks = true;
+                }
                 if changed_masks && s.edit(|model| ayatsuri_core::edit::set_masks(model, i, &masks))
                 {
                     log::info!("{} clips by {} mesh(es)", s.mesh_name(i), masks.len());
@@ -9298,14 +9324,26 @@ impl EditorUi {
                 );
                 match &d.kind {
                     DeformerKind::Warp(w) => {
-                        row(
-                            ui,
-                            crate::i18n::tr("Type"),
-                            crate::i18n::trf(
-                                "Warp {cols}x{rows}",
-                                &[("cols", &w.cols), ("rows", &w.rows)],
-                            ),
-                        );
+                        row(ui, crate::i18n::tr("Type"), crate::i18n::tr("Warp").into());
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [74.0, 16.0],
+                                egui::Label::new(
+                                    egui::RichText::new(crate::i18n::tr("Divisions"))
+                                        .color(theme::pal().text_faint)
+                                        .size(11.0),
+                                ),
+                            );
+                            if ui
+                                .small_button(format!("{} x {}", w.cols, w.rows))
+                                .on_hover_text(crate::i18n::tr(
+                                    "Change its conversion divisions; its shape is kept",
+                                ))
+                                .clicked()
+                            {
+                                self.def_division = Some((i, w.cols, w.rows));
+                            }
+                        });
                         row(ui, crate::i18n::tr("Keyforms"), format!("{}", w.opacities.len()));
                     }
                     DeformerKind::Rotation(r) => {
@@ -14782,6 +14820,26 @@ fn parts_mesh_row(
             *cmd = Some(MeshRowCmd::Rename(mi));
             ui.close();
         }
+        let model = s.puppet.model();
+        let copy_of: Vec<usize> = if picked.contains(&mi) { picked.to_vec() } else { vec![mi] };
+        let ids: Vec<&str> = copy_of
+            .iter()
+            .filter_map(|&m| model.art_meshes.get(m))
+            .map(|m| m.id.as_str())
+            .collect();
+        let label = if ids.len() > 1 {
+            crate::i18n::trf("Copy {count} IDs", &[("count", &ids.len())])
+        } else {
+            crate::i18n::tr("Copy ID").to_string()
+        };
+        if ui
+            .button(label)
+            .on_hover_text(crate::i18n::tr("Paste into another mesh's Clip IDs to clip by it"))
+            .clicked()
+        {
+            ui.ctx().copy_text(ids.join(", "));
+            ui.close();
+        }
         if ui
             .button(crate::i18n::tr("Clip by…"))
             .on_hover_text(crate::i18n::tr("Pick this mesh's clipping masks on the canvas"))
@@ -16907,6 +16965,93 @@ const COLOR_BLEND_MENU: [ayatsuri_format::model::ColorBlend; 18] = {
         MultiplyCompatible,
     ]
 };
+
+/// Clip IDs: a mesh's masks as text, like Cubism's clipping field, to type
+/// or paste IDs into (Copy ID on a mesh, or a mesh copied with Ctrl+C,
+/// which pastes as its ID here). Applied when the field is left; Esc
+/// leaves it unchanged. Gives the new masks when they changed.
+fn clip_ids_row(
+    ui: &mut Ui,
+    s: &Session,
+    mesh: usize,
+    masks: &[u32],
+    buf: &mut Option<(usize, String)>,
+) -> Option<Vec<u32>> {
+    let model = s.puppet.model();
+    let shown = masks
+        .iter()
+        .filter_map(|&x| model.art_meshes.get(x as usize))
+        .map(|m| m.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut text = match buf {
+        Some((m, t)) if *m == mesh => t.clone(),
+        _ => shown,
+    };
+    let id = ui.make_persistent_id(("clip-ids", mesh));
+    if ui.memory(|m| m.has_focus(id)) {
+        // a whole copied mesh would paste as its JSON; take its IDs instead
+        let ids = ui.ctx().input_mut(|i| {
+            let mut ids = Vec::new();
+            i.events.retain(|e| match e {
+                egui::Event::Paste(t) => match crate::mesh_clip::ClipFile::from_text(t) {
+                    Some(clip) => {
+                        ids.extend(clip.meshes.iter().map(|c| c.mesh.id.clone()));
+                        false
+                    }
+                    None => true,
+                },
+                _ => true,
+            });
+            ids
+        });
+        for add in ids {
+            if !text.trim().is_empty() {
+                text.push_str(", ");
+            }
+            text.push_str(&add);
+        }
+    }
+    let mut out = None;
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [74.0, 16.0],
+            egui::Label::new(
+                egui::RichText::new(crate::i18n::tr("Clip IDs"))
+                    .color(theme::pal().text_faint)
+                    .size(11.0),
+            ),
+        );
+        let r = ui
+            .add(
+                egui::TextEdit::singleline(&mut text)
+                    .id(id)
+                    .hint_text(crate::i18n::tr("Paste or type mask IDs"))
+                    .desired_width(ui.available_width()),
+            )
+            .on_hover_text(crate::i18n::tr(
+                "The IDs of the meshes this one clips by, separated by commas. Copy ID on a \
+                 mesh (or Ctrl+C) and paste here.",
+            ));
+        if r.has_focus() {
+            *buf = Some((mesh, text.clone()));
+        }
+        if r.lost_focus() {
+            *buf = None;
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                return;
+            }
+            let (found, unknown) = crate::mesh_clip::resolve_ids(model, mesh, &text);
+            if !unknown.is_empty() {
+                log::warn!("Clip IDs: no other mesh has the ID {}", unknown.join(", "));
+            }
+            if found != masks {
+                out = Some(found);
+            }
+        }
+    });
+    out
+}
 
 /// Below a mesh's Clip by: inheriting its masks' clip, the chain that
 /// gives, and the clip group it shares its masks through.
