@@ -4055,13 +4055,18 @@ impl EditorUi {
     }
 
     /// Cubism's "Blend Shape is editable: <parameter>": shown while edits to
-    /// the selected mesh land in a blend shape keyform, not a normal one.
+    /// the selected object land in a blend shape keyform, not a normal one.
     fn blend_edit_label(&self, ctx: &egui::Context) {
-        let Some(Sel::Mesh(mi)) = self.selected else { return };
+        use ayatsuri_core::edit::Target;
+        let target = match self.selected {
+            Some(Sel::Mesh(i)) => Target::ArtMesh(i),
+            Some(Sel::Deformer(i)) => Target::Deformer(i),
+            Some(Sel::Part(i)) => Target::Part(i),
+            _ => return,
+        };
         let Some(s) = &self.session else { return };
         let model = s.puppet.model();
         let values: Vec<f32> = (0..model.parameters.len()).map(|i| s.puppet.value(i)).collect();
-        let target = ayatsuri_core::edit::Target::ArtMesh(mi);
         let Some(pi) = ayatsuri_core::keyform::editing_blend_shape(model, target, &values) else {
             return;
         };
@@ -11506,7 +11511,27 @@ impl EditorUi {
                             }
                             if d.turning && d.degrees.abs() > 1e-3 {
                                 let (deg, dfm) = (d.degrees, d.deformer);
-                                if s.edit(|m| ayatsuri_core::edit::rotate_rotation(m, dfm, deg)) {
+                                // with a blend shape parameter on a key, only
+                                // that shape keyform turns
+                                let values: Vec<f32> = (0..s.puppet.model().parameters.len())
+                                    .map(|i| s.puppet.value(i))
+                                    .collect();
+                                let target = ayatsuri_core::edit::Target::Deformer(dfm);
+                                let shaped = ayatsuri_core::keyform::editing_blend_shape(
+                                    s.puppet.model(),
+                                    target,
+                                    &values,
+                                )
+                                .and_then(|_| {
+                                    ayatsuri_core::keyform::keyform_at(
+                                        s.puppet.model(),
+                                        target,
+                                        &values,
+                                    )
+                                });
+                                if s.edit(|m| {
+                                    ayatsuri_core::edit::rotate_rotation_at(m, dfm, shaped, deg)
+                                }) {
                                     log::debug!("rotation {dfm} turned {deg:.2} deg");
                                 }
                             } else if !d.turning && (d.wx != 0.0 || d.wy != 0.0) {

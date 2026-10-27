@@ -25,6 +25,7 @@ pub mod keyform;
 pub mod overlap;
 pub mod palette;
 pub mod physics;
+pub mod shapes;
 pub mod skin;
 pub mod stroke_mesh;
 
@@ -496,6 +497,15 @@ impl Puppet {
     /// for a live slider preview, the same way.
     pub fn opacity_mut(&mut self, target: edit::Target, keyform: usize) -> Option<&mut f32> {
         self.cache.valid = false;
+        if keyform >= shapes::normal_count(&self.model, target) {
+            return shapes::channel_mut(
+                &mut self.model,
+                target,
+                keyform,
+                blendshape::Channel::Opacity,
+            )?
+            .first_mut();
+        }
         match target {
             edit::Target::ArtMesh(i) => {
                 self.model.art_meshes.get_mut(i)?.opacities.get_mut(keyform)
@@ -522,6 +532,15 @@ impl Puppet {
     /// One keyform's warp grid, editable in place the same way.
     pub fn warp_keyform_mut(&mut self, deformer: usize, keyform: usize) -> Option<&mut [f32]> {
         self.cache.valid = false;
+        let target = edit::Target::Deformer(deformer);
+        if keyform >= shapes::normal_count(&self.model, target) {
+            return shapes::channel_mut(
+                &mut self.model,
+                target,
+                keyform,
+                blendshape::Channel::Positions,
+            );
+        }
         let d = self.model.deformers.get_mut(deformer)?;
         let DeformerKind::Warp(w) = &mut d.kind else { return None };
         let points = (w.rows as usize + 1).checked_mul(w.cols as usize + 1)?;
@@ -1968,6 +1987,76 @@ mod tests {
         p.set_value(0, 0.0);
         p.update();
         assert!((at(&p, 0).unwrap().0[0] - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn deformer_blend_shapes_are_keyed_and_edited_like_meshes() {
+        use ayatsuri_format::model::{Deformer, RotationData, WarpData};
+        use edit::Target;
+        let mut model = one_param_model();
+        let s = with_shape_param(&mut model) as usize;
+        let warp = |positions| Deformer {
+            id: "W".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: Default::default(),
+            kind: DeformerKind::Warp(WarpData {
+                rows: 1,
+                cols: 1,
+                quad: false,
+                opacities: vec![1.0],
+                positions,
+            }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
+            blend_shapes: Vec::new(),
+        };
+        model.deformers.push(warp(vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 2.0, 2.0]));
+        model.deformers.push(Deformer {
+            id: "R".into(),
+            kind: DeformerKind::Rotation(RotationData {
+                base_angle: 0.0,
+                opacities: vec![1.0],
+                angles: vec![0.0],
+                origins_x: vec![0.0],
+                origins_y: vec![0.0],
+                scales: vec![1.0],
+                reflect_x: vec![false],
+                reflect_y: vec![false],
+            }),
+            ..warp(Vec::new())
+        });
+        let (w, r) = (Target::Deformer(0), Target::Deformer(1));
+        assert!(edit::add_keys(&mut model, w, s, &[1.0]));
+        assert!(edit::add_keys(&mut model, r, s, &[1.0]));
+        assert_eq!(keyform::keys_on(&model, w, s), Some(vec![0.0, 1.0]));
+        // on the key, edits land in the shape keyform (one past the normal one)
+        let values = [0.0, 1.0];
+        let k = keyform::keyform_at(&model, w, &values).unwrap();
+        assert_eq!(k, 1);
+        assert_eq!(keyform::editing_blend_shape(&model, w, &values), Some(s));
+        assert!(edit::move_warp_points(&mut model, 0, Some(k), &[(0, 1.0, 0.0)]));
+        assert!(edit::set_opacity(&mut model, w, k, 0.5));
+        let kr = keyform::keyform_at(&model, r, &values).unwrap();
+        assert!(edit::rotate_rotation_at(&mut model, 1, Some(kr), 30.0));
+        // the normal keyforms are untouched
+        let DeformerKind::Warp(wd) = &model.deformers[0].kind else { unreachable!() };
+        assert_eq!(wd.positions[0], 0.0);
+        let DeformerKind::Rotation(rd) = &model.deformers[1].kind else { unreachable!() };
+        assert_eq!(rd.angles, vec![0.0]);
+        let shape = &model.deformers[1].blend_shapes[0];
+        assert_eq!(shape.angles, vec![30.0]);
+        // the parameter is in use; unbinding takes the shapes with it
+        assert!(!edit::delete_parameter(&mut model.clone(), s));
+        assert_eq!(edit::param_users(&model, s).0, 2);
+        let mut gone = model.clone();
+        assert!(edit::unbind_parameter_everywhere(&mut gone, s));
+        assert!(gone.deformers.iter().all(|d| d.blend_shapes.is_empty()));
+        // deleting the last key removes the shape
+        assert!(edit::delete_key(&mut model, w, s, 1.0));
+        assert!(model.deformers[0].blend_shapes.is_empty());
     }
 
     #[test]
