@@ -624,6 +624,8 @@ pub struct EditorUi {
     tdeform_error: Option<&'static str>,
     dbrush_hardness: f32,
     dbrush_strength: f32,
+    /// The pen tablet's pressure, read each frame.
+    pub(crate) pen: crate::pen::Pen,
     show_guides: bool,
     /// Mirror edit: point moves repeat, flipped, on the point across the
     /// vertical axis (a vertical guide line nearest the centre, else the
@@ -1565,6 +1567,7 @@ impl Default for EditorUi {
             tdeform_error: None,
             dbrush_hardness: 0.3,
             dbrush_strength: 0.7,
+            pen: Default::default(),
             show_guides: true,
             mirror_edit: false,
             guide_drag: None,
@@ -2551,6 +2554,8 @@ impl EditorUi {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm_close = Some(1);
         }
+        self.pen.read(ui.ctx());
+        crate::pen::apply_click_options(ui.ctx(), self.prefs.pen_mode);
         // shortcuts: the more modifiers a binding has, the earlier it gets a
         // look, so Ctrl+Shift+Z is taken before Ctrl+Z and Ctrl+1 before 1.
         // Plain-key bindings stay quiet while a text field has the keyboard,
@@ -12514,7 +12519,9 @@ impl EditorUi {
         }
         if self.tool == Tool::DeformBrush && !space && self.mesh_edit.is_none() {
             let sizing = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 4.0);
-            let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
+            // a pen's pressure sizes and weights the stroke as set
+            let (pen_size, pen_strength) = self.pen.brush(&self.prefs);
+            let r = self.tool_opts.brush_size.clamp(4.0, 400.0) * pen_size;
             let (ptr, any_down) =
                 ui.ctx().input(|i| (i.pointer.latest_pos(), i.pointer.any_down()));
             let k_unit = 1.0 / (scale * c.pixels_per_unit);
@@ -12664,7 +12671,8 @@ impl EditorUi {
                 let from = st.last;
                 st.last = p;
                 if delta.length_sq() > 0.0 {
-                    let (hard, strength) = (self.dbrush_hardness, self.dbrush_strength);
+                    let (hard, strength) =
+                        (self.dbrush_hardness, self.dbrush_strength * pen_strength);
                     for (live, start, shifts) in &mut st.parts {
                         for (j, sh) in shifts.iter_mut().enumerate() {
                             let Some(&p0) = start.get(j) else { continue };
@@ -12782,7 +12790,8 @@ impl EditorUi {
                     targets.push(((1, mi), gp.iter().map(|p| to_screen(p[0], p[1])).collect()));
                 }
             }
-            let r = self.tool_opts.brush_size.clamp(2.0, 400.0);
+            let (pen_size, pen_strength) = self.pen.brush(&self.prefs);
+            let r = self.tool_opts.brush_size.clamp(2.0, 400.0) * pen_size;
             if esc {
                 self.brush_w.clear();
                 log::debug!("brush selection cleared");
@@ -12847,7 +12856,8 @@ impl EditorUi {
                             if d < r {
                                 let t = 1.0 - d / r;
                                 let f = t * t * (3.0 - 2.0 * t);
-                                *wt = (*wt + sign * self.brush_weight * f).clamp(0.0, 1.0);
+                                *wt = (*wt + sign * self.brush_weight * pen_strength * f)
+                                    .clamp(0.0, 1.0);
                             }
                         }
                     }
@@ -13661,7 +13671,8 @@ impl EditorUi {
                 // and the whole stroke goes in one undo step on release
                 if self.mesh_mode == 5 && !space {
                     let sizing = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 4.0);
-                    let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
+                    let r =
+                        self.tool_opts.brush_size.clamp(4.0, 400.0) * self.pen.brush(&self.prefs).0;
                     let painting =
                         !sizing && (resp.dragged() || resp.drag_started() || resp.clicked());
                     if painting && let Some(ptr) = resp.interact_pointer_pos() {
@@ -14310,7 +14321,8 @@ impl EditorUi {
                 // release as one undo step
                 if editing && self.tool == Tool::Glue && !space {
                     let sizing = size_brush(ui, &resp, &mut self.tool_opts.brush_size, 4.0);
-                    let r = self.tool_opts.brush_size.clamp(4.0, 400.0);
+                    let (pen_size, pen_strength) = self.pen.brush(&self.prefs);
+                    let r = self.tool_opts.brush_size.clamp(4.0, 400.0) * pen_size;
                     if let Some(p) = ptr {
                         vp.circle_stroke(
                             p,
@@ -14328,7 +14340,8 @@ impl EditorUi {
                             if d <= r {
                                 let falloff = 1.0 - d / r;
                                 let e = self.glue_stroke.entry(pi).or_insert(0.0);
-                                *e = (*e + self.glue_strength * falloff * dt * 3.0).min(1.0);
+                                *e = (*e + self.glue_strength * pen_strength * falloff * dt * 3.0)
+                                    .min(1.0);
                             }
                         }
                     }

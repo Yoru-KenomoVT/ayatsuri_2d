@@ -1488,5 +1488,18 @@
   "Rename the selected deformer, or the selected mesh's": "선택한 디포머 또는 선택한 메시의 디포머 이름 변경",
   "{count} deformers": "디포머 {count}개",
   "Show parent-child hierarchy of deformers": "디포머의 부모-자식 계층 표시",
-  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "캔버스 우클릭 메뉴 맨 위에 포인터 아래 메시의 상위 디포머를 표시해 선택할 수 있습니다"
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "캔버스 우클릭 메뉴 맨 위에 포인터 아래 메시의 상위 디포머를 표시해 선택할 수 있습니다",
+  "PEN TABLET": "펜 태블릿",
+  "Pen mode": "펜 모드",
+  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "펜에 맞게 클릭 판정을 느슨하게 합니다: 탭이 조금 움직여도, 더블 탭이 느려도 인식합니다",
+  "Pressure": "필압",
+  "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "필압이 변형 브러시, 브러시 선택, 글루 가중치 브러시, 메시 지우개에서 무엇을 바꾸는지",
+  "On": "켜기",
+  "Pressure curve": "필압 곡선",
+  "Left: a light touch already goes far. Right: it takes a firm press": "왼쪽: 가볍게 눌러도 강하게 적용됩니다. 오른쪽: 세게 눌러야 합니다",
+  "Lightest touch": "최소 필압",
+  "How much the lightest press still gives, in percent": "가장 가볍게 눌렀을 때의 적용 정도(퍼센트)",
+  "Test": "테스트",
+  "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "펜으로 캔버스를 누르면 보고된 필압이 막대에 표시됩니다. 필압은 Windows에서 동작하며, Linux에서는 현재 펜이 마우스로 동작합니다",
+  "No pressure seen yet": "아직 필압이 감지되지 않았습니다"
 }

@@ -1488,5 +1488,18 @@
   "Rename the selected deformer, or the selected mesh's": "重命名选中的变形器，或选中网格的变形器",
   "{count} deformers": "{count} 个变形器",
   "Show parent-child hierarchy of deformers": "显示变形器的父子层级",
-  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "在画布右键菜单顶部显示指针下网格之上的变形器，可从中选择"
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "在画布右键菜单顶部显示指针下网格之上的变形器，可从中选择",
+  "PEN TABLET": "数位板",
+  "Pen mode": "笔模式",
+  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "为笔放宽点击判定：轻点时稍有偏移、双击稍慢也能识别",
+  "Pressure": "压感",
+  "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "压感在变形笔刷、笔刷选择、黏合权重笔刷和网格橡皮擦上改变什么",
+  "On": "开启",
+  "Pressure curve": "压感曲线",
+  "Left: a light touch already goes far. Right: it takes a firm press": "左：轻触即可生效较强。右：需要用力按压",
+  "Lightest touch": "最轻触感",
+  "How much the lightest press still gives, in percent": "最轻按压时仍有的效果（百分比）",
+  "Test": "测试",
+  "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "用笔按压画布，条形显示其报告的压感。Windows 上可用压感；Linux 上目前笔作为鼠标使用",
+  "No pressure seen yet": "尚未检测到压感"
 }
