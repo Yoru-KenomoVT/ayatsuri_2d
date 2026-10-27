@@ -101,7 +101,18 @@ pub fn normal_count(model: &Model, target: Target) -> usize {
 /// the defaults. A colour the object does not have is neutral.
 pub fn base(model: &Model, target: Target, channel: Channel) -> Option<Vec<f32>> {
     let (pool, n) = normal_pool(model, target, channel)?;
-    let b = binding(model, target)?;
+    if pool.is_empty() {
+        // a colour the object does not have: neutral, if the defaults are keyed
+        let neutral = if channel == Channel::Multiply { 1.0 } else { 0.0 };
+        return default_blend(model, binding(model, target)?, &[], 0).map(|_| vec![neutral; n]);
+    }
+    default_blend(model, binding(model, target)?, pool, n)
+}
+
+/// A pool's blend (`n` floats per keyform) at every parameter's default,
+/// for anything with a binding. None when the binding does not cover the
+/// defaults.
+pub fn default_blend(model: &Model, b: &Binding, pool: &[f32], n: usize) -> Option<Vec<f32>> {
     let mut corners = Vec::new();
     let at_default = blend::corners(
         b,
@@ -114,10 +125,6 @@ pub fn base(model: &Model, target: Target, channel: Channel) -> Option<Vec<f32>>
     );
     if !at_default {
         return None;
-    }
-    if pool.is_empty() {
-        let neutral = if channel == Channel::Multiply { 1.0 } else { 0.0 };
-        return Some(vec![neutral; n]);
     }
     let mut out = vec![0.0; n];
     for &(k, w) in &corners {
