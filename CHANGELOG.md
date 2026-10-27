@@ -111,6 +111,11 @@ meshes and the Parts palette, and the requests from Discord testing.
   on (for the mouse too): what a drag grabs is where the press began.
 - **After making a deformer** the canvas goes back to the Arrow, so the
   next click edits it instead of opening New Deformer again.
+- **Timelapses recorded before 0.6.0 play and export again**: a field
+  added to the middle of the model shifted what older steps held, so they
+  could not be read ("step 0 could not be read"). They are put right as
+  they are read, and new steps are written in a way a later field can
+  never shift.
 - **After Undo** a selected object the undo took away is let go, so the
   next action never works on one that is gone.
 - **Several deformers can be selected at once**, as in Cubism. In the
