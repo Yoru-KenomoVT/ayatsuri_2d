@@ -17106,11 +17106,12 @@ fn clip_by_row(
             for (at, &x) in want.iter().enumerate() {
                 let name = s.mesh_name(x as usize);
                 let id = model.art_meshes.get(x as usize).map_or("", |m| m.id.as_str());
-                let chip = egui::Button::new(
-                    egui::RichText::new(format!("{}  ×", truncate(&name, 18))).size(10.5),
-                )
-                .corner_radius(8.0)
-                .small();
+                let chip = egui::Button::new((
+                    egui::RichText::new(truncate(&name, 22)).size(12.0),
+                    egui::RichText::new(egui_phosphor::regular::X).size(12.5),
+                ))
+                .corner_radius(10.0)
+                .min_size(vec2(0.0, 22.0));
                 if ui
                     .add(chip)
                     .on_hover_text(format!(
