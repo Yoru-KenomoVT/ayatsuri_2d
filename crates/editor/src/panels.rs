@@ -2611,6 +2611,7 @@ impl EditorUi {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm_close = Some(1);
         }
+        self.drop_stale_selection();
         self.pen.read(ui.ctx());
         crate::pen::apply_click_options(ui.ctx(), self.prefs.pen_mode);
         // shortcuts: the more modifiers a binding has, the earlier it gets a
@@ -8638,6 +8639,29 @@ impl EditorUi {
             self.multi_sel.clear();
             self.part_pick.clear();
         }
+    }
+
+    /// Let go of selected objects the model no longer has (an undo or
+    /// redo took them away), so nothing acts on an index that is gone.
+    fn drop_stale_selection(&mut self) {
+        let Some(s) = &self.session else { return };
+        let m = s.puppet.model();
+        let (meshes, defs, parts, params) =
+            (m.art_meshes.len(), m.deformers.len(), m.parts.len(), m.parameters.len());
+        let gone = match self.selected {
+            Some(Sel::Mesh(i)) => i >= meshes,
+            Some(Sel::Deformer(i)) => i >= defs,
+            Some(Sel::Part(i)) => i >= parts,
+            Some(Sel::Parameter(i)) => i >= params,
+            None => false,
+        };
+        if gone {
+            log::debug!("selection: {:?} is gone from the model", self.selected);
+            self.selected = None;
+        }
+        self.multi_sel.retain(|&i| i < meshes);
+        self.def_pick.retain(|&i| i < defs);
+        self.part_pick.retain(|&i| i < parts);
     }
 
     /// Start picking `mesh`'s clipping masks on the canvas.

@@ -946,6 +946,31 @@ pub fn create_deformer(
             return None;
         }
         let span = (x1 - x0).max(y1 - y0).max(1e-3);
+        // a rotation's local space depends on its parent (inside a warp it
+        // is not the warp's unit square), so what it holds is carried over
+        // through the canvas, as set_parent does: the model at rest before
+        let wraps_rotation = children.iter().any(|&c| {
+            matches!(c, Child::Deformer(d) if matches!(
+                model.deformers.get(d).map(|x| &x.kind),
+                Some(DeformerKind::Rotation(_))
+            ))
+        });
+        let before = (matches!(kind, NewDeformer::Rotation { .. }) || wraps_rotation)
+            .then(|| rest_puppet(model));
+        // a rotation inside keeps the turn it shows (its inherited turn
+        // changes with its new parent)
+        let turns: Vec<(usize, f32)> = match &before {
+            Some(b) => children
+                .iter()
+                .filter_map(|&c| match c {
+                    Child::Deformer(d) => Some((d, b.rotation_state(d)?.angle)),
+                    Child::Mesh(_) => None,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let is_rotation = matches!(kind, NewDeformer::Rotation { .. });
+        let old_parent = parent;
         let (deformer_kind, map): (DeformerKind, Box<PointMap>) = match kind {
             NewDeformer::Warp { rows, cols } => {
                 // a little margin so edge points sit inside the grid
@@ -1039,6 +1064,18 @@ pub fn create_deformer(
                 blend_shapes: Vec::new(),
             },
         );
+        // and the model at rest with the new rotation in place
+        let after = before.as_ref().map(|_| rest_puppet(model));
+        let through_canvas = |x: f32, y: f32| match (&before, &after) {
+            (Some(b), Some(a)) if is_rotation => {
+                let world = match old_parent {
+                    Some(p) => b.deformer_point(p as usize, x, y),
+                    None => (x, y),
+                };
+                to_local(a, Some(di), world)
+            }
+            _ => map(x, y),
+        };
         for &c in &children {
             // a deformer can't become a child of its own descendant
             if let Child::Deformer(d) = c
@@ -1046,7 +1083,7 @@ pub fn create_deformer(
             {
                 continue;
             }
-            map_child(model, c, &*map);
+            map_child(model, c, &through_canvas);
             match c {
                 Child::Mesh(i) => {
                     if let Some(m) = model.art_meshes.get_mut(i) {
@@ -1060,6 +1097,8 @@ pub fn create_deformer(
                 }
             }
         }
+        let turns: Vec<(usize, f32)> = turns.into_iter().map(|(d, a)| (shift(d), a)).collect();
+        settle_rotations(model, &turns);
         Some(di)
     })
 }
@@ -5318,6 +5357,75 @@ mod tests {
     fn mirrored(pts: &[f32], horizontal: bool, mid2: f32) -> Vec<f32> {
         let axis = if horizontal { 0 } else { 1 };
         pts.iter().enumerate().map(|(i, &v)| if i % 2 == axis { mid2 - v } else { v }).collect()
+    }
+
+    #[test]
+    fn a_rotation_made_inside_a_warp_leaves_the_mesh_in_place() {
+        let mut m = test_model();
+        let am = &mut m.art_meshes[0];
+        am.vertex_count = 3;
+        am.uvs = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        am.indices = vec![0, 1, 2];
+        am.binding = Binding::default();
+        am.opacities = vec![1.0];
+        am.draw_orders = vec![500.0];
+        am.positions = vec![100.0, 100.0, 140.0, 100.0, 100.0, 160.0];
+        m.canvas.pixels_per_unit = 1000.0;
+        create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 2, cols: 2 },
+            &[Child::Mesh(0)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "Warp".into(),
+        )
+        .unwrap();
+        let before = mesh_world(&m);
+        for origin in [None, Some((0.5, 0.5))] {
+            let mut r = m.clone();
+            create_deformer(
+                &mut r,
+                NewDeformer::Rotation { origin },
+                &[Child::Mesh(0)],
+                None,
+                (0.0, 0.0, 1.0, 1.0),
+                None,
+                "Rot".into(),
+            )
+            .unwrap();
+            let after = mesh_world(&r);
+            for (a, b) in before.iter().zip(&after) {
+                assert!((a - b).abs() < 1e-2, "{origin:?}: {a} vs {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_deformer_around_a_rotation_leaves_the_art_in_place() {
+        for rotation in [true, false] {
+            let (mut m, _, rot) = nested_rig();
+            let before = mesh_world(&m);
+            let kind = if rotation {
+                NewDeformer::Rotation { origin: None }
+            } else {
+                NewDeformer::Warp { rows: 2, cols: 2 }
+            };
+            create_deformer(
+                &mut m,
+                kind,
+                &[Child::Deformer(rot)],
+                None,
+                (0.0, 0.0, 1.0, 1.0),
+                None,
+                "New".into(),
+            )
+            .unwrap();
+            let after = mesh_world(&m);
+            for (a, b) in before.iter().zip(&after) {
+                assert!((a - b).abs() < 1e-2, "rotation {rotation}: {a} vs {b}");
+            }
+        }
     }
 
     #[test]

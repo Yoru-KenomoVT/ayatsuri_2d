@@ -98,6 +98,12 @@ meshes and the Parts palette, and the requests from Discord testing.
   come through clean, and sibling folders with the same name stay apart
   instead of merging into one part.
 - **Inspector notes** wrap inside the panel instead of running past it.
+- **A rotation deformer made inside a warp** no longer blows up the art it
+  holds: what it holds is carried over through the canvas, so it stays
+  where it was, and a rotation deformer wrapped by a new deformer keeps
+  its turn.
+- **After Undo** a selected object the undo took away is let go, so the
+  next action never works on one that is gone.
 - **Several deformers can be selected at once**, as in Cubism. In the
   Deformer palette Shift+click picks the run between two clicks and
   Ctrl+click adds or removes one; on the canvas Shift+Alt+click adds the
