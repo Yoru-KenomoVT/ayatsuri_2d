@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.6.0 (2026-10-29)
+
+Blend shapes, the feature promised for the end of October: on every kind
+of object, with weight limits, in moc3 from 4.2 on. Alongside them come
+multiply and screen colours, offscreen parts, a run of Cubism tools for
+meshes and the Parts palette, and the requests from Discord testing.
+
+### Added
+
+- **Blend shapes** (#23), as in Cubism 5.0: mark a parameter as a blend
+  shape and its keys add a difference on top of everything else, instead
+  of blending with the other parameters. They work on art meshes, warp and
+  rotation deformers and parts (glue keeps the ones it is imported with),
+  and change shape, opacity, multiply
+  and screen colour, angle, origin, scale and draw order. Add Keys, the
+  grid tools, the rotation handle and the opacity and colour rows edit the
+  key you sit on, and the Inspector says when a blend shape key is the one
+  being edited.
+- **Weight limits for blend shapes** (#24): Parameter palette menu > Limit
+  Settings for Blend Shape Weights. Another parameter scales a blend
+  shape's weight along a graph, from a preset or drawn by Edit Graph, on
+  meshes, deformers and parts.
+- **Multiply and screen colour per keyform** (#26), as in Cubism 4.2: tint
+  meshes and deformers per key in the Inspector. They go into moc3 4.2 and
+  later and into .cmo3, and come back from both.
+- **Offscreen drawing on parts** (#25), Cubism 5.3's way: a part draws its
+  children as one layer, with its own opacity, blend mode and clipping, so
+  overlapping children show no seams. PSD folders that blend as a whole
+  (not pass-through, not plain Normal at 100%) import as offscreen parts.
+  moc3 5.3 stores them, blend shapes on their opacity included; older
+  versions say what they drop.
+- **moc3 export of all of it**: blend shapes on meshes and warps from 4.2,
+  on rotations, parts and glue from 5.0, offscreen parts from 5.3. The
+  layout was checked against an open reference core, which reads the files
+  back and plays them as we do.
+- **Clip by in one row**: type part of a mesh's name or ID and pick it from
+  the list, paste IDs (`A, B, C`) and press Enter, or pick masks on the
+  canvas. The masks show as chips under the field. **Copy ID** on a mesh
+  (right-click, or the button beside its ID in the Inspector) and the copy
+  button by Clip by put IDs on the clipboard for another mesh, and a mesh
+  copied with Ctrl+C pastes into Clip by as its ID.
+- **Conversion division in Tool Details**: select a warp, type the new
+  columns and rows and press Apply. The Inspector shows it too, and a
+  warp's blend shapes now follow a division change.
+- **Model Template** (Modeling > Model Template): Live2D's Standard
+  Parameter List, 27 or all 40, filed into the standard groups with the
+  IDs face trackers and VTube Studio expect. Save your own model's
+  parameters, ranges and folders as a template for the next model.
+- **Parts palette as in Cubism**: drag parts and meshes to reorder and
+  regroup them, New Part, and Group into New Part on the context menu.
+- **Rename an art mesh and edit its ID**.
+- **Automatic mesh generator settings and presets** as in Cubism. Auto
+  mesh starts from the layer's art and runs a row of points down thin
+  strokes instead of boxing them in.
+- **Drawn lines guide Auto connect**, and Add vertex chains as in Cubism.
+- **View > Solo**, **Highlight Deformer's Child Elements** and **Highlight
+  Overlapping Polygons**, as in Cubism.
+- **Custom texture atlas page sizes**, up to what your GPU takes.
+- **Experimental features** (Settings > General, at the bottom): one
+  switch for all of them and one per feature. In this release: clip
+  groups, inherited clipping (exported to moc3 as hidden helper masks) and
+  stroke mesh-mapping, whose 1, 2 and 3 vertices across lay the mesh out
+  as Cubism's do.
+
+### Changed
+
+- **Parameters drag like layers**, into and out of folders.
+- **Clicking another mesh inside the selected one's box** switches to it
+  instead of grabbing the box.
+- **Blend shape keys** draw as rectangles, with a border on the base key,
+  as in Cubism.
+- **Every dialog's close button** sits in its top right corner, however
+  wide the dialog comes out.
+
+### Fixed
+
+- **Texture atlas**: a mesh could show a sliver of its neighbour's art at
+  its edge. Each piece is now masked to its own art, with wider gaps.
+- **Zooming at the limit** no longer flings the canvas away.
+- **Auto connect** keeps every face that holds art and peels slivers off
+  concave edges.
+- **PSD import**: layer names some programs end with a hidden character
+  come through clean, and sibling folders with the same name stay apart
+  instead of merging into one part.
+- **Inspector notes** wrap inside the panel instead of running past it.
+
 ## 0.5.8 (2026-10-24)
 
 The rest of @seoriboi's requests from #29, their round of testing on
