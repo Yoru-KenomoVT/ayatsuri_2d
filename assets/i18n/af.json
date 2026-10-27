@@ -1486,5 +1486,7 @@
   "Reset the selected parameter to default": "Stel die gekose parameter terug na verstek",
   "Select the objects keyed on the parameter": "Kies die voorwerpe met sleutels op die parameter",
   "Rename the selected deformer, or the selected mesh's": "Hernoem die gekose vervormer, of dié van die gekose maas",
-  "{count} deformers": "{count} vervormers"
+  "{count} deformers": "{count} vervormers",
+  "Show parent-child hierarchy of deformers": "Wys die ouer-kind-hiërargie van vervormers",
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "Bo-aan die doek se regsklikkieslys: die vervormers bo die maas onder die wyser, om uit te kies"
 }

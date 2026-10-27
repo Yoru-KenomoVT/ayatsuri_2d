@@ -97,6 +97,95 @@ impl Tool {
     }
 }
 
+/// A deformer picked on the canvas (Shift+Alt+click, or the right-click
+/// tree): alone, or with `add` put into the pick or taken out of it.
+/// The selection it changes, borrowed field by field
+/// so the canvas can pick while it holds the session.
+struct CanvasPick<'a> {
+    model: &'a ayatsuri_format::Model,
+    selected: &'a mut Option<Sel>,
+    pick: &'a mut Vec<usize>,
+    anchor: &'a mut Option<usize>,
+    meshes: &'a mut Vec<usize>,
+    parts: &'a mut Vec<usize>,
+}
+
+fn canvas_def_pick(c: CanvasPick, d: usize, add: bool) {
+    let mut pick = def_group(*c.selected, c.pick);
+    if !add {
+        pick.clear();
+    }
+    match pick.iter().position(|&x| x == d) {
+        Some(at) if add => {
+            pick.remove(at);
+        }
+        Some(_) => {}
+        None => pick.push(d),
+    }
+    let pick = top_level_pick(c.model, &pick);
+    *c.selected = if pick.contains(&d) {
+        Some(Sel::Deformer(d))
+    } else {
+        pick.last().copied().map(Sel::Deformer)
+    };
+    *c.anchor = Some(d);
+    *c.pick = pick;
+    c.meshes.clear();
+    c.parts.clear();
+}
+
+/// Several deformers are picked at the top level only, as in Cubism: one
+/// inside another picked deformer is left out of the pick, so a rigged
+/// child taken in by mistake never gets the group's moves or keys.
+fn top_level_pick(model: &ayatsuri_format::Model, pick: &[usize]) -> Vec<usize> {
+    if pick.len() < 2 {
+        return pick.to_vec();
+    }
+    let kept = outermost(model, pick);
+    if kept.len() < pick.len() {
+        log::info!(
+            "{} deformer(s) inside another picked one left out of the pick",
+            pick.len() - kept.len()
+        );
+    }
+    kept
+}
+
+/// The deformers in `picked` with no other picked deformer above them.
+fn outermost(model: &ayatsuri_format::Model, picked: &[usize]) -> Vec<usize> {
+    picked
+        .iter()
+        .copied()
+        .filter(|&d| {
+            let mut cur = model.deformers.get(d).and_then(|x| x.parent_deformer);
+            let mut hops = 0;
+            while let Some(p) = cur.map(|p| p as usize) {
+                if picked.contains(&p) || hops > 256 {
+                    return hops > 256;
+                }
+                hops += 1;
+                cur = model.deformers.get(p).and_then(|x| x.parent_deformer);
+            }
+            true
+        })
+        .collect()
+}
+
+/// The deformers above an art mesh, root first (a loop is cut short).
+fn deformer_chain(model: &ayatsuri_format::Model, mesh: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut cur = model.art_meshes.get(mesh).and_then(|m| m.parent_deformer);
+    while let Some(d) = cur.map(|d| d as usize) {
+        if out.contains(&d) {
+            break;
+        }
+        out.push(d);
+        cur = model.deformers.get(d).and_then(|x| x.parent_deformer);
+    }
+    out.reverse();
+    out
+}
+
 /// The deformers a deformer action works on: the palette pick when the
 /// selected deformer is in it, else the selected deformer alone.
 fn def_group(selected: Option<Sel>, pick: &[usize]) -> Vec<usize> {
@@ -372,6 +461,8 @@ pub struct EditorUi {
     dev_mesh_logged: bool,
     /// A mesh or warp point drag being shown live on the model.
     live_drag: Option<LiveDrag>,
+    /// The same for a box over several objects (meshes or deformers).
+    live_group: LiveGroup,
     /// A rotation being turned live: the deformer and its angles as they were.
     rot_live: Option<(usize, Vec<f32>)>,
     /// Set by "Reset Toolbar Position": put the floating bar back next frame.
@@ -448,6 +539,9 @@ pub struct EditorUi {
     /// The meshes drawn where the canvas was right-clicked, front first,
     /// for its Select Layer menu.
     ctx_layers: Vec<usize>,
+    /// The deformers above the front-most mesh under the right-click, root
+    /// first, for the tree at the top of the canvas menu.
+    ctx_tree: Vec<usize>,
     /// The right-click came with Ctrl: Cubism's ArtMesh pop-up list, the
     /// meshes under the pointer and nothing else.
     ctx_mesh_list: bool,
@@ -871,6 +965,109 @@ impl LiveDrag {
     }
 }
 
+/// One object under a box over several: a mesh or warp keyform, or a
+/// rotation deformer's origin (one point).
+#[derive(Clone, Copy, PartialEq)]
+enum GroupObj {
+    Live(LiveTarget),
+    Origin(usize),
+}
+
+/// A rotation deformer origin under a live group preview: deformer,
+/// keyform, the stored origin and the blended local one.
+type LiveOrigin = (usize, usize, (f32, f32), (f32, f32));
+
+/// A live preview for a box over several objects: while the box is dragged
+/// each object shows its points where the box has them, and everything is
+/// put back before the edit lands (or the drag ends).
+#[derive(Default)]
+struct LiveGroup {
+    live: Vec<LiveDrag>,
+    origins: Vec<LiveOrigin>,
+}
+
+impl LiveGroup {
+    /// Put every object back; true when something was showing.
+    fn restore(&mut self, puppet: &mut ayatsuri_core::Puppet) -> bool {
+        let any = !self.live.is_empty() || !self.origins.is_empty();
+        for l in self.live.drain(..) {
+            l.restore(puppet);
+        }
+        for (d, k, (x, y), _) in self.origins.drain(..) {
+            if let Some((ox, oy)) = puppet.rotation_origin_mut(d, k) {
+                (*ox, *oy) = (x, y);
+            }
+        }
+        any
+    }
+
+    /// Show a drag: `from` is where the dragged points started, `pts` where
+    /// they are now, `owner` whose point each is. With no drag (or a
+    /// marquee) it puts everything back. True when the puppet changed.
+    fn update(
+        &mut self,
+        puppet: &mut ayatsuri_core::Puppet,
+        from: Option<&[(usize, Pos2)]>,
+        pts: &[Pos2],
+        owner: &[(GroupObj, usize)],
+        k_unit: f32,
+    ) -> bool {
+        let Some(from) = from else { return self.restore(puppet) };
+        if self.live.is_empty() && self.origins.is_empty() {
+            let values: Vec<f32> =
+                (0..puppet.model().parameters.len()).map(|i| puppet.value(i)).collect();
+            let mut seen: Vec<GroupObj> = Vec::new();
+            for &(obj, _) in owner {
+                if seen.contains(&obj) {
+                    continue;
+                }
+                seen.push(obj);
+                match obj {
+                    GroupObj::Live(t) => {
+                        if let Some(l) = LiveDrag::start(puppet, t) {
+                            self.live.push(l);
+                        }
+                    }
+                    GroupObj::Origin(d) => {
+                        let target = ayatsuri_core::edit::Target::Deformer(d);
+                        let k = ayatsuri_core::keyform::keyform_at(puppet.model(), target, &values);
+                        let local = puppet.rotation_local_origin(d);
+                        if let (Some(k), Some(local)) = (k, local)
+                            && let Some((x, y)) = puppet.rotation_origin_mut(d, k)
+                        {
+                            let stored = (*x, *y);
+                            self.origins.push((d, k, stored, local));
+                        }
+                    }
+                }
+            }
+        }
+        let mut per: Vec<(GroupObj, Vec<(usize, Vec2)>)> = Vec::new();
+        for &(i, p0) in from {
+            let (Some(&(obj, vi)), Some(&p)) = (owner.get(i), pts.get(i)) else { continue };
+            match per.iter_mut().find(|(o, _)| *o == obj) {
+                Some((_, v)) => v.push((vi, p - p0)),
+                None => per.push((obj, vec![(vi, p - p0)])),
+            }
+        }
+        let shifts_of = |obj: GroupObj| {
+            per.iter().find(|(o, _)| *o == obj).map(|(_, v)| v.as_slice()).unwrap_or(&[])
+        };
+        for l in &self.live {
+            l.show(puppet, shifts_of(GroupObj::Live(l.target)), k_unit);
+        }
+        for &(d, k, (x, y), (lx, ly)) in &self.origins {
+            let shift = shifts_of(GroupObj::Origin(d)).first().map(|s| s.1).unwrap_or(Vec2::ZERO);
+            let parent = puppet.model().deformers.get(d).and_then(|x| x.parent_deformer);
+            let (dx, dy) = parent_delta(puppet, parent, lx, ly, shift.x * k_unit, shift.y * k_unit);
+            if let Some((ox, oy)) = puppet.rotation_origin_mut(d, k) {
+                (*ox, *oy) = (x + dx, y + dy);
+            }
+        }
+        true
+    }
+}
+
 /// Keep `live` on `target` (starting it, or switching from another
 /// object), or put back whatever it was showing when nothing is dragged.
 fn live_for(
@@ -1279,6 +1476,7 @@ impl Default for EditorUi {
             td_division: None,
             toolbar_reset: false,
             live_drag: None,
+            live_group: LiveGroup::default(),
             dev_mesh_done: false,
             dev_def_done: false,
             dev_def_logged: false,
@@ -1316,6 +1514,7 @@ impl Default for EditorUi {
             pending_guide: None,
             ctx_click: None,
             ctx_layers: Vec::new(),
+            ctx_tree: Vec::new(),
             ctx_mesh_list: false,
             show_guide_settings: false,
             focus_request: false,
@@ -8238,6 +8437,9 @@ impl EditorUi {
             self.def_anchor = None;
         }
         pick_in(&mut self.def_pick, &mut self.def_anchor, row, shift, ctrl, order);
+        if let Some(s) = &self.session {
+            self.def_pick = top_level_pick(s.puppet.model(), &self.def_pick);
+        }
         self.selected = if self.def_pick.contains(&row) {
             Some(Sel::Deformer(row))
         } else {
@@ -10067,13 +10269,31 @@ impl EditorUi {
                 }
                 _ => Vec::new(),
             };
+            self.ctx_tree = match self.ctx_layers.first() {
+                Some(&mi) if !self.prefs.def_tree_off => deformer_chain(s.puppet.model(), mi),
+                _ => Vec::new(),
+            };
         }
+        // Cubism's tree: the right-clicked mesh's deformers, root first, then
+        // the mesh; a click selects one, Shift+click adds it to the pick
+        let tree: Vec<(usize, String, bool)> = self
+            .ctx_tree
+            .iter()
+            .map(|&d| {
+                let warp = s.puppet.warp_grid(d).is_some();
+                (d, s.deformer_name(d).to_string(), warp)
+            })
+            .collect();
+        let tree_mesh = self.ctx_layers.first().copied().filter(|_| !tree.is_empty());
+        let mut pick_def: Option<usize> = None;
+        let picked_now = def_group(self.selected, &self.def_pick);
         // every layer drawn under the right-click, front first, so a mesh
         // under another one can be picked without the Part tree
         let layers: Vec<(usize, String)> =
             self.ctx_layers.iter().map(|&mi| (mi, s.mesh_name(mi).to_string())).collect();
         let mut pick_layer = None;
         let mut hover_layer = None;
+        let mut hover_def: Option<usize> = None;
         let current = self.selected;
         // a row: its picture, a click picks it, a hover outlines it on the
         // canvas so the right one is easy to tell apart
@@ -10096,6 +10316,34 @@ impl EditorUi {
                 }
                 list(ui, s);
                 return;
+            }
+            for (depth, (d, name, warp)) in tree.iter().enumerate() {
+                let r = ui
+                    .horizontal(|ui| {
+                        ui.add_space(depth as f32 * 12.0);
+                        let (glyph, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                        if *warp {
+                            paint_warp_glyph(ui, glyph.center());
+                        } else {
+                            paint_rotation_glyph(ui, glyph.center());
+                        }
+                        ui.add(egui::Button::selectable(picked_now.contains(d), name))
+                    })
+                    .inner;
+                if r.hovered() {
+                    hover_def = Some(*d);
+                }
+                if r.clicked() {
+                    pick_def = Some(*d);
+                    ui.close();
+                }
+            }
+            if let Some(mi) = tree_mesh {
+                ui.horizontal(|ui| {
+                    ui.add_space(tree.len() as f32 * 12.0 + 18.0);
+                    ui.weak(s.mesh_name(mi));
+                });
+                ui.separator();
             }
             if !layers.is_empty() {
                 ui.menu_button(crate::i18n::tr("Select Layer"), |ui| list(ui, s));
@@ -10144,6 +10392,25 @@ impl EditorUi {
         });
         if let Some(mi) = hover_layer {
             self.palette_hover = Some(Sel::Mesh(mi));
+        }
+        if let Some(d) = hover_def {
+            self.palette_hover = Some(Sel::Deformer(d));
+        }
+        if let Some(d) = pick_def {
+            let shift = ui.ctx().input(|i| i.modifiers.shift);
+            canvas_def_pick(
+                CanvasPick {
+                    model: s.puppet.model(),
+                    selected: &mut self.selected,
+                    pick: &mut self.def_pick,
+                    anchor: &mut self.def_anchor,
+                    meshes: &mut self.multi_sel,
+                    parts: &mut self.part_pick,
+                },
+                d,
+                shift,
+            );
+            log::info!("selection: deformer {} from the canvas menu", s.deformer_name(d));
         }
         if let Some(mi) = pick_layer {
             log::info!("selection: {} from the canvas menu", s.mesh_name(mi));
@@ -10701,6 +10968,26 @@ impl EditorUi {
                             self.selected = Some(Sel::Mesh(mi));
                         }
                     }
+                } else if add && alt {
+                    // Shift+Alt+click adds the mesh's deformer to the pick,
+                    // or takes it out when it is already in
+                    let d = hit.and_then(|mi| {
+                        s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_deformer)
+                    });
+                    if let Some(d) = d {
+                        canvas_def_pick(
+                            CanvasPick {
+                                model: s.puppet.model(),
+                                selected: &mut self.selected,
+                                pick: &mut self.def_pick,
+                                anchor: &mut self.def_anchor,
+                                meshes: &mut self.multi_sel,
+                                parts: &mut self.part_pick,
+                            },
+                            d as usize,
+                            true,
+                        );
+                    }
                 } else if alt {
                     // alt+click selects the mesh's deformer; again walks up
                     let start = match (self.selected, hit) {
@@ -10954,6 +11241,7 @@ impl EditorUi {
 
         // overlays for whatever is selected
         let mut warp_hot = false;
+        let mut group_live = false;
         match self.selected {
             Some(Sel::Mesh(_)) if self.multi_sel.len() > 1 => {
                 let group: Vec<usize> = self
@@ -11009,6 +11297,22 @@ impl EditorUi {
                     grab_hot = out.hover_grab;
                     if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                         self.pts.picked.clear();
+                    }
+                    // the art follows the box while it is dragged
+                    group_live = true;
+                    let from = self
+                        .pts
+                        .drag
+                        .as_ref()
+                        .filter(|d| d.grab != point_edit::Grab::Marquee && out.commit.is_none())
+                        .map(|d| d.from.clone());
+                    let objs: Vec<(GroupObj, usize)> = owner
+                        .iter()
+                        .map(|&(m, v)| (GroupObj::Live(LiveTarget::Mesh(m)), v))
+                        .collect();
+                    let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                    if self.live_group.update(&mut s.puppet, from.as_deref(), &pts, &objs, k_unit) {
+                        s.dirty = true;
                     }
                     if let Some(moved) = out.commit {
                         let k_unit = 1.0 / (scale * c.pixels_per_unit);
@@ -11376,7 +11680,11 @@ impl EditorUi {
                 // several deformers picked: one box over every warp's grid
                 // and rotation deformer's origin moves, scales and rotates
                 // them together, in the keyform the parameters sit on
-                let group: Vec<usize> = def_group(self.selected, &self.def_pick)
+                // a picked deformer inside another picked one rides along
+                // with it, so only the outermost ones take the box (else
+                // the inner ones would move twice); any level can be picked
+                let picked = def_group(self.selected, &self.def_pick);
+                let group: Vec<usize> = outermost(s.puppet.model(), &picked)
                     .into_iter()
                     .filter(|d| !self.def_locked.contains(d))
                     .collect();
@@ -11430,6 +11738,25 @@ impl EditorUi {
                     grab_hot = out.hover_grab;
                     if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                         self.pts.picked.clear();
+                    }
+                    // the art follows the box while it is dragged
+                    group_live = true;
+                    let from = self
+                        .pts
+                        .drag
+                        .as_ref()
+                        .filter(|d| d.grab != point_edit::Grab::Marquee && out.commit.is_none())
+                        .map(|d| d.from.clone());
+                    let objs: Vec<(GroupObj, usize)> = owner
+                        .iter()
+                        .map(|&(d, gi)| match gi {
+                            usize::MAX => (GroupObj::Origin(d), 0),
+                            _ => (GroupObj::Live(LiveTarget::Warp(d)), gi),
+                        })
+                        .collect();
+                    let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                    if self.live_group.update(&mut s.puppet, from.as_deref(), &pts, &objs, k_unit) {
+                        s.dirty = true;
                     }
                     if let Some(moved) = out.commit {
                         let k_unit = 1.0 / (scale * c.pixels_per_unit);
@@ -12168,6 +12495,10 @@ impl EditorUi {
             _ => {}
         }
 
+        // a group preview whose box is gone (selection changed) puts back
+        if !group_live && self.live_group.restore(&mut s.puppet) {
+            s.dirty = true;
+        }
         self.pts.hot = warp_hot;
         if !warp_hot {
             self.pts.on_handle = false;
@@ -17540,6 +17871,45 @@ mod palette_pick_tests {
         // a mesh selection does not count as a deformer pick
         ed.selected = Some(Sel::Mesh(0));
         assert!(def_group(ed.selected, &ed.def_pick).is_empty());
+    }
+
+    #[test]
+    fn only_top_level_deformers_join_a_pick() {
+        use ayatsuri_core::edit::{NewDeformer, create_deformer};
+        let mut m = Model::new();
+        let warp = |m: &mut Model, parent: Option<u32>, id: &str| {
+            let kind = NewDeformer::Warp { rows: 1, cols: 1 };
+            create_deformer(m, kind, &[], parent, (0.0, 0.0, 1.0, 1.0), None, id.into()).unwrap()
+        };
+        let a = warp(&mut m, None, "A");
+        let b = warp(&mut m, Some(a as u32), "B");
+        let c = warp(&mut m, Some(b as u32), "C");
+        let d = warp(&mut m, None, "D");
+        // siblings at the top, as in Cubism, all move
+        assert_eq!(outermost(&m, &[a, d]), vec![a, d]);
+        // lower levels can be picked too; inside a picked one they ride along
+        assert_eq!(outermost(&m, &[c, a, d]), vec![a, d]);
+        assert_eq!(outermost(&m, &[c, b]), vec![b]);
+        let ids = |v: Vec<usize>| -> Vec<String> {
+            v.into_iter().map(|i| m.deformers[i].id.clone()).collect()
+        };
+        assert_eq!(ids(outermost(&m, &[c])), vec!["C"]);
+        // in the palette: Ctrl+click on a child of a picked deformer is
+        // refused, and on its parent drops the child
+        let mut ed = EditorUi::new();
+        let ctx = egui::Context::default();
+        ed.session = Some(Session::create(&ctx, "t".into(), String::new(), m).unwrap());
+        let order = [a, b, c, d];
+        ed.pick_def_rows(b, false, false, &order);
+        ed.pick_def_rows(c, false, true, &order);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![b]);
+        ed.pick_def_rows(d, false, true, &order);
+        ed.pick_def_rows(a, false, true, &order);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![d, a]);
+        // a Shift run over a branch keeps its top: A and D, not B and C
+        ed.pick_def_rows(a, false, false, &order);
+        ed.pick_def_rows(d, true, false, &order);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![a, d]);
     }
 
     #[test]

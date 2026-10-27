@@ -1486,5 +1486,7 @@
   "Reset the selected parameter to default": "将选中的参数重置为默认值",
   "Select the objects keyed on the parameter": "选择在该参数上有关键帧的对象",
   "Rename the selected deformer, or the selected mesh's": "重命名选中的变形器，或选中网格的变形器",
-  "{count} deformers": "{count} 个变形器"
+  "{count} deformers": "{count} 个变形器",
+  "Show parent-child hierarchy of deformers": "显示变形器的父子层级",
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "在画布右键菜单顶部显示指针下网格之上的变形器，可从中选择"
 }

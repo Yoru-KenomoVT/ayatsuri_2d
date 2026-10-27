@@ -98,11 +98,19 @@ meshes and the Parts palette, and the requests from Discord testing.
   come through clean, and sibling folders with the same name stay apart
   instead of merging into one part.
 - **Inspector notes** wrap inside the panel instead of running past it.
-- **Several deformers can be selected at once** in the Deformer palette,
-  as in Cubism: Shift+click picks the run between two clicks, Ctrl+click
-  adds or removes one. The pick moves, scales and rotates together in one
-  box on the canvas, takes keys together, and deletes, locks, hides and
-  re-parents (drag) as a group.
+- **Several deformers can be selected at once**, as in Cubism. In the
+  Deformer palette Shift+click picks the run between two clicks and
+  Ctrl+click adds or removes one; on the canvas Shift+Alt+click adds the
+  deformer of the mesh under the pointer. Only top-level ones join: a
+  deformer inside another picked one is left out, so a rigged child taken
+  in by mistake is never moved or keyed with the group. The pick moves,
+  scales and rotates in one box (the art follows live), takes keys
+  together, and deletes, locks, hides and re-parents as a group.
+- **The canvas right-click menu shows the deformers above** the mesh under
+  the pointer as a tree to select from (Shift+click adds to the pick), as
+  in Cubism; Settings > Canvas can turn it off.
+- **Boxes over several meshes** move the art live while dragged, like a
+  single mesh, instead of only on release.
 - **Clip by on several selected meshes** clips all of them, not only one,
   from the canvas pick and the Inspector field alike, as one undo step.
 

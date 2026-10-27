@@ -174,6 +174,9 @@ pub struct Prefs {
     pub ffmpeg_prompt_off: bool,
     /// Hide the canvas rulers (guides still show).
     pub rulers_off: bool,
+    /// Leave the deformer tree off the top of the canvas right-click menu
+    /// (Cubism's Show parent-child hierarchy of deformers, cleared).
+    pub def_tree_off: bool,
     pub guide_snap_off: bool,
     /// Smooth movement while dragging points and objects, and how much
     /// (1 to 100; 0 is the default, 40).
