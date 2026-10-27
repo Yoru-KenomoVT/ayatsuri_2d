@@ -1525,5 +1525,13 @@
   "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "Wanneer Maasredigering verlaat word, die atlas dadelik weer uitlê as 'n maas nou verby sy eie kuns strek. Af: die atlas wag vir die uitvoer, wat die uitleg aanbied wanneer 'n maas dit nodig het",
   "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "{count} maas/mase strek op die tekstuuratlas verby hul kuns, dus sou hulle 'n buurman se pixels wys",
   "Lay out the atlas": "Lê die atlas uit",
-  "Pack each mesh's own art again (one undo step), then export": "Pak elke maas se eie kuns weer in (een ontdoen-stap), voer dan uit"
+  "Pack each mesh's own art again (one undo step), then export": "Pak elke maas se eie kuns weer in (een ontdoen-stap), voer dan uit",
+  "Verify placement": "Verifieer plasing",
+  "Select the pieces that overlap another or reach past the page, one at a time": "Kies een vir een die stukke wat 'n ander oorvleuel of verby die bladsy strek",
+  "{overlap} overlapping, {over} past the page: they would show other pixels on the model": "{overlap} oorvleuel, {over} verby die bladsy: hulle sou ander pixels op die model wys",
+  "Every piece has its own space": "Elke stuk het sy eie ruimte",
+  "Switch between Source Image and Texture Atlas": "Wissel tussen bronbeeld en tekstuuratlas",
+  "Texture Atlas View": "Tekstuuratlas-aansig",
+  "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)": "Wys elke pixel wat elke maas op die tekstuuratlas dek, soos die uitvoer sal: 'n maas wat oor sy buurman gegroei het, wys daardie buurman (T)",
+  "Texture Atlas View  ·  T to switch back": "Tekstuuratlas-aansig  ·  T om terug te gaan"
 }

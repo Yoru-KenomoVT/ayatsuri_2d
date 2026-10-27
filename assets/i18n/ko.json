@@ -1525,5 +1525,13 @@
   "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "메시 편집을 마칠 때 메시가 자기 아트 밖으로 나가면 바로 아틀라스를 다시 배치합니다. 끄면: 아틀라스는 내보내기까지 기다리고, 필요할 때 내보내기에서 배치를 제안합니다",
   "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "메시 {count}개가 텍스처 아틀라스에서 자기 아트 밖으로 나가 있어 이웃 픽셀이 보이게 됩니다",
   "Lay out the atlas": "아틀라스 배치",
-  "Pack each mesh's own art again (one undo step), then export": "각 메시의 아트를 다시 배치합니다(한 번에 되돌리기 가능). 그다음 내보내세요"
+  "Pack each mesh's own art again (one undo step), then export": "각 메시의 아트를 다시 배치합니다(한 번에 되돌리기 가능). 그다음 내보내세요",
+  "Verify placement": "배치 검증",
+  "Select the pieces that overlap another or reach past the page, one at a time": "다른 조각과 겹치거나 페이지 밖으로 나간 조각을 하나씩 선택합니다",
+  "{overlap} overlapping, {over} past the page: they would show other pixels on the model": "겹침 {overlap}개, 페이지 밖 {over}개: 모델에 다른 픽셀이 보이게 됩니다",
+  "Every piece has its own space": "모든 조각이 자기 자리에 있습니다",
+  "Switch between Source Image and Texture Atlas": "원본 이미지와 텍스처 아틀라스 전환",
+  "Texture Atlas View": "텍스처 아틀라스 보기",
+  "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)": "각 메시가 텍스처 아틀라스에서 덮는 모든 픽셀을 내보내기와 같이 표시합니다. 이웃까지 커진 메시는 이웃이 보입니다(T)",
+  "Texture Atlas View  ·  T to switch back": "텍스처 아틀라스 보기  ·  T로 돌아가기"
 }

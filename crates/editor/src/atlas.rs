@@ -149,6 +149,57 @@ pub fn auto_layout(pieces: &[Piece], page_size: u32, fit: bool) -> Result<Layout
     Ok(Layout { page_size, pages: if unique.is_empty() { 0 } else { page + 1 }, places })
 }
 
+/// What Verify placement found on a layout, as Cubism's does: pieces
+/// overlapping another on the same page (their meshes would show each
+/// other's pixels), and pieces reaching past the page's edge. Copies of one
+/// mesh share their pixels on purpose and never count as overlapping.
+#[derive(Debug, Default, PartialEq)]
+pub struct Problems {
+    pub overlapping: Vec<usize>,
+    pub overhanging: Vec<usize>,
+}
+
+impl Problems {
+    pub fn is_empty(&self) -> bool {
+        self.overlapping.is_empty() && self.overhanging.is_empty()
+    }
+
+    pub fn contains(&self, piece: usize) -> bool {
+        self.overlapping.contains(&piece) || self.overhanging.contains(&piece)
+    }
+}
+
+pub fn verify(pieces: &[Piece], layout: &Layout) -> Problems {
+    let side = layout.page_size;
+    let rect = |i: usize| {
+        let (p, pl) = (pieces.get(i)?, layout.places.get(i)?);
+        Some((pl.page, pl.x, pl.y, pl.x.saturating_add(p.w), pl.y.saturating_add(p.h)))
+    };
+    let key = |p: &Piece| -> PieceKey { (p.page, p.x, p.y, p.w, p.h, p.art) };
+    let mut out = Problems::default();
+    for i in 0..pieces.len() {
+        let Some((page, x0, y0, x1, y1)) = rect(i) else { continue };
+        if x1 > side || y1 > side {
+            out.overhanging.push(i);
+        }
+        let overlaps = (0..pieces.len()).any(|j| {
+            if j == i {
+                return false;
+            }
+            let (Some((pj, a0, b0, a1, b1)), Some(pi_), Some(pj_)) =
+                (rect(j), pieces.get(i), pieces.get(j))
+            else {
+                return false;
+            };
+            pj == page && key(pi_) != key(pj_) && x0 < a1 && a0 < x1 && y0 < b1 && b0 < y1
+        });
+        if overlaps {
+            out.overlapping.push(i);
+        }
+    }
+    out
+}
+
 /// Rewrite the model's uvs and page numbers for a layout. Pixels are not
 /// touched here; `build_pages` does that.
 pub fn apply_to_model(
@@ -278,6 +329,33 @@ mod tests {
                 art: None,
             }]
         );
+    }
+
+    #[test]
+    fn verify_finds_overlaps_and_pieces_past_the_edge() {
+        let ps = vec![
+            Piece { mesh: 0, page: 0, x: 0, y: 0, w: 100, h: 100, art: None },
+            // a copy of mesh 0's rectangle: shares its place on purpose
+            Piece { mesh: 1, page: 0, x: 0, y: 0, w: 100, h: 100, art: None },
+            Piece { mesh: 2, page: 0, x: 0, y: 0, w: 50, h: 50, art: None },
+            Piece { mesh: 3, page: 0, x: 0, y: 0, w: 50, h: 50, art: None },
+        ];
+        let place = |page, x, y| Place { page, x, y };
+        let mut layout = Layout {
+            page_size: 256,
+            pages: 2,
+            // 0 and 1 together, 2 touching 0's edge only, 3 on another page
+            places: vec![place(0, 0, 0), place(0, 0, 0), place(0, 100, 0), place(1, 10, 10)],
+        };
+        assert!(verify(&ps, &layout).is_empty(), "touching is not overlapping");
+        // 2 slides into 0 and 1
+        layout.places[2] = place(0, 80, 20);
+        let found = verify(&ps, &layout);
+        assert_eq!(found.overlapping, vec![0, 1, 2]);
+        // 3 hangs past the page's edge
+        layout.places[3] = place(1, 230, 10);
+        assert_eq!(verify(&ps, &layout).overhanging, vec![3]);
+        assert!(verify(&ps, &layout).contains(3));
     }
 
     #[test]

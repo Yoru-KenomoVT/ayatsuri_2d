@@ -1525,5 +1525,13 @@
   "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "退出网格编辑时，若网格超出自身图像，立即重新排列图集。关闭：图集等到导出时再处理，需要时导出会提示排列",
   "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "{count} 个网格在纹理图集上超出了自身图像，会显示相邻的像素",
   "Lay out the atlas": "排列图集",
-  "Pack each mesh's own art again (one undo step), then export": "重新打包每个网格自己的图像（一步撤销），然后再导出"
+  "Pack each mesh's own art again (one undo step), then export": "重新打包每个网格自己的图像（一步撤销），然后再导出",
+  "Verify placement": "验证排列",
+  "Select the pieces that overlap another or reach past the page, one at a time": "逐个选择与其他部分重叠或超出页面的部分",
+  "{overlap} overlapping, {over} past the page: they would show other pixels on the model": "{overlap} 个重叠，{over} 个超出页面：模型上会显示其他像素",
+  "Every piece has its own space": "每个部分都有自己的位置",
+  "Switch between Source Image and Texture Atlas": "在原图与纹理图集之间切换",
+  "Texture Atlas View": "纹理图集视图",
+  "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)": "像导出时一样显示每个网格在纹理图集上覆盖的全部像素：越界到相邻部分的网格会显示相邻内容（T）",
+  "Texture Atlas View  ·  T to switch back": "纹理图集视图  ·  按 T 返回"
 }

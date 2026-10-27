@@ -29,6 +29,8 @@ pub struct AtlasWin {
     panning: bool,
     /// A page size typed in rather than picked from the list.
     custom: bool,
+    /// What Verify placement last said, when it found nothing.
+    verified: bool,
 }
 
 /// The sizes the page picker offers.
@@ -61,6 +63,7 @@ impl AtlasWin {
             pan: Vec2::ZERO,
             panning: false,
             custom: false,
+            verified: false,
         }
     }
 
@@ -152,6 +155,36 @@ impl EditorUi {
                     ui.checkbox(&mut win.fit, tr("Scale pieces that don't fit"));
                     if ui.button(tr("Auto layout")).clicked() {
                         win.auto();
+                    }
+                    // Cubism's Verify placement: select the next piece that
+                    // overlaps another or reaches past the page
+                    if ui
+                        .button(tr("Verify placement"))
+                        .on_hover_text(tr(
+                            "Select the pieces that overlap another or reach past the page, one at a time",
+                        ))
+                        .clicked()
+                    {
+                        let problems = crate::atlas::verify(&win.pieces, &win.layout);
+                        let mut flagged: Vec<usize> = problems
+                            .overlapping
+                            .iter()
+                            .chain(&problems.overhanging)
+                            .copied()
+                            .collect();
+                        flagged.sort_unstable();
+                        flagged.dedup();
+                        let next = match win.selected {
+                            Some(cur) => flagged.iter().find(|&&i| i > cur).or(flagged.first()),
+                            None => flagged.first(),
+                        };
+                        win.verified = next.is_none();
+                        if let Some(&i) = next {
+                            win.selected = Some(i);
+                            if let Some(pl) = win.layout.places.get(i) {
+                                win.page = pl.page;
+                            }
+                        }
                     }
                     ui.separator();
                     if ui.button(tr("New page")).clicked() {
@@ -394,6 +427,7 @@ impl EditorUi {
                     }
                     let pointer = resp.interact_pointer_pos();
                     let mut hit: Option<usize> = None;
+                    let problems = crate::atlas::verify(&win.pieces, &win.layout);
                     for (i, (p, pl)) in win.pieces.iter().zip(&win.layout.places).enumerate() {
                         if pl.page != win.page {
                             continue;
@@ -419,13 +453,17 @@ impl EditorUi {
                             painter.image(t.id(), r, uv, Color32::WHITE);
                         }
                         let on = win.selected == Some(i);
+                        // a piece overlapping another, or past the page, in red
+                        let bad = problems.contains(i);
                         painter.rect_stroke(
                             r,
                             0.0,
                             Stroke::new(
-                                if on { 2.0 } else { 1.0 },
+                                if on || bad { 2.0 } else { 1.0 },
                                 if on {
                                     crate::theme::pal().accent
+                                } else if bad {
+                                    crate::theme::pal().rotation_red
                                 } else {
                                     Color32::from_white_alpha(90)
                                 },
@@ -476,6 +514,27 @@ impl EditorUi {
                     ui.vertical(|ui| {
                         ui.set_min_width(200.0);
                         ui.strong(tr("Pieces on this page"));
+                        let found = crate::atlas::verify(&win.pieces, &win.layout);
+                        if !found.is_empty() {
+                            win.verified = false;
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} {}",
+                                    egui_phosphor::regular::WARNING,
+                                    trf(
+                                        "{overlap} overlapping, {over} past the page: they would show other pixels on the model",
+                                        &[
+                                            ("overlap", &found.overlapping.len()),
+                                            ("over", &found.overhanging.len()),
+                                        ],
+                                    )
+                                ))
+                                .size(11.0)
+                                .color(crate::theme::pal().rotation_red),
+                            );
+                        } else if win.verified {
+                            ui.weak(tr("Every piece has its own space"));
+                        }
                         egui::ScrollArea::vertical().max_height(side - 24.0).show(ui, |ui| {
                             for (i, (p, pl)) in
                                 win.pieces.iter().zip(&win.layout.places).enumerate()
@@ -484,10 +543,15 @@ impl EditorUi {
                                     continue;
                                 }
                                 let name = s.mesh_name(p.mesh);
+                                let mark = if found.contains(i) {
+                                    format!("{} ", egui_phosphor::regular::WARNING)
+                                } else {
+                                    String::new()
+                                };
                                 if ui
                                     .selectable_label(
                                         win.selected == Some(i),
-                                        format!("{name}  {}×{}", p.w, p.h),
+                                        format!("{mark}{name}  {}×{}", p.w, p.h),
                                     )
                                     .clicked()
                                 {
