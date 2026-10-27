@@ -87,7 +87,7 @@ struct Cdi3Entry {
 }
 
 /// What is selected across the palettes.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sel {
     Part(usize),
     Deformer(usize),

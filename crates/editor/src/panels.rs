@@ -9040,19 +9040,11 @@ impl EditorUi {
                 if resp.drag_started() && !self.def_locked.contains(&i) {
                     resp.dnd_set_drag_payload(Child::Deformer(i));
                 }
-                if let Some(p) = resp.dnd_hover_payload::<Child>()
-                    && *p != Child::Deformer(i)
-                {
-                    ui.painter().rect_stroke(
-                        rect.shrink(1.0),
-                        3.0,
-                        Stroke::new(1.5, theme::pal().accent),
-                        StrokeKind::Inside,
-                    );
-                }
-                if let Some(p) = resp.dnd_release_payload::<Child>() {
-                    def_cmd = Some(DefCmd::Reparent(*p, Some(i)));
-                }
+                // as in the Parts palette: the edges drop beside this
+                // deformer (under its parent), the middle drops into it
+                let row_parent = s.puppet.model().deformers.get(i).and_then(|d| d.parent_deformer);
+                let open = has_kids && !self.def_collapsed.contains(&i);
+                def_drop_target(ui, &resp, Some(i), row_parent, open, &mut def_cmd);
                 let shown = s.deformer_shown.get(i).copied().unwrap_or(true);
                 let eye = Rect::from_min_size(rect.min, vec2(18.0, 18.0));
                 paint_eye(ui, eye, shown, shown);
@@ -9281,10 +9273,8 @@ impl EditorUi {
                     if resp.drag_started() {
                         resp.dnd_set_drag_payload(Child::Mesh(mi));
                     }
-                    // dropping on a mesh row means its deformer
-                    if let Some(p) = resp.dnd_release_payload::<Child>() {
-                        def_cmd = Some(DefCmd::Reparent(*p, Some(i)));
-                    }
+                    // dropping beside a mesh puts it under the mesh's deformer
+                    def_drop_target(ui, &resp, None, Some(i as u32), false, &mut def_cmd);
                     def_mesh_rows.push(mi);
                     if self.selected == Some(Sel::Mesh(mi)) || self.multi_sel.contains(&mi) {
                         paint_picked_row(ui, rect);
@@ -16124,6 +16114,55 @@ fn parts_mesh_row(
 enum Dragged {
     Parts(Vec<usize>),
     Mesh(usize),
+}
+
+/// A Deformer palette row as a drop place, the way the Parts palette's
+/// are: the top or bottom edge of a row drops beside it, under the row's
+/// own parent (deformers have no order among siblings, so above and below
+/// are the same), marked with a line; the middle of a deformer row drops
+/// into it, marked with a box, and so does the lower half of an open one,
+/// whose first child shows just under it. `into` is the row's deformer
+/// (None for a mesh row), `parent` the deformer its row sits under.
+fn def_drop_target(
+    ui: &Ui,
+    resp: &egui::Response,
+    into: Option<usize>,
+    parent: Option<u32>,
+    open: bool,
+    out: &mut Option<DefCmd>,
+) {
+    let Some(dragged) = egui::DragAndDrop::payload::<Child>(ui.ctx()).map(|d| *d) else {
+        return;
+    };
+    let rect = resp.rect;
+    let Some(ptr) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p)) else {
+        return;
+    };
+    let f = (ptr.y - rect.min.y) / rect.height().max(1.0);
+    let target = match into {
+        Some(d) if f >= 0.3 && (open || f <= 0.7) => Some(d),
+        _ => None,
+    };
+    // a deformer dropped on itself goes nowhere
+    if target.is_some() && target.map(Child::Deformer) == Some(dragged) {
+        return;
+    }
+    let stroke = Stroke::new(2.0, theme::pal().accent);
+    match target {
+        Some(_) => {
+            ui.painter().rect_stroke(rect.shrink(1.0), 2.0, stroke, StrokeKind::Inside);
+        }
+        None if f < 0.5 => {
+            ui.painter().hline(rect.x_range(), rect.min.y, stroke);
+        }
+        None => {
+            ui.painter().hline(rect.x_range(), rect.max.y, stroke);
+        }
+    }
+    if ui.input(|i| i.pointer.any_released()) {
+        let to = target.or(parent.map(|p| p as usize));
+        *out = Some(DefCmd::Reparent(dragged, to));
+    }
 }
 
 /// A Parts palette row as a drop place, as in Cubism: the top of a row
