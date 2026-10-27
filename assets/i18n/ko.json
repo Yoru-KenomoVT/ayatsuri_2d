@@ -1520,5 +1520,6 @@
   "Finish Mesh Edit": "메시 편집 종료",
   "Select Parent Deformer": "부모 디포머 선택",
   "Lock": "잠금",
-  "Unlock": "잠금 해제"
+  "Unlock": "잠금 해제",
+  "Pick the colour from the art on the canvas (Esc cancels)": "캔버스의 아트에서 색을 가져옵니다(Esc로 취소)"
 }

@@ -1520,5 +1520,6 @@
   "Finish Mesh Edit": "Mesh bewerken afronden",
   "Select Parent Deformer": "Bovenliggende deformer selecteren",
   "Lock": "Vergrendelen",
-  "Unlock": "Ontgrendelen"
+  "Unlock": "Ontgrendelen",
+  "Pick the colour from the art on the canvas (Esc cancels)": "Neem de kleur over van de art op het canvas (Esc annuleert)"
 }

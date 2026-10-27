@@ -814,6 +814,10 @@ pub struct EditorUi {
     art_style: ayatsuri_format::model::ArtPath,
     art_finish: bool,
     art_pick: Option<u8>,
+    /// The Inspector's eyedropper: which colour waits for a click on the
+    /// art, and the colour a click took, for the Inspector to set.
+    color_pick: Option<ayatsuri_core::edit::ColorKind>,
+    color_picked: Option<(ayatsuri_core::edit::ColorKind, [u8; 3])>,
     clip_with: Option<usize>,
     clip_search: String,
     /// The Clip by field while it is being typed in: the mesh and the text.
@@ -1818,6 +1822,8 @@ impl Default for EditorUi {
             art_style: ayatsuri_format::model::ArtPath::default(),
             art_finish: false,
             art_pick: None,
+            color_pick: None,
+            color_picked: None,
             clip_with: None,
             clip_search: String::new(),
             clip_ids: None,
@@ -10324,7 +10330,14 @@ impl EditorUi {
                 let targets: Vec<ayatsuri_core::edit::Target> =
                     picked.iter().map(|&m| ayatsuri_core::edit::Target::ArtMesh(m)).collect();
                 opacity_row(ui, s, &targets, self.sel_param);
-                color_rows(ui, s, &targets, self.sel_param);
+                color_rows(
+                    ui,
+                    s,
+                    &targets,
+                    self.sel_param,
+                    &mut self.color_pick,
+                    &mut self.color_picked,
+                );
                 use ayatsuri_format::model::{Blend, flags};
                 let blend = Blend::of(m.blend, m.flags);
                 let mut new_blend = blend;
@@ -10518,7 +10531,14 @@ impl EditorUi {
                 );
                 ui.separator();
                 opacity_row(ui, s, &[ayatsuri_core::edit::Target::Deformer(i)], self.sel_param);
-                color_rows(ui, s, &[ayatsuri_core::edit::Target::Deformer(i)], self.sel_param);
+                color_rows(
+                    ui,
+                    s,
+                    &[ayatsuri_core::edit::Target::Deformer(i)],
+                    self.sel_param,
+                    &mut self.color_pick,
+                    &mut self.color_picked,
+                );
             }
             Some(Sel::Part(i)) => {
                 let Some(p) = s.puppet.model().parts.get(i) else { return };
@@ -11408,7 +11428,37 @@ impl EditorUi {
 
         // the Select tool: hover previews a mesh, click selects it, empty
         // click deselects, double-click jumps into mesh editing
-        if self.tool == Tool::Arrow && !space && self.mesh_edit.is_none() {
+        // the Inspector's eyedropper: a click on the art takes its colour
+        // (and selects nothing); Esc lets go
+        let eyedropping = self.color_pick.is_some();
+        if let Some(kind) = self.color_pick {
+            let ptr = ui.ctx().input(|i| i.pointer.latest_pos()).filter(|p| view.contains(*p));
+            let sample = ptr.and_then(|p| {
+                let c = s.puppet.model().canvas;
+                let (origin, scale) = view_origin_scale(view, c, self.view_zoom, self.view_pan);
+                let ux = ((p.x - origin.x) / scale - c.origin_x) / c.pixels_per_unit;
+                let uy = ((p.y - origin.y) / scale - c.origin_y) / c.pixels_per_unit;
+                color_at(&s.puppet, &s.texture_pngs, &mut self.pick_pages, ux, uy)
+            });
+            if let (Some(p), Some([r, g, b, _])) = (ptr, sample) {
+                painter.circle(
+                    p + vec2(18.0, -18.0),
+                    9.0,
+                    Color32::from_rgb(r, g, b),
+                    Stroke::new(1.5, Color32::WHITE),
+                );
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            let cancel = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+            if resp.clicked() || cancel {
+                if let (false, Some([r, g, b, _])) = (cancel, sample) {
+                    self.color_picked = Some((kind, [r, g, b]));
+                }
+                self.color_pick = None;
+                self.pick_pages.clear();
+            }
+        }
+        if self.tool == Tool::Arrow && !space && self.mesh_edit.is_none() && !eyedropping {
             let unit_of = |ptr: Pos2| {
                 (
                     ((ptr.x - origin.x) / scale - c.origin_x) / c.pixels_per_unit,
@@ -16193,6 +16243,8 @@ fn color_rows(
     s: &mut Session,
     targets: &[ayatsuri_core::edit::Target],
     across: Option<usize>,
+    pick: &mut Option<ayatsuri_core::edit::ColorKind>,
+    picked: &mut Option<(ayatsuri_core::edit::ColorKind, [u8; 3])>,
 ) {
     use ayatsuri_core::edit::{ColorKind, Target};
     let (sets, _) = keyform_sets(s, targets, across);
@@ -16262,6 +16314,32 @@ fn color_rows(
                     }
                 }
                 s.dirty = true;
+            }
+            // the eyedropper: take the colour from the art on the canvas
+            let picking = *pick == Some(kind);
+            if ui
+                .add(egui::Button::selectable(picking, egui_phosphor::regular::EYEDROPPER))
+                .on_hover_text(crate::i18n::tr(
+                    "Pick the colour from the art on the canvas (Esc cancels)",
+                ))
+                .clicked()
+            {
+                *pick = if picking { None } else { Some(kind) };
+            }
+            if let Some((k, [r, g, b])) = *picked
+                && k == kind
+            {
+                *picked = None;
+                let set = [r, g, b].map(|c| c as f32 / 255.0);
+                if s.edit(|m| {
+                    let mut any = false;
+                    for &(t, k) in &pairs {
+                        any |= ayatsuri_core::edit::set_color(m, t, k, kind, set);
+                    }
+                    any
+                }) {
+                    log::info!("{name} of {} keyform(s) picked from the art", pairs.len());
+                }
             }
             let reset = ui
                 .small_button("↺")

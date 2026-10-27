@@ -1520,5 +1520,6 @@
   "Finish Mesh Edit": "メッシュ編集を終了",
   "Select Parent Deformer": "親デフォーマを選択",
   "Lock": "ロック",
-  "Unlock": "ロック解除"
+  "Unlock": "ロック解除",
+  "Pick the colour from the art on the canvas (Esc cancels)": "キャンバスのアートから色を取得します（Escで取り消し）"
 }
