@@ -1216,6 +1216,8 @@ enum MeshRowCmd {
     /// Group into New Part: this mesh, or the pick it is in.
     Group(usize),
     Rename(usize),
+    /// Flip this mesh (with the pick it is in), horizontally or not.
+    Flip(usize, bool),
 }
 
 enum DefCmd {
@@ -1229,6 +1231,8 @@ enum DefCmd {
     /// Flip this deformer (with the pick it is in): horizontally or not,
     /// and the warp alone (what it holds staying put) or with its content.
     Flip(usize, bool, bool),
+    /// Flip this art mesh (with the pick it is in), horizontally or not.
+    FlipMesh(usize, bool),
     Delete(usize),
     /// Delete this art mesh (with the rest of the pick when it is in it).
     DeleteMesh(usize),
@@ -7383,6 +7387,17 @@ impl EditorUi {
         }
     }
 
+    /// Flip from a mesh row's menu: the pick it is in, or the mesh alone.
+    fn flip_mesh_row(&mut self, mi: usize, horizontal: bool) {
+        let pick = self.mesh_pick_with(mi);
+        if pick.len() < 2 {
+            self.multi_sel = vec![mi];
+        }
+        self.selected = Some(Sel::Mesh(mi));
+        self.def_pick.clear();
+        self.flip_selection(horizontal);
+    }
+
     /// Flip only the selected warps (the whole pick), each across its own
     /// centre, while what they hold stays where it is.
     fn flip_warps_only(&mut self, horizontal: bool) {
@@ -8570,6 +8585,7 @@ impl EditorUi {
             }
             Some(MeshRowCmd::ClipBy(mi)) => self.start_clip_pick(mi),
             Some(MeshRowCmd::Rename(mi)) => self.open_mesh_rename(mi),
+            Some(MeshRowCmd::Flip(mi, h)) => self.flip_mesh_row(mi, h),
             Some(MeshRowCmd::Group(mi)) => {
                 // a mesh outside the pick groups alone
                 if !self.multi_sel.contains(&mi) {
@@ -9374,6 +9390,16 @@ impl EditorUi {
                             def_cmd = Some(DefCmd::RenameMesh(mi));
                             ui.close();
                         }
+                        ui.menu_button(crate::i18n::tr("Flip"), |ui| {
+                            for (label, h) in
+                                [("Flip Horizontally", true), ("Flip Vertically", false)]
+                            {
+                                if ui.button(crate::i18n::tr(label)).clicked() {
+                                    def_cmd = Some(DefCmd::FlipMesh(mi, h));
+                                    ui.close();
+                                }
+                            }
+                        });
                         if ui.button(crate::i18n::tr("Clip by…")).clicked() {
                             def_cmd = Some(DefCmd::ClipBy(mi));
                             ui.close();
@@ -9540,6 +9566,7 @@ impl EditorUi {
             DefCmd::Rename(i) => self.open_def_rename(i),
             DefCmd::RenameMesh(i) => self.open_mesh_rename(i),
             DefCmd::Division(i) => self.open_def_division(i),
+            DefCmd::FlipMesh(mi, h) => self.flip_mesh_row(mi, h),
             DefCmd::Flip(i, horizontal, alone) => {
                 // a deformer outside the pick flips by itself
                 if !def_group(self.selected, &self.def_pick).contains(&i) {
@@ -16310,6 +16337,14 @@ fn parts_mesh_row(
             *cmd = Some(MeshRowCmd::Rename(mi));
             ui.close();
         }
+        ui.menu_button(crate::i18n::tr("Flip"), |ui| {
+            for (label, h) in [("Flip Horizontally", true), ("Flip Vertically", false)] {
+                if ui.button(crate::i18n::tr(label)).clicked() {
+                    *cmd = Some(MeshRowCmd::Flip(mi, h));
+                    ui.close();
+                }
+            }
+        });
         let model = s.puppet.model();
         let copy_of: Vec<usize> = if picked.contains(&mi) { picked.to_vec() } else { vec![mi] };
         let ids: Vec<&str> = copy_of
