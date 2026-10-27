@@ -1479,5 +1479,10 @@
   "Copy this ID, to paste into another mesh's Clip by": "复制此 ID，粘贴到另一个网格的剪贴中",
   "Apply to change the division; the shape is kept.": "点击“应用”更改分割数，形状保持不变。",
   "Rename Part": "重命名部件",
-  "Rename the selected object": "重命名选中的对象"
+  "Rename the selected object": "重命名选中的对象",
+  "Copy the selected meshes' IDs": "复制选中网格的 ID",
+  "Delete the selected parameter": "删除选中的参数",
+  "Link or unlink the parameter below": "与下方参数链接或取消链接",
+  "Reset the selected parameter to default": "将选中的参数重置为默认值",
+  "Select the objects keyed on the parameter": "选择在该参数上有关键帧的对象"
 }

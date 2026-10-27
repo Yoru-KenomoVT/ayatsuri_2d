@@ -1479,5 +1479,10 @@
   "Copy this ID, to paste into another mesh's Clip by": "Kopieer hierdie ID om in 'n ander maas se Knip deur te plak",
   "Apply to change the division; the shape is kept.": "Klik Pas toe om die verdeling te verander; die vorm bly behoue.",
   "Rename Part": "Hernoem deel",
-  "Rename the selected object": "Hernoem die gekose voorwerp"
+  "Rename the selected object": "Hernoem die gekose voorwerp",
+  "Copy the selected meshes' IDs": "Kopieer die gekose mase se ID's",
+  "Delete the selected parameter": "Skrap die gekose parameter",
+  "Link or unlink the parameter below": "Koppel of ontkoppel die parameter hieronder",
+  "Reset the selected parameter to default": "Stel die gekose parameter terug na verstek",
+  "Select the objects keyed on the parameter": "Kies die voorwerpe met sleutels op die parameter"
 }
