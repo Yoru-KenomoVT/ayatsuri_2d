@@ -105,7 +105,8 @@ meshes and the Parts palette, and the requests from Discord testing.
   deformer inside another picked one is left out, so a rigged child taken
   in by mistake is never moved or keyed with the group. The pick moves,
   scales and rotates in one box (the art follows live), takes keys
-  together, and deletes, locks, hides and re-parents as a group.
+  together, and deletes, locks, hides and re-parents as a group; a new
+  deformer made as their parent wraps all of them.
 - **The canvas right-click menu shows the deformers above** the mesh under
   the pointer as a tree to select from (Shift+click adds to the pick), as
   in Cubism; Settings > Canvas can turn it off.
