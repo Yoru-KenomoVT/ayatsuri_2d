@@ -379,7 +379,7 @@ pub fn base_form(model: &Model, mesh: usize) -> Option<Vec<f32>> {
 /// Why a weight limit cannot be set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LimitError {
-    /// The mesh has no blend shape on that parameter.
+    /// The object has no blend shape on that parameter.
     NoShape,
     /// A shape cannot limit itself.
     SameParameter,
@@ -390,11 +390,11 @@ pub enum LimitError {
     Graph(blendshape::GraphError),
 }
 
-/// Add a weight limit to mesh `mi`'s blend shape on `shape`, following
+/// Add a weight limit to `target`'s blend shape on `shape`, following
 /// parameter `by` with the graph `keys` to `weights`.
 pub fn add_weight_limit(
     model: &mut Model,
-    mi: usize,
+    target: Target,
     shape: usize,
     by: usize,
     keys: Vec<f32>,
@@ -405,10 +405,8 @@ pub fn add_weight_limit(
     if shape == by {
         return Err(LimitError::SameParameter);
     }
-    let s = model
-        .art_meshes
-        .get_mut(mi)
-        .and_then(|m| m.blend_shapes.iter_mut().find(|s| s.parameter as usize == shape))
+    let s = crate::shapes::shapes_mut(model, target)
+        .and_then(|v| v.iter_mut().find(|s| s.parameter as usize == shape))
         .ok_or(LimitError::NoShape)?;
     if s.limits.iter().any(|l| l.parameter as usize == by) {
         return Err(LimitError::Duplicate);
@@ -417,10 +415,10 @@ pub fn add_weight_limit(
     Ok(())
 }
 
-/// Replace the graph of the limit on `by` of mesh `mi`'s shape on `shape`.
+/// Replace the graph of the limit on `by` of `target`'s shape on `shape`.
 pub fn set_weight_limit(
     model: &mut Model,
-    mi: usize,
+    target: Target,
     shape: usize,
     by: usize,
     keys: Vec<f32>,
@@ -428,10 +426,8 @@ pub fn set_weight_limit(
 ) -> Result<(), LimitError> {
     let p = model.parameters.get(by).ok_or(LimitError::NoParameter)?;
     blendshape::check_graph(&keys, &weights, p.min, p.max).map_err(LimitError::Graph)?;
-    let l = model
-        .art_meshes
-        .get_mut(mi)
-        .and_then(|m| m.blend_shapes.iter_mut().find(|s| s.parameter as usize == shape))
+    let l = crate::shapes::shapes_mut(model, target)
+        .and_then(|v| v.iter_mut().find(|s| s.parameter as usize == shape))
         .and_then(|s| s.limits.iter_mut().find(|l| l.parameter as usize == by))
         .ok_or(LimitError::NoShape)?;
     l.keys = keys;
@@ -439,12 +435,10 @@ pub fn set_weight_limit(
     Ok(())
 }
 
-/// Take the limit on `by` off mesh `mi`'s shape on `shape`.
-pub fn remove_weight_limit(model: &mut Model, mi: usize, shape: usize, by: usize) -> bool {
-    let Some(s) = model
-        .art_meshes
-        .get_mut(mi)
-        .and_then(|m| m.blend_shapes.iter_mut().find(|s| s.parameter as usize == shape))
+/// Take the limit on `by` off `target`'s shape on `shape`.
+pub fn remove_weight_limit(model: &mut Model, target: Target, shape: usize, by: usize) -> bool {
+    let Some(s) = crate::shapes::shapes_mut(model, target)
+        .and_then(|v| v.iter_mut().find(|s| s.parameter as usize == shape))
     else {
         return false;
     };
@@ -4860,6 +4854,36 @@ mod tests {
         assert!(!set_warp_division(&mut m, di, 0, 3));
         assert!(!set_warp_division(&mut m, di, 65, 3));
         assert!(!set_warp_division(&mut m, 99, 3, 3));
+    }
+
+    #[test]
+    fn weight_limits_work_on_a_deformers_shape() {
+        let mut m = test_model();
+        let di = create_warp_deformer(&mut m, &[0], 1, 1, "W".into()).unwrap();
+        m.deformers[di].blend_shapes.push(ayatsuri_format::model::BlendShape {
+            parameter: 0,
+            keys: vec![1.0],
+            positions: vec![0.0; 8],
+            ..Default::default()
+        });
+        let t = Target::Deformer(di);
+        let by = m.parameters.len() - 1;
+        assert_ne!(by, 0);
+        let (lo, hi) = (m.parameters[by].min, m.parameters[by].max);
+        assert_eq!(add_weight_limit(&mut m, t, 0, by, vec![lo, hi], vec![0.0, 1.0]), Ok(()));
+        assert_eq!(
+            add_weight_limit(&mut m, t, 0, by, vec![lo, hi], vec![0.0, 1.0]),
+            Err(LimitError::Duplicate)
+        );
+        assert_eq!(set_weight_limit(&mut m, t, 0, by, vec![lo, hi], vec![1.0, 0.0]), Ok(()));
+        assert_eq!(m.deformers[di].blend_shapes[0].limits[0].weights, vec![1.0, 0.0]);
+        assert!(remove_weight_limit(&mut m, t, 0, by));
+        assert!(m.deformers[di].blend_shapes[0].limits.is_empty());
+        // a part without that shape
+        assert_eq!(
+            add_weight_limit(&mut m, Target::Part(0), 0, by, vec![lo, hi], vec![0.0, 1.0]),
+            Err(LimitError::NoShape)
+        );
     }
 
     #[test]

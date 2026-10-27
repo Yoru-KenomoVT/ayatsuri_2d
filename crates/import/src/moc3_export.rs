@@ -201,10 +201,10 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
         .flat_map(|p| &p.blend_shapes)
         .filter(|s| !s.opacities.is_empty())
         .count();
-    if offscreen_shaped > 0 {
+    if offscreen_shaped > 0 && version.max_slot() < 152 {
         out.push(format!(
-            "{offscreen_shaped} blend shape(s) change an offscreen layer's opacity, which this \
-             export does not write yet"
+            "{offscreen_shaped} blend shape(s) change an offscreen layer's opacity, which only \
+             moc3 5.3 stores"
         ));
     }
     if version.max_slot() >= 152 {
@@ -994,6 +994,10 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let (mut off_owner, mut off_flags, mut off_blend) = (Vec::new(), Vec::new(), Vec::new());
     let (mut off_mask_begin, mut off_mask_count) = (Vec::new(), Vec::new());
     let mut off_opac: Vec<f32> = Vec::new();
+    // offscreen blend shapes (5.3, 164-166): their keyforms follow the
+    // normal ones, opacity as a difference from the base
+    let mut off_normal = 0usize;
+    let mut bs_off: Vec<(i32, i32, i32)> = Vec::new();
     if version.max_slot() >= 152 {
         for (i, p) in model.parts.iter().enumerate() {
             // a part the draw order groups don't hold as a group draws directly
@@ -1024,6 +1028,30 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
             }
         }
         part_kf_off.extend(std::iter::repeat_n(-1, part_shape_keyforms));
+        off_normal = off_opac.len();
+        for (i, p) in model.parts.iter().enumerate() {
+            let Some(&oi) = part_off.get(i).filter(|&&o| o >= 0) else { continue };
+            let shaped: Vec<_> = p
+                .blend_shapes
+                .iter()
+                .filter(|s| !s.opacities.is_empty())
+                .filter_map(|s| Some((s, table_of(&bs_tables, s.parameter)?)))
+                .collect();
+            if shaped.is_empty() {
+                continue;
+            }
+            let what = format!("part {i}'s offscreen");
+            let base = base_of(Target::Part(i), Channel::Opacity, &what)?;
+            let first = st.bindings.len() as i32;
+            for (shape, (t, keys)) in &shaped {
+                let off = off_opac.len() as i32;
+                for d in shape_deltas(shape, Channel::Opacity, &base, keys) {
+                    off_opac.push(d.first().copied().unwrap_or(0.0));
+                }
+                st.bind(shape, *t, off, keys.len(), n_params, &what)?;
+            }
+            bs_off.push((oi, first, shaped.len() as i32));
+        }
     }
     sect.insert(80, i32s(&mask_pool));
 
@@ -1195,7 +1223,8 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
             .chain(&r_col)
             .chain(&m_col)
             .copied()
-            .chain(core::iter::repeat_n(neutral, off_opac.len()))
+            .chain(core::iter::repeat_n(neutral, off_normal))
+            .chain(core::iter::repeat_n(([0.0; 3], [0.0; 3]), off_opac.len() - off_normal))
             .collect();
         if pool.len() != color_total {
             return Err(err("keyform colours disagree with the keyforms"));
@@ -1322,6 +1351,17 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         let off_colors: Vec<i32> = (0..off_opac.len() as i32).map(|k| first_color + k).collect();
         sect.insert(162, i32s(&off_colors));
         sect.insert(163, i32s(&off_colors));
+        for c in 0..3usize {
+            let col: Vec<i32> = bs_off
+                .iter()
+                .map(|r| match c {
+                    0 => r.0,
+                    1 => r.1,
+                    _ => r.2,
+                })
+                .collect();
+            sect.insert(164 + c, i32s(&col));
+        }
     }
 
     // ---- counts table (slot 0), field order is the on-disk order ----
@@ -1367,13 +1407,14 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         st.lim.param.len() as i32,
         st.lim.keys.len() as i32,
     ];
-    // 5.0 doubled the table; past 4.2's fields only the offscreen counts
-    // (35, 36) are written, as no blend shapes are
+    // 5.0 doubled the table: its blend shapes on parts, rotations and glue
+    // (32-34), then 5.3's offscreens, their keyforms and shapes (35-37)
     let mut count_bytes = vec![0u8; version.count_ints() * 4];
     let five =
         [(32usize, bs_parts.len() as i32), (33, bs_rots.len() as i32), (34, bs_glue.len() as i32)];
     let five = five.into_iter().filter(|_| more_shapes_on);
-    let extra = [(35usize, off_owner.len() as i32), (36, off_opac.len() as i32)];
+    let extra =
+        [(35usize, off_owner.len() as i32), (36, off_opac.len() as i32), (37, bs_off.len() as i32)];
     let extra = five.chain(extra.into_iter().filter(|_| version.max_slot() >= 152));
     for (i, c) in counts.iter().copied().enumerate().chain(extra) {
         let at = i * 4;
@@ -1990,6 +2031,34 @@ mod tests {
         // the meshes' own masks are untouched by the layer's
         assert!(back.art_meshes.iter().all(|m| m.masks.is_empty()));
 
+        // a blend shape on the layer's opacity (164-166) comes back on the
+        // part's shape for that parameter
+        let fade = model.parameters.len() as u32;
+        model.parameters.push(ayatsuri_format::model::Parameter {
+            id: "ParamFade".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: true,
+        });
+        model.parts[0].blend_shapes.push(ayatsuri_format::model::BlendShape {
+            parameter: fade,
+            keys: vec![1.0],
+            draw_orders: vec![500.0],
+            opacities: vec![0.1],
+            ..Default::default()
+        });
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_03).unwrap()).unwrap();
+        let shape = &back.parts[0].blend_shapes[0];
+        assert_eq!((shape.parameter, shape.keys.as_slice()), (fade, &[1.0][..]));
+        assert!((shape.opacities[0] - 0.1).abs() < 1e-6, "{:?}", shape.opacities);
+        assert_eq!(shape.draw_orders, vec![500.0]);
+        assert!(
+            export_warnings(&model, ExportVersion::V5_03).iter().all(|w| !w.contains("opacity"))
+        );
+
         // before 5.3 the layer goes, and the export says so
         let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_00).unwrap()).unwrap();
         assert!(back.parts[0].offscreen.is_none());
@@ -1997,6 +2066,7 @@ mod tests {
         assert_eq!(back.draw_groups[0].total, 2);
         let warnings = export_warnings(&model, ExportVersion::V5_00).join(" ");
         assert!(warnings.contains("1 part(s) use offscreen drawing"), "{warnings}");
+        assert!(warnings.contains("only moc3 5.3 stores"), "{warnings}");
     }
 
     #[test]

@@ -719,20 +719,14 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
 /// key of its parameter's key table with the base key's among them, hold
 /// what the shape adds; the model keeps the shape's form at each non-base
 /// key (the object's base plus that) on every channel its kind has, and its
-/// weight limits (slots 123-124, 131-136). Offscreen blend shapes (5.3) are
-/// not kept yet, and say so.
+/// weight limits (slots 123-124, 131-136). Offscreen blend shapes (5.3,
+/// 164-166) join the part's shape on the same parameter as its opacity.
 fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_begin: &I32s<'_>) {
     use ayatsuri_core::blendshape::Channel;
     use ayatsuri_core::edit::Target;
     let c = *moc.counts();
     if c.blend_shape_keyform_bindings <= 0 {
         return;
-    }
-    if c.blend_shapes_offscreens > 0 {
-        log::warn!(
-            "moc3: {} blend shape(s) on offscreen layers are not kept yet",
-            c.blend_shapes_offscreens
-        );
     }
     let (Ok(ptype), Ok(table_begin), Ok(table_count)) =
         (moc.i32s(114), moc.i32s(115), moc.i32s(116))
@@ -941,6 +935,72 @@ fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_b
                 Some(l) => *l = shapes,
                 None => {
                     log::warn!("moc3: blend shapes for an object that is not in the file; dropped")
+                }
+            }
+        }
+    }
+
+    // 5.3's offscreen shapes change a part's offscreen opacity: their
+    // keyforms (161) follow the normal ones, each a difference from the base
+    let (Some(target), Some(bind_begin), Some(bind_count), Some(owner)) =
+        (i(164), i(165), i(166), i(155))
+    else {
+        return;
+    };
+    let off_opac = f(161);
+    let n_params = model.parameters.len();
+    for e in 0..c.blend_shapes_offscreens.max(0) as usize {
+        let part = target
+            .get(e)
+            .and_then(|o| owner.get(usize::try_from(o).ok()?))
+            .and_then(|p| usize::try_from(p).ok());
+        let Some(part) = part else { continue };
+        let obj = Target::Part(part);
+        let Some(base) = ayatsuri_core::shapes::base(model, obj, Channel::Opacity)
+            .and_then(|b| b.first().copied())
+        else {
+            log::warn!("moc3: offscreen blend shapes on part {part}, which has no offscreen");
+            continue;
+        };
+        let order_base = ayatsuri_core::shapes::base(model, obj, Channel::DrawOrder);
+        let first = bind_begin.get(e).unwrap_or(0).max(0);
+        for b in first..first + bind_count.get(e).unwrap_or(0).max(0) {
+            let b = b as usize;
+            let Some(t) = b_table.get(b).and_then(|t| usize::try_from(t).ok()) else { continue };
+            let Some(parameter) = table_param.get(t).copied().flatten() else { continue };
+            let (kb, kn) =
+                (keys_begin.get(t).unwrap_or(0).max(0), keys_count.get(t).unwrap_or(0).max(0));
+            let base_at = base_key.get(t).unwrap_or(-1);
+            let (off, n) = (b_off.get(b).unwrap_or(0), b_len.get(b).unwrap_or(0));
+            let (mut keys, mut opacities) = (Vec::new(), Vec::new());
+            for k in (0..kn.min(n)).filter(|&k| k != base_at) {
+                let Some(key) = pool.get((kb + k) as usize) else { continue };
+                let g = (off + k).max(0) as usize;
+                keys.push(key);
+                opacities.push(base + off_opac.as_ref().and_then(|p| p.get(g)).unwrap_or(0.0));
+            }
+            if keys.is_empty() || opacities.iter().all(|a| (a - base).abs() < 1e-6) {
+                continue;
+            }
+            let limits = read_limits(moc, b, n_params);
+            let Some(list) = ayatsuri_core::shapes::shapes_mut(model, obj) else { continue };
+            match list.iter_mut().find(|s| s.parameter == parameter) {
+                Some(s) if s.keys == keys => s.opacities = opacities,
+                Some(_) => log::warn!(
+                    "moc3: part {part}'s offscreen shape keys differ from its draw order's; dropped"
+                ),
+                None => {
+                    let draw_orders = order_base.as_deref().map_or_else(Vec::new, |o| {
+                        std::iter::repeat_n(o, keys.len()).flatten().copied().collect()
+                    });
+                    list.push(ayatsuri_format::model::BlendShape {
+                        parameter,
+                        keys,
+                        opacities,
+                        draw_orders,
+                        limits,
+                        ..Default::default()
+                    });
                 }
             }
         }

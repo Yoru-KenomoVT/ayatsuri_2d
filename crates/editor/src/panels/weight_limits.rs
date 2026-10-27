@@ -29,18 +29,17 @@ pub(super) struct LimitsDlg {
     error: Option<String>,
 }
 
-/// The selected meshes and, per blend shape parameter they have, which of
-/// them have it, in parameter order.
-fn shapes_on(s: &Session, targets: &[Target]) -> Vec<(usize, Vec<usize>)> {
-    let mut out: Vec<(usize, Vec<usize>)> = Vec::new();
-    for t in targets {
-        let Target::ArtMesh(mi) = *t else { continue };
-        let Some(m) = s.puppet.model().art_meshes.get(mi) else { continue };
-        for shape in &m.blend_shapes {
+/// Per blend shape parameter the selected objects (meshes, deformers,
+/// parts) have, which of them have it, in parameter order.
+fn shapes_on(s: &Session, targets: &[Target]) -> Vec<(usize, Vec<Target>)> {
+    let mut out: Vec<(usize, Vec<Target>)> = Vec::new();
+    for &t in targets {
+        let Some(shapes) = ayatsuri_core::shapes::shapes(s.puppet.model(), t) else { continue };
+        for shape in shapes {
             let p = shape.parameter as usize;
             match out.iter_mut().find(|(q, _)| *q == p) {
-                Some((_, meshes)) => meshes.push(mi),
-                None => out.push((p, vec![mi])),
+                Some((_, objects)) => objects.push(t),
+                None => out.push((p, vec![t])),
             }
         }
     }
@@ -48,17 +47,13 @@ fn shapes_on(s: &Session, targets: &[Target]) -> Vec<(usize, Vec<usize>)> {
     out
 }
 
-/// The parameters limiting `shape` on any of `meshes`, first seen first,
-/// with the graph of the first mesh that has each.
-fn limits_of(s: &Session, meshes: &[usize], shape: usize) -> Vec<(usize, Vec<f32>, Vec<f32>)> {
+/// The parameters limiting `shape` on any of `objects`, first seen first,
+/// with the graph of the first object that has each.
+fn limits_of(s: &Session, objects: &[Target], shape: usize) -> Vec<(usize, Vec<f32>, Vec<f32>)> {
     let mut out: Vec<(usize, Vec<f32>, Vec<f32>)> = Vec::new();
-    for &mi in meshes {
-        let Some(sh) = s
-            .puppet
-            .model()
-            .art_meshes
-            .get(mi)
-            .and_then(|m| m.blend_shapes.iter().find(|b| b.parameter as usize == shape))
+    for &t in objects {
+        let Some(sh) = ayatsuri_core::shapes::shapes(s.puppet.model(), t)
+            .and_then(|v| v.iter().find(|b| b.parameter as usize == shape))
         else {
             continue;
         };
@@ -200,7 +195,7 @@ impl EditorUi {
             d.shape = shapes.first().map(|x| x.0);
             d.picked = None;
         }
-        let meshes: Vec<usize> = shapes
+        let meshes: Vec<Target> = shapes
             .iter()
             .find(|(p, _)| Some(*p) == d.shape)
             .map(|(_, m)| m.clone())
@@ -247,7 +242,7 @@ impl EditorUi {
                                 }
                             }
                         });
-                    let objects: Vec<String> = meshes.iter().map(|&mi| s.mesh_name(mi)).collect();
+                    let objects: Vec<String> = meshes.iter().map(|&t| object_name(s, t)).collect();
                     ui.label(trf(
                         "Number of Target Objects to be Edited: {count}",
                         &[("count", &meshes.len())],
@@ -456,7 +451,7 @@ impl EditorUi {
                     };
                     match r {
                         Ok(()) => n += 1,
-                        // a mesh lacking that limit, or already having it
+                        // an object lacking that limit, or already having it
                         Err(LimitError::NoShape | LimitError::Duplicate) => {}
                         Err(e) => failed = Some(e),
                     }
@@ -476,6 +471,28 @@ impl EditorUi {
     }
 }
 
-fn meshes_of(shapes: &[(usize, Vec<usize>)], p: usize) -> Vec<usize> {
+fn meshes_of(shapes: &[(usize, Vec<Target>)], p: usize) -> Vec<Target> {
     shapes.iter().find(|(q, _)| *q == p).map(|(_, m)| m.clone()).unwrap_or_default()
+}
+
+/// What the objects list calls a mesh, deformer or part.
+fn object_name(s: &Session, t: Target) -> String {
+    let model = s.puppet.model();
+    match t {
+        Target::ArtMesh(i) => s.mesh_name(i),
+        Target::Deformer(i) => s
+            .deformer_names
+            .get(i)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .or_else(|| model.deformers.get(i).map(|d| d.id.clone()))
+            .unwrap_or_default(),
+        Target::Part(i) => s
+            .part_names
+            .get(i)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .or_else(|| model.parts.get(i).map(|p| p.id.clone()))
+            .unwrap_or_default(),
+    }
 }
