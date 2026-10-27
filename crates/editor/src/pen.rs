@@ -1,7 +1,8 @@
-// Pen tablets. The window layer hands pen pressure over as a touch with a
-// force (Windows pens do; Linux gets none from it yet), and the same pen
-// also drives the pointer, so every tool works with it as with a mouse.
-// Here the force is read each frame, smoothed against jitter, and shaped
+// Pen tablets. The pen drives the pointer, so every tool works with it as
+// with a mouse; pressure comes on top. On Windows the window layer hands it
+// over as a touch with a force; on Linux and macOS the ayatsuri-pen crate
+// reads it (the tablet's device, the system's events), since the window
+// layer does not. Here it is read each frame, smoothed against jitter, and shaped
 // by the user's curve; the brushes ask for it as a size and a strength
 // factor. Pen mode also loosens what counts as a click, since a pen hand
 // drifts a few pixels on a tap.
@@ -19,18 +20,44 @@ pub(crate) struct Pen {
     down: Option<f32>,
     /// The last pressure seen, kept after the pen lifts, for the meter.
     pub(crate) last: Option<f32>,
+    /// `down` came from the tablet reader, not from touch events.
+    from_reader: bool,
 }
 
 impl Pen {
     /// Take this frame's pen readings from the input events.
     pub(crate) fn read(&mut self, ctx: &egui::Context) {
+        // once: the reader asks for a frame whenever the pen changes
+        let wake = ctx.clone();
+        ayatsuri_pen::start(move || wake.request_repaint());
+        let mut touched = false;
         ctx.input(|i| {
             for e in &i.events {
                 if let Event::Touch { phase, force, .. } = e {
+                    touched |= force.is_some();
                     self.take(*phase, *force);
                 }
             }
         });
+        if !touched {
+            self.take_reader(ayatsuri_pen::reading());
+        }
+    }
+
+    /// The tablet reader's latest: pressure while the tip touches.
+    fn take_reader(&mut self, r: Option<ayatsuri_pen::Reading>) {
+        match r {
+            Some(r) if r.down => {
+                let phase = if self.down.is_some() { TouchPhase::Move } else { TouchPhase::Start };
+                self.take(phase, Some(r.pressure));
+                self.from_reader = true;
+            }
+            _ if self.from_reader => {
+                self.take(TouchPhase::End, None);
+                self.from_reader = false;
+            }
+            _ => {}
+        }
     }
 
     fn take(&mut self, phase: TouchPhase, force: Option<f32>) {
@@ -117,6 +144,22 @@ mod tests {
         assert!(pen.last.is_some(), "the meter keeps the last reading");
         // touches without a force (a mouse emulating one) change nothing
         pen.take(TouchPhase::Start, None);
+        assert_eq!(pen.pressure(&prefs), None);
+    }
+
+    #[test]
+    fn the_tablet_reader_feeds_pressure_while_the_tip_is_down() {
+        let prefs = Prefs::default();
+        let mut pen = Pen::default();
+        let at = |pressure, down| Some(ayatsuri_pen::Reading { pressure, down, eraser: false });
+        pen.take_reader(at(0.3, false));
+        assert_eq!(pen.pressure(&prefs), None, "hovering is no pressure");
+        pen.take_reader(at(0.5, true));
+        assert!(pen.pressure(&prefs).is_some());
+        pen.take_reader(at(0.0, false));
+        assert_eq!(pen.pressure(&prefs), None, "lifting lets go");
+        // with no tablet at all nothing changes
+        pen.take_reader(None);
         assert_eq!(pen.pressure(&prefs), None);
     }
 

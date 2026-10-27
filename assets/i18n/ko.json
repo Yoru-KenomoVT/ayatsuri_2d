@@ -1505,5 +1505,11 @@
   "Flip": "반전",
   "Flip Warp Only Horizontally": "워프만 좌우 반전",
   "Flip Warp Only Vertically": "워프만 상하 반전",
-  "Mirror the warp's grid while the art and deformers inside stay where they are": "안의 아트와 디포머는 그대로 두고 워프 격자만 반전합니다"
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "안의 아트와 디포머는 그대로 두고 워프 격자만 반전합니다",
+  "Press on the canvas with the pen: the bar shows the pressure it reports": "펜으로 캔버스를 누르면 보고된 필압이 막대에 표시됩니다",
+  "Tablet": "태블릿",
+  "Reading {tablets}": "{tablets} 읽는 중",
+  "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "{tablets}을(를) 찾았지만 이 사용자는 읽을 수 없습니다. input 그룹에 가입한 뒤(sudo usermod -aG input $USER) 다시 로그인하세요",
+  "No pen tablet found; plug one in and it is picked up": "펜 태블릿을 찾을 수 없습니다. 연결하면 자동으로 인식됩니다",
+  "The system passes pen pressure on": "시스템이 필압을 전달합니다"
 }

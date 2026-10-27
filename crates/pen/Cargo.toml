@@ -1,0 +1,32 @@
+[package]
+name = "ayatsuri-pen"
+description = "Pen tablet pressure the window layer does not pass on: read from the tablet on Linux, from the system's events on macOS"
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The second crate allowed unsafe, and only for macOS: adding an event
+# monitor through objc2 has no safe form. Linux reads the tablet in safe
+# Rust; Windows needs nothing here (the window layer passes pressure on).
+# The crate denies unsafe everywhere else; the macOS module alone allows it.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[dependencies]
+log = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSEvent"] }
+block2 = "0.6"

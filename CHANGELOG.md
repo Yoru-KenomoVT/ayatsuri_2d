@@ -124,8 +124,10 @@ meshes and the Parts palette, and the requests from Discord testing.
   can size and weight the Deform Brush, Brush Selection, the glue weight
   brush and the mesh eraser, through a pressure curve and a lightest-touch
   floor, smoothed against jitter, with a meter to test the pen. Pen mode
-  loosens clicks for a pen hand. Pressure comes through on Windows; on
-  Linux the pen works as a mouse for now.
+  loosens clicks for a pen hand. Pressure works on Windows and Linux
+  (read from the tablet itself, on Wayland and X11 alike; the user needs
+  to be able to read it, which Settings explains) and is in for macOS but
+  untested there.
 - **Boxes over several meshes** move the art live while dragged, like a
   single mesh, instead of only on release.
 - **Clip by on several selected meshes** clips all of them, not only one,

@@ -1505,5 +1505,11 @@
   "Flip": "反転",
   "Flip Warp Only Horizontally": "ワープだけを左右反転",
   "Flip Warp Only Vertically": "ワープだけを上下反転",
-  "Mirror the warp's grid while the art and deformers inside stay where they are": "中のアートとデフォーマはそのままで、ワープのグリッドだけを反転します"
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "中のアートとデフォーマはそのままで、ワープのグリッドだけを反転します",
+  "Press on the canvas with the pen: the bar shows the pressure it reports": "ペンでキャンバスを押すと、報告された筆圧がバーに表示されます",
+  "Tablet": "タブレット",
+  "Reading {tablets}": "{tablets} を読み取り中",
+  "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "{tablets} が見つかりましたが、このユーザーには読み取り権限がありません。input グループに参加して（sudo usermod -aG input $USER）ログインし直してください",
+  "No pen tablet found; plug one in and it is picked up": "ペンタブレットが見つかりません。接続すると自動で認識されます",
+  "The system passes pen pressure on": "システムが筆圧を渡しています"
 }

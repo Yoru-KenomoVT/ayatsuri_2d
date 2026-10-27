@@ -1505,5 +1505,11 @@
   "Flip": "Spieël",
   "Flip Warp Only Horizontally": "Spieël slegs die warp horisontaal",
   "Flip Warp Only Vertically": "Spieël slegs die warp vertikaal",
-  "Mirror the warp's grid while the art and deformers inside stay where they are": "Spieël die warp se rooster terwyl die kuns en vervormers binne bly waar hulle is"
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "Spieël die warp se rooster terwyl die kuns en vervormers binne bly waar hulle is",
+  "Press on the canvas with the pen: the bar shows the pressure it reports": "Druk met die pen op die doek: die balk wys die druk wat dit meld",
+  "Tablet": "Tablet",
+  "Reading {tablets}": "Lees {tablets}",
+  "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "{tablets} gevind, maar hierdie gebruiker mag dit nie lees nie: sluit by die input-groep aan (sudo usermod -aG input $USER) en meld weer aan",
+  "No pen tablet found; plug one in and it is picked up": "Geen pentablet gevind nie; prop een in en dit word opgetel",
+  "The system passes pen pressure on": "Die stelsel gee pendruk deur"
 }
