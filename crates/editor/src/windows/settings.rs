@@ -815,7 +815,7 @@ impl EditorUi {
             ui,
             crate::i18n::tr("Test"),
             crate::i18n::tr(
-                "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now",
+                "Press on the canvas with the pen: the bar shows the pressure it reports",
             ),
             |ui| {
                 let shaped = self.pen.pressure(&self.prefs);
@@ -836,6 +836,28 @@ impl EditorUi {
                 }
             },
         );
+        // where the pressure comes from on this system
+        let source = match ayatsuri_pen::status() {
+            ayatsuri_pen::Status::Reading(names) => {
+                crate::i18n::trf("Reading {tablets}", &[("tablets", &names.join(", "))])
+            }
+            ayatsuri_pen::Status::NoAccess(names) => crate::i18n::trf(
+                "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again",
+                &[("tablets", &names.join(", "))],
+            ),
+            ayatsuri_pen::Status::NoTablet => {
+                crate::i18n::tr("No pen tablet found; plug one in and it is picked up").to_string()
+            }
+            ayatsuri_pen::Status::NotNeeded => {
+                crate::i18n::tr("The system passes pen pressure on").to_string()
+            }
+            ayatsuri_pen::Status::NotStarted => String::new(),
+        };
+        if !source.is_empty() {
+            row(ui, crate::i18n::tr("Tablet"), "", |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(source).weak()).wrap());
+            });
+        }
         section(ui, crate::i18n::tr("OVERLAYS"));
         ui.label(
             RichText::new(crate::i18n::tr(

@@ -21,6 +21,7 @@ ayatsuri-update = { workspace = true }
 sys-locale = "0.3"
 openmoc3 = { workspace = true }
 egui = { workspace = true }
+ayatsuri-pen = { workspace = true }
 egui-wgpu = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }

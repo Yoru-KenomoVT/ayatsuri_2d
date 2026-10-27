@@ -1505,5 +1505,11 @@
   "Flip": "翻转",
   "Flip Warp Only Horizontally": "仅水平翻转弯曲变形器",
   "Flip Warp Only Vertically": "仅垂直翻转弯曲变形器",
-  "Mirror the warp's grid while the art and deformers inside stay where they are": "仅镜像弯曲变形器的网格，内部的图像和变形器保持不动"
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "仅镜像弯曲变形器的网格，内部的图像和变形器保持不动",
+  "Press on the canvas with the pen: the bar shows the pressure it reports": "用笔按压画布，条形显示其报告的压感",
+  "Tablet": "数位板",
+  "Reading {tablets}": "正在读取 {tablets}",
+  "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "找到了 {tablets}，但当前用户无权读取：请加入 input 组（sudo usermod -aG input $USER）并重新登录",
+  "No pen tablet found; plug one in and it is picked up": "未找到数位板；插入后会自动识别",
+  "The system passes pen pressure on": "系统会传递压感"
 }
