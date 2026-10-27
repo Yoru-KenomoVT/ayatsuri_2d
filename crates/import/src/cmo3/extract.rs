@@ -54,6 +54,9 @@ pub struct Form {
     pub coords: Vec<usize>,
     pub opacity: f32,
     pub draw_order: f32,
+    /// Multiply and screen colour, rgb.
+    pub multiply: [f32; 3],
+    pub screen: [f32; 3],
     /// Warp grid or mesh points, in the parent's space.
     pub positions: Vec<f32>,
     /// Rotation deformers only.
@@ -276,6 +279,24 @@ impl Ctx<'_> {
         (op, dr)
     }
 
+    /// Multiply and screen colour from the same block (Cubism 4.2):
+    /// neutral where a file has none.
+    fn form_colors(&self, form: usize) -> ([f32; 3], [f32; 3]) {
+        let doc = self.doc;
+        let sup = doc.field_raw(form, "super");
+        // CFloatColor keeps its channels as attributes; it may be shared
+        let color = |field: &str, neutral: f32| {
+            let c = sup.and_then(|s| doc.field(s, field));
+            let at = |ch: &str| {
+                c.and_then(|c| doc.attr(c, ch))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(neutral)
+            };
+            [at("red"), at("green"), at("blue")]
+        };
+        (color("multiplyColor", 1.0), color("screenColor", 0.0))
+    }
+
     fn part_path(&self, mut gid: Option<String>) -> Vec<String> {
         let mut out = Vec::new();
         let mut hops = 0;
@@ -409,9 +430,12 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
             let mut forms = Vec::new();
             for (coords, form) in kfs {
                 let (opacity, _) = cx.form_common(form);
+                let (multiply, screen) = cx.form_colors(form);
                 let mut f = Form {
                     coords,
                     opacity,
+                    multiply,
+                    screen,
                     draw_order: 500.0,
                     positions: Vec::new(),
                     angle: 0.0,
@@ -736,9 +760,12 @@ pub fn extract(caff: &Caff, doc: &Doc) -> Result<Extract, ImportError> {
         let mut forms = Vec::new();
         for (coords, form) in kfs {
             let (opacity, draw_order) = cx.form_common(form);
+            let (multiply, screen) = cx.form_colors(form);
             forms.push(Form {
                 coords,
                 opacity,
+                multiply,
+                screen,
                 draw_order,
                 positions: doc.field(form, "positions").map(|p| doc.floats(p)).unwrap_or_default(),
                 angle: 0.0,

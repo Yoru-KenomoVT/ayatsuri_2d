@@ -121,8 +121,9 @@ mod tests {
                 opacities: vec![1.0, 1.0],
                 positions: grid.iter().chain(bulged.iter()).copied().collect(),
             }),
-            multiply: Vec::new(),
-            screen: Vec::new(),
+            // darker at key 1, and a blue screen there
+            multiply: vec![1.0, 1.0, 1.0, 0.5, 0.5, 0.5],
+            screen: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.25],
             blend_shapes: Vec::new(),
         });
         model.deformers.push(Deformer {
@@ -231,6 +232,10 @@ mod tests {
             model.art_meshes.iter().map(|x| x.blend).collect::<Vec<_>>()
         );
         assert_eq!(m.parameters.len(), 1);
+        let warp = m.deformers.iter().find(|d| matches!(d.kind, DeformerKind::Warp(_))).unwrap();
+        assert_eq!(warp.multiply, vec![1.0, 1.0, 1.0, 0.5, 0.5, 0.5], "multiply colours come back");
+        assert_eq!(warp.screen, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.25]);
+        assert!(m.art_meshes.iter().all(|a| a.multiply.is_empty()), "neutral stays empty");
         assert_eq!(back.param_names, vec!["Sway amount".to_string()]);
         assert_eq!(back.param_groups, vec![("Motion".to_string(), vec![0])]);
         assert_eq!(back.imported.mesh_names, vec!["red".to_string(), "blue".to_string()]);
