@@ -51,8 +51,7 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **Parts palette as in Cubism**: drag parts and meshes to reorder and
   regroup them, New Part, and Group into New Part on the context menu.
 - **Rename parts and art meshes and edit their IDs**, from the Parts and
-  Deformer palettes. A Rename shortcut (no key until you pick one in
-  Settings > Keyboard) renames the selected part, deformer or art mesh,
+  Deformer palettes. F2 renames the selected part, deformer or art mesh,
   or opens Edit Parameter on the selected parameter.
 - **Automatic mesh generator settings and presets** as in Cubism. Auto
   mesh starts from the layer's art and runs a row of points down thin
@@ -63,8 +62,13 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **Custom texture atlas page sizes**, up to what your GPU takes.
 - **A shortcut for every menu action** in Settings > Keyboard: tools such
   as the Deform Brush, Extended Interpolation and the other parameter
-  commands, the File, View, Window and Help items, and more. They have no
-  keys until you pick some; menus and toolbar tips show the ones you set.
+  commands, the File, View, Window and Help items, and more. New keys:
+  F2 renames the selected object, Shift+F2 the selected deformer (or the
+  selected mesh's), D picks the Deform Brush, Ctrl+Shift+I opens Extended
+  Interpolation, Ctrl+Alt+C copies the selected meshes' IDs, Ctrl+, opens
+  Settings and Ctrl+Q exits; Ctrl+Shift+N (New Animation) and Ctrl+T
+  (Texture Atlas) are Cubism's. The rest have no key until you pick one;
+  menus and toolbar tips show the keys.
 - **Shift holds a Deform Brush stroke** to the X or Y axis, whichever it
   moves along first.
 - **Experimental features** (Settings > General, at the bottom): one
