@@ -380,7 +380,8 @@ impl EditorUi {
 
         let (new_pts, new_tris) =
             stroke_mesh::build_all(&edit.strokes, &self.tool_opts.stroke.settings);
-        if new_tris.is_empty() {
+        // 1 across gives points only, which join the mesh as they are
+        if new_pts.is_empty() {
             log::warn!("stroke mesh: the stroke is too short to make a mesh");
             return;
         }
@@ -512,16 +513,17 @@ mod tests {
         ed.apply_stroke_mesh();
         let s = ed.session.as_mut().unwrap();
         let m = &s.puppet.model().art_meshes[0];
-        // the square's corners stay (the stroke covers none), 5 stations of 2 join them
-        assert_eq!(m.vertex_count, 14);
-        assert_eq!(m.indices.len() / 3, 2 + 8);
-        // the first new point sits on the art where it was drawn
+        // the square's corners stay (the stroke covers none); 5 stations on
+        // one side and 6 half-stations on the other zigzag between them
+        assert_eq!(m.vertex_count, 4 + 11);
+        assert_eq!(m.indices.len() / 3, 2 + 9);
+        // the first station sits on the art where it was drawn
         assert!(
-            (m.uvs[8] - 0.1).abs() < 1e-4 && (m.uvs[9] - 0.6).abs() < 1e-4,
+            (m.uvs[10] - 0.1).abs() < 1e-4 && (m.uvs[11] - 0.6).abs() < 1e-4,
             "{:?}",
-            &m.uvs[8..10]
+            &m.uvs[10..12]
         );
-        assert!((m.positions[8] - 0.1).abs() < 1e-4 && (m.positions[9] - 0.6).abs() < 1e-4);
+        assert!((m.positions[10] - 0.1).abs() < 1e-4 && (m.positions[11] - 0.6).abs() < 1e-4);
         s.undo();
         assert_eq!(s.puppet.model().art_meshes[0].vertex_count, 4);
         assert!(ed.stroke_edit.is_none(), "confirm uses the strokes up");
@@ -548,6 +550,6 @@ mod tests {
         });
         ed.apply_stroke_mesh();
         let n = ed.session.as_ref().unwrap().puppet.model().art_meshes[0].vertex_count;
-        assert_eq!(n, 2 + 2 * 3, "corners 2 and 3 stay, 3 stations of 2 join them");
+        assert_eq!(n, 2 + 3 + 4, "corners 2 and 3 stay; 3 stations and 4 half-stations join them");
     }
 }

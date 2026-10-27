@@ -1,8 +1,18 @@
 //! Stroke mesh-mapping (Cubism editor manual, Mesh Edit: "Stroke
 //! mesh-mapping (beta)"): a mesh built along a dragged stroke. The stroke is
 //! a smooth curve through its control points; stations are set along it at
-//! the repeat spacing, and each station puts 1, 2 or 3 vertices across the
-//! mesh width, which width handles can widen or narrow along the way.
+//! the repeat spacing, half-stations between them (and half a step past
+//! each end), and the mesh width, which width handles can widen or narrow
+//! along the way, is split as the manual's pictures show:
+//!
+//! ```text
+//!  1: points on the stroke    2: zigzag             3: diamonds
+//!                                t0───t1───t2           t0───t1───t2
+//!  ·─·─·─·─·─·─·─·              ╱ ╲  ╱ ╲  ╱ ╲          ╱ ╲  ╱ ╲  ╱ ╲
+//!  (no triangles)             b0───b1───b2───b3      m0───m1───m2───m3
+//!                                                      ╲ ╱  ╲ ╱  ╲ ╱
+//!                                                       b0───b1───b2
+//! ```
 //!
 //! Everything here works in one plane (the editor uses canvas pixels) on
 //! plain points; the editor maps the result onto the art.
@@ -17,10 +27,11 @@ pub struct Settings {
     pub width: f32,
     /// The spacing of stations along the stroke.
     pub density: f32,
-    /// Vertices across the width at each station: 1 (alternating sides),
-    /// 2 (one each side) or 3 (each side and the stroke).
+    /// How the width is split: 1 (points on the stroke, no triangles),
+    /// 2 (a zigzag between the sides) or 3 (both sides and the stroke).
     pub across: u8,
-    /// With 2 across: flip the diagonal of the first and last cells.
+    /// With 2 across: the other side takes the half-stations, which flips
+    /// the first and last edges.
     pub invert: bool,
 }
 
@@ -164,76 +175,108 @@ fn point_at(line: &[P], acc: &[f32], d: f32) -> Option<(P, P)> {
     Some((add(a, mul(sub(b, a), f)), sub(b, a)))
 }
 
-/// The stations along a stroke: evenly spread at about the settings'
-/// spacing, the first and last on the stroke's ends.
-pub fn stations(stroke: &Stroke, s: &Settings) -> Vec<Station> {
+/// The stroke as a polyline with its running lengths, its length and the
+/// spacing that fits it with whole steps (at least one).
+fn layout(stroke: &Stroke, s: &Settings) -> Option<(Vec<P>, Vec<f32>, f32, usize)> {
     let line = curve(&stroke.points);
     let acc = lengths(&line);
     let total = acc.last().copied().unwrap_or(0.0);
     if line.len() < 2 || total <= 1e-4 {
-        return Vec::new();
+        return None;
     }
     let segments = ((total / s.density.max(0.5)).round() as usize).max(1);
-    let mut out = Vec::with_capacity(segments + 1);
-    for k in 0..=segments {
-        let t = k as f32 / segments as f32;
-        let Some((at, dir)) = point_at(&line, &acc, t * total) else { continue };
-        let l = len(dir);
-        let normal = if l > 1e-6 { [-dir[1] / l, dir[0] / l] } else { [0.0, 1.0] };
-        out.push(Station { at, normal, half: s.width.max(0.0) * stroke.scale_at(t) });
-    }
-    out
+    Some((line, acc, total, segments))
+}
+
+/// The station `d` along the stroke; past either end it carries on
+/// straight along the end's direction.
+fn station_at(
+    stroke: &Stroke,
+    s: &Settings,
+    line: &[P],
+    acc: &[f32],
+    total: f32,
+    d: f32,
+) -> Option<Station> {
+    let on = d.clamp(0.0, total);
+    let (at, dir) = point_at(line, acc, on)?;
+    let l = len(dir);
+    let unit = if l > 1e-6 { [dir[0] / l, dir[1] / l] } else { [1.0, 0.0] };
+    Some(Station {
+        at: add(at, mul(unit, d - on)),
+        normal: [-unit[1], unit[0]],
+        half: s.width.max(0.0) * stroke.scale_at(on / total),
+    })
+}
+
+/// The stations along a stroke: evenly spread at about the settings'
+/// spacing, the first and last on the stroke's ends.
+pub fn stations(stroke: &Stroke, s: &Settings) -> Vec<Station> {
+    let Some((line, acc, total, n)) = layout(stroke, s) else { return Vec::new() };
+    let step = total / n as f32;
+    (0..=n).filter_map(|k| station_at(stroke, s, &line, &acc, total, k as f32 * step)).collect()
+}
+
+/// The half-stations: one before the first station, one between each two,
+/// one after the last, each half a step from its neighbours.
+pub fn half_stations(stroke: &Stroke, s: &Settings) -> Vec<Station> {
+    let Some((line, acc, total, n)) = layout(stroke, s) else { return Vec::new() };
+    let step = total / n as f32;
+    (0..=n + 1)
+        .filter_map(|k| station_at(stroke, s, &line, &acc, total, (k as f32 - 0.5) * step))
+        .collect()
 }
 
 /// The mesh of one stroke: its points and triangles (indices into the
-/// points).
+/// points). With 1 across there are points only.
 pub fn build(stroke: &Stroke, s: &Settings) -> (Vec<P>, Vec<[u16; 3]>) {
-    let st = stations(stroke, s);
+    let (st, half) = (stations(stroke, s), half_stations(stroke, s));
     let mut pts: Vec<P> = Vec::new();
     let mut tris: Vec<[u16; 3]> = Vec::new();
-    if st.len() < 2 {
+    let n = st.len();
+    if n < 2 || half.len() != n + 1 {
         return (pts, tris);
     }
     let side = |x: &Station, k: f32| add(x.at, mul(x.normal, x.half * k));
     match s.across {
         1 => {
-            // one vertex per station, sides taking turns: a strip of
-            // triangles, each on three stations in a row
+            // every station and the half-station after it, on the stroke
             for (i, x) in st.iter().enumerate() {
-                pts.push(side(x, if i % 2 == 0 { 1.0 } else { -1.0 }));
-            }
-            for i in 0..pts.len().saturating_sub(2) {
-                tris.push([i as u16, (i + 1) as u16, (i + 2) as u16]);
+                pts.push(x.at);
+                if i + 1 < n
+                    && let Some(h) = half.get(i + 1)
+                {
+                    pts.push(h.at);
+                }
             }
         }
         3 => {
-            for x in &st {
-                pts.extend([side(x, 1.0), x.at, side(x, -1.0)]);
-            }
-            for i in 0..st.len() - 1 {
-                let (a, b) = ((i * 3) as u16, ((i + 1) * 3) as u16);
-                for c in 0..2u16 {
-                    tris.push([a + c, a + c + 1, b + c + 1]);
-                    tris.push([a + c, b + c + 1, b + c]);
+            // stations on both sides, half-stations on the stroke between
+            let (t, m, b) = (0u16, n as u16, (2 * n + 1) as u16);
+            pts.extend(st.iter().map(|x| side(x, 1.0)));
+            pts.extend(half.iter().map(|x| x.at));
+            pts.extend(st.iter().map(|x| side(x, -1.0)));
+            for k in 0..n as u16 {
+                if k + 1 < n as u16 {
+                    tris.push([t + k, t + k + 1, m + k + 1]);
+                    tris.push([b + k, m + k + 1, b + k + 1]);
                 }
+                tris.push([m + k, t + k, m + k + 1]);
+                tris.push([m + k, m + k + 1, b + k]);
             }
         }
         _ => {
-            for x in &st {
-                pts.extend([side(x, 1.0), side(x, -1.0)]);
-            }
-            let cells = st.len() - 1;
-            for i in 0..cells {
-                let (l0, r0, l1, r1) =
-                    ((i * 2) as u16, (i * 2 + 1) as u16, (i * 2 + 2) as u16, (i * 2 + 3) as u16);
-                let flip = s.invert && (i == 0 || i + 1 == cells);
-                if flip {
-                    tris.push([l0, r0, l1]);
-                    tris.push([r0, r1, l1]);
-                } else {
-                    tris.push([l0, r0, r1]);
-                    tris.push([l0, r1, l1]);
+            // stations on one side, half-stations on the other, taking
+            // turns: a strip of triangles on three points in a row
+            let (on, off) = if s.invert { (-1.0, 1.0) } else { (1.0, -1.0) };
+            for (k, h) in half.iter().enumerate() {
+                pts.push(side(h, off));
+                if let Some(x) = st.get(k) {
+                    pts.push(side(x, on));
                 }
+            }
+            for i in 0..pts.len().saturating_sub(2) as u16 {
+                tris.push([i, i + 1, i + 2]);
             }
         }
     }
@@ -416,29 +459,48 @@ mod tests {
     }
 
     #[test]
-    fn two_across_makes_quads_of_two_triangles() {
+    fn two_across_zigzags_between_the_sides() {
         let s = Settings { width: 5.0, density: 50.0, across: 2, invert: false };
         let (p, t) = build(&straight(100.0), &s);
-        assert_eq!(p.len(), 6);
-        assert_eq!(t.len(), 4);
-        // left of a stroke going +x is +y here (normal (-dy, dx))
-        assert_eq!(p[0], [0.0, 5.0]);
-        assert_eq!(p[1], [0.0, -5.0]);
-        let inv = build(&straight(100.0), &Settings { invert: true, ..s }).1;
-        assert_ne!(inv[0], t[0]);
-        assert_ne!(inv[3], t[3]);
+        // 3 stations on the left, 4 half-stations on the right
+        assert_eq!(p.len(), 7);
+        assert_eq!(t.len(), 5);
+        // left of a stroke going +x is +y here (normal (-dy, dx)); the
+        // half-stations start half a step before the stroke
+        assert_eq!(p[0], [-25.0, -5.0]);
+        assert_eq!(p[1], [0.0, 5.0]);
+        assert_eq!(p[6], [125.0, -5.0]);
+        assert_eq!(t[0], [0, 1, 2]);
+        // invert swaps the sides
+        let (q, _) = build(&straight(100.0), &Settings { invert: true, ..s });
+        assert_eq!((q[0], q[1]), ([-25.0, 5.0], [0.0, -5.0]));
     }
 
     #[test]
-    fn one_and_three_across() {
+    fn one_across_is_points_on_the_stroke() {
         let s = Settings { width: 5.0, density: 25.0, across: 1, invert: false };
         let (p, t) = build(&straight(100.0), &s);
-        assert_eq!((p.len(), t.len()), (5, 3));
-        assert_eq!(p[0][1], 5.0);
-        assert_eq!(p[1][1], -5.0);
-        let (p, t) = build(&straight(100.0), &Settings { across: 3, ..s });
-        assert_eq!((p.len(), t.len()), (15, 16));
-        assert_eq!(p[1], [0.0, 0.0]);
+        // 5 stations and the 4 half-stations between them
+        assert_eq!((p.len(), t.len()), (9, 0));
+        assert_eq!(p[1], [12.5, 0.0]);
+        assert!(p.iter().all(|q| q[1] == 0.0));
+    }
+
+    #[test]
+    fn three_across_makes_diamonds() {
+        let s = Settings { width: 5.0, density: 25.0, across: 3, invert: false };
+        let (p, t) = build(&straight(100.0), &s);
+        // 5 stations each side, 6 half-stations on the stroke
+        assert_eq!((p.len(), t.len()), (16, 18));
+        assert_eq!(p[0], [0.0, 5.0]);
+        assert_eq!(p[5], [-12.5, 0.0]);
+        assert_eq!(p[10], [112.5, 0.0]);
+        assert_eq!(p[11], [0.0, -5.0]);
+        // every triangle has a corner on the stroke and one on a side
+        for tri in &t {
+            assert!(tri.iter().any(|&i| (5..11).contains(&i)), "{tri:?}");
+            assert!(tri.iter().any(|&i| !(5..11).contains(&i)), "{tri:?}");
+        }
     }
 
     #[test]
