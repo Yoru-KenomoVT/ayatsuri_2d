@@ -1974,40 +1974,39 @@ pub fn rename_art_mesh(model: &mut Model, mesh: usize, id: &str) -> bool {
 }
 
 /// Change a warp deformer's division to `cols` x `rows` after it was
-/// made: every keyform's grid is sampled again at the new division, so
-/// what the warp holds keeps its shape (exactly when the division gets
-/// finer). Its children are placed by the warp's 0 to 1 space and need no
-/// change. False when it is not a warp, the division is out of range
-/// (1 to 64) or already that.
+/// made: every keyform's grid, and every blend shape keyform's, is sampled
+/// again at the new division, so what the warp holds keeps its shape
+/// (exactly when the division gets finer). Its children are placed by the
+/// warp's 0 to 1 space and need no change. False when it is not a warp,
+/// the division is out of range (1 to 64) or already that.
 pub fn set_warp_division(model: &mut Model, deformer: usize, cols: u32, rows: u32) -> bool {
     if !(1..=64).contains(&cols) || !(1..=64).contains(&rows) {
         return false;
     }
-    let Some(DeformerKind::Warp(w)) = model.deformers.get_mut(deformer).map(|d| &mut d.kind) else {
-        return false;
-    };
+    let Some(d) = model.deformers.get_mut(deformer) else { return false };
+    let DeformerKind::Warp(w) = &mut d.kind else { return false };
     if (w.cols, w.rows) == (cols, rows) {
         return false;
     }
     let stride = w.grid_points() * 2;
-    if stride == 0 || w.positions.len() % stride != 0 {
+    let fits = |v: &[f32]| stride != 0 && v.len().is_multiple_of(stride);
+    if !fits(&w.positions) || !d.blend_shapes.iter().all(|b| fits(&b.positions)) {
         return false;
     }
-    let positions = w
-        .positions
-        .chunks(stride)
-        .flat_map(|k| {
-            crate::bezier::resample_grid(
-                k,
-                w.cols as usize,
-                w.rows as usize,
-                cols as usize,
-                rows as usize,
-            )
-        })
-        .collect();
-    w.positions = positions;
+    // sampling is linear, so a shape's offsets resample the same way
+    let (was_cols, was_rows) = (w.cols as usize, w.rows as usize);
+    let regrid = |v: &[f32]| -> Vec<f32> {
+        v.chunks(stride)
+            .flat_map(|k| {
+                crate::bezier::resample_grid(k, was_cols, was_rows, cols as usize, rows as usize)
+            })
+            .collect()
+    };
+    w.positions = regrid(&w.positions);
     (w.cols, w.rows) = (cols, rows);
+    for b in &mut d.blend_shapes {
+        b.positions = regrid(&b.positions);
+    }
     true
 }
 
@@ -4861,6 +4860,28 @@ mod tests {
         assert!(!set_warp_division(&mut m, di, 0, 3));
         assert!(!set_warp_division(&mut m, di, 65, 3));
         assert!(!set_warp_division(&mut m, 99, 3, 3));
+    }
+
+    #[test]
+    fn warp_division_resamples_its_blend_shapes() {
+        let mut m = test_model();
+        let di = create_warp_deformer(&mut m, &[0], 1, 1, "W".into()).unwrap();
+        // one key: the grid's right column pushed 0.5 to the right
+        let push = vec![0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 0.0];
+        m.deformers[di].blend_shapes.push(ayatsuri_format::model::BlendShape {
+            parameter: 0,
+            keys: vec![1.0],
+            positions: push,
+            ..Default::default()
+        });
+        assert!(set_warp_division(&mut m, di, 2, 1));
+        let p = &m.deformers[di].blend_shapes[0].positions;
+        // 3 x 2 points; the new middle column gets half the push
+        assert_eq!(p.len(), 3 * 2 * 2);
+        for (c, want) in [(0, 0.0), (1, 0.25), (2, 0.5)] {
+            assert!((p[c * 2] - want).abs() < 1e-6);
+            assert!((p[(3 + c) * 2] - want).abs() < 1e-6);
+        }
     }
 
     #[test]

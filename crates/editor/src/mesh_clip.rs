@@ -227,3 +227,41 @@ pub(crate) fn paste(
     }
     Ok(added)
 }
+
+/// The art meshes a Clip IDs text names, for `mesh` to clip by: IDs split
+/// by commas, semicolons or spaces, in the order typed, each once. Also
+/// gives back the words that named no other mesh (unknown IDs, or the
+/// mesh's own).
+pub(crate) fn resolve_ids(model: &Model, mesh: usize, text: &str) -> (Vec<u32>, Vec<String>) {
+    let ids: Vec<&str> = model.art_meshes.iter().map(|m| m.id.as_str()).collect();
+    resolve_in(&ids, mesh, text)
+}
+
+fn resolve_in(ids: &[&str], mesh: usize, text: &str) -> (Vec<u32>, Vec<String>) {
+    let (mut found, mut unknown) = (Vec::new(), Vec::new());
+    for word in text.split([',', ';', ' ', '\t', '\n', '\r']).filter(|w| !w.is_empty()) {
+        match ids.iter().position(|&id| id == word) {
+            Some(mi) if mi != mesh => {
+                if !found.contains(&(mi as u32)) {
+                    found.push(mi as u32);
+                }
+            }
+            _ => unknown.push(word.to_string()),
+        }
+    }
+    (found, unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clip_ids_resolve_in_order_once() {
+        let ids = ["Eye", "Iris", "Hi"];
+        let (found, unknown) = resolve_in(&ids, 2, "Iris, Eye;Iris  Nope,Hi");
+        assert_eq!(found, vec![1, 0]);
+        assert_eq!(unknown, vec!["Nope".to_string(), "Hi".to_string()]);
+        assert_eq!(resolve_in(&ids, 0, " , ").0, Vec::<u32>::new());
+    }
+}

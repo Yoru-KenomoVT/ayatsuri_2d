@@ -1459,5 +1459,15 @@
   "Lightens: black leaves the art as it is. Passed down from a deformer to all under it": "밝게 합니다. 검은색이면 원래 그림 그대로입니다. 디포머에 설정하면 그 아래 모두에 적용됩니다",
   "Between keys. Move the parameters onto a key to set the color there.": "키 사이입니다. 색을 설정하려면 파라미터를 키 위로 옮기세요.",
   "Back to the color that leaves the art as it is": "원래 그림 그대로가 되는 색으로 되돌리기",
-  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "인스펙터의 클리핑에 '상속'을 표시합니다. 메시가 마스크 자신의 클리핑으로도 잘립니다. moc3 내보내기는 숨겨진 보조 마스크로 이를 옮기므로 모든 버전과 VTube Studio에서 작동합니다"
+  "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its masks are clipped by. moc3 export carries it with hidden helper masks, so it works in every version and VTube Studio": "인스펙터의 클리핑에 '상속'을 표시합니다. 메시가 마스크 자신의 클리핑으로도 잘립니다. moc3 내보내기는 숨겨진 보조 마스크로 이를 옮기므로 모든 버전과 VTube Studio에서 작동합니다",
+  "Copy ID": "ID 복사",
+  "Copy {count} IDs": "ID {count}개 복사",
+  "Divisions": "분할 수",
+  "Warp": "워프",
+  "Clip IDs": "클리핑 ID",
+  "Paste or type mask IDs": "마스크 ID를 붙여넣거나 입력",
+  "Copy this ID, to paste into another mesh's Clip IDs": "이 ID를 복사해 다른 메시의 클리핑 ID에 붙여넣습니다",
+  "Paste into another mesh's Clip IDs to clip by it": "다른 메시의 클리핑 ID에 붙여넣으면 이것으로 클리핑됩니다",
+  "Change its conversion divisions; its shape is kept": "변환 분할 수를 바꿉니다. 모양은 유지됩니다",
+  "The IDs of the meshes this one clips by, separated by commas. Copy ID on a mesh (or Ctrl+C) and paste here.": "이 메시를 클리핑하는 메시의 ID(쉼표로 구분). 메시에서 ID 복사(또는 Ctrl+C) 후 여기에 붙여넣으세요."
 }
