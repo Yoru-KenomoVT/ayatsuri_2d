@@ -144,10 +144,9 @@ pub fn keys_on(model: &Model, target: Target, param: usize) -> Option<Vec<f32>> 
         .map(|a| a.keys.clone())
 }
 
-/// `target`'s blend shape on `param`, when it has one (art meshes only).
+/// `target`'s blend shape on `param`, when it has one.
 pub fn blend_shape_on(model: &Model, target: Target, param: usize) -> Option<&BlendShape> {
-    let Target::ArtMesh(mi) = target else { return None };
-    model.art_meshes.get(mi)?.blend_shapes.iter().find(|s| s.parameter as usize == param)
+    crate::shapes::shapes(model, target)?.iter().find(|s| s.parameter as usize == param)
 }
 
 /// How many normal keyforms a mesh has. Its blend shapes' keyforms are
@@ -182,45 +181,9 @@ pub fn mesh_form_mut(m: &mut ArtMesh, k: usize) -> Option<&mut [f32]> {
 /// The blend shape parameter whose keyform edits on `target` land in now
 /// (see `keyform_at`), for the editor's "Blend Shape is editable" label.
 pub fn editing_blend_shape(model: &Model, target: Target, values: &[f32]) -> Option<usize> {
-    let Target::ArtMesh(mi) = target else { return None };
-    let m = model.art_meshes.get(mi)?;
-    let k = blend_keyform_at(model, m, values)??;
-    let mut first = normal_keyforms(m);
-    for s in &m.blend_shapes {
-        if k < first + s.keys.len() {
-            return Some(s.parameter as usize);
-        }
-        first += s.keys.len();
-    }
-    None
-}
-
-/// The blend shape keyform the values sit on: exactly one blend shape
-/// parameter off its base key and on one of its keys (Cubism can edit one
-/// blend shape keyform per object at a time). `Some(None)` when every blend
-/// shape is at its base key, so the normal keyforms are the ones to edit;
-/// None when nothing can be edited.
-fn blend_keyform_at(model: &Model, m: &ArtMesh, values: &[f32]) -> Option<Option<usize>> {
-    let mut found = None;
-    let mut first = normal_keyforms(m);
-    for s in &m.blend_shapes {
-        let p = model.parameters.get(s.parameter as usize)?;
-        let v = values.get(s.parameter as usize).copied().unwrap_or(p.default);
-        let tol = ((p.max - p.min).abs() * 0.01).max(1e-4);
-        if v.abs() > tol {
-            let i = s.keys.iter().position(|k| (k - v).abs() <= tol)?;
-            // a limited shape cannot be edited where its limit holds it
-            // under 100% (editor manual, weight limits: precautions)
-            if found.is_some()
-                || crate::blendshape::limit(&model.parameters, &s.limits, values) < 1.0 - 1e-6
-            {
-                return None;
-            }
-            found = Some(first + i);
-        }
-        first += s.keys.len();
-    }
-    Some(found)
+    let k = crate::shapes::keyform_at(model, target, values)??;
+    let (si, _) = crate::shapes::locate(model, target, k)?;
+    crate::shapes::shapes(model, target)?.get(si).map(|s| s.parameter as usize)
 }
 
 /// Every keyform at the key of `param` that its current value sits on, across
@@ -250,13 +213,10 @@ pub fn keyforms_on_key(
 
 /// The keyform the current parameter values sit on, when every bound axis
 /// is on a key (within a hundredth of its range). Copy and paste need one.
-/// A mesh with a blend shape parameter on one of its keys gives that blend
-/// shape keyform instead, whatever the normal axes are doing.
+/// An object with a blend shape parameter on one of its keys gives that
+/// blend shape keyform instead, whatever the normal axes are doing.
 pub fn keyform_at(model: &Model, target: Target, values: &[f32]) -> Option<usize> {
-    if let Target::ArtMesh(mi) = target
-        && let Some(m) = model.art_meshes.get(mi)
-        && let Some(k) = blend_keyform_at(model, m, values)?
-    {
+    if let Some(k) = crate::shapes::keyform_at(model, target, values)? {
         return Some(k);
     }
     let binding = binding_of(model, target)?;

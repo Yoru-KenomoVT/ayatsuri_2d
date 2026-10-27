@@ -376,66 +376,6 @@ pub fn base_form(model: &Model, mesh: usize) -> Option<Vec<f32>> {
     Some(base)
 }
 
-/// Blend shape keys: every value off the base key gains a keyform on the
-/// mesh's blend shape for `param` (made when it has none), holding the form
-/// the mesh shows there now, so nothing moves. Art meshes only for now.
-fn add_blend_keys(model: &mut Model, target: Target, param: usize, values: &[f32]) -> bool {
-    let Target::ArtMesh(mi) = target else { return false };
-    let Some(base) = base_form(model, mi) else { return false };
-    let Some(m) = model.art_meshes.get_mut(mi) else { return false };
-    let stride = base.len();
-    if stride == 0 {
-        return false;
-    }
-    let at = match m.blend_shapes.iter().position(|s| s.parameter as usize == param) {
-        Some(at) => at,
-        None => {
-            m.blend_shapes.push(BlendShape {
-                parameter: param as u32,
-                keys: Vec::new(),
-                positions: Vec::new(),
-                limits: Vec::new(),
-                angles: Vec::new(),
-                draw_orders: Vec::new(),
-                intensities: Vec::new(),
-                multiply: Vec::new(),
-                opacities: Vec::new(),
-                origins_x: Vec::new(),
-                origins_y: Vec::new(),
-                scales: Vec::new(),
-                screen: Vec::new(),
-            });
-            m.blend_shapes.len() - 1
-        }
-    };
-    let Some(shape) = m.blend_shapes.get_mut(at) else { return false };
-    let mut changed = false;
-    for &v in values {
-        if v.abs() < 1e-5 || shape.keys.iter().any(|k| (k - v).abs() < 1e-5) {
-            continue;
-        }
-        // the base plus whatever the shape already adds at `v`
-        let mut form = base.clone();
-        for (k, w) in blendshape::weights(v, &shape.keys) {
-            let start = k.saturating_mul(stride);
-            if w > 0.0
-                && let Some(f) = shape.positions.get(start..start.saturating_add(stride))
-            {
-                blendshape::add(&mut form, f, &base, w);
-            }
-        }
-        let i = shape.keys.partition_point(|&k| k < v);
-        let start = i.saturating_mul(stride).min(shape.positions.len());
-        shape.keys.insert(i, v);
-        shape.positions.splice(start..start, form);
-        changed = true;
-    }
-    if shape.keys.is_empty() {
-        m.blend_shapes.remove(at);
-    }
-    changed
-}
-
 /// Why a weight limit cannot be set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LimitError {
@@ -513,44 +453,12 @@ pub fn remove_weight_limit(model: &mut Model, mi: usize, shape: usize, by: usize
     s.limits.len() != before
 }
 
-/// Remove the blend shape key nearest `value`; the base key cannot go. The
-/// last key going takes the blend shape with it.
-fn delete_blend_key(model: &mut Model, target: Target, param: usize, value: f32) -> bool {
-    let Target::ArtMesh(mi) = target else { return false };
-    let Some(m) = model.art_meshes.get_mut(mi) else { return false };
-    let stride = (m.vertex_count as usize).saturating_mul(2);
-    let Some(at) = m.blend_shapes.iter().position(|s| s.parameter as usize == param) else {
-        return false;
-    };
-    let Some(shape) = m.blend_shapes.get_mut(at) else { return false };
-    let Some((i, k)) = shape
-        .keys
-        .iter()
-        .copied()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| (a - value).abs().total_cmp(&(b - value).abs()))
-    else {
-        return false;
-    };
-    if value.abs() < (k - value).abs() {
-        return false;
-    }
-    let start = i.saturating_mul(stride).min(shape.positions.len());
-    let end = start.saturating_add(stride).min(shape.positions.len());
-    shape.keys.remove(i);
-    shape.positions.drain(start..end);
-    if shape.keys.is_empty() {
-        m.blend_shapes.remove(at);
-    }
-    true
-}
-
 /// Add keys at `values` to `target`'s binding on `param`. Objects not yet
 /// bound on the parameter gain a new axis; existing shapes are preserved
 /// exactly (new keys take the interpolated form). Returns true on change.
 pub fn add_keys(model: &mut Model, target: Target, param: usize, values: &[f32]) -> bool {
     if is_blend_shape(model, param) {
-        return add_blend_keys(model, target, param, values);
+        return crate::shapes::add_keys(model, target, param, values);
     }
     with_object(model, target, |binding, mut channels| {
         let mut changed = false;
@@ -632,7 +540,7 @@ pub fn add_keys(model: &mut Model, target: Target, param: usize, values: &[f32])
 /// the last key removes the binding itself. Returns true on change.
 pub fn delete_key(model: &mut Model, target: Target, param: usize, value: f32) -> bool {
     if is_blend_shape(model, param) {
-        return delete_blend_key(model, target, param, value);
+        return crate::shapes::delete_key(model, target, param, value);
     }
     with_object(model, target, |binding, mut channels| {
         let Some(axis_at) = binding.axes.iter().position(|a| a.parameter as usize == param) else {
@@ -675,11 +583,7 @@ pub fn delete_binding(model: &mut Model, target: Target, param: usize, default: 
     if is_blend_shape(model, param) {
         // at its base key a blend shape adds nothing: dropping it keeps the
         // default shape
-        let Target::ArtMesh(mi) = target else { return false };
-        let Some(m) = model.art_meshes.get_mut(mi) else { return false };
-        let before = m.blend_shapes.len();
-        m.blend_shapes.retain(|s| s.parameter as usize != param);
-        return m.blend_shapes.len() != before;
+        return crate::shapes::remove(model, target, param);
     }
     with_object(model, target, |binding, mut channels| {
         let Some(axis_at) = binding.axes.iter().position(|a| a.parameter as usize == param) else {
@@ -1847,6 +1751,13 @@ pub enum ColorKind {
 }
 
 impl ColorKind {
+    pub fn channel(self) -> crate::blendshape::Channel {
+        match self {
+            ColorKind::Multiply => crate::blendshape::Channel::Multiply,
+            ColorKind::Screen => crate::blendshape::Channel::Screen,
+        }
+    }
+
     /// The colour that leaves the art as it is.
     pub fn neutral(self) -> f32 {
         match self {
@@ -1885,6 +1796,19 @@ pub fn color_pool_mut(
 /// One keyform's colour of `kind` (neutral when the object has none set).
 pub fn color_at(model: &Model, target: Target, keyform: usize, kind: ColorKind) -> [f32; 3] {
     let n = kind.neutral();
+    // a shape keyform: its own colour, or the object's base when the
+    // shape does not change colour
+    if let Some((si, ki)) = crate::shapes::locate(model, target, keyform) {
+        let channel = kind.channel();
+        let own = crate::shapes::shapes(model, target)
+            .and_then(|l| l.get(si))
+            .map(|s| channel.of(s))
+            .filter(|p| !p.is_empty())
+            .and_then(|p| p.get(ki * 3..ki * 3 + 3).map(<[f32]>::to_vec));
+        let rgb = own.or_else(|| crate::shapes::base(model, target, channel)).unwrap_or_default();
+        let at = |c: usize| rgb.get(c).copied().unwrap_or(n);
+        return [at(0), at(1), at(2)];
+    }
     let pool = match target {
         Target::ArtMesh(i) => model.art_meshes.get(i).map(|m| match kind {
             ColorKind::Multiply => &m.multiply,
@@ -1909,6 +1833,18 @@ pub fn set_color(
     kind: ColorKind,
     rgb: [f32; 3],
 ) -> bool {
+    if keyform >= crate::shapes::normal_count(model, target) {
+        let Some(slot) = crate::shapes::channel_mut(model, target, keyform, kind.channel()) else {
+            return false;
+        };
+        let mut changed = false;
+        for (s, v) in slot.iter_mut().zip(rgb) {
+            let v = v.clamp(0.0, 1.0);
+            changed |= (*s - v).abs() > 1e-6;
+            *s = v;
+        }
+        return changed;
+    }
     let Some((pool, keyforms)) = color_pool_mut(model, target, kind) else { return false };
     if keyform >= keyforms {
         return false;
@@ -1932,6 +1868,19 @@ pub fn set_color(
 }
 
 pub fn set_opacity(model: &mut Model, target: Target, keyform: usize, opacity: f32) -> bool {
+    // a shape keyform's opacity (numbered after the normal keyforms)
+    if keyform >= crate::shapes::normal_count(model, target) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        let Some(slot) =
+            crate::shapes::channel_mut(model, target, keyform, crate::blendshape::Channel::Opacity)
+                .and_then(|s| s.first_mut())
+        else {
+            return false;
+        };
+        let changed = (*slot - opacity).abs() >= 1e-6;
+        *slot = opacity;
+        return changed;
+    }
     let slot = match target {
         Target::ArtMesh(i) => {
             model.art_meshes.get_mut(i).and_then(|m| m.opacities.get_mut(keyform))
@@ -2901,6 +2850,25 @@ pub fn move_warp_points(
     keyform: Option<usize>,
     moves: &[(usize, f32, f32)],
 ) -> bool {
+    let target = Target::Deformer(deformer);
+    if let Some(k) = keyform.filter(|&k| k >= crate::shapes::normal_count(model, target)) {
+        let Some(form) =
+            crate::shapes::channel_mut(model, target, k, crate::blendshape::Channel::Positions)
+        else {
+            return false;
+        };
+        let mut touched = false;
+        for &(p, dx, dy) in moves {
+            if let Some(x) = form.get_mut(p * 2) {
+                *x += dx;
+            }
+            if let Some(y) = form.get_mut(p * 2 + 1) {
+                *y += dy;
+                touched = true;
+            }
+        }
+        return touched;
+    }
     let Some(d) = model.deformers.get_mut(deformer) else { return false };
     let DeformerKind::Warp(w) = &mut d.kind else { return false };
     let count = w.grid_points();
@@ -3017,6 +2985,25 @@ pub fn move_rotation_pivot(
     true
 }
 
+/// Turn a rotation deformer by `degrees`: on every keyform, or with a
+/// shape keyform given (a blend shape parameter on one of its keys), on
+/// that one only.
+pub fn rotate_rotation_at(
+    model: &mut Model,
+    deformer: usize,
+    keyform: Option<usize>,
+    degrees: f32,
+) -> bool {
+    let target = Target::Deformer(deformer);
+    match keyform.filter(|&k| k >= crate::shapes::normal_count(model, target)) {
+        Some(k) => crate::shapes::channel_mut(model, target, k, crate::blendshape::Channel::Angle)
+            .and_then(|a| a.first_mut())
+            .map(|a| *a += degrees)
+            .is_some(),
+        None => rotate_rotation(model, deformer, degrees),
+    }
+}
+
 /// Turn a rotation deformer by `degrees` on every keyform.
 pub fn rotate_rotation(model: &mut Model, deformer: usize, degrees: f32) -> bool {
     let Some(d) = model.deformers.get_mut(deformer) else { return false };
@@ -3061,10 +3048,10 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
     let shaped = |s: &[BlendShape]| {
         s.iter().any(|s| s.parameter == p32 || s.limits.iter().any(|l| l.parameter == p32))
     };
-    let used = model.parts.iter().any(|p| uses(&p.binding))
-        || model.deformers.iter().any(|d| uses(&d.binding))
+    let used = model.parts.iter().any(|p| uses(&p.binding) || shaped(&p.blend_shapes))
+        || model.deformers.iter().any(|d| uses(&d.binding) || shaped(&d.blend_shapes))
         || model.art_meshes.iter().any(|m| uses(&m.binding) || shaped(&m.blend_shapes))
-        || model.glues.iter().any(|g| uses(&g.binding))
+        || model.glues.iter().any(|g| uses(&g.binding) || shaped(&g.blend_shapes))
         || model.physics.as_ref().is_some_and(|rig| {
             rig.groups.iter().any(|g| {
                 g.inputs.iter().any(|i| i.param == id) || g.outputs.iter().any(|o| o.param == id)
@@ -3087,9 +3074,8 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
     for d in &mut model.deformers {
         shift(&mut d.binding);
     }
-    for m in &mut model.art_meshes {
-        shift(&mut m.binding);
-        for s in &mut m.blend_shapes {
+    let shift_shapes = |list: &mut Vec<BlendShape>| {
+        for s in list {
             if s.parameter > p32 {
                 s.parameter -= 1;
             }
@@ -3099,6 +3085,19 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
                 }
             }
         }
+    };
+    for m in &mut model.art_meshes {
+        shift(&mut m.binding);
+        shift_shapes(&mut m.blend_shapes);
+    }
+    for d in &mut model.deformers {
+        shift_shapes(&mut d.blend_shapes);
+    }
+    for p in &mut model.parts {
+        shift_shapes(&mut p.blend_shapes);
+    }
+    for g in &mut model.glues {
+        shift_shapes(&mut g.blend_shapes);
     }
     for g in &mut model.glues {
         shift(&mut g.binding);
@@ -3111,8 +3110,13 @@ pub fn delete_parameter(model: &mut Model, param: usize) -> bool {
 pub fn param_users(model: &Model, param: usize) -> (usize, usize) {
     let p32 = param as u32;
     let uses = |b: &Binding| b.axes.iter().any(|a| a.parameter == p32);
-    let objects = model.parts.iter().filter(|p| uses(&p.binding)).count()
-        + model.deformers.iter().filter(|d| uses(&d.binding)).count()
+    let shaped = |l: &[BlendShape]| l.iter().any(|s| s.parameter == p32);
+    let objects = model
+        .parts
+        .iter()
+        .filter(|p| uses(&p.binding) || shaped(&p.blend_shapes))
+        .count()
+        + model.deformers.iter().filter(|d| uses(&d.binding) || shaped(&d.blend_shapes)).count()
         + model
             .art_meshes
             .iter()
@@ -3123,7 +3127,7 @@ pub fn param_users(model: &Model, param: usize) -> (usize, usize) {
                         .any(|s| s.parameter == p32 || s.limits.iter().any(|l| l.parameter == p32))
             })
             .count()
-        + model.glues.iter().filter(|g| uses(&g.binding)).count();
+        + model.glues.iter().filter(|g| uses(&g.binding) || shaped(&g.blend_shapes)).count();
     let id = model.parameters.get(param).map(|p| p.id.as_str()).unwrap_or_default();
     let physics = model.physics.as_ref().map_or(0, |rig| {
         rig.groups
@@ -3176,8 +3180,27 @@ pub fn unbind_parameter_everywhere(model: &mut Model, param: usize) -> bool {
     for t in targets {
         changed |= delete_binding(model, t, param, default);
     }
+    // blend shapes on it go from every other kind too, as do glue's
+    for d in 0..model.deformers.len() {
+        changed |= crate::shapes::remove(model, Target::Deformer(d), param);
+    }
+    for p in 0..model.parts.len() {
+        changed |= crate::shapes::remove(model, Target::Part(p), param);
+    }
+    for g in &mut model.glues {
+        let before = g.blend_shapes.len();
+        g.blend_shapes.retain(|s| s.parameter != p32);
+        changed |= g.blend_shapes.len() != before;
+    }
     // weight limits that follow it go: nothing is left to read
-    for s in model.art_meshes.iter_mut().flat_map(|m| &mut m.blend_shapes) {
+    for s in model
+        .art_meshes
+        .iter_mut()
+        .flat_map(|m| &mut m.blend_shapes)
+        .chain(model.deformers.iter_mut().flat_map(|d| &mut d.blend_shapes))
+        .chain(model.parts.iter_mut().flat_map(|p| &mut p.blend_shapes))
+        .chain(model.glues.iter_mut().flat_map(|g| &mut g.blend_shapes))
+    {
         let before = s.limits.len();
         s.limits.retain(|l| l.parameter != p32);
         changed |= s.limits.len() != before;
