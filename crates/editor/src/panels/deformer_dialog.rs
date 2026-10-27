@@ -244,6 +244,8 @@ impl EditorUi {
             Some(Sel::Deformer(d)) => Some(d),
             _ => None,
         };
+        // several deformers picked: the new one wraps them all
+        let picked_defs = super::def_group(self.selected, &self.def_pick);
         let Some(s) = &mut self.session else { return };
         let model = s.puppet.model();
         if model.deformers.iter().any(|d| d.id == name) {
@@ -254,9 +256,7 @@ impl EditorUi {
         let mut children: Vec<Child> = match placement {
             Placement::ParentOfSelection => {
                 let mut c: Vec<Child> = meshes.iter().map(|&m| Child::Mesh(m)).collect();
-                if let Some(d) = selected_def {
-                    c.push(Child::Deformer(d));
-                }
+                c.extend(picked_defs.iter().map(|&d| Child::Deformer(d)));
                 c
             }
             Placement::ChildOfSelection => {
@@ -292,9 +292,7 @@ impl EditorUi {
         // Set Parent Manually on the selection's own parent still wraps it
         if placement == Placement::Manual {
             let mut sel: Vec<Child> = meshes.iter().map(|&m| Child::Mesh(m)).collect();
-            if let Some(d) = selected_def {
-                sel.push(Child::Deformer(d));
-            }
+            sel.extend(picked_defs.iter().map(|&d| Child::Deformer(d)));
             let same = !sel.is_empty()
                 && sel.iter().all(|&c| {
                     let p = match c {
@@ -377,10 +375,57 @@ impl EditorUi {
                 );
                 self.selected = Some(Sel::Deformer(di));
                 self.multi_sel.clear();
+                self.def_pick.clear();
+                self.def_anchor = None;
             }
             None => log::warn!(
                 "could not create {name}: the selected objects must share one parent deformer"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::Session;
+    use ayatsuri_format::Model;
+
+    #[test]
+    fn a_new_parent_wraps_every_picked_deformer() {
+        let mut m = Model::new();
+        let warp = |m: &mut Model, id: &str| {
+            let kind = NewDeformer::Warp { rows: 1, cols: 1 };
+            ayatsuri_core::edit::create_deformer(
+                m,
+                kind,
+                &[],
+                None,
+                (0.0, 0.0, 1.0, 1.0),
+                None,
+                id.into(),
+            )
+            .unwrap()
+        };
+        for id in ["EyeL", "WhiteEyeL", "LowEyeL"] {
+            warp(&mut m, id);
+        }
+        let ctx = egui::Context::default();
+        let mut ed = EditorUi::new();
+        ed.session = Some(Session::create(&ctx, "t".into(), String::new(), m).unwrap());
+        ed.selected = Some(Sel::Deformer(0));
+        ed.def_pick = vec![0, 1, 2];
+        ed.open_deformer_dialog(true, None);
+        if let Some(d) = &mut ed.deformer_dialog {
+            d.name = "Eyes".into();
+        }
+        ed.create_from_dialog();
+        let model = ed.session.as_ref().unwrap().puppet.model();
+        let parent = model.deformers.iter().position(|d| d.id == "Eyes").unwrap() as u32;
+        for id in ["EyeL", "WhiteEyeL", "LowEyeL"] {
+            let d = model.deformers.iter().find(|d| d.id == id).unwrap();
+            assert_eq!(d.parent_deformer, Some(parent), "{id} goes under the new warp");
+        }
+        assert!(ed.def_pick.is_empty());
     }
 }
