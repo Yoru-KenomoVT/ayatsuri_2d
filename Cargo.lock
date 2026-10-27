@@ -153,6 +153,7 @@ dependencies = [
  "ayatsuri-editor",
  "ayatsuri-format",
  "ayatsuri-import",
+ "ayatsuri-pen",
  "ayatsuri-render",
  "eframe",
  "egui",
@@ -265,6 +266,11 @@ dependencies = [
  "log",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "raw-window-handle",
+ "rustix 1.1.5",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

@@ -7,10 +7,11 @@ repository.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# The second crate allowed unsafe, and only for macOS: adding an event
-# monitor through objc2 has no safe form. Linux reads the tablet in safe
-# Rust; Windows needs nothing here (the window layer passes pressure on).
-# The crate denies unsafe everywhere else; the macOS module alone allows it.
+# The second crate allowed unsafe, in two modules only: attaching to the
+# window's Wayland connection (Linux) and adding an event monitor (macOS)
+# have no safe form. The tablet reader is safe Rust; Windows needs nothing
+# here (the window layer passes pressure on). The crate denies unsafe
+# everywhere else.
 [lints.rust]
 unsafe_code = "deny"
 
@@ -22,9 +23,15 @@ indexing_slicing = "deny"
 
 [dependencies]
 log = { workspace = true }
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.13"
+# the same libwayland-backed client winit uses, so its connection can be shared
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+rustix = { version = "1", features = ["event"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

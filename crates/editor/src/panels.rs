@@ -519,6 +519,8 @@ pub struct EditorUi {
     live_group: LiveGroup,
     /// A rotation being turned live: the deformer and its angles as they were.
     rot_live: Option<(usize, Vec<f32>)>,
+    /// Rotation handles made longer with Alt+drag, by deformer: display only.
+    rot_handle: std::collections::HashMap<usize, f32>,
     /// Set by "Reset Toolbar Position": put the floating bar back next frame.
     toolbar_reset: bool,
     /// The Rename dialog of a deformer or an art mesh: which, the name and
@@ -864,6 +866,21 @@ struct RotDrag {
     wy: f32,
     degrees: f32,
     last_ptr: Pos2,
+    /// Ctrl when the drag began: the deformer changes, what it holds
+    /// stays (Cubism's table); without it the centre carries its art.
+    keep: bool,
+    /// Alt on the handle: only the handle's length changes.
+    handle_only: bool,
+    /// The centre dragged without Ctrl: the keyform it moves in and its
+    /// stored origin, for the live preview.
+    origin_base: Option<(usize, f32, f32)>,
+}
+
+impl RotDrag {
+    /// The turn so far; Shift holds it to 45 degree steps.
+    fn turn(&self, shift: bool) -> f32 {
+        if shift { (self.degrees / 45.0).round() * 45.0 } else { self.degrees }
+    }
 }
 
 /// What a live drag is rewriting.
@@ -1545,6 +1562,7 @@ impl Default for EditorUi {
             mesh_edit_was: None,
             dev_mesh_logged: false,
             rot_live: None,
+            rot_handle: Default::default(),
             api: Default::default(),
             recovery: Default::default(),
             recovering: None,
@@ -1659,6 +1677,12 @@ impl Default for EditorUi {
 impl EditorUi {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Before egui reads this frame's input: a pen taken through the
+    /// Wayland tablet protocol joins it as pointer events (see `pen`).
+    pub fn pen_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.pen.feed(ctx, raw);
     }
 
     /// The app shell calls this after catching a panic out of `ui`: the
@@ -12581,21 +12605,29 @@ impl EditorUi {
                     if let Some(d) = &self.rot_drag
                         && d.deformer == di
                     {
-                        if d.turning {
-                            angle += d.degrees;
-                        } else if let Some(ptr) = ptr
+                        let shift = ui.input(|i| i.modifiers.shift);
+                        if d.turning && !d.handle_only {
+                            angle += d.turn(shift);
+                        } else if !d.turning
+                            && let Some(ptr) = ptr
                             && resp.dragged()
                         {
                             o = ptr;
                         }
                     }
                     let a = angle.to_radians();
-                    let dir = vec2(a.sin(), -a.cos()) * 26.0;
+                    let handle = self.rot_handle.get(&di).copied().unwrap_or(26.0);
+                    let dir = vec2(a.sin(), -a.cos()) * handle;
                     let tip = o + dir;
 
+                    // a drag only starts once the pointer has gone past the
+                    // click distance (wider in pen mode), so what it grabs
+                    // is where the press began, not where the pointer is now
+                    let press = ui.ctx().input(|i| i.pointer.press_origin());
+                    let at = if resp.drag_started() { press.or(ptr) } else { ptr };
                     let near_origin =
-                        ptr.is_some_and(|p| p.distance(o) < 9.0) && self.rot_drag.is_none();
-                    let near_tip = ptr.is_some_and(|p| p.distance(tip) < 9.0)
+                        at.is_some_and(|p| p.distance(o) < 9.0) && self.rot_drag.is_none();
+                    let near_tip = at.is_some_and(|p| p.distance(tip) < 9.0)
                         && !near_origin
                         && self.rot_drag.is_none();
                     if !space {
@@ -12605,22 +12637,47 @@ impl EditorUi {
                             && let Some(ptr) = ptr
                             && let Some(local) = s.puppet.rotation_local_origin(di)
                         {
+                            let start = press.unwrap_or(ptr);
+                            // the way already come before the drag started,
+                            // less this frame's step, which the drag adds
+                            let ahead = (ptr - start) - resp.drag_delta();
+                            let (wx, wy) = (
+                                ahead.x / (scale * c.pixels_per_unit),
+                                ahead.y / (scale * c.pixels_per_unit),
+                            );
+                            let parent = s
+                                .puppet
+                                .model()
+                                .deformers
+                                .get(di)
+                                .and_then(|de| de.parent_deformer);
+                            let (dx, dy) = if near_tip {
+                                (0.0, 0.0)
+                            } else {
+                                parent_delta(&s.puppet, parent, local.0, local.1, wx, wy)
+                            };
                             self.rot_drag = Some(RotDrag {
                                 deformer: di,
                                 turning: near_tip,
                                 local_origin: local,
-                                dx: 0.0,
-                                dy: 0.0,
-                                wx: 0.0,
-                                wy: 0.0,
+                                dx,
+                                dy,
+                                wx: if near_tip { 0.0 } else { wx },
+                                wy: if near_tip { 0.0 } else { wy },
                                 degrees: 0.0,
-                                last_ptr: ptr,
+                                last_ptr: start,
+                                keep: ui.input(|i| i.modifiers.command),
+                                handle_only: near_tip && ui.input(|i| i.modifiers.alt),
+                                origin_base: None,
                             });
                         }
                         // live turn: what the rotation holds swings with the
                         // handle; the angles go back before the real edit
-                        let turning_now =
-                            self.rot_drag.as_ref().filter(|d| d.turning && d.deformer == di);
+                        let turning_now = self
+                            .rot_drag
+                            .as_ref()
+                            .filter(|d| d.turning && d.deformer == di && !d.keep && !d.handle_only);
+                        let shift_now = ui.input(|i| i.modifiers.shift);
                         match (turning_now, &self.rot_live) {
                             (Some(d), _) => {
                                 if self.rot_live.as_ref().is_none_or(|(rd, _)| *rd != di)
@@ -12633,7 +12690,7 @@ impl EditorUi {
                                     && a.len() == base.len()
                                 {
                                     for (x, b) in a.iter_mut().zip(base) {
-                                        *x = b + d.degrees;
+                                        *x = b + d.turn(shift_now);
                                     }
                                     s.dirty = true;
                                 }
@@ -12654,7 +12711,9 @@ impl EditorUi {
                             && let Some(d) = &mut self.rot_drag
                             && d.deformer == di
                         {
-                            if d.turning {
+                            if d.turning && d.handle_only {
+                                self.rot_handle.insert(di, (ptr - o).length().clamp(12.0, 600.0));
+                            } else if d.turning {
                                 let prev = d.last_ptr - o;
                                 let cur = ptr - o;
                                 if prev.length() > 2.0 && cur.length() > 2.0 {
@@ -12685,22 +12744,78 @@ impl EditorUi {
                                 d.dy += ldy;
                                 d.wx += mdx;
                                 d.wy += mdy;
+                                // without Ctrl the art comes along: the origin
+                                // of the keyform the parameters sit on moves
+                                // live, put back before the real edit
+                                if !d.keep {
+                                    if d.origin_base.is_none() {
+                                        let values: Vec<f32> =
+                                            (0..s.puppet.model().parameters.len())
+                                                .map(|i| s.puppet.value(i))
+                                                .collect();
+                                        let target = ayatsuri_core::edit::Target::Deformer(di);
+                                        if let Some(k) = ayatsuri_core::keyform::keyform_at(
+                                            s.puppet.model(),
+                                            target,
+                                            &values,
+                                        ) && let Some((x, y)) =
+                                            s.puppet.rotation_origin_mut(di, k)
+                                        {
+                                            d.origin_base = Some((k, *x, *y));
+                                        }
+                                    }
+                                    if let Some((k, bx, by)) = d.origin_base
+                                        && let Some((x, y)) = s.puppet.rotation_origin_mut(di, k)
+                                    {
+                                        (*x, *y) = (bx + d.dx, by + d.dy);
+                                        s.dirty = true;
+                                    }
+                                }
                             }
                         }
                         if resp.drag_stopped()
                             && let Some(d) = self.rot_drag.take()
                             && d.deformer == di
                         {
-                            // the live angles go back first; the edit below
-                            // turns the real model once
+                            // the live angles and origin go back first; the
+                            // edit below changes the real model once
                             if let Some((rd, base)) = self.rot_live.take()
                                 && let Some(a) = s.puppet.rotation_angles_mut(rd)
                                 && a.len() == base.len()
                             {
                                 a.copy_from_slice(&base);
                             }
-                            if d.turning && d.degrees.abs() > 1e-3 {
-                                let (deg, dfm) = (d.degrees, d.deformer);
+                            if let Some((k, bx, by)) = d.origin_base
+                                && let Some((x, y)) = s.puppet.rotation_origin_mut(di, k)
+                            {
+                                (*x, *y) = (bx, by);
+                                s.dirty = true;
+                            }
+                            let deg = d.turn(ui.input(|i| i.modifiers.shift));
+                            if d.turning && d.handle_only {
+                                // only the handle's length, already shown
+                            } else if d.turning && d.keep && deg.abs() > 1e-3 {
+                                let dfm = d.deformer;
+                                if s.edit(|m| {
+                                    ayatsuri_core::edit::rotate_rotation_keep_children(m, dfm, deg)
+                                }) {
+                                    log::debug!("rotation {dfm} turned {deg:.2} deg alone");
+                                }
+                            } else if !d.turning
+                                && !d.keep
+                                && let Some((k, _, _)) = d.origin_base
+                                && (d.dx != 0.0 || d.dy != 0.0)
+                            {
+                                let (dfm, dx, dy) = (d.deformer, d.dx, d.dy);
+                                if s.edit(|m| {
+                                    ayatsuri_core::edit::move_rotation_origin_in(m, dfm, k, dx, dy)
+                                }) {
+                                    log::debug!(
+                                        "rotation {dfm} moved with its art in keyform {k} ({dx:.3}, {dy:.3})"
+                                    );
+                                }
+                            } else if d.turning && deg.abs() > 1e-3 {
+                                let dfm = d.deformer;
                                 // with a blend shape parameter on a key, only
                                 // that shape keyform turns
                                 let values: Vec<f32> = (0..s.puppet.model().parameters.len())
@@ -12724,6 +12839,10 @@ impl EditorUi {
                                 }) {
                                     log::debug!("rotation {dfm} turned {deg:.2} deg");
                                 }
+                            } else if !d.turning && !d.keep && (d.dx != 0.0 || d.dy != 0.0) {
+                                log::warn!(
+                                    "the parameters are between keys: move them onto a key to move this rotation deformer"
+                                );
                             } else if !d.turning && (d.wx != 0.0 || d.wy != 0.0) {
                                 // the centre is the pivot: it moves, the mesh stays
                                 match pivot_move(&s.puppet, d.deformer, d.wx, d.wy) {
