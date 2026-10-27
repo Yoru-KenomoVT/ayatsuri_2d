@@ -1511,5 +1511,14 @@
   "Reading {tablets}": "{tablets} wordt gelezen",
   "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "{tablets} gevonden, maar deze gebruiker mag het niet lezen: word lid van de input-groep (sudo usermod -aG input $USER) en log opnieuw in",
   "No pen tablet found; plug one in and it is picked up": "Geen pentablet gevonden; sluit er een aan en hij wordt opgepikt",
-  "The system passes pen pressure on": "Het systeem geeft pendruk door"
+  "The system passes pen pressure on": "Het systeem geeft pendruk door",
+  "Merge Vertices": "Hoekpunten samenvoegen",
+  "Delete Points": "Punten verwijderen",
+  "Auto Connect": "Automatisch verbinden",
+  "Divide into 4": "In 4 delen",
+  "Reset Mesh": "Mesh herstellen",
+  "Finish Mesh Edit": "Mesh bewerken afronden",
+  "Select Parent Deformer": "Bovenliggende deformer selecteren",
+  "Lock": "Vergrendelen",
+  "Unlock": "Ontgrendelen"
 }

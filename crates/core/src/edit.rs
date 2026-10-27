@@ -2511,6 +2511,87 @@ pub fn has_edge(model: &Model, mesh: usize, a: u16, b: u16) -> bool {
     })
 }
 
+/// Mesh Edit's Merge vertices (Cubism): the selected points become one, at
+/// their middle in every keyform and in the texture, and their edges go to
+/// it; faces that fold to a line go, glue pairs on merged points follow.
+/// False with fewer than two points.
+pub fn merge_vertices(model: &mut Model, mesh: usize, vertices: &[usize]) -> bool {
+    let n = model.art_meshes.get(mesh).map_or(0, |m| m.vertex_count as usize);
+    let mut picked: Vec<usize> = vertices.iter().copied().filter(|&v| v < n).collect();
+    picked.sort_unstable();
+    picked.dedup();
+    let Some(&keep) = picked.first() else { return false };
+    if picked.len() < 2 {
+        return false;
+    }
+    let others: Vec<usize> = picked.iter().copied().skip(1).collect();
+    let k16 = keep as u16;
+    let merged = with_shapes(model, |model| {
+        let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
+        let count = picked.len() as f32;
+        let mean = |v: &[f32], base: usize| {
+            picked.iter().fold((0.0, 0.0), |(x, y), &i| {
+                (
+                    x + v.get(base + i * 2).copied().unwrap_or(0.0) / count,
+                    y + v.get(base + i * 2 + 1).copied().unwrap_or(0.0) / count,
+                )
+            })
+        };
+        let stride = n * 2;
+        for k in 0..m.positions.len().checked_div(stride).unwrap_or(0) {
+            let (x, y) = mean(&m.positions, k * stride);
+            if let Some(p) = m.positions.get_mut(k * stride + keep * 2) {
+                *p = x;
+            }
+            if let Some(p) = m.positions.get_mut(k * stride + keep * 2 + 1) {
+                *p = y;
+            }
+        }
+        let (u, v) = mean(&m.uvs, 0);
+        if let Some(p) = m.uvs.get_mut(keep * 2) {
+            *p = u;
+        }
+        if let Some(p) = m.uvs.get_mut(keep * 2 + 1) {
+            *p = v;
+        }
+        // edges go to the kept point; faces folded to a line, or made twice,
+        // go
+        let to = |i: u16| if others.contains(&(i as usize)) { k16 } else { i };
+        let (tris, _) = m.indices.as_chunks::<3>();
+        let mut seen: Vec<[u16; 3]> = Vec::new();
+        let mut indices = Vec::with_capacity(m.indices.len());
+        for t in tris {
+            let f = [to(t[0]), to(t[1]), to(t[2])];
+            if f[0] == f[1] || f[1] == f[2] || f[0] == f[2] {
+                continue;
+            }
+            let mut key = f;
+            key.sort_unstable();
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            indices.extend_from_slice(&f);
+        }
+        m.indices = indices;
+        // glue pairs on a merged point now hold the kept one
+        let mesh32 = mesh as u32;
+        for g in &mut model.glues {
+            let (a, b) = (g.art_mesh_a == mesh32, g.art_mesh_b == mesh32);
+            for (slot, i) in g.indices.iter_mut().enumerate() {
+                let ours = if slot.is_multiple_of(2) { a } else { b };
+                if ours {
+                    *i = to(*i);
+                }
+            }
+        }
+        true
+    });
+    // the merged points hold no face or glue now: they go, and the rest
+    // compact
+    merged && delete_vertices(model, mesh, &others)
+}
+
 /// Remove one vertex: its triangles go with it and the pools compact. Glue
 /// pairs pointing at it are dropped, the rest re-indexed.
 pub fn delete_vertex(model: &mut Model, mesh: usize, vertex: usize) -> bool {
@@ -5612,6 +5693,29 @@ mod tests {
             assert!(moved > 0.05, "the art grew with it ({moved})");
             assert!(!scale_rotation_in(&mut with, d, 0, 0.0));
         }
+    }
+
+    #[test]
+    fn merging_two_stroke_ends_makes_one_point() {
+        // two triangles side by side whose near corners (1 and 3) should join
+        let mut m = test_model();
+        let am = &mut m.art_meshes[0];
+        am.vertex_count = 6;
+        am.uvs = vec![0.0, 0.0, 0.4, 0.0, 0.0, 1.0, 0.6, 0.0, 1.0, 0.0, 1.0, 1.0];
+        am.indices = vec![0, 1, 2, 3, 4, 5];
+        am.binding = Binding::default();
+        am.opacities = vec![1.0];
+        am.draw_orders = vec![500.0];
+        am.positions = vec![0.0, 0.0, 4.0, 0.0, 0.0, 10.0, 6.0, 0.0, 10.0, 0.0, 10.0, 10.0];
+        assert!(!merge_vertices(&mut m, 0, &[1]), "one point is nothing to merge");
+        assert!(merge_vertices(&mut m, 0, &[3, 1]));
+        let am = &m.art_meshes[0];
+        assert_eq!(am.vertex_count, 5);
+        // the kept point sits in the middle, in shape and texture
+        assert_eq!((am.positions[2], am.positions[3]), (5.0, 0.0));
+        assert_eq!((am.uvs[2], am.uvs[3]), (0.5, 0.0));
+        // both faces now share it
+        assert_eq!(am.indices, vec![0, 1, 2, 1, 3, 4]);
     }
 
     #[test]
