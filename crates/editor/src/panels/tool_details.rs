@@ -202,9 +202,29 @@ impl EditorUi {
         if let Some((di, cols, rows)) = warp {
             let cur = self.bezier_div.get(&di).copied().unwrap_or((2.min(cols), 2.min(rows)));
             let (mut bw, mut bh) = cur;
+            // the conversion division is typed, then applied: stepping it
+            // down and back up live would lose the shape on the way
+            let (mut cw, mut ch) = match self.td_division {
+                Some((d, c, r)) if d == di => (c, r),
+                _ => (cols as u32, rows as u32),
+            };
+            let mut apply = false;
             grid(ui, "td-warp", |ui| {
                 row(ui, crate::i18n::tr("Conversion division"), |ui| {
-                    ui.label(format!("{cols} × {rows}"));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut cw).range(1..=64));
+                        ui.label("×");
+                        ui.add(egui::DragValue::new(&mut ch).range(1..=64));
+                        apply = ui
+                            .add_enabled(
+                                (cw, ch) != (cols as u32, rows as u32),
+                                egui::Button::new(crate::i18n::tr("Apply")),
+                            )
+                            .on_hover_text(crate::i18n::tr(
+                                "Change its columns and rows; its shape is kept",
+                            ))
+                            .clicked();
+                    });
                 });
                 row(ui, crate::i18n::tr("Bezier division"), |ui| {
                     ui.add_enabled_ui(self.edit_level == 2, |ui| {
@@ -216,7 +236,20 @@ impl EditorUi {
                     });
                 });
             });
-            if (bw, bh) != cur {
+            if (cw, ch) != (cols as u32, rows as u32) {
+                ui.weak(if cw < cols as u32 || ch < rows as u32 {
+                    crate::i18n::tr(
+                        "Fewer divisions keep the shape only at the points that remain.",
+                    )
+                } else {
+                    crate::i18n::tr("Apply to change the division; the shape is kept.")
+                });
+            }
+            self.td_division = ((cw, ch) != (cols as u32, rows as u32)).then_some((di, cw, ch));
+            if apply {
+                self.td_division = None;
+                self.apply_warp_division(di, cw, ch);
+            } else if (bw, bh) != cur {
                 self.bezier_div.insert(di, (bw, bh));
             }
         }
