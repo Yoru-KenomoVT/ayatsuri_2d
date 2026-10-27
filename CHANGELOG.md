@@ -102,6 +102,10 @@ meshes and the Parts palette, and the requests from Discord testing.
   holds: what it holds is carried over through the canvas, so it stays
   where it was, and a rotation deformer wrapped by a new deformer keeps
   its turn.
+- **Grabbing a rotation deformer's centre or handle** works with Pen mode
+  on (for the mouse too): what a drag grabs is where the press began.
+- **After making a deformer** the canvas goes back to the Arrow, so the
+  next click edits it instead of opening New Deformer again.
 - **After Undo** a selected object the undo took away is let go, so the
   next action never works on one that is gone.
 - **Several deformers can be selected at once**, as in Cubism. In the
@@ -117,6 +121,10 @@ meshes and the Parts palette, and the requests from Discord testing.
   or bottom edge of a row (a line shows) to move beside it, out of a
   deformer and into its parent's level; drop on the middle of a deformer
   (a box shows) to move into it.
+- **Rotation deformers take Cubism's keys**: dragging the centre moves the
+  deformer with its art (Ctrl+drag moves only the pivot), Ctrl+drag on the
+  handle turns the deformer while its art stays, Shift turns in 45 degree
+  steps, and Alt+drag makes only the handle longer.
 - **Ctrl+drag moves a warp without what it holds**, as in Cubism: the box
   or its points move, scale or rotate while the art and deformers inside
   stay where they are, to fit a warp after it was made. Works on several
@@ -134,10 +142,11 @@ meshes and the Parts palette, and the requests from Discord testing.
   can size and weight the Deform Brush, Brush Selection, the glue weight
   brush and the mesh eraser, through a pressure curve and a lightest-touch
   floor, smoothed against jitter, with a meter to test the pen. Pen mode
-  loosens clicks for a pen hand. Pressure works on Windows and Linux
-  (read from the tablet itself, on Wayland and X11 alike; the user needs
-  to be able to read it, which Settings explains) and is in for macOS but
-  untested there.
+  loosens clicks for a pen hand. Pressure works on Windows and Linux and
+  is in for macOS but untested there. On Wayland the pen comes through the
+  tablet protocol, as in Krita, so it clicks and drags even where the
+  compositor's own fallback drops a pen's clicks (Hyprland 0.56); on X11
+  the tablet is read directly (Settings explains access if needed).
 - **Boxes over several meshes** move the art live while dragged, like a
   single mesh, instead of only on release.
 - **Clip by on several selected meshes** clips all of them, not only one,

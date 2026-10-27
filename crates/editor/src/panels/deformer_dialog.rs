@@ -219,6 +219,14 @@ impl EditorUi {
         } else if !open || close {
             self.deformer_dialog = None;
         }
+        // the creation tools work through this dialog: once it is gone the
+        // canvas goes back to the Arrow, so the next click edits what was
+        // made instead of opening the dialog again
+        if self.deformer_dialog.is_none()
+            && matches!(self.tool, super::Tool::WarpCreate | super::Tool::RotationCreate)
+        {
+            self.tool = super::Tool::Arrow;
+        }
     }
 
     fn create_from_dialog(&mut self) {

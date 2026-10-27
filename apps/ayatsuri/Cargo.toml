@@ -21,6 +21,7 @@ psd = "0.3"
 [dependencies]
 ayatsuri-editor = { workspace = true }
 ayatsuri-render = { workspace = true }
+ayatsuri-pen = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 # only here to switch on "links": without it ctx.open_url (About, Discord

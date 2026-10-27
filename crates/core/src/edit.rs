@@ -3308,6 +3308,70 @@ pub fn rotate_rotation_at(
     }
 }
 
+/// Cubism's Ctrl+drag on a rotation deformer's handle: the deformer turns
+/// by `degrees` on every keyform while what it holds stays where it is on
+/// screen. Its children turn back by the same amount in its own space (the
+/// other way when the deformer mirrors through one Reflect flag), and
+/// rotation deformers among them keep the turn they showed.
+pub fn rotate_rotation_keep_children(model: &mut Model, deformer: usize, degrees: f32) -> bool {
+    let Some(DeformerKind::Rotation(r)) = model.deformers.get(deformer).map(|d| &d.kind) else {
+        return false;
+    };
+    let mirrored = r.reflect_x.first().copied().unwrap_or(false)
+        != r.reflect_y.first().copied().unwrap_or(false);
+    let d32 = Some(deformer as u32);
+    let mut children: Vec<Child> = model
+        .art_meshes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.parent_deformer == d32)
+        .map(|(i, _)| Child::Mesh(i))
+        .collect();
+    children.extend(
+        model
+            .deformers
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.parent_deformer == d32)
+            .map(|(i, _)| Child::Deformer(i)),
+    );
+    let turns: Vec<(usize, f32)> = {
+        let rotations: Vec<usize> = children
+            .iter()
+            .filter_map(|&c| match c {
+                Child::Deformer(d)
+                    if matches!(
+                        model.deformers.get(d).map(|x| &x.kind),
+                        Some(DeformerKind::Rotation(_))
+                    ) =>
+                {
+                    Some(d)
+                }
+                _ => None,
+            })
+            .collect();
+        if rotations.is_empty() {
+            Vec::new()
+        } else {
+            let p = rest_puppet(model);
+            rotations.iter().filter_map(|&d| Some((d, p.rotation_state(d)?.angle))).collect()
+        }
+    };
+    if !rotate_rotation(model, deformer, degrees) {
+        return false;
+    }
+    let back = if mirrored { degrees } else { -degrees }.to_radians();
+    let (sin, cos) = back.sin_cos();
+    let turn = |x: f32, y: f32| (x * cos - y * sin, x * sin + y * cos);
+    with_shapes(model, |model| {
+        for &c in &children {
+            map_child(model, c, &turn);
+        }
+    });
+    settle_rotations(model, &turns);
+    true
+}
+
 /// Turn a rotation deformer by `degrees` on every keyform.
 pub fn rotate_rotation(model: &mut Model, deformer: usize, degrees: f32) -> bool {
     let Some(d) = model.deformers.get_mut(deformer) else { return false };
@@ -5425,6 +5489,25 @@ mod tests {
             for (a, b) in before.iter().zip(&after) {
                 assert!((a - b).abs() < 1e-2, "rotation {rotation}: {a} vs {b}");
             }
+        }
+    }
+
+    #[test]
+    fn ctrl_turning_a_rotation_leaves_what_it_holds() {
+        for reflect in [false, true] {
+            let (mut m, _, rot) = nested_rig();
+            if let DeformerKind::Rotation(r) = &mut m.deformers[rot].kind {
+                r.reflect_x = vec![reflect; r.reflect_x.len()];
+            }
+            let before = mesh_world(&m);
+            let angle = rest_puppet(&m).rotation_state(rot).unwrap().angle;
+            assert!(rotate_rotation_keep_children(&mut m, rot, 30.0));
+            let after = mesh_world(&m);
+            for (a, b) in before.iter().zip(&after) {
+                assert!((a - b).abs() < 1e-3, "reflect {reflect}: {a} vs {b}");
+            }
+            let now = rest_puppet(&m).rotation_state(rot).unwrap().angle;
+            assert!((now - angle - 30.0).abs() < 1e-3, "the deformer itself turned");
         }
     }
 

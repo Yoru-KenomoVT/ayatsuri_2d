@@ -22,6 +22,8 @@ pub(crate) struct Pen {
     pub(crate) last: Option<f32>,
     /// `down` came from the tablet reader, not from touch events.
     from_reader: bool,
+    /// Where the pen taken through Wayland last was, in points.
+    at: Option<egui::Pos2>,
 }
 
 impl Pen {
@@ -41,6 +43,39 @@ impl Pen {
         });
         if !touched {
             self.take_reader(ayatsuri_pen::reading());
+        }
+    }
+
+    /// A pen taken through the Wayland tablet protocol: its events become
+    /// the pointer events a mouse would give, before egui reads them.
+    pub(crate) fn feed(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let zoom = ctx.zoom_factor().max(0.01);
+        for e in ayatsuri_pen::drain_pointer() {
+            match e {
+                ayatsuri_pen::PenPointer::Move { x, y } => {
+                    let p = egui::pos2(x / zoom, y / zoom);
+                    self.at = Some(p);
+                    raw.events.push(Event::PointerMoved(p));
+                }
+                ayatsuri_pen::PenPointer::Button { button, pressed } => {
+                    let Some(pos) = self.at else { continue };
+                    let button = match button {
+                        ayatsuri_pen::PenButton::Primary => egui::PointerButton::Primary,
+                        ayatsuri_pen::PenButton::Secondary => egui::PointerButton::Secondary,
+                        ayatsuri_pen::PenButton::Middle => egui::PointerButton::Middle,
+                    };
+                    raw.events.push(Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: ctx.input(|i| i.modifiers),
+                    });
+                }
+                ayatsuri_pen::PenPointer::Leave => {
+                    self.at = None;
+                    raw.events.push(Event::PointerGone);
+                }
+            }
         }
     }
 
