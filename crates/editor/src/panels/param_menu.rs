@@ -471,6 +471,11 @@ impl EditorUi {
                 out.push(Target::ArtMesh(mi));
             }
         }
+        for d in super::def_group(self.selected, &self.def_pick) {
+            if !out.contains(&Target::Deformer(d)) {
+                out.push(Target::Deformer(d));
+            }
+        }
         out
     }
 

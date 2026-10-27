@@ -2950,6 +2950,27 @@ pub fn move_rotation_origin(model: &mut Model, deformer: usize, dx: f32, dy: f32
     !r.origins_x.is_empty()
 }
 
+/// Slide a rotation deformer's origin by (dx, dy) in parent space, in one
+/// keyform only (form editing with the arrow tool).
+pub fn move_rotation_origin_in(
+    model: &mut Model,
+    deformer: usize,
+    keyform: usize,
+    dx: f32,
+    dy: f32,
+) -> bool {
+    let Some(d) = model.deformers.get_mut(deformer) else { return false };
+    let DeformerKind::Rotation(r) = &mut d.kind else { return false };
+    match (r.origins_x.get_mut(keyform), r.origins_y.get_mut(keyform)) {
+        (Some(x), Some(y)) => {
+            *x += dx;
+            *y += dy;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Move a rotation deformer's pivot without moving what it holds: keyform
 /// k's origin shifts by `origin_deltas[k]` (parent space) while every child
 /// shifts by `child` (the deformer's local space). The caller picks them so

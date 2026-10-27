@@ -1485,5 +1485,6 @@
   "Link or unlink the parameter below": "Koppel of ontkoppel die parameter hieronder",
   "Reset the selected parameter to default": "Stel die gekose parameter terug na verstek",
   "Select the objects keyed on the parameter": "Kies die voorwerpe met sleutels op die parameter",
-  "Rename the selected deformer, or the selected mesh's": "Hernoem die gekose vervormer, of dié van die gekose maas"
+  "Rename the selected deformer, or the selected mesh's": "Hernoem die gekose vervormer, of dié van die gekose maas",
+  "{count} deformers": "{count} vervormers"
 }

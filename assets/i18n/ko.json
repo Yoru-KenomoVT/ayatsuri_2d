@@ -1485,5 +1485,6 @@
   "Link or unlink the parameter below": "아래 파라미터와 연결 또는 연결 해제",
   "Reset the selected parameter to default": "선택한 파라미터를 기본값으로 재설정",
   "Select the objects keyed on the parameter": "파라미터에 키가 있는 오브젝트 선택",
-  "Rename the selected deformer, or the selected mesh's": "선택한 디포머 또는 선택한 메시의 디포머 이름 변경"
+  "Rename the selected deformer, or the selected mesh's": "선택한 디포머 또는 선택한 메시의 디포머 이름 변경",
+  "{count} deformers": "디포머 {count}개"
 }

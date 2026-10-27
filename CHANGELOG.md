@@ -98,6 +98,11 @@ meshes and the Parts palette, and the requests from Discord testing.
   come through clean, and sibling folders with the same name stay apart
   instead of merging into one part.
 - **Inspector notes** wrap inside the panel instead of running past it.
+- **Several deformers can be selected at once** in the Deformer palette,
+  as in Cubism: Shift+click picks the run between two clicks, Ctrl+click
+  adds or removes one. The pick moves, scales and rotates together in one
+  box on the canvas, takes keys together, and deletes, locks, hides and
+  re-parents (drag) as a group.
 - **Clip by on several selected meshes** clips all of them, not only one,
   from the canvas pick and the Inspector field alike, as one undo step.
 
