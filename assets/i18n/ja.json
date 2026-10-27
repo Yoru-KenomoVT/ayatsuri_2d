@@ -1479,5 +1479,10 @@
   "Copy this ID, to paste into another mesh's Clip by": "このIDをコピーして、別のメッシュのクリッピングに貼り付けます",
   "Apply to change the division; the shape is kept.": "「適用」で分割数を変更します。形は保たれます。",
   "Rename Part": "パーツの名前を変更",
-  "Rename the selected object": "選択中のオブジェクトの名前を変更"
+  "Rename the selected object": "選択中のオブジェクトの名前を変更",
+  "Copy the selected meshes' IDs": "選択中のメッシュのIDをコピー",
+  "Delete the selected parameter": "選択中のパラメータを削除",
+  "Link or unlink the parameter below": "下のパラメータと結合または結合解除",
+  "Reset the selected parameter to default": "選択中のパラメータを初期値に戻す",
+  "Select the objects keyed on the parameter": "パラメータにキーがあるオブジェクトを選択"
 }

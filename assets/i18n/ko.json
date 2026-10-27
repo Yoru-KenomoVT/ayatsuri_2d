@@ -1479,5 +1479,10 @@
   "Copy this ID, to paste into another mesh's Clip by": "이 ID를 복사해 다른 메시의 클리핑에 붙여넣습니다",
   "Apply to change the division; the shape is kept.": "적용을 누르면 분할 수가 바뀝니다. 모양은 유지됩니다.",
   "Rename Part": "파츠 이름 변경",
-  "Rename the selected object": "선택한 오브젝트 이름 변경"
+  "Rename the selected object": "선택한 오브젝트 이름 변경",
+  "Copy the selected meshes' IDs": "선택한 메시의 ID 복사",
+  "Delete the selected parameter": "선택한 파라미터 삭제",
+  "Link or unlink the parameter below": "아래 파라미터와 연결 또는 연결 해제",
+  "Reset the selected parameter to default": "선택한 파라미터를 기본값으로 재설정",
+  "Select the objects keyed on the parameter": "파라미터에 키가 있는 오브젝트 선택"
 }

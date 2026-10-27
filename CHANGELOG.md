@@ -61,6 +61,12 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **View > Solo**, **Highlight Deformer's Child Elements** and **Highlight
   Overlapping Polygons**, as in Cubism.
 - **Custom texture atlas page sizes**, up to what your GPU takes.
+- **A shortcut for every menu action** in Settings > Keyboard: tools such
+  as the Deform Brush, Extended Interpolation and the other parameter
+  commands, the File, View, Window and Help items, and more. They have no
+  keys until you pick some; menus and toolbar tips show the ones you set.
+- **Shift holds a Deform Brush stroke** to the X or Y axis, whichever it
+  moves along first.
 - **Experimental features** (Settings > General, at the bottom): one
   switch for all of them and one per feature. In this release: clip
   groups, inherited clipping (exported to moc3 as hidden helper masks) and
@@ -88,6 +94,8 @@ meshes and the Parts palette, and the requests from Discord testing.
   come through clean, and sibling folders with the same name stay apart
   instead of merging into one part.
 - **Inspector notes** wrap inside the panel instead of running past it.
+- **Clip by on several selected meshes** clips all of them, not only one,
+  from the canvas pick and the Inspector field alike, as one undo step.
 
 ## 0.5.8 (2026-10-24)
 
