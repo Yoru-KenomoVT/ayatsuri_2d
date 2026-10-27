@@ -2092,7 +2092,10 @@ mod tests {
             blend_shape: true,
         });
         let (keys, weights) = blendshape::Preset::Straight3.graph(0.0, 1.0);
-        assert_eq!(edit::add_weight_limit(&mut model, 0, 1, 2, keys, weights), Ok(()));
+        assert_eq!(
+            edit::add_weight_limit(&mut model, edit::Target::ArtMesh(0), 1, 2, keys, weights),
+            Ok(())
+        );
         let mut p = Puppet::new(model);
         p.set_value(1, 1.0);
         p.update();
