@@ -9138,9 +9138,16 @@ impl EditorUi {
                 if !new_blend.legacy_bits().1 {
                     ui.horizontal(|ui| {
                         ui.add_space(78.0);
-                        ui.weak(crate::i18n::tr(
-                            "Kept by moc3 5.3; older versions draw the nearest of Normal, Add and Multiply",
-                        ));
+                        // wraps inside the panel, under the controls
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::i18n::tr(
+                                    "Kept by moc3 5.3; older versions draw the nearest of Normal, Add and Multiply",
+                                ))
+                                .weak(),
+                            )
+                            .wrap(),
+                        );
                     });
                 }
                 let mut double_sided = m.flags & flags::DOUBLE_SIDED != 0;
@@ -16943,7 +16950,7 @@ fn clip_by_row(
             }
         }
     }
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
         ui.add_sized(
             [74.0, 16.0],
             egui::Label::new(
@@ -16952,37 +16959,13 @@ fn clip_by_row(
                     .size(11.0),
             ),
         );
-        let mut drop: Option<usize> = None;
-        for (at, &x) in want.iter().enumerate() {
-            let name = s.mesh_name(x as usize);
-            let id = model.art_meshes.get(x as usize).map_or("", |m| m.id.as_str());
-            let chip = egui::Button::new(
-                egui::RichText::new(format!("{}  ×", truncate(&name, 18))).size(10.5),
-            )
-            .corner_radius(8.0)
-            .small();
-            if ui
-                .add(chip)
-                .on_hover_text(format!("{id}\n{}", crate::i18n::tr("Stop clipping by this mesh")))
-                .clicked()
-            {
-                drop = Some(at);
-            }
-        }
-        if let Some(at) = drop {
-            want.remove(at);
-        }
-        let hint = if want.is_empty() {
-            crate::i18n::tr("Type or paste an ID")
-        } else {
-            crate::i18n::tr("Add…")
-        };
+        let hint = crate::i18n::tr("Type or paste an ID");
         let r = ui
             .add(
                 egui::TextEdit::singleline(&mut text)
                     .id(field)
                     .hint_text(hint)
-                    .desired_width(120.0),
+                    .desired_width((ui.available_width() - 60.0).max(80.0)),
             )
             .on_hover_text(crate::i18n::tr(
                 "Type a mesh's name or ID and pick it from the list, or paste IDs separated by \
@@ -17050,7 +17033,7 @@ fn clip_by_row(
             .open_memory(None)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.set_min_width(200.0);
+                ui.set_width(240.0);
                 if matches.is_empty() {
                     ui.weak(crate::i18n::tr("No other mesh matches"));
                     return;
@@ -17069,8 +17052,16 @@ fn clip_by_row(
                         }
                         let name = s.mesh_name(mi);
                         let id = model.art_meshes.get(mi).map_or("", |m| m.id.as_str());
-                        let label = if name == id { name } else { format!("{name}   {id}") };
-                        if ui.button(label).clicked() {
+                        // a row like the other dropdowns': the name, its ID
+                        // faint at the right when the two differ
+                        let row = egui::Button::selectable(false, name.as_str())
+                            .right_text(
+                                egui::RichText::new(if name == id { "" } else { id })
+                                    .color(theme::pal().text_faint)
+                                    .size(11.0),
+                            )
+                            .min_size(vec2(ui.available_width(), 0.0));
+                        if ui.add(row).clicked() {
                             picked = Some(mi);
                         }
                     }
@@ -17107,6 +17098,35 @@ fn clip_by_row(
         }
         *buf = (r.has_focus() || !text.is_empty()).then(|| (mesh, text.clone()));
     });
+    // the masks as chips under the field (x takes one off)
+    if !want.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(78.0);
+            let mut drop: Option<usize> = None;
+            for (at, &x) in want.iter().enumerate() {
+                let name = s.mesh_name(x as usize);
+                let id = model.art_meshes.get(x as usize).map_or("", |m| m.id.as_str());
+                let chip = egui::Button::new(
+                    egui::RichText::new(format!("{}  ×", truncate(&name, 18))).size(10.5),
+                )
+                .corner_radius(8.0)
+                .small();
+                if ui
+                    .add(chip)
+                    .on_hover_text(format!(
+                        "{id}\n{}",
+                        crate::i18n::tr("Stop clipping by this mesh")
+                    ))
+                    .clicked()
+                {
+                    drop = Some(at);
+                }
+            }
+            if let Some(at) = drop {
+                want.remove(at);
+            }
+        });
+    }
     ClipRow { masks: (want != masks).then_some(want), toggle_pick }
 }
 
