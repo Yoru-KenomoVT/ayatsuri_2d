@@ -1521,5 +1521,9 @@
   "Select Parent Deformer": "Kies ouervervormer",
   "Lock": "Sluit",
   "Unlock": "Ontsluit",
-  "Pick the colour from the art on the canvas (Esc cancels)": "Kies die kleur van die kuns op die doek (Esc kanselleer)"
+  "Pick the colour from the art on the canvas (Esc cancels)": "Kies die kleur van die kuns op die doek (Esc kanselleer)",
+  "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "Wanneer Maasredigering verlaat word, die atlas dadelik weer uitlê as 'n maas nou verby sy eie kuns strek. Af: die atlas wag vir die uitvoer, wat die uitleg aanbied wanneer 'n maas dit nodig het",
+  "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "{count} maas/mase strek op die tekstuuratlas verby hul kuns, dus sou hulle 'n buurman se pixels wys",
+  "Lay out the atlas": "Lê die atlas uit",
+  "Pack each mesh's own art again (one undo step), then export": "Pak elke maas se eie kuns weer in (een ontdoen-stap), voer dan uit"
 }

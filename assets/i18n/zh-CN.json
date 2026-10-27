@@ -1521,5 +1521,9 @@
   "Select Parent Deformer": "选择父变形器",
   "Lock": "锁定",
   "Unlock": "解锁",
-  "Pick the colour from the art on the canvas (Esc cancels)": "从画布上的图像取色（Esc 取消）"
+  "Pick the colour from the art on the canvas (Esc cancels)": "从画布上的图像取色（Esc 取消）",
+  "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "退出网格编辑时，若网格超出自身图像，立即重新排列图集。关闭：图集等到导出时再处理，需要时导出会提示排列",
+  "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "{count} 个网格在纹理图集上超出了自身图像，会显示相邻的像素",
+  "Lay out the atlas": "排列图集",
+  "Pack each mesh's own art again (one undo step), then export": "重新打包每个网格自己的图像（一步撤销），然后再导出"
 }

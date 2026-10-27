@@ -299,18 +299,14 @@ impl EditorUi {
         );
 
         section(ui, crate::i18n::tr("TEXTURE ATLAS"));
-        let mut repack = !self.prefs.atlas_repack_off;
         row(
             ui,
             crate::i18n::tr("Repack when a mesh outgrows its art"),
             crate::i18n::tr(
-                "On leaving Mesh Edit, lays the atlas out again if a mesh now reaches past its own art, so no export ever shows a neighbour's. Turn off to keep a layout arranged by hand",
+                "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it",
             ),
             |ui| {
-                if ui.checkbox(&mut repack, "").changed() {
-                    self.prefs.atlas_repack_off = !repack;
-                    save = true;
-                }
+                save |= ui.checkbox(&mut self.prefs.atlas_repack_auto, "").changed();
             },
         );
 

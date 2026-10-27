@@ -1521,5 +1521,9 @@
   "Select Parent Deformer": "親デフォーマを選択",
   "Lock": "ロック",
   "Unlock": "ロック解除",
-  "Pick the colour from the art on the canvas (Esc cancels)": "キャンバスのアートから色を取得します（Escで取り消し）"
+  "Pick the colour from the art on the canvas (Esc cancels)": "キャンバスのアートから色を取得します（Escで取り消し）",
+  "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "メッシュ編集を終えたとき、メッシュが自分のアートからはみ出していれば、すぐにアトラスを配置し直します。オフ：アトラスはエクスポートまで待ち、必要なときにエクスポートが配置を提案します",
+  "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "{count} 個のメッシュがテクスチャアトラス上で自分のアートからはみ出しているため、隣のピクセルが表示されます",
+  "Lay out the atlas": "アトラスを配置",
+  "Pack each mesh's own art again (one undo step), then export": "各メッシュのアートを詰め直します（1回で元に戻せます）。その後エクスポートしてください"
 }
