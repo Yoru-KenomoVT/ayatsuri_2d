@@ -50,7 +50,10 @@ meshes and the Parts palette, and the requests from Discord testing.
   parameters, ranges and folders as a template for the next model.
 - **Parts palette as in Cubism**: drag parts and meshes to reorder and
   regroup them, New Part, and Group into New Part on the context menu.
-- **Rename an art mesh and edit its ID**.
+- **Rename parts and art meshes and edit their IDs**, from the Parts and
+  Deformer palettes. A Rename shortcut (no key until you pick one in
+  Settings > Keyboard) renames the selected part, deformer or art mesh,
+  or opens Edit Parameter on the selected parameter.
 - **Automatic mesh generator settings and presets** as in Cubism. Auto
   mesh starts from the layer's art and runs a row of points down thin
   strokes instead of boxing them in.

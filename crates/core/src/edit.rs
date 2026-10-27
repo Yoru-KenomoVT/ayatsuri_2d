@@ -1967,6 +1967,21 @@ pub fn rename_art_mesh(model: &mut Model, mesh: usize, id: &str) -> bool {
     }
 }
 
+/// Rename a part's id; refused when another part already has it.
+pub fn rename_part(model: &mut Model, part: usize, id: &str) -> bool {
+    let id = id.trim();
+    if id.is_empty() || model.parts.iter().enumerate().any(|(i, p)| i != part && p.id == id) {
+        return false;
+    }
+    match model.parts.get_mut(part) {
+        Some(p) => {
+            p.id = id.to_string();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Change a warp deformer's division to `cols` x `rows` after it was
 /// made: every keyform's grid, and every blend shape keyform's, is sampled
 /// again at the new division, so what the warp holds keeps its shape
@@ -4804,6 +4819,18 @@ mod tests {
         assert!(!rename_deformer(&mut m, b, "  "));
         assert!(rename_deformer(&mut m, a, " Face "));
         assert_eq!(m.deformers[a].id, "Face");
+    }
+
+    #[test]
+    fn rename_part_refuses_taken_or_empty_ids() {
+        let mut m = test_model();
+        let a = crate::palette::new_part(&mut m, "PartA", None, 500.0, &[]);
+        let b = crate::palette::new_part(&mut m, "PartB", None, 500.0, &[]);
+        assert!(!rename_part(&mut m, b, "PartA"));
+        assert!(!rename_part(&mut m, b, "  "));
+        assert!(!rename_part(&mut m, 99, "PartC"));
+        assert!(rename_part(&mut m, a, " PartHead "));
+        assert_eq!(m.parts[a].id, "PartHead");
     }
 
     #[test]

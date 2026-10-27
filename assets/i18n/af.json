@@ -1477,5 +1477,7 @@
   "Copy these masks' IDs, to paste into another mesh's Clip by": "Kopieer hierdie maskers se ID's om in 'n ander maas se Knip deur te plak",
   "Paste into another mesh's Clip by to clip by it": "Plak in 'n ander maas se Knip deur om daardeur te knip",
   "Copy this ID, to paste into another mesh's Clip by": "Kopieer hierdie ID om in 'n ander maas se Knip deur te plak",
-  "Apply to change the division; the shape is kept.": "Klik Pas toe om die verdeling te verander; die vorm bly behoue."
+  "Apply to change the division; the shape is kept.": "Klik Pas toe om die verdeling te verander; die vorm bly behoue.",
+  "Rename Part": "Hernoem deel",
+  "Rename the selected object": "Hernoem die gekose voorwerp"
 }
