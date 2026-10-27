@@ -529,6 +529,15 @@ impl Puppet {
         Some(r.angles.as_mut_slice())
     }
 
+    /// A rotation deformer's keyform scales, editable in place for a live
+    /// scale handle preview, the same way.
+    pub fn rotation_scales_mut(&mut self, deformer: usize) -> Option<&mut [f32]> {
+        self.cache.valid = false;
+        let d = self.model.deformers.get_mut(deformer)?;
+        let DeformerKind::Rotation(r) = &mut d.kind else { return None };
+        Some(r.scales.as_mut_slice())
+    }
+
     /// One keyform's rotation deformer origin (parent space), editable in
     /// place the same way.
     pub fn rotation_origin_mut(

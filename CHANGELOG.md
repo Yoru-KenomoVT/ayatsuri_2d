@@ -124,7 +124,9 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **Rotation deformers take Cubism's keys**: dragging the centre moves the
   deformer with its art (Ctrl+drag moves only the pivot), Ctrl+drag on the
   handle turns the deformer while its art stays, Shift turns in 45 degree
-  steps, and Alt+drag makes only the handle longer.
+  steps, and Alt+drag makes only the handle longer. The round ring
+  around the centre is the scale handle: drag it to enlarge the deformer
+  with its art, Ctrl+drag to enlarge the deformer alone.
 - **Ctrl+drag moves a warp without what it holds**, as in Cubism: the box
   or its points move, scale or rotate while the art and deformers inside
   stay where they are, to fit a warp after it was made. Works on several
