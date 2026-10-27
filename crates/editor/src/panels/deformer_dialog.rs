@@ -246,6 +246,10 @@ impl EditorUi {
         };
         // several deformers picked: the new one wraps them all
         let picked_defs = super::def_group(self.selected, &self.def_pick);
+        let selection_note = format!(
+            "selected {:?}, deformer pick {:?}, mesh pick {:?}, part pick {:?}",
+            self.selected, self.def_pick, self.multi_sel, self.part_pick
+        );
         let Some(s) = &mut self.session else { return };
         let model = s.puppet.model();
         if model.deformers.iter().any(|d| d.id == name) {
@@ -345,6 +349,26 @@ impl EditorUi {
                 }
             })
         };
+        // what is asked for, by name, to set against what it ends up holding
+        let name_of = |model: &ayatsuri_format::Model, c: &Child| match *c {
+            Child::Mesh(i) => {
+                format!("mesh {}", model.art_meshes.get(i).map_or("?", |m| m.id.as_str()))
+            }
+            Child::Deformer(i) => {
+                format!("deformer {}", model.deformers.get(i).map_or("?", |d| d.id.as_str()))
+            }
+        };
+        let asked: Vec<String> = children.iter().map(|c| name_of(s.puppet.model(), c)).collect();
+        log::info!(
+            "New Deformer {name}: {selection_note}; {} wraps {} object(s): {}",
+            match placement {
+                Placement::ParentOfSelection => "as parent of the selection",
+                Placement::ChildOfSelection => "as child of the selected deformer",
+                Placement::Manual => "with its parent set by hand",
+            },
+            asked.len(),
+            asked.join(", ")
+        );
         let kind =
             if warp { NewDeformer::Warp { rows, cols } } else { NewDeformer::Rotation { origin } };
         let mut made = None;
@@ -362,6 +386,32 @@ impl EditorUi {
         });
         match made {
             Some(di) => {
+                // what it holds now, against what was asked
+                let model = s.puppet.model();
+                let d32 = Some(di as u32);
+                let mut got: Vec<String> = model
+                    .art_meshes
+                    .iter()
+                    .filter(|m| m.parent_deformer == d32)
+                    .map(|m| format!("mesh {}", m.id))
+                    .collect();
+                got.extend(
+                    model
+                        .deformers
+                        .iter()
+                        .filter(|d| d.parent_deformer == d32)
+                        .map(|d| format!("deformer {}", d.id)),
+                );
+                let missing: Vec<&String> = asked.iter().filter(|a| !got.contains(a)).collect();
+                if missing.is_empty() {
+                    log::info!("New Deformer {name}: holds {}", got.join(", "));
+                } else {
+                    log::warn!(
+                        "New Deformer {name}: holds {} but not {}",
+                        got.join(", "),
+                        missing.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
+                    );
+                }
                 // indices at or past the insert point moved up one
                 let shift = |set: &std::collections::HashSet<usize>| {
                     set.iter().map(|&i| if i >= di { i + 1 } else { i }).collect()
