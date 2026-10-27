@@ -315,6 +315,9 @@ pub struct EditorUi {
     /// The Conversion Divisions dialog: the warp and the columns and rows
     /// being set.
     def_division: Option<(usize, u32, u32)>,
+    /// Tool Details' Conversion division while it differs from the warp's:
+    /// the warp and the columns and rows typed, applied with Apply.
+    td_division: Option<(usize, u32, u32)>,
     /// Undo depth at the start of the frame; see `on_crash`.
     frame_undo_depth: usize,
     /// When the last frame began, and the real time since the one before:
@@ -1196,6 +1199,7 @@ impl Default for EditorUi {
             anim_slot: None,
             def_rename: None,
             def_division: None,
+            td_division: None,
             toolbar_reset: false,
             live_drag: None,
             dev_mesh_done: false,
@@ -8989,16 +8993,23 @@ impl EditorUi {
         );
         if ok {
             let (cols, rows) = (*cols, *rows);
-            let Some(s) = &mut self.session else { return };
-            if s.edit(|m| ayatsuri_core::edit::set_warp_division(m, i, cols, rows)) {
-                // the Bezier handles and picked points were for the old grid
-                s.bezier_nets.retain(|&(d, _), _| d != i);
-                self.pts = point_edit::PointState::default();
-                log::info!("deformer {i}: divisions {was_cols}x{was_rows} to {cols}x{rows}");
-            }
+            self.apply_warp_division(i, cols, rows);
             self.def_division = None;
         } else if !open {
             self.def_division = None;
+        }
+    }
+
+    /// Change warp `i`'s conversion division as one undo step: its grids
+    /// are sampled again, and the Bezier handles and picked points, made for
+    /// the old grid, are dropped.
+    fn apply_warp_division(&mut self, i: usize, cols: u32, rows: u32) {
+        let Some(s) = &mut self.session else { return };
+        if s.edit(|m| ayatsuri_core::edit::set_warp_division(m, i, cols, rows)) {
+            s.bezier_nets.retain(|&(d, _), _| d != i);
+            self.bezier_div.remove(&i);
+            self.pts = point_edit::PointState::default();
+            log::info!("deformer {i}: divisions now {cols}x{rows}");
         }
     }
 
