@@ -79,6 +79,11 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Changed
 
+- **The texture atlas waits for export**: leaving Mesh Edit no longer lays
+  the atlas out again by itself, so rigging and animating never rewrite
+  the textures. When a mesh has grown past its art, the moc3 export says
+  so and offers **Lay out the atlas**; Settings can turn the old automatic
+  layout back on.
 - **Parameters drag like layers**, into and out of folders.
 - **Clicking another mesh inside the selected one's box** switches to it
   instead of grabbing the box.

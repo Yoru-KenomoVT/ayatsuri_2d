@@ -197,9 +197,10 @@ pub struct Prefs {
     pub pen_min: u32,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
-    /// Don't lay the atlas out again on leaving Mesh Edit when a mesh has
-    /// grown past its own art (keeps a layout arranged by hand).
-    pub atlas_repack_off: bool,
+    /// Lay the atlas out again by itself on leaving Mesh Edit when a mesh
+    /// has grown past its own art. Off by default: the atlas is an export
+    /// step, and the moc3 export offers the layout when it is needed.
+    pub atlas_repack_auto: bool,
     /// Experimental features (Settings > Experimental): the master switch,
     /// then one per feature; a feature is on only with both.
     pub experimental: bool,

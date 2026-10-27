@@ -2721,7 +2721,7 @@ impl EditorUi {
         }
         if self.mesh_edit.is_some() {
             self.mesh_edit_was = self.mesh_edit;
-        } else if self.mesh_edit_was.take().is_some() && !self.prefs.atlas_repack_off {
+        } else if self.mesh_edit_was.take().is_some() && self.prefs.atlas_repack_auto {
             self.repack_if_outgrown(&ui.ctx().clone());
         }
         self.def_division_window(&ui.ctx().clone());
@@ -9959,15 +9959,15 @@ impl EditorUi {
         }
     }
 
-    /// Lay the atlas out again when a mesh reaches past its own art, so the
-    /// pages hold only each mesh's own pixels and no export shows a
-    /// neighbour's: one undo step, at the size of the biggest page now.
-    fn repack_if_outgrown(&mut self, ctx: &egui::Context) {
-        let Some(s) = &mut self.session else { return };
+    /// The meshes that reach past their own art on the atlas (Mesh Edit
+    /// grew them), whose exported texture would show a neighbour's pixels
+    /// until the atlas is laid out again.
+    pub(crate) fn outgrown_meshes(&self) -> Vec<usize> {
+        let Some(s) = &self.session else { return Vec::new() };
         let sizes = s.page_sizes();
         let art = s.art_boxes();
-        let model = s.puppet.model();
-        let outgrown: Vec<usize> = model
+        s.puppet
+            .model()
             .art_meshes
             .iter()
             .enumerate()
@@ -9981,7 +9981,18 @@ impl EditorUi {
                 })
             })
             .map(|(i, _)| i)
-            .collect();
+            .collect()
+    }
+
+    /// Lay the atlas out again when a mesh reaches past its own art, so the
+    /// pages hold only each mesh's own pixels and no export shows a
+    /// neighbour's: one undo step, at the size of the biggest page now.
+    pub(crate) fn repack_if_outgrown(&mut self, ctx: &egui::Context) {
+        let outgrown = self.outgrown_meshes();
+        let Some(s) = &mut self.session else { return };
+        let sizes = s.page_sizes();
+        let art = s.art_boxes();
+        let model = s.puppet.model();
         if outgrown.is_empty() {
             return;
         }
@@ -19621,7 +19632,10 @@ mod atlas_leak_tests {
         }));
         let mut ed = EditorUi::new();
         ed.session = Some(s);
+        // the export sees the outgrown mesh, and nothing after the layout
+        assert_eq!(ed.outgrown_meshes(), vec![red]);
         ed.repack_if_outgrown(&ctx);
+        assert!(ed.outgrown_meshes().is_empty());
         let s = ed.session.as_ref().unwrap();
         let m = &s.puppet.model().art_meshes[red];
         let page = image::load_from_memory(&s.texture_pngs[m.texture as usize]).unwrap().to_rgba8();

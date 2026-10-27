@@ -1521,5 +1521,9 @@
   "Select Parent Deformer": "Bovenliggende deformer selecteren",
   "Lock": "Vergrendelen",
   "Unlock": "Ontgrendelen",
-  "Pick the colour from the art on the canvas (Esc cancels)": "Neem de kleur over van de art op het canvas (Esc annuleert)"
+  "Pick the colour from the art on the canvas (Esc cancels)": "Neem de kleur over van de art op het canvas (Esc annuleert)",
+  "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it": "Bij het verlaten van Mesh bewerken de atlas meteen opnieuw indelen als een mesh nu buiten zijn eigen art komt. Uit: de atlas wacht op de export, die de indeling aanbiedt als een mesh dat nodig heeft",
+  "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels": "{count} mesh(es) komen op de textuuratlas buiten hun art, dus ze zouden pixels van een buur tonen",
+  "Lay out the atlas": "Atlas indelen",
+  "Pack each mesh's own art again (one undo step), then export": "Pak de eigen art van elke mesh opnieuw in (één stap ongedaan maken) en exporteer daarna"
 }
