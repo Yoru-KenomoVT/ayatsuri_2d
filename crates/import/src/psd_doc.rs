@@ -15,6 +15,11 @@
 use crate::ImportError;
 use crate::layers::{Blend, Document, Folder, Layer};
 
+/// A layer or folder name without the NUL some writers end it with.
+fn clean(name: &str) -> String {
+    name.trim_end_matches('\0').to_string()
+}
+
 /// Read a .psd into a layered document, bottom layer first.
 pub fn read_psd(bytes: &[u8]) -> Result<Document, ImportError> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_inner(bytes))) {
@@ -29,6 +34,21 @@ fn read_inner(bytes: &[u8]) -> Result<Document, ImportError> {
     let psd = psd::Psd::from_bytes(bytes).map_err(|e| ImportError::Export(format!("psd: {e}")))?;
     let (cw, ch) = (psd.width(), psd.height());
     let groups = psd.groups();
+    // folder names as the model uses them: siblings sharing a name (some
+    // writers save every folder as "Unnamed Layer") are numbered so their
+    // layers do not end up in one part
+    let mut ids: Vec<u32> = groups.keys().copied().collect();
+    ids.sort_unstable();
+    let mut names = std::collections::HashMap::new();
+    let mut seen = std::collections::HashMap::new();
+    for id in ids {
+        let Some(g) = groups.get(&id) else { continue };
+        let base = clean(g.name());
+        let n = seen.entry((g.parent_id(), base.clone())).or_insert(0u32);
+        *n += 1;
+        names.insert(id, if *n == 1 { base } else { format!("{base} {n}") });
+    }
+    let name_of = |id: u32| names.get(&id).cloned().unwrap_or_default();
 
     // the crate lists layers top-down; the model wants bottom-up
     let mut layers = Vec::with_capacity(psd.layers().len());
@@ -44,7 +64,7 @@ fn read_inner(bytes: &[u8]) -> Result<Document, ImportError> {
         let mut hops = 0;
         while let Some(id) = cur {
             let Some(g) = groups.get(&id) else { break };
-            path.push(g.name().to_string());
+            path.push(name_of(id));
             cur = g.parent_id();
             hops += 1;
             if hops > 64 {
@@ -67,7 +87,7 @@ fn read_inner(bytes: &[u8]) -> Result<Document, ImportError> {
             }
         }
         layers.push(Layer {
-            name: l.name().to_string(),
+            name: clean(l.name()),
             groups: path,
             x: left,
             y: top,
@@ -98,12 +118,12 @@ fn read_inner(bytes: &[u8]) -> Result<Document, ImportError> {
         if code == 0 {
             continue;
         }
-        let mut path = vec![g.name().to_string()];
+        let mut path = vec![name_of(*id)];
         let mut cur = g.parent_id();
         let mut hops = 0;
         while let Some(pid) = cur {
             let Some(p) = groups.get(&pid).filter(|_| pid != *id) else { break };
-            path.push(p.name().to_string());
+            path.push(name_of(pid));
             cur = p.parent_id();
             hops += 1;
             if hops > 64 {
