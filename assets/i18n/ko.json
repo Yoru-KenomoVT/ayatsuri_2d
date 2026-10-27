@@ -1477,5 +1477,7 @@
   "Copy these masks' IDs, to paste into another mesh's Clip by": "이 마스크들의 ID를 복사해 다른 메시의 클리핑에 붙여넣습니다",
   "Paste into another mesh's Clip by to clip by it": "다른 메시의 클리핑에 붙여넣으면 이것으로 클리핑됩니다",
   "Copy this ID, to paste into another mesh's Clip by": "이 ID를 복사해 다른 메시의 클리핑에 붙여넣습니다",
-  "Apply to change the division; the shape is kept.": "적용을 누르면 분할 수가 바뀝니다. 모양은 유지됩니다."
+  "Apply to change the division; the shape is kept.": "적용을 누르면 분할 수가 바뀝니다. 모양은 유지됩니다.",
+  "Rename Part": "파츠 이름 변경",
+  "Rename the selected object": "선택한 오브젝트 이름 변경"
 }

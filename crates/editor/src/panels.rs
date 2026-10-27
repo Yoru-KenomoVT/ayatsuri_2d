@@ -6522,6 +6522,7 @@ impl EditorUi {
                 self.view_pan = Vec2::ZERO;
             }
             "focus" => self.focus_request = true,
+            "rename" if have => self.rename_selected(),
             "mirror-edit" => self.mirror_edit = !self.mirror_edit,
             "solo" => self.toggle_solo(),
             "highlight-children" => self.highlight_children = !self.highlight_children,
@@ -7434,6 +7435,7 @@ impl EditorUi {
         if let Some(take) = take_new {
             self.open_new_part(take);
         }
+        let rename_sc = self.sc("rename");
         let Some(s) = &mut self.session else { return };
         let query = self.part_search.trim().to_lowercase();
         let searching = !query.is_empty();
@@ -7547,6 +7549,7 @@ impl EditorUi {
         let mut drop_cmd: Option<(Dragged, PDrop)> = None;
         let mut part_click: Option<usize> = None;
         let mut group_part: Option<usize> = None;
+        let mut rename_part: Option<usize> = None;
         let mut part_double = false;
         ScrollArea::vertical().id_salt("parts").show(ui, |ui| {
             for (row, depth) in visible {
@@ -7572,6 +7575,7 @@ impl EditorUi {
                             &self.multi_sel,
                             &mut self.palette_hover,
                             dnd,
+                            &rename_sc,
                         );
                         if dnd {
                             palette_drop_target(ui, &resp, row, false, &mut drop_cmd);
@@ -7739,6 +7743,15 @@ impl EditorUi {
                         group_part = Some(i);
                         ui.close();
                     }
+                    if ui
+                        .add(
+                            egui::Button::new(crate::i18n::tr("Rename…")).shortcut_text(&rename_sc),
+                        )
+                        .clicked()
+                    {
+                        rename_part = Some(i);
+                        ui.close();
+                    }
                 });
 
                 if dnd {
@@ -7839,6 +7852,9 @@ impl EditorUi {
                 self.open_new_part(true);
             }
             None => {}
+        }
+        if let Some(i) = rename_part {
+            self.open_part_rename(i);
         }
         if let Some(i) = group_part {
             if !self.part_pick.contains(&i) {
@@ -8183,6 +8199,7 @@ impl EditorUi {
             ui.disable();
         }
         let mut def_cmd: Option<DefCmd> = None;
+        let rename_sc = self.sc("rename");
         let mut def_mesh_rows: Vec<usize> = Vec::new();
         let mut def_mesh_click: Option<usize> = None;
         let Some(s) = &mut self.session else {
@@ -8456,7 +8473,12 @@ impl EditorUi {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(crate::i18n::tr("Rename…")).shortcut_text(&rename_sc),
+                        )
+                        .clicked()
+                    {
                         def_cmd = Some(DefCmd::Rename(i));
                         ui.close();
                     }
@@ -8557,7 +8579,13 @@ impl EditorUi {
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(crate::i18n::tr("Rename…"))
+                                    .shortcut_text(&rename_sc),
+                            )
+                            .clicked()
+                        {
                             def_cmd = Some(DefCmd::RenameMesh(mi));
                             ui.close();
                         }
@@ -8865,7 +8893,31 @@ impl EditorUi {
         self.def_rename = Some((Sel::Mesh(i), name, m.id.clone(), false));
     }
 
-    /// Rename a deformer or an art mesh: its name (shown in the palettes,
+    /// Open Rename Part on a part's current name and ID.
+    fn open_part_rename(&mut self, i: usize) {
+        let Some(s) = &self.session else { return };
+        let Some(p) = s.puppet.model().parts.get(i) else { return };
+        let name = s.part_names.get(i).cloned().unwrap_or_default();
+        self.def_rename = Some((Sel::Part(i), name, p.id.clone(), false));
+    }
+
+    /// The rename shortcut: Rename on whatever is selected, a part,
+    /// deformer or art mesh, or Edit Parameter on a selected parameter.
+    fn rename_selected(&mut self) {
+        match self.selected {
+            Some(Sel::Part(i)) => self.open_part_rename(i),
+            Some(Sel::Deformer(i)) => self.open_def_rename(i),
+            Some(Sel::Mesh(i)) => self.open_mesh_rename(i),
+            Some(Sel::Parameter(i)) => self.run_param_cmd(ParamCmd::Edit(i)),
+            None => {
+                if let Some(pi) = self.sel_param {
+                    self.run_param_cmd(ParamCmd::Edit(pi));
+                }
+            }
+        }
+    }
+
+    /// Rename a part, deformer or art mesh: its name (shown in the palettes,
     /// free text, as in Cubism) and its ID (what exports and the runtime
     /// use: unique and not empty), both editable after it was made.
     fn def_rename_window(&mut self, ctx: &egui::Context) {
@@ -8873,6 +8925,7 @@ impl EditorUi {
         let (target, mut open, mut ok) = (*target, true, false);
         let title = match target {
             Sel::Mesh(_) => crate::i18n::tr("Rename Art Mesh"),
+            Sel::Part(_) => crate::i18n::tr("Rename Part"),
             _ => crate::i18n::tr("Rename Deformer"),
         };
         crate::windows::Dialog::new(title).open(&mut open).show(ctx, |ui| {
@@ -8909,6 +8962,9 @@ impl EditorUi {
                 Sel::Deformer(i) => {
                     ("deformer", i, s.puppet.model().deformers.get(i).is_some_and(|d| d.id == id))
                 }
+                Sel::Part(i) => {
+                    ("part", i, s.puppet.model().parts.get(i).is_some_and(|p| p.id == id))
+                }
                 _ => {
                     self.def_rename = None;
                     return;
@@ -8917,6 +8973,7 @@ impl EditorUi {
             let renamed = same_id
                 || s.edit(|m| match target {
                     Sel::Mesh(i) => ayatsuri_core::edit::rename_art_mesh(m, i, &id),
+                    Sel::Part(i) => ayatsuri_core::edit::rename_part(m, i, &id),
                     _ => ayatsuri_core::edit::rename_deformer(m, i, &id),
                 });
             if !renamed {
@@ -8929,7 +8986,11 @@ impl EditorUi {
             if !same_id {
                 log::info!("{kind} {i}: ID changed to {id}");
             }
-            let names = if kind == "art mesh" { &mut s.mesh_names } else { &mut s.deformer_names };
+            let names = match kind {
+                "art mesh" => &mut s.mesh_names,
+                "part" => &mut s.part_names,
+                _ => &mut s.deformer_names,
+            };
             if let Some(n) = names.get_mut(i).filter(|n| **n != name) {
                 *n = name.clone();
                 s.modified = true;
@@ -13956,6 +14017,8 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Edit", "redo", "Redo", CS, K::Z),
         ("Edit", "redo-alt", "Redo (alternate)", C, K::Y),
         ("Edit", "select-parent", "Select deformer for parent", C, K::D),
+        // no keys until you pick some
+        ("Edit", "rename", "Rename the selected object", N, K::F35),
         ("Modeling", "mesh-edit", "Edit mesh", C, K::E),
         ("Modeling", "auto-mesh", "Automatic mesh generator", CS, K::A),
         ("Modeling", "auto-connect", "Auto connect edges", C, K::R),
@@ -14662,6 +14725,7 @@ fn parts_mesh_row(
     picked: &[usize],
     hover: &mut Option<Sel>,
     drag_ok: bool,
+    rename_sc: &str,
 ) -> egui::Response {
     let (rect, resp) =
         ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click_and_drag());
@@ -14752,7 +14816,8 @@ fn parts_mesh_row(
             *cmd = Some(MeshRowCmd::Group(mi));
             ui.close();
         }
-        if ui.button(crate::i18n::tr("Rename…")).clicked() {
+        if ui.add(egui::Button::new(crate::i18n::tr("Rename…")).shortcut_text(rename_sc)).clicked()
+        {
             *cmd = Some(MeshRowCmd::Rename(mi));
             ui.close();
         }

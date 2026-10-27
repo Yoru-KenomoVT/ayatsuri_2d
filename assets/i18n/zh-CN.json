@@ -1477,5 +1477,7 @@
   "Copy these masks' IDs, to paste into another mesh's Clip by": "复制这些蒙版的 ID，粘贴到另一个网格的剪贴中",
   "Paste into another mesh's Clip by to clip by it": "粘贴到另一个网格的剪贴中，即可用它剪贴",
   "Copy this ID, to paste into another mesh's Clip by": "复制此 ID，粘贴到另一个网格的剪贴中",
-  "Apply to change the division; the shape is kept.": "点击“应用”更改分割数，形状保持不变。"
+  "Apply to change the division; the shape is kept.": "点击“应用”更改分割数，形状保持不变。",
+  "Rename Part": "重命名部件",
+  "Rename the selected object": "重命名选中的对象"
 }

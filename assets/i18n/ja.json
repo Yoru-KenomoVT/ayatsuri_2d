@@ -1477,5 +1477,7 @@
   "Copy these masks' IDs, to paste into another mesh's Clip by": "これらのマスクのIDをコピーして、別のメッシュのクリッピングに貼り付けます",
   "Paste into another mesh's Clip by to clip by it": "別のメッシュのクリッピングに貼り付けると、これでクリッピングされます",
   "Copy this ID, to paste into another mesh's Clip by": "このIDをコピーして、別のメッシュのクリッピングに貼り付けます",
-  "Apply to change the division; the shape is kept.": "「適用」で分割数を変更します。形は保たれます。"
+  "Apply to change the division; the shape is kept.": "「適用」で分割数を変更します。形は保たれます。",
+  "Rename Part": "パーツの名前を変更",
+  "Rename the selected object": "選択中のオブジェクトの名前を変更"
 }
