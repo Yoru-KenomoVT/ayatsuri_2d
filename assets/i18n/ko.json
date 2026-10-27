@@ -1501,5 +1501,9 @@
   "How much the lightest press still gives, in percent": "가장 가볍게 눌렀을 때의 적용 정도(퍼센트)",
   "Test": "테스트",
   "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "펜으로 캔버스를 누르면 보고된 필압이 막대에 표시됩니다. 필압은 Windows에서 동작하며, Linux에서는 현재 펜이 마우스로 동작합니다",
-  "No pressure seen yet": "아직 필압이 감지되지 않았습니다"
+  "No pressure seen yet": "아직 필압이 감지되지 않았습니다",
+  "Flip": "반전",
+  "Flip Warp Only Horizontally": "워프만 좌우 반전",
+  "Flip Warp Only Vertically": "워프만 상하 반전",
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "안의 아트와 디포머는 그대로 두고 워프 격자만 반전합니다"
 }

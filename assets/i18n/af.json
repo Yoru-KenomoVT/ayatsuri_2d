@@ -1501,5 +1501,9 @@
   "How much the lightest press still gives, in percent": "Hoeveel die ligste druk steeds gee, in persent",
   "Test": "Toets",
   "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "Druk met die pen op die doek: die balk wys die druk wat dit meld. Druk werk op Windows; op Linux werk die pen vir nou as 'n muis",
-  "No pressure seen yet": "Nog geen druk gesien nie"
+  "No pressure seen yet": "Nog geen druk gesien nie",
+  "Flip": "Spieël",
+  "Flip Warp Only Horizontally": "Spieël slegs die warp horisontaal",
+  "Flip Warp Only Vertically": "Spieël slegs die warp vertikaal",
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "Spieël die warp se rooster terwyl die kuns en vervormers binne bly waar hulle is"
 }

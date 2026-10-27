@@ -1501,5 +1501,9 @@
   "How much the lightest press still gives, in percent": "最轻按压时仍有的效果（百分比）",
   "Test": "测试",
   "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "用笔按压画布，条形显示其报告的压感。Windows 上可用压感；Linux 上目前笔作为鼠标使用",
-  "No pressure seen yet": "尚未检测到压感"
+  "No pressure seen yet": "尚未检测到压感",
+  "Flip": "翻转",
+  "Flip Warp Only Horizontally": "仅水平翻转弯曲变形器",
+  "Flip Warp Only Vertically": "仅垂直翻转弯曲变形器",
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "仅镜像弯曲变形器的网格，内部的图像和变形器保持不动"
 }
