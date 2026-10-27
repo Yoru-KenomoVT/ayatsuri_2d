@@ -1485,5 +1485,6 @@
   "Link or unlink the parameter below": "与下方参数链接或取消链接",
   "Reset the selected parameter to default": "将选中的参数重置为默认值",
   "Select the objects keyed on the parameter": "选择在该参数上有关键帧的对象",
-  "Rename the selected deformer, or the selected mesh's": "重命名选中的变形器，或选中网格的变形器"
+  "Rename the selected deformer, or the selected mesh's": "重命名选中的变形器，或选中网格的变形器",
+  "{count} deformers": "{count} 个变形器"
 }

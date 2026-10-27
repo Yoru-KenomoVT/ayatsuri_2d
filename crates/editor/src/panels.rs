@@ -97,6 +97,54 @@ impl Tool {
     }
 }
 
+/// The deformers a deformer action works on: the palette pick when the
+/// selected deformer is in it, else the selected deformer alone.
+fn def_group(selected: Option<Sel>, pick: &[usize]) -> Vec<usize> {
+    match selected {
+        Some(Sel::Deformer(d)) if pick.contains(&d) => pick.to_vec(),
+        Some(Sel::Deformer(d)) => vec![d],
+        _ => Vec::new(),
+    }
+}
+
+/// Ctrl+click toggles `row` in the pick, Shift+click picks the run from
+/// the anchor in `order`, a plain click picks just `row`.
+fn pick_in(
+    pick: &mut Vec<usize>,
+    anchor: &mut Option<usize>,
+    row: usize,
+    shift: bool,
+    ctrl: bool,
+    order: &[usize],
+) {
+    let at = |r: usize| order.iter().position(|&x| x == r);
+    match (shift, ctrl) {
+        (true, _) => match (anchor.and_then(at), at(row)) {
+            (Some(a), Some(b)) => {
+                let (lo, hi) = (a.min(b), a.max(b));
+                *pick = order.get(lo..=hi).map(<[usize]>::to_vec).unwrap_or_default();
+            }
+            _ => {
+                *pick = vec![row];
+                *anchor = Some(row);
+            }
+        },
+        (false, true) => {
+            match pick.iter().position(|&x| x == row) {
+                Some(p) => {
+                    pick.remove(p);
+                }
+                None => pick.push(row),
+            }
+            *anchor = Some(row);
+        }
+        (false, false) => {
+            *pick = vec![row];
+            *anchor = Some(row);
+        }
+    }
+}
+
 /// The shortcut action that picks a tool, for its toolbar tip.
 fn tool_key(t: Tool) -> Option<&'static str> {
     Some(match t {
@@ -375,6 +423,10 @@ pub struct EditorUi {
     /// View > Highlight Overlapping Polygons.
     highlight_overlap: bool,
     part_anchor: Option<usize>,
+    /// Deformers picked together in the Deformer palette (Ctrl or Shift
+    /// click); see `def_group` for when it counts.
+    def_pick: Vec<usize>,
+    def_anchor: Option<usize>,
     /// The Parts palette row under the pointer, outlined on the canvas.
     palette_hover: Option<Sel>,
     /// The Parts and Deformer palettes' search boxes.
@@ -1252,6 +1304,8 @@ impl Default for EditorUi {
             highlight_children: false,
             highlight_overlap: false,
             part_anchor: None,
+            def_pick: Vec::new(),
+            def_anchor: None,
             palette_hover: None,
             part_search: String::new(),
             def_search: String::new(),
@@ -7131,17 +7185,29 @@ impl EditorUi {
                 self.mesh_locked.insert(mi);
             }
         }
-        if let Some(Sel::Deformer(d)) = self.selected
-            && !self.def_locked.remove(&d)
-        {
-            self.def_locked.insert(d);
+        let defs = def_group(self.selected, &self.def_pick);
+        let all = !defs.is_empty() && defs.iter().all(|d| self.def_locked.contains(d));
+        for d in defs {
+            if all {
+                self.def_locked.remove(&d);
+            } else {
+                self.def_locked.insert(d);
+            }
         }
         log::info!("{} locked mesh(es)", self.mesh_locked.len());
     }
 
     fn toggle_selected_visibility(&mut self) {
         let meshes = self.selection_meshes();
+        let defs = def_group(self.selected, &self.def_pick);
         if let Some(s) = &mut self.session {
+            for d in defs {
+                if let Some(f) = s.deformer_shown.get_mut(d) {
+                    *f = !*f;
+                    s.puppet.set_deformer_visible(d, *f);
+                    s.dirty = true;
+                }
+            }
             log::info!("visibility toggled on {} mesh(es)", meshes.len());
             for mi in meshes {
                 if let Some(f) = s.mesh_shown.get_mut(mi) {
@@ -8113,6 +8179,8 @@ impl EditorUi {
         self.selected_glue = None;
         self.part_pick.clear();
         self.part_anchor = None;
+        self.def_pick.clear();
+        self.def_anchor = None;
         self.multi_sel.clear();
         self.mesh_anchor = None;
         log::info!("selection cleared from the palette");
@@ -8150,31 +8218,34 @@ impl EditorUi {
             }
             (&mut self.multi_sel, &mut self.mesh_anchor)
         };
-        let at = |r: usize| order.iter().position(|&x| x == r);
-        match (shift, ctrl) {
-            (true, _) => match (anchor.and_then(at), at(row)) {
-                (Some(a), Some(b)) => {
-                    let (lo, hi) = (a.min(b), a.max(b));
-                    *pick = order.get(lo..=hi).map(<[usize]>::to_vec).unwrap_or_default();
-                }
-                _ => {
-                    *pick = vec![row];
-                    *anchor = Some(row);
-                }
-            },
-            (false, true) => {
-                match pick.iter().position(|&x| x == row) {
-                    Some(p) => {
-                        pick.remove(p);
-                    }
-                    None => pick.push(row),
-                }
-                *anchor = Some(row);
+        pick_in(pick, anchor, row, shift, ctrl, order);
+    }
+
+    /// A deformer row clicked with Ctrl or Shift (or plainly): the pick
+    /// starts from the selected deformer, and the selection follows.
+    fn pick_def_rows(&mut self, row: usize, shift: bool, ctrl: bool, order: &[usize]) {
+        let current = match self.selected {
+            Some(Sel::Deformer(d)) => Some(d),
+            _ => None,
+        };
+        if let Some(d) = current {
+            if !self.def_pick.contains(&d) {
+                self.def_pick = vec![d];
+                self.def_anchor = Some(d);
             }
-            (false, false) => {
-                *pick = vec![row];
-                *anchor = Some(row);
-            }
+        } else {
+            self.def_pick.clear();
+            self.def_anchor = None;
+        }
+        pick_in(&mut self.def_pick, &mut self.def_anchor, row, shift, ctrl, order);
+        self.selected = if self.def_pick.contains(&row) {
+            Some(Sel::Deformer(row))
+        } else {
+            self.def_pick.last().copied().map(Sel::Deformer)
+        };
+        if self.def_pick.len() > 1 {
+            self.multi_sel.clear();
+            self.part_pick.clear();
         }
     }
 
@@ -8449,6 +8520,9 @@ impl EditorUi {
         }
         let mut def_cmd: Option<DefCmd> = None;
         let rename_sc = self.sc("rename");
+        let picked_defs = def_group(self.selected, &self.def_pick);
+        let mut def_rows: Vec<usize> = Vec::new();
+        let mut def_click: Option<usize> = None;
         let mut def_mesh_rows: Vec<usize> = Vec::new();
         let mut def_mesh_click: Option<usize> = None;
         let Some(s) = &mut self.session else {
@@ -8567,9 +8641,10 @@ impl EditorUi {
             for (i, dep, _, is_warp, has_kids) in rows {
                 let (rect, resp) = ui
                     .allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click_and_drag());
-                if self.selected == Some(Sel::Deformer(i)) {
+                if self.selected == Some(Sel::Deformer(i)) || picked_defs.contains(&i) {
                     paint_picked_row(ui, rect);
                 }
+                def_rows.push(i);
                 // drag a row onto a deformer to make it the parent
                 if resp.drag_started() && !self.def_locked.contains(&i) {
                     resp.dnd_set_drag_payload(Child::Deformer(i));
@@ -8702,7 +8777,7 @@ impl EditorUi {
                 if resp.double_clicked() {
                     def_double = true;
                 } else if resp.clicked() {
-                    self.selected = Some(Sel::Deformer(i));
+                    def_click = Some(i);
                 }
                 resp.context_menu(|ui| {
                     if ui
@@ -8927,6 +9002,9 @@ impl EditorUi {
         });
         if def_double {
             self.deselect_all();
+        } else if let Some(i) = def_click {
+            let (shift, ctrl) = ui.ctx().input(|i| (i.modifiers.shift, i.modifiers.command));
+            self.pick_def_rows(i, shift, ctrl, &def_rows);
         }
         // what is being dragged follows the pointer
         if let Some(p) = egui::DragAndDrop::payload::<Child>(&ctx)
@@ -8934,6 +9012,13 @@ impl EditorUi {
             && let Some(s) = &self.session
         {
             let lines: Vec<String> = match *p {
+                Child::Deformer(d)
+                    if def_group(self.selected, &self.def_pick).len() > 1
+                        && self.def_pick.contains(&d) =>
+                {
+                    let n = self.def_pick.len();
+                    vec![crate::i18n::trf("{count} deformers", &[("count", &n)])]
+                }
                 Child::Deformer(d) => vec![
                     s.puppet.model().deformers.get(d).map(|d| d.id.clone()).unwrap_or_default(),
                 ],
@@ -9011,8 +9096,16 @@ impl EditorUi {
                     Child::Mesh(mi) if self.multi_sel.len() > 1 && self.multi_sel.contains(&mi) => {
                         self.multi_sel.iter().map(|&m| Child::Mesh(m)).collect()
                     }
+                    Child::Deformer(d) if def_group(self.selected, &self.def_pick).contains(&d) => {
+                        def_group(self.selected, &self.def_pick)
+                            .into_iter()
+                            .map(Child::Deformer)
+                            .collect()
+                    }
                     other => vec![other],
                 };
+                // re-parenting can re-sort deformers: the pick follows by id
+                let picked_ids: Vec<String> = self.def_pick.iter().filter_map(id_of).collect();
                 let count = group.len();
                 if s.edit(|m| {
                     let mut any = false;
@@ -9029,8 +9122,9 @@ impl EditorUi {
                     if let Some(id) = picked {
                         self.selected = index_of(&id).map(Sel::Deformer);
                     }
+                    self.def_pick = picked_ids.iter().filter_map(index_of).collect();
                     if count > 1 {
-                        log::info!("re-parented {count} meshes under {parent:?}");
+                        log::info!("re-parented {count} objects under {parent:?}");
                     } else {
                         log::info!("re-parented {child:?} under {parent:?}");
                     }
@@ -9057,21 +9151,36 @@ impl EditorUi {
                 self.delete_meshes(meshes);
             }
             DefCmd::Delete(i) => {
+                // a deformer in the pick deletes the whole pick, last first
+                // so the earlier indices hold, as one undo step
+                let group = def_group(self.selected, &self.def_pick);
+                let mut gone = if group.contains(&i) { group } else { vec![i] };
+                gone.sort_unstable_by(|a, b| b.cmp(a));
                 let Some(s) = &mut self.session else { return };
-                let name =
-                    s.puppet.model().deformers.get(i).map(|d| d.id.clone()).unwrap_or_default();
-                if s.edit(|m| ayatsuri_core::edit::delete_deformer(m, i)) {
-                    log::info!("deleted deformer {name}");
-                    // indices past it moved down one
+                let names: Vec<String> = gone
+                    .iter()
+                    .filter_map(|&d| s.puppet.model().deformers.get(d).map(|d| d.id.clone()))
+                    .collect();
+                if s.edit(|m| {
+                    let mut any = false;
+                    for &d in &gone {
+                        any |= ayatsuri_core::edit::delete_deformer(m, d);
+                    }
+                    any
+                }) {
+                    log::info!("deleted deformer(s) {}", names.join(", "));
+                    // indices past each one moved down
                     let fix = |set: &mut std::collections::HashSet<usize>| {
                         *set = set
                             .iter()
-                            .filter(|&&d| d != i)
-                            .map(|&d| if d > i { d - 1 } else { d })
+                            .filter(|d| !gone.contains(d))
+                            .map(|&d| d - gone.iter().filter(|&&g| g < d).count())
                             .collect();
                     };
                     fix(&mut self.def_collapsed);
                     fix(&mut self.def_locked);
+                    self.def_pick.clear();
+                    self.def_anchor = None;
                     if matches!(self.selected, Some(Sel::Deformer(_))) {
                         self.selected = None;
                     }
@@ -11261,6 +11370,171 @@ impl EditorUi {
                     if editable {
                         point_edit::draw_overlay(&self.pts, &vp, &pts, true, 0.0, grab_hot);
                     }
+                }
+            }
+            Some(Sel::Deformer(_)) if def_group(self.selected, &self.def_pick).len() > 1 => {
+                // several deformers picked: one box over every warp's grid
+                // and rotation deformer's origin moves, scales and rotates
+                // them together, in the keyform the parameters sit on
+                let group: Vec<usize> = def_group(self.selected, &self.def_pick)
+                    .into_iter()
+                    .filter(|d| !self.def_locked.contains(d))
+                    .collect();
+                // (deformer, grid point; usize::MAX for a rotation origin)
+                let mut owner: Vec<(usize, usize)> = Vec::new();
+                let mut pts: Vec<Pos2> = Vec::new();
+                let mut grids: Vec<(usize, u32, u32)> = Vec::new();
+                for &d in &group {
+                    if let Some((g, rows, cols)) = s.puppet.warp_grid(d) {
+                        let base = pts.len();
+                        for (gi, q) in g.as_chunks::<2>().0.iter().enumerate() {
+                            pts.push(to_screen(q[0], q[1]));
+                            owner.push((d, gi));
+                        }
+                        grids.push((base, rows, cols));
+                    } else if let Some((x, y)) = s.puppet.rotation_local_origin(d) {
+                        let parent =
+                            s.puppet.model().deformers.get(d).and_then(|x| x.parent_deformer);
+                        let (wx, wy) = match parent {
+                            Some(p) => s.puppet.deformer_point(p as usize, x, y),
+                            None => (x, y),
+                        };
+                        pts.push(to_screen(wx, wy));
+                        owner.push((d, usize::MAX));
+                    }
+                }
+                let editable =
+                    matches!(self.tool, Tool::Arrow | Tool::Lasso) && !space && !pts.is_empty();
+                let key =
+                    group.iter().fold(0x51ed_usize, |h, d| h.wrapping_mul(31).wrapping_add(*d));
+                let mut grab_hot = None;
+                if editable {
+                    self.pts.bind((4, key));
+                    self.pts.weights = Vec::new();
+                    let inp = point_edit::PtInput::read(ui, &resp);
+                    let opts = point_edit::PtOpts {
+                        whole_box: true,
+                        marquee: true,
+                        lasso: self.tool == Tool::Lasso,
+                        reach: 7.0,
+                        pad: 0.0,
+                    };
+                    let mut out = point_edit::point_tool(&mut self.pts, &inp, &mut pts, &opts);
+                    if self.pts.settling {
+                        ui.ctx().request_repaint();
+                    }
+                    if let (Some(ax), Some(m)) = (mirror_x, &mut out.commit) {
+                        point_edit::mirror_moves(m, &pts, ax, mirror_tol);
+                    }
+                    warp_hot |= self.pts.hot;
+                    grab_hot = out.hover_grab;
+                    if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.pts.picked.clear();
+                    }
+                    if let Some(moved) = out.commit {
+                        let k_unit = 1.0 / (scale * c.pixels_per_unit);
+                        let values: Vec<f32> = (0..s.puppet.model().parameters.len())
+                            .map(|i| s.puppet.value(i))
+                            .collect();
+                        let mut per: std::collections::BTreeMap<usize, Vec<(usize, f32, f32)>> =
+                            std::collections::BTreeMap::new();
+                        let mut locals: std::collections::HashMap<usize, Vec<f32>> =
+                            std::collections::HashMap::new();
+                        for &(i, dv) in &moved {
+                            let Some(&(d, gi)) = owner.get(i) else { continue };
+                            let (px, py) = if gi == usize::MAX {
+                                s.puppet.rotation_local_origin(d).unwrap_or((0.0, 0.0))
+                            } else {
+                                let local = locals.entry(d).or_insert_with(|| {
+                                    s.puppet.warp_local_grid(d).unwrap_or_default()
+                                });
+                                (
+                                    local.get(gi * 2).copied().unwrap_or(0.0),
+                                    local.get(gi * 2 + 1).copied().unwrap_or(0.0),
+                                )
+                            };
+                            let parent =
+                                s.puppet.model().deformers.get(d).and_then(|x| x.parent_deformer);
+                            let (dx, dy) = parent_delta(
+                                &s.puppet,
+                                parent,
+                                px,
+                                py,
+                                dv.x * k_unit,
+                                dv.y * k_unit,
+                            );
+                            per.entry(d).or_default().push((gi, dx, dy));
+                        }
+                        let mut plan = Vec::new();
+                        let mut between = 0usize;
+                        for (d, moves) in per {
+                            let target = ayatsuri_core::edit::Target::Deformer(d);
+                            match ayatsuri_core::keyform::keyform_at(
+                                s.puppet.model(),
+                                target,
+                                &values,
+                            ) {
+                                Some(k) => plan.push((d, k, moves)),
+                                None => between += 1,
+                            }
+                        }
+                        let count = plan.len();
+                        if !plan.is_empty()
+                            && s.edit(|m| {
+                                let mut any = false;
+                                for (d, k, moves) in &plan {
+                                    match moves.first() {
+                                        Some(&(usize::MAX, dx, dy)) => {
+                                            any |= ayatsuri_core::edit::move_rotation_origin_in(
+                                                m, *d, *k, dx, dy,
+                                            );
+                                        }
+                                        _ => {
+                                            any |= ayatsuri_core::edit::move_warp_points(
+                                                m,
+                                                *d,
+                                                Some(*k),
+                                                moves,
+                                            );
+                                        }
+                                    }
+                                }
+                                any
+                            })
+                        {
+                            log::debug!("{count} deformers moved together");
+                        }
+                        if between > 0 {
+                            log::warn!(
+                                "{between} deformer(s) sit between keys and did not move: put the parameters on a key"
+                            );
+                        }
+                    }
+                }
+                let stroke = Stroke::new(1.0, theme::pal().accent.gamma_multiply(0.8));
+                for &(base, rows, cols) in &grids {
+                    let stride = cols as usize + 1;
+                    let at = |r: usize, c2: usize| pts.get(base + r * stride + c2).copied();
+                    for r in 0..=rows as usize {
+                        for c2 in 0..=cols as usize {
+                            let Some(p) = at(r, c2) else { continue };
+                            if let Some(q) = at(r, c2 + 1).filter(|_| c2 < cols as usize) {
+                                vp.line_segment([p, q], stroke);
+                            }
+                            if let Some(q) = at(r + 1, c2).filter(|_| r < rows as usize) {
+                                vp.line_segment([p, q], stroke);
+                            }
+                        }
+                    }
+                }
+                for (p, &(_, gi)) in pts.iter().zip(&owner) {
+                    if gi == usize::MAX {
+                        vp.circle_stroke(*p, 5.0, Stroke::new(1.5, theme::pal().accent));
+                    }
+                    vp.circle_filled(*p, 2.0, theme::pal().accent);
+                }
+                if editable {
+                    point_edit::draw_overlay(&self.pts, &vp, &pts, true, 0.0, grab_hot);
                 }
             }
             Some(Sel::Deformer(di)) => {
@@ -17243,6 +17517,29 @@ mod palette_pick_tests {
         assert_eq!(ed.part_pick, vec![4, 1, 3]);
         ed.pick_rows(2, false, false, &order, true);
         assert_eq!(ed.part_pick, vec![2]);
+    }
+
+    #[test]
+    fn deformer_rows_pick_with_ctrl_and_shift_as_in_cubism() {
+        let order = [4, 2, 7, 1];
+        let mut ed = EditorUi::new();
+        ed.pick_def_rows(2, false, false, &order);
+        assert!(ed.selected == Some(Sel::Deformer(2)) && ed.def_pick == vec![2]);
+        // Ctrl adds just the one clicked, and takes it off again
+        ed.pick_def_rows(1, false, true, &order);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![2, 1]);
+        ed.pick_def_rows(1, false, true, &order);
+        assert!(ed.selected == Some(Sel::Deformer(2)) && ed.def_pick == vec![2]);
+        // Shift takes every row from the last click to this one
+        ed.pick_def_rows(2, false, false, &order);
+        ed.pick_def_rows(1, true, false, &order);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![2, 7, 1]);
+        // a plain click starts over
+        ed.pick_def_rows(4, false, false, &order);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![4]);
+        // a mesh selection does not count as a deformer pick
+        ed.selected = Some(Sel::Mesh(0));
+        assert!(def_group(ed.selected, &ed.def_pick).is_empty());
     }
 
     #[test]
