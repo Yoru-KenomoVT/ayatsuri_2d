@@ -295,7 +295,7 @@ pub fn read_kra(bytes: &[u8]) -> Result<(Document, usize), ImportError> {
     }
     // maindoc lists the topmost layer first
     layers.reverse();
-    Ok((Document { width, height, layers }, skipped))
+    Ok((Document { width, height, layers, folders: Vec::new() }, skipped))
 }
 
 #[cfg(test)]

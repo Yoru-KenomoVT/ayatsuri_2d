@@ -17202,6 +17202,7 @@ mod atlas_leak_tests {
             width: 200,
             height: 100,
             layers: vec![layer("Red", 10, [255, 0, 0]), layer("Blue", 60, [0, 0, 255])],
+            folders: Vec::new(),
         };
         let art = ayatsuri_import::from_layers(&doc).unwrap();
         let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();

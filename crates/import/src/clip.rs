@@ -498,7 +498,10 @@ pub fn read_clip(bytes: &[u8]) -> Result<(Document, usize), ImportError> {
             },
         });
     }
-    Ok((Document { width: cw as u32, height: ch as u32, layers: out }, skipped))
+    Ok((
+        Document { width: cw as u32, height: ch as u32, layers: out, folders: Vec::new() },
+        skipped,
+    ))
 }
 
 #[cfg(test)]
