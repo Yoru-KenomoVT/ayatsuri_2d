@@ -529,6 +529,19 @@ impl Puppet {
         Some(r.angles.as_mut_slice())
     }
 
+    /// One keyform's rotation deformer origin (parent space), editable in
+    /// place the same way.
+    pub fn rotation_origin_mut(
+        &mut self,
+        deformer: usize,
+        keyform: usize,
+    ) -> Option<(&mut f32, &mut f32)> {
+        self.cache.valid = false;
+        let d = self.model.deformers.get_mut(deformer)?;
+        let DeformerKind::Rotation(r) = &mut d.kind else { return None };
+        Some((r.origins_x.get_mut(keyform)?, r.origins_y.get_mut(keyform)?))
+    }
+
     /// One keyform's warp grid, editable in place the same way.
     pub fn warp_keyform_mut(&mut self, deformer: usize, keyform: usize) -> Option<&mut [f32]> {
         self.cache.valid = false;

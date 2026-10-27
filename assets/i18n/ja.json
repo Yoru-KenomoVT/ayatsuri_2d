@@ -1486,5 +1486,7 @@
   "Reset the selected parameter to default": "選択中のパラメータを初期値に戻す",
   "Select the objects keyed on the parameter": "パラメータにキーがあるオブジェクトを選択",
   "Rename the selected deformer, or the selected mesh's": "選択中のデフォーマ、または選択中のメッシュのデフォーマの名前を変更",
-  "{count} deformers": "{count} 個のデフォーマ"
+  "{count} deformers": "{count} 個のデフォーマ",
+  "Show parent-child hierarchy of deformers": "デフォーマの親子階層を表示",
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "キャンバスの右クリックメニューの上部に、ポインタ下のメッシュの上にあるデフォーマを表示して選択できます"
 }

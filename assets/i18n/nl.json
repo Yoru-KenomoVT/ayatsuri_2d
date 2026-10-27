@@ -1486,5 +1486,7 @@
   "Reset the selected parameter to default": "De geselecteerde parameter terugzetten naar standaard",
   "Select the objects keyed on the parameter": "De objecten met sleutels op de parameter selecteren",
   "Rename the selected deformer, or the selected mesh's": "De geselecteerde deformer hernoemen, of die van de geselecteerde mesh",
-  "{count} deformers": "{count} deformers"
+  "{count} deformers": "{count} deformers",
+  "Show parent-child hierarchy of deformers": "Ouder-kindhiërarchie van deformers tonen",
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "Bovenaan het rechtsklikmenu van het canvas: de deformers boven de mesh onder de aanwijzer, om uit te kiezen"
 }

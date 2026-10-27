@@ -1486,5 +1486,7 @@
   "Reset the selected parameter to default": "선택한 파라미터를 기본값으로 재설정",
   "Select the objects keyed on the parameter": "파라미터에 키가 있는 오브젝트 선택",
   "Rename the selected deformer, or the selected mesh's": "선택한 디포머 또는 선택한 메시의 디포머 이름 변경",
-  "{count} deformers": "디포머 {count}개"
+  "{count} deformers": "디포머 {count}개",
+  "Show parent-child hierarchy of deformers": "디포머의 부모-자식 계층 표시",
+  "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "캔버스 우클릭 메뉴 맨 위에 포인터 아래 메시의 상위 디포머를 표시해 선택할 수 있습니다"
 }

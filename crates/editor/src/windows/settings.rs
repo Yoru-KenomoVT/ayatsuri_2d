@@ -726,6 +726,20 @@ impl EditorUi {
         );
         row(
             ui,
+            crate::i18n::tr("Show parent-child hierarchy of deformers"),
+            crate::i18n::tr(
+                "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from",
+            ),
+            |ui| {
+                let mut on = !self.prefs.def_tree_off;
+                if ui.checkbox(&mut on, "").changed() {
+                    self.prefs.def_tree_off = !on;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
             crate::i18n::tr("Smooth movement"),
             crate::i18n::tr(
                 "Points and objects follow the pointer softly while dragged; they land where you let go",
