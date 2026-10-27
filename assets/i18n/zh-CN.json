@@ -1520,5 +1520,6 @@
   "Finish Mesh Edit": "结束网格编辑",
   "Select Parent Deformer": "选择父变形器",
   "Lock": "锁定",
-  "Unlock": "解锁"
+  "Unlock": "解锁",
+  "Pick the colour from the art on the canvas (Esc cancels)": "从画布上的图像取色（Esc 取消）"
 }
