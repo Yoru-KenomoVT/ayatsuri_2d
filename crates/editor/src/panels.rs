@@ -6516,6 +6516,18 @@ impl EditorUi {
             }
             "focus" => self.focus_request = true,
             "rename" if have => self.rename_selected(),
+            "rename-deformer" if have => {
+                let d = match self.selected {
+                    Some(Sel::Deformer(d)) => Some(d),
+                    Some(Sel::Mesh(m)) => self.session.as_ref().and_then(|s| {
+                        s.puppet.model().art_meshes.get(m)?.parent_deformer.map(|d| d as usize)
+                    }),
+                    _ => None,
+                };
+                if let Some(d) = d {
+                    self.open_def_rename(d);
+                }
+            }
             "mirror-edit" => self.mirror_edit = !self.mirror_edit,
             "solo" => self.toggle_solo(),
             "highlight-children" => self.highlight_children = !self.highlight_children,
@@ -14295,9 +14307,9 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("File", "export-image", "Export image", C, K::I),
         ("File", "export-moc3", "Export model", CA, K::S),
         ("File", "shortcuts", "Keyboard shortcuts", CAS, K::K),
-        // every menu item without a Cubism key gets an entry with no key,
-        // ready for one in Settings
-        ("File", "new-animation", "New Animation…", N, K::F35),
+        // every menu item gets an entry; Cubism's key when it has one, a few
+        // of ours on keys it leaves free, the rest none until you pick one
+        ("File", "new-animation", "New Animation…", CS, K::N),
         ("File", "new-composition", "New Composition…", N, K::F35),
         ("File", "export-animation", "Export Animation…", N, K::F35),
         ("File", "export-timelapse", "Export Timelapse…", N, K::F35),
@@ -14307,14 +14319,20 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("File", "reimport-artwork", "Re-import Artwork…", N, K::F35),
         ("File", "project-info", "Project…", N, K::F35),
         ("File", "model-stats", "Model Statistics…", N, K::F35),
-        ("File", "settings", "Environment Settings…", N, K::F35),
-        ("File", "exit", "Exit", N, K::F35),
+        ("File", "settings", "Environment Settings…", C, K::Comma),
+        ("File", "exit", "Exit", C, K::Q),
         ("Edit", "undo", "Undo", C, K::Z),
         ("Edit", "redo", "Redo", CS, K::Z),
         ("Edit", "redo-alt", "Redo (alternate)", C, K::Y),
         ("Edit", "select-parent", "Select deformer for parent", C, K::D),
-        // no keys until you pick some
-        ("Edit", "rename", "Rename the selected object", N, K::F35),
+        ("Edit", "rename", "Rename the selected object", N, K::F2),
+        (
+            "Edit",
+            "rename-deformer",
+            "Rename the selected deformer, or the selected mesh's",
+            M::SHIFT,
+            K::F2,
+        ),
         ("Modeling", "mesh-edit", "Edit mesh", C, K::E),
         ("Modeling", "auto-mesh", "Automatic mesh generator", CS, K::A),
         ("Modeling", "auto-connect", "Auto connect edges", C, K::R),
@@ -14331,7 +14349,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Tools", "tool-lasso", "Lasso tool", N, K::L),
         ("Tools", "tool-brush", "Brush selection tool", N, K::B),
         ("Tools", "tool-path", "Deform path tool", N, K::P),
-        ("Tools", "tool-deform-brush", "Deform Brush", N, K::F35),
+        ("Tools", "tool-deform-brush", "Deform Brush", N, K::D),
         ("Tools", "tool-glue", "Glue", N, K::F35),
         ("Tools", "tool-artpath", "ArtPath", N, K::F35),
         ("Tools", "tool-auto-mesh", "Auto Mesh", N, K::F35),
@@ -14384,11 +14402,11 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Modeling", "new-part", "New Part", N, K::F35),
         ("Modeling", "group-into-part", "Group into New Part…", N, K::F35),
         ("Modeling", "clip-by", "Clip by…", N, K::F35),
-        ("Modeling", "copy-ids", "Copy the selected meshes' IDs", N, K::F35),
+        ("Modeling", "copy-ids", "Copy the selected meshes' IDs", CA, K::C),
         ("Modeling", "skinning", "Skinning…", N, K::F35),
         ("Modeling", "skin-params", "Generate Parameters for Rotation Deformers…", N, K::F35),
         ("Modeling", "skin-path", "Use Deform Path for Skinning", N, K::F35),
-        ("Modeling", "texture-atlas", "Texture Atlas…", N, K::F35),
+        ("Modeling", "texture-atlas", "Texture Atlas…", C, K::T),
         ("Modeling", "artpath-create", "Create ArtPath", N, K::F35),
         ("Modeling", "flip-h", "Flip Horizontally", N, K::F35),
         ("Modeling", "flip-v", "Flip Vertically", N, K::F35),
@@ -14400,7 +14418,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Parameter", "keys-min-default-max", "Add Keys at Min, Default and Max", N, K::F35),
         ("Parameter", "key-add-single", "Add Single Keyform", N, K::F35),
         ("Parameter", "key-delete-nearest", "Delete Nearest Key", N, K::F35),
-        ("Parameter", "extended-interpolation", "Extended Interpolation…", N, K::F35),
+        ("Parameter", "extended-interpolation", "Extended Interpolation…", CS, K::I),
         ("Parameter", "param-edit", "Edit Parameter…", N, K::F35),
         ("Parameter", "param-create", "Create Parameter…", N, K::F35),
         ("Parameter", "param-replicate", "Replicate parameters", N, K::F35),
@@ -17225,6 +17243,22 @@ mod palette_pick_tests {
         assert_eq!(ed.part_pick, vec![4, 1, 3]);
         ed.pick_rows(2, false, false, &order, true);
         assert_eq!(ed.part_pick, vec![2]);
+    }
+
+    #[test]
+    fn default_shortcuts_never_share_a_key() {
+        // Modeling and the Timeline split a few keys by workspace
+        let mut seen: Vec<(&str, egui::Modifiers, egui::Key)> = Vec::new();
+        for &(_, id, _, m, k) in KEY_ACTIONS {
+            if k == egui::Key::F35 {
+                continue;
+            }
+            for &(other, om, ok) in &seen {
+                let split = id.starts_with("anim-") != other.starts_with("anim-");
+                assert!(om != m || ok != k || split, "{id} and {other} share a key");
+            }
+            seen.push((id, m, k));
+        }
     }
 
     #[test]

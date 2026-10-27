@@ -1484,5 +1484,6 @@
   "Delete the selected parameter": "選択中のパラメータを削除",
   "Link or unlink the parameter below": "下のパラメータと結合または結合解除",
   "Reset the selected parameter to default": "選択中のパラメータを初期値に戻す",
-  "Select the objects keyed on the parameter": "パラメータにキーがあるオブジェクトを選択"
+  "Select the objects keyed on the parameter": "パラメータにキーがあるオブジェクトを選択",
+  "Rename the selected deformer, or the selected mesh's": "選択中のデフォーマ、または選択中のメッシュのデフォーマの名前を変更"
 }
