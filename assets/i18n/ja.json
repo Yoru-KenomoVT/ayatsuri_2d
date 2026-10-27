@@ -1501,5 +1501,9 @@
   "How much the lightest press still gives, in percent": "いちばん軽く押したときの効き具合（パーセント）",
   "Test": "テスト",
   "Press on the canvas with the pen: the bar shows the pressure it reports. Pressure comes through on Windows; on Linux the pen works as a mouse for now": "ペンでキャンバスを押すと、報告された筆圧がバーに表示されます。筆圧はWindowsで使えます。Linuxでは今のところペンはマウスとして動作します",
-  "No pressure seen yet": "まだ筆圧を検出していません"
+  "No pressure seen yet": "まだ筆圧を検出していません",
+  "Flip": "反転",
+  "Flip Warp Only Horizontally": "ワープだけを左右反転",
+  "Flip Warp Only Vertically": "ワープだけを上下反転",
+  "Mirror the warp's grid while the art and deformers inside stay where they are": "中のアートとデフォーマはそのままで、ワープのグリッドだけを反転します"
 }

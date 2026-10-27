@@ -2998,10 +2998,124 @@ fn warp_inverse(
     p
 }
 
-/// Edit Form > Flip: mirror a mesh or warp across its own centre, every
-/// keyform, horizontally or vertically. A warp's children flip with it.
-/// Rotation deformers and parts are refused (false).
+/// Edit Form > Flip: mirror a mesh or deformer across its own centre, every
+/// keyform, horizontally or vertically. Whatever a deformer holds flips
+/// with it. A rotation deformer turns the other way and mirrors through its
+/// Reflect X / Y flag (Cubism's own way to mirror one), and every rotation
+/// deformer inside a flipped deformer does the same, measured on the model
+/// at rest so nested rigs come out as a true mirror. Parts are refused.
 pub fn flip_object(model: &mut Model, target: Target, horizontal: bool) -> bool {
+    let rotations = match target {
+        Target::Deformer(d) => rotations_in(model, d),
+        _ => Vec::new(),
+    };
+    let before: Vec<(usize, f32)> = if rotations.is_empty() {
+        Vec::new()
+    } else {
+        let p = rest_puppet(model);
+        rotations.iter().filter_map(|&r| Some((r, p.rotation_state(r)?.angle))).collect()
+    };
+    let mirrored = match target {
+        Target::Deformer(d)
+            if matches!(
+                model.deformers.get(d).map(|x| &x.kind),
+                Some(DeformerKind::Rotation(_))
+            ) =>
+        {
+            // its centre is its origin, which stays
+            true
+        }
+        _ => mirror_positions(model, target, horizontal),
+    };
+    if !mirrored {
+        return false;
+    }
+    for &r in &rotations {
+        if let Some(DeformerKind::Rotation(rot)) = model.deformers.get_mut(r).map(|d| &mut d.kind) {
+            rot.base_angle = -rot.base_angle;
+            for a in &mut rot.angles {
+                *a = -*a;
+            }
+            let flags = if horizontal { &mut rot.reflect_x } else { &mut rot.reflect_y };
+            for f in flags {
+                *f = !*f;
+            }
+        }
+    }
+    // what is left, the turn each inherits from its parents, is measured
+    let want: Vec<(usize, f32)> = before.into_iter().map(|(r, a)| (r, -a)).collect();
+    settle_rotations(model, &want);
+    true
+}
+
+/// Flip a warp's grid across its centre, every keyform, while everything
+/// it holds stays where it is on screen (Ctrl, as Ctrl+drag): what it holds
+/// is carried back through the grid of `keyform`, and rotation deformers
+/// inside keep their turn.
+pub fn flip_warp_keep_children(
+    model: &mut Model,
+    deformer: usize,
+    keyform: usize,
+    horizontal: bool,
+) -> bool {
+    let target = Target::Deformer(deformer);
+    if keyform >= crate::shapes::normal_count(model, target) {
+        return false;
+    }
+    let grid_of = |model: &Model| match model.deformers.get(deformer).map(|d| &d.kind) {
+        Some(DeformerKind::Warp(w)) => {
+            let stride = w.grid_points() * 2;
+            let at = keyform.checked_mul(stride)?;
+            let form = w.positions.get(at..at.checked_add(stride)?)?;
+            Some((form.to_vec(), w.rows as usize, w.cols as usize, w.quad))
+        }
+        _ => None,
+    };
+    let Some((old, rows, cols, quad)) = grid_of(model) else { return false };
+    let rotations: Vec<usize> =
+        rotations_in(model, deformer).into_iter().filter(|&r| r != deformer).collect();
+    let before: Vec<(usize, f32)> = if rotations.is_empty() {
+        Vec::new()
+    } else {
+        let p = rest_puppet(model);
+        rotations.iter().filter_map(|&r| Some((r, p.rotation_state(r)?.angle))).collect()
+    };
+    if !mirror_positions(model, target, horizontal) {
+        return false;
+    }
+    let Some((new, ..)) = grid_of(model) else { return true };
+    let d32 = Some(deformer as u32);
+    let mut children: Vec<Child> = model
+        .art_meshes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.parent_deformer == d32)
+        .map(|(i, _)| Child::Mesh(i))
+        .collect();
+    children.extend(
+        model
+            .deformers
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.parent_deformer == d32)
+            .map(|(i, _)| Child::Deformer(i)),
+    );
+    let remap = |u: f32, v: f32| {
+        let mut io = [u, v];
+        crate::deform::warp_transform(&old, rows, cols, quad, &mut io);
+        warp_inverse(&new, rows, cols, quad, (io[0], io[1]), (u, v))
+    };
+    with_shapes(model, |model| {
+        for &c in &children {
+            map_child(model, c, &remap);
+        }
+    });
+    settle_rotations(model, &before);
+    true
+}
+
+/// Mirror a mesh's or warp's points across their centre, every keyform.
+fn mirror_positions(model: &mut Model, target: Target, horizontal: bool) -> bool {
     let pos: &mut Vec<f32> = match target {
         Target::ArtMesh(i) => match model.art_meshes.get_mut(i) {
             Some(m) => &mut m.positions,
@@ -3027,6 +3141,35 @@ pub fn flip_object(model: &mut Model, target: Target, horizontal: bool) -> bool 
         *v = mid2 - *v;
     }
     true
+}
+
+/// The rotation deformers at or under `deformer`, parents first.
+fn rotations_in(model: &Model, deformer: usize) -> Vec<usize> {
+    (0..model.deformers.len())
+        .filter(|&r| {
+            matches!(model.deformers.get(r).map(|d| &d.kind), Some(DeformerKind::Rotation(_)))
+                && deformer_under(model, r, deformer)
+        })
+        .collect()
+}
+
+/// Turn each rotation deformer's base angle so it sits at the wanted turn
+/// on the model at rest, parents first (a child inherits its parent's).
+fn settle_rotations(model: &mut Model, want: &[(usize, f32)]) {
+    for &(r, angle) in want {
+        let now = rest_puppet(model).rotation_state(r).map(|s| s.angle);
+        if let (Some(now), Some(DeformerKind::Rotation(rot))) =
+            (now, model.deformers.get_mut(r).map(|d| &mut d.kind))
+        {
+            let mut diff = (angle - now) % 360.0;
+            if diff > 180.0 {
+                diff -= 360.0;
+            } else if diff < -180.0 {
+                diff += 360.0;
+            }
+            rot.base_angle += diff;
+        }
+    }
 }
 
 /// Slide a rotation deformer's origin by (dx, dy) in parent space, across
@@ -5112,5 +5255,122 @@ mod tests {
         assert!(flip_object(&mut m, Target::ArtMesh(0), true));
         assert_eq!(m.art_meshes[0].positions, vec![2.0, 0.0, 0.0, 0.0]);
         assert!(!flip_object(&mut m, Target::Part(0), true));
+    }
+
+    /// A warp holding a rotation deformer holding a mesh, everything off
+    /// centre and turned, so a wrong sign anywhere shows.
+    fn nested_rig() -> (Model, usize, usize) {
+        let mut m = test_model();
+        // a real triangle, well away from where the rotation's centre lands
+        let am = &mut m.art_meshes[0];
+        am.vertex_count = 3;
+        am.uvs = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        am.indices = vec![0, 1, 2];
+        am.binding = Binding::default();
+        am.opacities = vec![1.0];
+        am.draw_orders = vec![500.0];
+        am.positions = vec![-3.0, -2.0, 4.0, -1.0, -1.0, 5.0];
+        let warp = create_deformer(
+            &mut m,
+            NewDeformer::Warp { rows: 2, cols: 2 },
+            &[Child::Mesh(0)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "Warp".into(),
+        )
+        .unwrap();
+        let rot = create_deformer(
+            &mut m,
+            NewDeformer::Rotation { origin: Some((0.3, 0.6)) },
+            &[Child::Mesh(0)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "Rot".into(),
+        )
+        .unwrap();
+        if let DeformerKind::Rotation(r) = &mut m.deformers[rot].kind {
+            r.base_angle = 25.0;
+        }
+        // skew the warp so its own frame is turned too
+        let n = match &m.deformers[warp].kind {
+            DeformerKind::Warp(w) => w.grid_points(),
+            _ => unreachable!(),
+        };
+        let skew: Vec<(usize, f32, f32)> =
+            (0..n).map(|i| (i, 0.0, 0.08 * (i % 3) as f32)).collect();
+        assert!(move_warp_points(&mut m, warp, None, &skew));
+        // warp > rotation > mesh
+        let warp = m.deformers.iter().position(|d| d.id == "Warp").unwrap();
+        let rot = m.deformers.iter().position(|d| d.id == "Rot").unwrap();
+        assert_eq!(m.deformers[rot].parent_deformer, Some(warp as u32));
+        assert_eq!(m.art_meshes[0].parent_deformer, Some(rot as u32));
+        (m, warp, rot)
+    }
+
+    fn mesh_world(m: &Model) -> Vec<f32> {
+        let p = rest_puppet(m);
+        p.mesh_geometry(0).unwrap().positions.to_vec()
+    }
+
+    /// Mirror xy pairs across the middle of their own extent on one axis.
+    fn mirrored(pts: &[f32], horizontal: bool, mid2: f32) -> Vec<f32> {
+        let axis = if horizontal { 0 } else { 1 };
+        pts.iter().enumerate().map(|(i, &v)| if i % 2 == axis { mid2 - v } else { v }).collect()
+    }
+
+    #[test]
+    fn flipping_a_rotation_deformer_mirrors_what_it_holds() {
+        for horizontal in [true, false] {
+            let (mut m, _, rot) = nested_rig();
+            let before = mesh_world(&m);
+            let origin = rest_puppet(&m).rotation_state(rot).unwrap().origin;
+            let mid2 = if horizontal { origin.x * 2.0 } else { origin.y * 2.0 };
+            assert!(flip_object(&mut m, Target::Deformer(rot), horizontal));
+            let after = mesh_world(&m);
+            let moved = before.iter().zip(&after).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(moved > 0.05, "the flip moved the mesh ({moved})");
+            for (a, b) in mirrored(&before, horizontal, mid2).iter().zip(&after) {
+                assert!((a - b).abs() < 1e-3, "{horizontal}: {a} vs {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn flipping_a_warp_mirrors_the_rotations_inside_it() {
+        for horizontal in [true, false] {
+            let (mut m, warp, _) = nested_rig();
+            let before = mesh_world(&m);
+            // the warp's grid mirrors across its own middle
+            let grid = rest_puppet(&m).warp_grid(warp).unwrap().0.to_vec();
+            let axis = if horizontal { 0 } else { 1 };
+            let vals: Vec<f32> = grid.iter().skip(axis).step_by(2).copied().collect();
+            let lo = vals.iter().copied().fold(f32::MAX, f32::min);
+            let hi = vals.iter().copied().fold(f32::MIN, f32::max);
+            assert!(flip_object(&mut m, Target::Deformer(warp), horizontal));
+            let after = mesh_world(&m);
+            let moved = before.iter().zip(&after).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(moved > 0.05, "the flip moved the mesh ({moved})");
+            for (a, b) in mirrored(&before, horizontal, lo + hi).iter().zip(&after) {
+                assert!((a - b).abs() < 1e-3, "{horizontal}: {a} vs {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn flipping_only_the_warp_leaves_what_it_holds() {
+        for horizontal in [true, false] {
+            let (mut m, warp, _) = nested_rig();
+            let before = mesh_world(&m);
+            let grid_before = rest_puppet(&m).warp_grid(warp).unwrap().0.to_vec();
+            assert!(flip_warp_keep_children(&mut m, warp, 0, horizontal));
+            let after = mesh_world(&m);
+            for (a, b) in before.iter().zip(&after) {
+                assert!((a - b).abs() < 1e-3, "{horizontal}: {a} vs {b}");
+            }
+            let grid_after = rest_puppet(&m).warp_grid(warp).unwrap().0.to_vec();
+            assert_ne!(grid_before, grid_after, "the warp itself flipped");
+        }
     }
 }

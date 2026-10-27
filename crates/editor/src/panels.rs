@@ -171,6 +171,60 @@ fn outermost(model: &ayatsuri_format::Model, picked: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// (min x, min y, max x, max y) on the canvas.
+type Extent = (f32, f32, f32, f32);
+
+/// An object's extent on the canvas now.
+fn world_extent(puppet: &ayatsuri_core::Puppet, t: ayatsuri_core::edit::Target) -> Option<Extent> {
+    use ayatsuri_core::edit::Target;
+    let pts: Vec<f32> = match t {
+        Target::ArtMesh(i) => puppet.mesh_geometry(i)?.positions.to_vec(),
+        Target::Deformer(d) => match puppet.warp_grid(d) {
+            Some((g, _, _)) => g.to_vec(),
+            None => {
+                let o = puppet.rotation_state(d)?.origin;
+                vec![o.x, o.y]
+            }
+        },
+        Target::Part(_) => return None,
+    };
+    let (xy, _) = pts.as_chunks::<2>();
+    xy.iter().fold(None, |acc, p| {
+        Some(match acc {
+            None => (p[0], p[1], p[0], p[1]),
+            Some((a, b, c, d)) => (a.min(p[0]), b.min(p[1]), c.max(p[0]), d.max(p[1])),
+        })
+    })
+}
+
+/// An object's parent deformer and its middle in that parent's space, for
+/// turning a canvas move into the object's own.
+fn local_centre(
+    puppet: &ayatsuri_core::Puppet,
+    t: ayatsuri_core::edit::Target,
+) -> Option<(Option<u32>, (f32, f32))> {
+    use ayatsuri_core::edit::Target;
+    let model = puppet.model();
+    let mean = |v: &[f32]| {
+        let (xy, _) = v.as_chunks::<2>();
+        let n = xy.len().max(1) as f32;
+        xy.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0] / n, y + p[1] / n))
+    };
+    match t {
+        Target::ArtMesh(i) => {
+            Some((model.art_meshes.get(i)?.parent_deformer, mean(&puppet.mesh_local_positions(i)?)))
+        }
+        Target::Deformer(d) => {
+            let parent = model.deformers.get(d)?.parent_deformer;
+            match puppet.warp_local_grid(d) {
+                Some(g) => Some((parent, mean(&g))),
+                None => Some((parent, puppet.rotation_local_origin(d)?)),
+            }
+        }
+        Target::Part(_) => None,
+    }
+}
+
 /// The deformers above an art mesh, root first (a loop is cut short).
 fn deformer_chain(model: &ayatsuri_format::Model, mesh: usize) -> Vec<usize> {
     let mut out = Vec::new();
@@ -1144,6 +1198,9 @@ enum DefCmd {
     RenameMesh(usize),
     /// Change this warp's conversion divisions.
     Division(usize),
+    /// Flip this deformer (with the pick it is in): horizontally or not,
+    /// and the warp alone (what it holds staying put) or with its content.
+    Flip(usize, bool, bool),
     Delete(usize),
     /// Delete this art mesh (with the rest of the pick when it is in it).
     DeleteMesh(usize),
@@ -3376,6 +3433,31 @@ impl EditorUi {
                             {
                                 ui.close();
                                 self.flip_selection(horizontal);
+                            }
+                        }
+                        // the warp alone, what it holds staying put (Ctrl)
+                        let warp_sel = self.session.as_ref().is_some_and(|s| {
+                            def_group(self.selected, &self.def_pick).iter().any(|&d| {
+                                s.puppet.warp_grid(d).is_some()
+                            })
+                        });
+                        for (label, horizontal, id) in [
+                            ("Flip Warp Only Horizontally", true, "flip-h-only"),
+                            ("Flip Warp Only Vertically", false, "flip-v-only"),
+                        ] {
+                            if ui
+                                .add_enabled(
+                                    warp_sel,
+                                    egui::Button::new(crate::i18n::tr(label))
+                                        .shortcut_text(self.sc(id)),
+                                )
+                                .on_hover_text(crate::i18n::tr(
+                                    "Mirror the warp's grid while the art and deformers inside stay where they are",
+                                ))
+                                .clicked()
+                            {
+                                ui.close();
+                                self.flip_warps_only(horizontal);
                             }
                         }
                         if ui
@@ -6934,6 +7016,8 @@ impl EditorUi {
             }
             "flip-h" if self.edit_target().is_some() => self.flip_selection(true),
             "flip-v" if self.edit_target().is_some() => self.flip_selection(false),
+            "flip-h-only" if have => self.flip_warps_only(true),
+            "flip-v-only" if have => self.flip_warps_only(false),
             "physics" if have => self.show_physics = true,
             "template-apply" if have => self.template_dlg = Some(TemplateDlg::apply(false)),
             "template-save" if have => {
@@ -7179,24 +7263,124 @@ impl EditorUi {
 
     /// Edit Form > Flip on the selected mesh(es) or warp, one undo step.
     fn flip_selection(&mut self, horizontal: bool) {
-        let mut targets: Vec<ayatsuri_core::edit::Target> =
-            self.selection_meshes().into_iter().map(ayatsuri_core::edit::Target::ArtMesh).collect();
-        if let Some(Sel::Deformer(d)) = self.selected {
-            targets.push(ayatsuri_core::edit::Target::Deformer(d));
-        }
+        use ayatsuri_core::edit::Target;
+        // a selected deformer flips with its pick, never with meshes left
+        // picked from before
+        let defs = def_group(self.selected, &self.def_pick);
+        let targets: Vec<Target> = if defs.is_empty() {
+            self.selection_meshes().into_iter().map(Target::ArtMesh).collect()
+        } else {
+            defs.into_iter().map(Target::Deformer).collect()
+        };
         let Some(s) = &mut self.session else { return };
+        // several objects flip as one, across the middle of them all: each
+        // mirrors across its own centre, then moves to its mirrored place
+        let shifts: Vec<(Target, f32, f32)> = if targets.len() > 1 {
+            let centres: Vec<(Target, Option<Extent>)> =
+                targets.iter().map(|&t| (t, world_extent(&s.puppet, t))).collect();
+            let all = centres.iter().filter_map(|(_, e)| *e).fold(None, |acc, e| {
+                Some(match acc {
+                    None => e,
+                    Some((a, b, c, d)) => {
+                        (f32::min(a, e.0), f32::min(b, e.1), f32::max(c, e.2), f32::max(d, e.3))
+                    }
+                })
+            });
+            match all {
+                Some((x0, y0, x1, y1)) => centres
+                    .into_iter()
+                    .filter_map(|(t, e)| {
+                        let (ex0, ey0, ex1, ey1) = e?;
+                        let (gx, gy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                        let (ox, oy) = ((ex0 + ex1) / 2.0, (ey0 + ey1) / 2.0);
+                        let (wx, wy) = if horizontal {
+                            (2.0 * (gx - ox), 0.0)
+                        } else {
+                            (0.0, 2.0 * (gy - oy))
+                        };
+                        let (parent, (px, py)) = local_centre(&s.puppet, t)?;
+                        let (dx, dy) = parent_delta(&s.puppet, parent, px, py, wx, wy);
+                        Some((t, dx, dy))
+                    })
+                    .collect(),
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         let mut n = 0;
         s.edit(|m| {
             for &t in &targets {
                 n += ayatsuri_core::edit::flip_object(m, t, horizontal) as usize;
             }
+            for &(t, dx, dy) in &shifts {
+                match t {
+                    Target::ArtMesh(i) => {
+                        let count = m.art_meshes.get(i).map_or(0, |a| a.vertex_count as usize);
+                        let moves: Vec<(usize, f32, f32)> =
+                            (0..count).map(|v| (v, dx, dy)).collect();
+                        ayatsuri_core::edit::move_vertices(m, i, &moves);
+                    }
+                    Target::Deformer(d) => match m.deformers.get(d).map(|x| &x.kind) {
+                        Some(DeformerKind::Warp(w)) => {
+                            let moves: Vec<(usize, f32, f32)> =
+                                (0..w.grid_points()).map(|p| (p, dx, dy)).collect();
+                            ayatsuri_core::edit::move_warp_points(m, d, None, &moves);
+                        }
+                        Some(DeformerKind::Rotation(_)) => {
+                            ayatsuri_core::edit::move_rotation_origin(m, d, dx, dy);
+                        }
+                        None => {}
+                    },
+                    Target::Part(_) => {}
+                }
+            }
             n > 0
         });
         if n == 0 {
-            log::warn!("flip works on meshes and warp deformers");
+            log::warn!("flip works on meshes and deformers");
         } else {
             log::info!(
                 "flipped {n} object(s) {}",
+                if horizontal { "horizontally" } else { "vertically" }
+            );
+        }
+    }
+
+    /// Flip only the selected warps (the whole pick), each across its own
+    /// centre, while what they hold stays where it is.
+    fn flip_warps_only(&mut self, horizontal: bool) {
+        let defs = def_group(self.selected, &self.def_pick);
+        let Some(s) = &mut self.session else { return };
+        let values: Vec<f32> =
+            (0..s.puppet.model().parameters.len()).map(|i| s.puppet.value(i)).collect();
+        let plan: Vec<(usize, usize)> = defs
+            .into_iter()
+            .filter(|&d| {
+                matches!(
+                    s.puppet.model().deformers.get(d).map(|x| &x.kind),
+                    Some(DeformerKind::Warp(_))
+                )
+            })
+            .filter_map(|d| {
+                let t = ayatsuri_core::edit::Target::Deformer(d);
+                Some((d, ayatsuri_core::keyform::keyform_at(s.puppet.model(), t, &values)?))
+            })
+            .collect();
+        if plan.is_empty() {
+            log::warn!("select a warp deformer, with the parameters on a key, to flip it alone");
+            return;
+        }
+        let n = plan.len();
+        if s.edit(|m| {
+            let mut any = false;
+            for &(d, k) in &plan {
+                any |= ayatsuri_core::edit::flip_warp_keep_children(m, d, k, horizontal);
+            }
+            any
+        }) {
+            log::info!(
+                "flipped {n} warp(s) alone {}",
                 if horizontal { "horizontally" } else { "vertically" }
             );
         }
@@ -9013,6 +9197,27 @@ impl EditorUi {
                         def_cmd = Some(DefCmd::Rename(i));
                         ui.close();
                     }
+                    ui.menu_button(crate::i18n::tr("Flip"), |ui| {
+                        for (label, h) in [("Flip Horizontally", true), ("Flip Vertically", false)]
+                        {
+                            if ui.button(crate::i18n::tr(label)).clicked() {
+                                def_cmd = Some(DefCmd::Flip(i, h, false));
+                                ui.close();
+                            }
+                        }
+                        if is_warp {
+                            ui.separator();
+                            for (label, h) in [
+                                ("Flip Warp Only Horizontally", true),
+                                ("Flip Warp Only Vertically", false),
+                            ] {
+                                if ui.button(crate::i18n::tr(label)).clicked() {
+                                    def_cmd = Some(DefCmd::Flip(i, h, true));
+                                    ui.close();
+                                }
+                            }
+                        }
+                    });
                     if is_warp
                         && ui
                             .button(crate::i18n::tr("Conversion Divisions…"))
@@ -9286,6 +9491,19 @@ impl EditorUi {
             DefCmd::Rename(i) => self.open_def_rename(i),
             DefCmd::RenameMesh(i) => self.open_mesh_rename(i),
             DefCmd::Division(i) => self.open_def_division(i),
+            DefCmd::Flip(i, horizontal, alone) => {
+                // a deformer outside the pick flips by itself
+                if !def_group(self.selected, &self.def_pick).contains(&i) {
+                    self.selected = Some(Sel::Deformer(i));
+                    self.def_pick = vec![i];
+                    self.multi_sel.clear();
+                }
+                if alone {
+                    self.flip_warps_only(horizontal);
+                } else {
+                    self.flip_selection(horizontal);
+                }
+            }
             DefCmd::Reparent(child, parent) => {
                 let Some(s) = &mut self.session else { return };
                 // the palette's per-row state is by index, and a re-parent
@@ -15067,6 +15285,8 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Modeling", "artpath-create", "Create ArtPath", N, K::F35),
         ("Modeling", "flip-h", "Flip Horizontally", N, K::F35),
         ("Modeling", "flip-v", "Flip Vertically", N, K::F35),
+        ("Modeling", "flip-h-only", "Flip Warp Only Horizontally", N, K::F35),
+        ("Modeling", "flip-v-only", "Flip Warp Only Vertically", N, K::F35),
         ("Modeling", "physics", "Physics Settings…", N, K::F35),
         ("Modeling", "template-apply", "Apply Parameter Template…", N, K::F35),
         ("Modeling", "template-save", "Save Parameters as Template…", N, K::F35),
@@ -17962,6 +18182,39 @@ mod palette_pick_tests {
         ed.pick_def_rows(a, false, false, &order);
         ed.pick_def_rows(d, true, false, &order);
         assert_eq!(def_group(ed.selected, &ed.def_pick), vec![a, d]);
+    }
+
+    #[test]
+    fn a_picked_group_flips_across_its_middle() {
+        use ayatsuri_core::edit::{NewDeformer, create_deformer};
+        let mut m = Model::new();
+        for (id, x) in [("Left", 0.0), ("Right", 2.0)] {
+            let kind = NewDeformer::Warp { rows: 1, cols: 1 };
+            create_deformer(&mut m, kind, &[], None, (x, 0.0, x + 1.0, 1.0), None, id.into())
+                .unwrap();
+        }
+        let ctx = egui::Context::default();
+        let mut ed = EditorUi::new();
+        ed.session = Some(Session::create(&ctx, "t".into(), String::new(), m).unwrap());
+        ed.selected = Some(Sel::Deformer(0));
+        ed.def_pick = vec![0, 1];
+        let span = |ed: &mut EditorUi, d: usize| {
+            let s = ed.session.as_mut().unwrap();
+            s.puppet.update();
+            world_extent(&s.puppet, ayatsuri_core::edit::Target::Deformer(d))
+                .map(|e| (e.0, e.2))
+                .unwrap()
+        };
+        let (l, r) = (span(&mut ed, 0), span(&mut ed, 1));
+        let mid2 = l.0 + r.1;
+        ed.flip_selection(true);
+        let near =
+            |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 1e-4 && (a.1 - b.1).abs() < 1e-4;
+        // across the middle of the pair: each lands on the other's side
+        let (l2, r2) = (span(&mut ed, 0), span(&mut ed, 1));
+        assert!(near(l2, (mid2 - l.1, mid2 - l.0)), "{l:?} -> {l2:?}");
+        assert!(near(r2, (mid2 - r.1, mid2 - r.0)), "{r:?} -> {r2:?}");
+        assert!(l2.0 > r2.1, "they swapped sides");
     }
 
     #[test]

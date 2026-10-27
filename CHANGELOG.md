@@ -111,6 +111,12 @@ meshes and the Parts palette, and the requests from Discord testing.
   or its points move, scale or rotate while the art and deformers inside
   stay where they are, to fit a warp after it was made. Works on several
   picked deformers too (a rotation's centre then moves as its pivot).
+- **Flip for deformers** (Modeling > Edit Form, or Flip on a deformer's
+  right-click menu): rotation deformers flip too, turning the other way and
+  mirroring through their Reflect flag, and rotation deformers nested inside
+  a flipped deformer stay a true mirror. Several picked objects flip
+  together across the middle of the pick. Flip Warp Only mirrors a warp's
+  grid while what it holds stays put. All have shortcut entries.
 - **The canvas right-click menu shows the deformers above** the mesh under
   the pointer as a tree to select from (Shift+click adds to the pick), as
   in Cubism; Settings > Canvas can turn it off.
