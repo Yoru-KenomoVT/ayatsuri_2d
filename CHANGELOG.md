@@ -135,7 +135,8 @@ meshes and the Parts palette, and the requests from Discord testing.
   right-click menu): rotation deformers flip too, turning the other way and
   mirroring through their Reflect flag, and rotation deformers nested inside
   a flipped deformer stay a true mirror. Several picked objects flip
-  together across the middle of the pick. Flip Warp Only mirrors a warp's
+  together across the middle of the pick; art meshes have the same Flip
+  on their right-click menu. Flip Warp Only mirrors a warp's
   grid while what it holds stays put. All have shortcut entries.
 - **The canvas right-click menu shows the deformers above** the mesh under
   the pointer as a tree to select from (Shift+click adds to the pick), as
