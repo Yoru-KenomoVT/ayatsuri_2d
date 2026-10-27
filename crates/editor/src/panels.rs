@@ -225,6 +225,154 @@ fn local_centre(
     }
 }
 
+/// What the canvas menu needs to know, read before it is drawn.
+struct MenuCtx {
+    mesh_edit: Option<usize>,
+    picked_points: usize,
+    /// The selected deformer and whether it is a warp.
+    deformer: Option<(usize, bool)>,
+    /// The mesh under the click (else the selected one).
+    mesh: Option<usize>,
+    shown: bool,
+    locked: bool,
+    sc: Vec<(&'static str, String)>,
+}
+
+/// The canvas menu's modeling items: Mesh Edit's when a mesh is open in
+/// it, else the selected deformer's, else those of the mesh clicked on.
+fn canvas_menu_items(ui: &mut Ui, mc: &MenuCtx, out: &mut Option<CanvasCmd>) {
+    let sc =
+        |a: &str| mc.sc.iter().find(|(k, _)| *k == a).map(|(_, v)| v.clone()).unwrap_or_default();
+    if let Some(mi) = mc.mesh_edit {
+        let n = mc.picked_points;
+        menu_item(ui, out, n >= 2, "Merge Vertices", sc("merge-vertices"), CanvasCmd::MergePoints);
+        menu_item(ui, out, n >= 1, "Delete Points", String::new(), CanvasCmd::DeletePoints);
+        ui.separator();
+        menu_item(
+            ui,
+            out,
+            true,
+            "Auto Connect",
+            sc("auto-connect"),
+            CanvasCmd::Mesh(MeshAction::AutoConnect),
+        );
+        menu_item(
+            ui,
+            out,
+            true,
+            "Divide into 4",
+            String::new(),
+            CanvasCmd::Mesh(MeshAction::Divide),
+        );
+        menu_item(ui, out, true, "Reset Mesh", String::new(), CanvasCmd::Mesh(MeshAction::Reset));
+        menu_flip(ui, out, mi);
+        ui.separator();
+        menu_item(ui, out, true, "Finish Mesh Edit", sc("mesh-edit"), CanvasCmd::FinishMeshEdit);
+        ui.separator();
+        return;
+    }
+    if let Some((d, warp)) = mc.deformer {
+        menu_item(ui, out, true, "Rename…", sc("rename"), CanvasCmd::Def(DefCmd::Rename(d)));
+        ui.menu_button(crate::i18n::tr("Flip"), |ui| {
+            for (label, h, alone) in [
+                ("Flip Horizontally", true, false),
+                ("Flip Vertically", false, false),
+                ("Flip Warp Only Horizontally", true, true),
+                ("Flip Warp Only Vertically", false, true),
+            ] {
+                if warp || !alone {
+                    menu_item(
+                        ui,
+                        out,
+                        true,
+                        label,
+                        String::new(),
+                        CanvasCmd::Def(DefCmd::Flip(d, h, alone)),
+                    );
+                }
+            }
+        });
+        if warp {
+            menu_item(
+                ui,
+                out,
+                true,
+                "Conversion Divisions…",
+                String::new(),
+                CanvasCmd::Def(DefCmd::Division(d)),
+            );
+        }
+        menu_item(ui, out, true, "Delete", String::new(), CanvasCmd::Def(DefCmd::Delete(d)));
+        ui.separator();
+        return;
+    }
+    let Some(mi) = mc.mesh else { return };
+    menu_item(ui, out, true, "Edit Mesh", sc("mesh-edit"), CanvasCmd::EditMesh(mi));
+    menu_item(ui, out, true, "Rename…", sc("rename"), CanvasCmd::RenameMesh(mi));
+    menu_item(ui, out, true, "Clip by…", String::new(), CanvasCmd::ClipBy(mi));
+    menu_item(ui, out, true, "Copy ID", sc("copy-ids"), CanvasCmd::CopyIds(mi));
+    ui.separator();
+    menu_item(
+        ui,
+        out,
+        true,
+        "Create Warp Deformer…",
+        String::new(),
+        CanvasCmd::CreateAround(mi, true),
+    );
+    menu_item(
+        ui,
+        out,
+        true,
+        "Create Rotation Deformer…",
+        String::new(),
+        CanvasCmd::CreateAround(mi, false),
+    );
+    menu_item(
+        ui,
+        out,
+        true,
+        "Select Parent Deformer",
+        sc("select-parent"),
+        CanvasCmd::SelectParent(mi),
+    );
+    menu_flip(ui, out, mi);
+    ui.separator();
+    let shown = if mc.shown { "Hide" } else { "Show" };
+    menu_item(ui, out, true, shown, sc("toggle-visible"), CanvasCmd::ToggleShown(mi));
+    let lock = if mc.locked { "Unlock" } else { "Lock" };
+    menu_item(ui, out, true, lock, sc("lock-selected"), CanvasCmd::ToggleLock(mi));
+    menu_item(ui, out, true, "Delete Art Mesh", String::new(), CanvasCmd::DeleteMeshes(mi));
+    ui.separator();
+}
+
+/// One canvas menu entry with its shortcut on the right.
+fn menu_item(
+    ui: &mut Ui,
+    out: &mut Option<CanvasCmd>,
+    on: bool,
+    label: &'static str,
+    shortcut: String,
+    cmd: CanvasCmd,
+) {
+    if ui
+        .add_enabled(on, egui::Button::new(crate::i18n::tr(label)).shortcut_text(shortcut))
+        .clicked()
+    {
+        *out = Some(cmd);
+        ui.close();
+    }
+}
+
+/// The Flip submenu for an art mesh (with the pick it is in).
+fn menu_flip(ui: &mut Ui, out: &mut Option<CanvasCmd>, mi: usize) {
+    ui.menu_button(crate::i18n::tr("Flip"), |ui| {
+        for (label, h) in [("Flip Horizontally", true), ("Flip Vertically", false)] {
+            menu_item(ui, out, true, label, String::new(), CanvasCmd::Flip(mi, h));
+        }
+    });
+}
+
 /// The deformers above an art mesh, root first (a loop is cut short).
 fn deformer_chain(model: &ayatsuri_format::Model, mesh: usize) -> Vec<usize> {
     let mut out = Vec::new();
@@ -598,6 +746,9 @@ pub struct EditorUi {
     /// The deformers above the front-most mesh under the right-click, root
     /// first, for the tree at the top of the canvas menu.
     ctx_tree: Vec<usize>,
+    /// An action picked on the canvas menu, run at the start of the next
+    /// frame (the canvas holds the session while the menu is drawn).
+    canvas_cmd: Option<CanvasCmd>,
     /// The right-click came with Ctrl: Cubism's ArtMesh pop-up list, the
     /// meshes under the pointer and nothing else.
     ctx_mesh_list: bool,
@@ -893,6 +1044,28 @@ impl RotDrag {
 /// The rotation deformer's round scale handle: a ring this far from its
 /// centre, in screen pixels.
 const ROT_RING: f32 = 26.0;
+
+/// What the canvas's right-click menu can do.
+enum CanvasCmd {
+    // in Mesh Edit
+    MergePoints,
+    DeletePoints,
+    Mesh(MeshAction),
+    FinishMeshEdit,
+    // on an art mesh, or the selection it is in
+    EditMesh(usize),
+    RenameMesh(usize),
+    ClipBy(usize),
+    CopyIds(usize),
+    CreateAround(usize, bool),
+    SelectParent(usize),
+    Flip(usize, bool),
+    ToggleShown(usize),
+    ToggleLock(usize),
+    DeleteMeshes(usize),
+    // on the selected deformer
+    Def(DefCmd),
+}
 
 /// What a live drag is rewriting.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1607,6 +1780,7 @@ impl Default for EditorUi {
             ctx_click: None,
             ctx_layers: Vec::new(),
             ctx_tree: Vec::new(),
+            canvas_cmd: None,
             ctx_mesh_list: false,
             show_guide_settings: false,
             focus_request: false,
@@ -2651,6 +2825,9 @@ impl EditorUi {
             self.confirm_close = Some(1);
         }
         self.drop_stale_selection();
+        if let Some(c) = self.canvas_cmd.take() {
+            self.run_canvas_cmd(&ui.ctx().clone(), c);
+        }
         self.pen.read(ui.ctx());
         crate::pen::apply_click_options(ui.ctx(), self.prefs.pen_mode);
         // shortcuts: the more modifiers a binding has, the earlier it gets a
@@ -7057,6 +7234,7 @@ impl EditorUi {
             "flip-h" if self.edit_target().is_some() => self.flip_selection(true),
             "flip-v" if self.edit_target().is_some() => self.flip_selection(false),
             "flip-h-only" if have => self.flip_warps_only(true),
+            "merge-vertices" if have => self.merge_picked_points(),
             "flip-v-only" if have => self.flip_warps_only(false),
             "physics" if have => self.show_physics = true,
             "template-apply" if have => self.template_dlg = Some(TemplateDlg::apply(false)),
@@ -8689,6 +8867,91 @@ impl EditorUi {
         if self.def_pick.len() > 1 {
             self.multi_sel.clear();
             self.part_pick.clear();
+        }
+    }
+
+    /// Run what was picked on the canvas menu.
+    fn run_canvas_cmd(&mut self, ctx: &egui::Context, cmd: CanvasCmd) {
+        // an object outside the selection is selected alone first
+        let take = |ed: &mut Self, mi: usize| {
+            if !ed.selection_meshes().contains(&mi) {
+                ed.selected = Some(Sel::Mesh(mi));
+                ed.multi_sel = vec![mi];
+                ed.def_pick.clear();
+            }
+        };
+        match cmd {
+            CanvasCmd::MergePoints => self.merge_picked_points(),
+            CanvasCmd::DeletePoints => {
+                if let Some(mi) = self.mesh_edit {
+                    let points: Vec<usize> = self.mesh_picked.iter().copied().collect();
+                    let Some(s) = &mut self.session else { return };
+                    if s.edit(|m| ayatsuri_core::edit::delete_vertices(m, mi, &points)) {
+                        self.mesh_picked.clear();
+                        self.pending_edges.remove(&mi);
+                        self.edge_first = None;
+                        log::info!("{} point(s) deleted", points.len());
+                    }
+                }
+            }
+            CanvasCmd::Mesh(a) => self.run_mesh_action(a),
+            CanvasCmd::FinishMeshEdit => self.run_key_action(ctx, "mesh-edit"),
+            CanvasCmd::EditMesh(mi) => {
+                self.selected = Some(Sel::Mesh(mi));
+                self.multi_sel = vec![mi];
+                self.run_key_action(ctx, "mesh-edit");
+            }
+            CanvasCmd::RenameMesh(mi) => self.open_mesh_rename(mi),
+            CanvasCmd::ClipBy(mi) => {
+                take(self, mi);
+                self.start_clip_pick(mi);
+            }
+            CanvasCmd::CopyIds(mi) => {
+                take(self, mi);
+                self.run_key_action(ctx, "copy-ids");
+            }
+            CanvasCmd::CreateAround(mi, warp) => {
+                take(self, mi);
+                self.pending_create = Some((warp, None));
+            }
+            CanvasCmd::SelectParent(mi) => {
+                self.selected = Some(Sel::Mesh(mi));
+                self.select_parent();
+            }
+            CanvasCmd::Flip(mi, h) => self.flip_mesh_row(mi, h),
+            CanvasCmd::ToggleShown(mi) => {
+                take(self, mi);
+                self.toggle_selected_visibility();
+            }
+            CanvasCmd::ToggleLock(mi) => {
+                take(self, mi);
+                self.toggle_selected_lock();
+            }
+            CanvasCmd::DeleteMeshes(mi) => {
+                let meshes = self.mesh_pick_with(mi);
+                self.delete_meshes(meshes);
+            }
+            CanvasCmd::Def(c) => self.run_def_cmd(c),
+        }
+    }
+
+    /// Merge vertices on the points picked in Mesh Edit.
+    fn merge_picked_points(&mut self) {
+        let Some(mi) = self.mesh_edit else {
+            log::warn!("merge vertices: open the mesh in Mesh Edit and pick the points first");
+            return;
+        };
+        let points: Vec<usize> = self.mesh_picked.iter().copied().collect();
+        if points.len() < 2 {
+            log::warn!("merge vertices: pick two or more points (Shift+click or a box)");
+            return;
+        }
+        let Some(s) = &mut self.session else { return };
+        if s.edit(|m| ayatsuri_core::edit::merge_vertices(m, mi, &points)) {
+            self.mesh_picked.clear();
+            self.pending_edges.remove(&mi);
+            self.edge_first = None;
+            log::info!("{} point(s) merged into one", points.len());
         }
     }
 
@@ -10520,6 +10783,20 @@ impl EditorUi {
 
         let strip_h = 26.0;
         let view = Rect::from_min_max(content.min, pos2(content.max.x, content.max.y - strip_h));
+        // shortcut hints for the canvas menu, read before the session is held
+        let menu_sc: Vec<(&'static str, String)> = [
+            "mesh-edit",
+            "auto-connect",
+            "rename",
+            "select-parent",
+            "copy-ids",
+            "toggle-visible",
+            "lock-selected",
+            "merge-vertices",
+        ]
+        .iter()
+        .map(|a| (*a, self.sc(a)))
+        .collect();
 
         let Some(s) = &mut self.session else {
             painter.text(
@@ -10586,6 +10863,27 @@ impl EditorUi {
         let tree_mesh = self.ctx_layers.first().copied().filter(|_| !tree.is_empty());
         let mut pick_def: Option<usize> = None;
         let picked_now = def_group(self.selected, &self.def_pick);
+        // what the menu's object items work on: in Mesh Edit its points,
+        // else the selected deformer, else the mesh under the click
+        let mut canvas_cmd: Option<CanvasCmd> = None;
+        let menu_ctx = MenuCtx {
+            mesh_edit: self.mesh_edit,
+            picked_points: self.mesh_picked.len(),
+            deformer: match self.selected {
+                Some(Sel::Deformer(d)) => Some((d, s.puppet.warp_grid(d).is_some())),
+                _ => None,
+            },
+            mesh: self.ctx_layers.first().copied().or(match self.selected {
+                Some(Sel::Mesh(m)) => Some(m),
+                _ => None,
+            }),
+            shown: self
+                .ctx_layers
+                .first()
+                .is_none_or(|&m| s.mesh_shown.get(m).copied().unwrap_or(true)),
+            locked: self.ctx_layers.first().is_some_and(|m| self.mesh_locked.contains(m)),
+            sc: menu_sc,
+        };
         // every layer drawn under the right-click, front first, so a mesh
         // under another one can be picked without the Part tree
         let layers: Vec<(usize, String)> =
@@ -10644,6 +10942,7 @@ impl EditorUi {
                 });
                 ui.separator();
             }
+            canvas_menu_items(ui, &menu_ctx, &mut canvas_cmd);
             if !layers.is_empty() {
                 ui.menu_button(crate::i18n::tr("Select Layer"), |ui| list(ui, s));
                 ui.separator();
@@ -10710,6 +11009,10 @@ impl EditorUi {
                 shift,
             );
             log::info!("selection: deformer {} from the canvas menu", s.deformer_name(d));
+        }
+        if canvas_cmd.is_some() {
+            self.canvas_cmd = canvas_cmd;
+            ui.ctx().request_repaint();
         }
         if let Some(mi) = pick_layer {
             log::info!("selection: {} from the canvas menu", s.mesh_name(mi));
@@ -15543,6 +15846,7 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
         ("Modeling", "flip-h", "Flip Horizontally", N, K::F35),
         ("Modeling", "flip-v", "Flip Vertically", N, K::F35),
         ("Modeling", "flip-h-only", "Flip Warp Only Horizontally", N, K::F35),
+        ("Modeling", "merge-vertices", "Merge Vertices", N, K::F35),
         ("Modeling", "flip-v-only", "Flip Warp Only Vertically", N, K::F35),
         ("Modeling", "physics", "Physics Settings…", N, K::F35),
         ("Modeling", "template-apply", "Apply Parameter Template…", N, K::F35),

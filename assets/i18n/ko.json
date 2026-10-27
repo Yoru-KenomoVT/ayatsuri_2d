@@ -1511,5 +1511,14 @@
   "Reading {tablets}": "{tablets} 읽는 중",
   "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "{tablets}을(를) 찾았지만 이 사용자는 읽을 수 없습니다. input 그룹에 가입한 뒤(sudo usermod -aG input $USER) 다시 로그인하세요",
   "No pen tablet found; plug one in and it is picked up": "펜 태블릿을 찾을 수 없습니다. 연결하면 자동으로 인식됩니다",
-  "The system passes pen pressure on": "시스템이 필압을 전달합니다"
+  "The system passes pen pressure on": "시스템이 필압을 전달합니다",
+  "Merge Vertices": "정점 병합",
+  "Delete Points": "정점 삭제",
+  "Auto Connect": "자동 연결",
+  "Divide into 4": "4분할",
+  "Reset Mesh": "메시 초기화",
+  "Finish Mesh Edit": "메시 편집 종료",
+  "Select Parent Deformer": "부모 디포머 선택",
+  "Lock": "잠금",
+  "Unlock": "잠금 해제"
 }

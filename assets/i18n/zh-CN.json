@@ -1511,5 +1511,14 @@
   "Reading {tablets}": "正在读取 {tablets}",
   "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "找到了 {tablets}，但当前用户无权读取：请加入 input 组（sudo usermod -aG input $USER）并重新登录",
   "No pen tablet found; plug one in and it is picked up": "未找到数位板；插入后会自动识别",
-  "The system passes pen pressure on": "系统会传递压感"
+  "The system passes pen pressure on": "系统会传递压感",
+  "Merge Vertices": "合并顶点",
+  "Delete Points": "删除顶点",
+  "Auto Connect": "自动连接",
+  "Divide into 4": "四等分",
+  "Reset Mesh": "重置网格",
+  "Finish Mesh Edit": "结束网格编辑",
+  "Select Parent Deformer": "选择父变形器",
+  "Lock": "锁定",
+  "Unlock": "解锁"
 }

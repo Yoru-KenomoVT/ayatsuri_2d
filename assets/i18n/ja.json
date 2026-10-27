@@ -1511,5 +1511,14 @@
   "Reading {tablets}": "{tablets} を読み取り中",
   "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again": "{tablets} が見つかりましたが、このユーザーには読み取り権限がありません。input グループに参加して（sudo usermod -aG input $USER）ログインし直してください",
   "No pen tablet found; plug one in and it is picked up": "ペンタブレットが見つかりません。接続すると自動で認識されます",
-  "The system passes pen pressure on": "システムが筆圧を渡しています"
+  "The system passes pen pressure on": "システムが筆圧を渡しています",
+  "Merge Vertices": "頂点を統合",
+  "Delete Points": "頂点を削除",
+  "Auto Connect": "自動接続",
+  "Divide into 4": "4分割",
+  "Reset Mesh": "メッシュをリセット",
+  "Finish Mesh Edit": "メッシュ編集を終了",
+  "Select Parent Deformer": "親デフォーマを選択",
+  "Lock": "ロック",
+  "Unlock": "ロック解除"
 }

@@ -138,6 +138,14 @@ meshes and the Parts palette, and the requests from Discord testing.
   together across the middle of the pick; art meshes have the same Flip
   on their right-click menu. Flip Warp Only mirrors a warp's
   grid while what it holds stays put. All have shortcut entries.
+- **More on the canvas right-click menu**: on an art mesh, Edit Mesh,
+  Rename, Clip by, Copy ID, Create Warp or Rotation Deformer, Select Parent
+  Deformer, Flip, Hide, Lock and Delete; with a deformer selected, Rename,
+  Flip, Conversion Divisions and Delete; in Mesh Edit, Merge Vertices,
+  Delete Points, Auto Connect, Divide into 4, Reset Mesh, Flip and Finish.
+- **Merge Vertices** in Mesh Edit, as in Cubism: pick two or more points
+  (the ends of two strokes, say) and they become one, at their middle,
+  with their edges. Also on a shortcut entry.
 - **The canvas right-click menu shows the deformers above** the mesh under
   the pointer as a tree to select from (Shift+click adds to the pick), as
   in Cubism; Settings > Canvas can turn it off.
