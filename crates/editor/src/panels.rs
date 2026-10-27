@@ -874,6 +874,13 @@ struct RotDrag {
     /// The centre dragged without Ctrl: the keyform it moves in and its
     /// stored origin, for the live preview.
     origin_base: Option<(usize, f32, f32)>,
+    /// The round scale handle is held: how far from the centre the press
+    /// was, the factor so far, and (without Ctrl) the keyform and stored
+    /// scale for the live preview.
+    scaling: bool,
+    scale_from: f32,
+    factor: f32,
+    scale_base: Option<(usize, f32)>,
 }
 
 impl RotDrag {
@@ -882,6 +889,10 @@ impl RotDrag {
         if shift { (self.degrees / 45.0).round() * 45.0 } else { self.degrees }
     }
 }
+
+/// The rotation deformer's round scale handle: a ring this far from its
+/// centre, in screen pixels.
+const ROT_RING: f32 = 26.0;
 
 /// What a live drag is rewriting.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -12609,6 +12620,7 @@ impl EditorUi {
                         if d.turning && !d.handle_only {
                             angle += d.turn(shift);
                         } else if !d.turning
+                            && !d.scaling
                             && let Some(ptr) = ptr
                             && resp.dragged()
                         {
@@ -12630,10 +12642,15 @@ impl EditorUi {
                     let near_tip = at.is_some_and(|p| p.distance(tip) < 9.0)
                         && !near_origin
                         && self.rot_drag.is_none();
+                    // the round scale handle: the ring around the centre
+                    let near_ring = at.is_some_and(|p| (p.distance(o) - ROT_RING).abs() < 5.0)
+                        && !near_origin
+                        && !near_tip
+                        && self.rot_drag.is_none();
                     if !space {
                         if resp.drag_started()
                             && !self.def_locked.contains(&di)
-                            && (near_origin || near_tip)
+                            && (near_origin || near_tip || near_ring)
                             && let Some(ptr) = ptr
                             && let Some(local) = s.puppet.rotation_local_origin(di)
                         {
@@ -12669,6 +12686,10 @@ impl EditorUi {
                                 keep: ui.input(|i| i.modifiers.command),
                                 handle_only: near_tip && ui.input(|i| i.modifiers.alt),
                                 origin_base: None,
+                                scaling: near_ring,
+                                scale_from: (start - o).length().max(1.0),
+                                factor: 1.0,
+                                scale_base: None,
                             });
                         }
                         // live turn: what the rotation holds swings with the
@@ -12711,7 +12732,40 @@ impl EditorUi {
                             && let Some(d) = &mut self.rot_drag
                             && d.deformer == di
                         {
-                            if d.turning && d.handle_only {
+                            if d.scaling {
+                                d.factor = ((ptr - o).length() / d.scale_from).clamp(0.05, 20.0);
+                                // without Ctrl the art grows with it, live in
+                                // the keyform the parameters sit on
+                                if !d.keep {
+                                    if d.scale_base.is_none() {
+                                        let values: Vec<f32> =
+                                            (0..s.puppet.model().parameters.len())
+                                                .map(|i| s.puppet.value(i))
+                                                .collect();
+                                        let target = ayatsuri_core::edit::Target::Deformer(di);
+                                        if let Some(k) = ayatsuri_core::keyform::keyform_at(
+                                            s.puppet.model(),
+                                            target,
+                                            &values,
+                                        ) && let Some(base) = s
+                                            .puppet
+                                            .rotation_scales_mut(di)
+                                            .and_then(|v| v.get(k).copied())
+                                        {
+                                            d.scale_base = Some((k, base));
+                                        }
+                                    }
+                                    if let Some((k, base)) = d.scale_base
+                                        && let Some(v) = s
+                                            .puppet
+                                            .rotation_scales_mut(di)
+                                            .and_then(|v| v.get_mut(k))
+                                    {
+                                        *v = base * d.factor;
+                                        s.dirty = true;
+                                    }
+                                }
+                            } else if d.turning && d.handle_only {
                                 self.rot_handle.insert(di, (ptr - o).length().clamp(12.0, 600.0));
                             } else if d.turning {
                                 let prev = d.last_ptr - o;
@@ -12791,8 +12845,41 @@ impl EditorUi {
                                 (*x, *y) = (bx, by);
                                 s.dirty = true;
                             }
+                            if let Some((k, base)) = d.scale_base
+                                && let Some(v) =
+                                    s.puppet.rotation_scales_mut(di).and_then(|v| v.get_mut(k))
+                            {
+                                *v = base;
+                                s.dirty = true;
+                            }
                             let deg = d.turn(ui.input(|i| i.modifiers.shift));
-                            if d.turning && d.handle_only {
+                            if d.scaling {
+                                let (dfm, f) = (d.deformer, d.factor);
+                                if (f - 1.0).abs() > 1e-4 {
+                                    let done = match (d.keep, d.scale_base) {
+                                        (true, _) => s.edit(|m| {
+                                            ayatsuri_core::edit::scale_rotation_keep_children(
+                                                m, dfm, f,
+                                            )
+                                        }),
+                                        (false, Some((k, _))) => s.edit(|m| {
+                                            ayatsuri_core::edit::scale_rotation_in(m, dfm, k, f)
+                                        }),
+                                        (false, None) => {
+                                            log::warn!(
+                                                "the parameters are between keys: move them onto a key to scale this rotation deformer"
+                                            );
+                                            false
+                                        }
+                                    };
+                                    if done {
+                                        log::debug!(
+                                            "rotation {dfm} scaled x{f:.3}{}",
+                                            if d.keep { " alone" } else { "" }
+                                        );
+                                    }
+                                }
+                            } else if d.turning && d.handle_only {
                                 // only the handle's length, already shown
                             } else if d.turning && d.keep && deg.abs() > 1e-3 {
                                 let dfm = d.deformer;
@@ -12868,11 +12955,19 @@ impl EditorUi {
                         }
                         if near_origin || near_tip {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        } else if near_ring {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
                         }
                     }
 
                     let stroke = Stroke::new(1.4, self.disp.rotation_color);
-                    vp.circle_stroke(o, 26.0, stroke);
+                    let scaling = self.rot_drag.as_ref().filter(|d| d.scaling && d.deformer == di);
+                    let ring = ROT_RING * scaling.map_or(1.0, |d| d.factor);
+                    if near_ring || scaling.is_some() {
+                        vp.circle_stroke(o, ring, Stroke::new(2.2, theme::pal().accent));
+                    } else {
+                        vp.circle_stroke(o, ring, stroke);
+                    }
                     vp.line_segment([o, tip], stroke);
                     let turning = self.rot_drag.as_ref().is_some_and(|d| d.turning);
                     if near_tip || turning {
@@ -12880,7 +12975,9 @@ impl EditorUi {
                     } else {
                         vp.circle_filled(tip, 3.0, self.disp.rotation_color);
                     }
-                    if near_origin || self.rot_drag.as_ref().is_some_and(|d| !d.turning) {
+                    if near_origin
+                        || self.rot_drag.as_ref().is_some_and(|d| !d.turning && !d.scaling)
+                    {
                         vp.circle(o, 4.5, theme::pal().accent, stroke);
                     } else {
                         vp.circle_filled(o, 2.5, self.disp.rotation_color);

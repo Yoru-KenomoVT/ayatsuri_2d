@@ -3372,6 +3372,73 @@ pub fn rotate_rotation_keep_children(model: &mut Model, deformer: usize, degrees
     true
 }
 
+/// Enlarge a rotation deformer by `factor` in one keyform, what it holds
+/// with it (the scale handle dragged).
+pub fn scale_rotation_in(model: &mut Model, deformer: usize, keyform: usize, factor: f32) -> bool {
+    if !(factor.is_finite() && factor > 0.0) {
+        return false;
+    }
+    let Some(DeformerKind::Rotation(r)) = model.deformers.get_mut(deformer).map(|d| &mut d.kind)
+    else {
+        return false;
+    };
+    match r.scales.get_mut(keyform) {
+        Some(s) => {
+            *s *= factor;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Cubism's Ctrl+drag on the scale handle: the rotation deformer grows by
+/// `factor` on every keyform while what it holds keeps its size and place
+/// on screen (its children shrink back in its space, and rotation
+/// deformers among them, which inherit its scale, shrink back their own).
+pub fn scale_rotation_keep_children(model: &mut Model, deformer: usize, factor: f32) -> bool {
+    if !(factor.is_finite() && factor > 0.0) {
+        return false;
+    }
+    let Some(DeformerKind::Rotation(r)) = model.deformers.get_mut(deformer).map(|d| &mut d.kind)
+    else {
+        return false;
+    };
+    for s in &mut r.scales {
+        *s *= factor;
+    }
+    let d32 = Some(deformer as u32);
+    let mut children: Vec<Child> = model
+        .art_meshes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.parent_deformer == d32)
+        .map(|(i, _)| Child::Mesh(i))
+        .collect();
+    children.extend(
+        model
+            .deformers
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.parent_deformer == d32)
+            .map(|(i, _)| Child::Deformer(i)),
+    );
+    let back = |x: f32, y: f32| (x / factor, y / factor);
+    with_shapes(model, |model| {
+        for &c in &children {
+            map_child(model, c, &back);
+            if let Child::Deformer(d) = c
+                && let Some(DeformerKind::Rotation(r)) =
+                    model.deformers.get_mut(d).map(|x| &mut x.kind)
+            {
+                for s in &mut r.scales {
+                    *s /= factor;
+                }
+            }
+        }
+    });
+    true
+}
+
 /// Turn a rotation deformer by `degrees` on every keyform.
 pub fn rotate_rotation(model: &mut Model, deformer: usize, degrees: f32) -> bool {
     let Some(d) = model.deformers.get_mut(deformer) else { return false };
@@ -5508,6 +5575,42 @@ mod tests {
             }
             let now = rest_puppet(&m).rotation_state(rot).unwrap().angle;
             assert!((now - angle - 30.0).abs() < 1e-3, "the deformer itself turned");
+        }
+    }
+
+    #[test]
+    fn the_scale_handle_enlarges_with_or_without_the_art() {
+        // inside a warp, and around a rotation that holds the mesh
+        let (m0, _, rot) = nested_rig();
+        let mut outer = m0.clone();
+        let outer_rot = create_deformer(
+            &mut outer,
+            NewDeformer::Rotation { origin: None },
+            &[Child::Deformer(rot)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "Outer".into(),
+        )
+        .unwrap();
+        for (m, d) in [(m0, rot), (outer, outer_rot)] {
+            let before = mesh_world(&m);
+            let scale = |m: &Model| rest_puppet(m).rotation_state(d).unwrap().scale;
+            let mut keep = m.clone();
+            assert!(scale_rotation_keep_children(&mut keep, d, 1.5));
+            for (a, b) in before.iter().zip(&mesh_world(&keep)) {
+                assert!((a - b).abs() < 1e-3, "the art stays: {a} vs {b}");
+            }
+            assert!((scale(&keep) / scale(&m) - 1.5).abs() < 1e-4, "the deformer grew");
+            let mut with = m.clone();
+            assert!(scale_rotation_in(&mut with, d, 0, 1.5));
+            let moved = before
+                .iter()
+                .zip(&mesh_world(&with))
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f32::max);
+            assert!(moved > 0.05, "the art grew with it ({moved})");
+            assert!(!scale_rotation_in(&mut with, d, 0, 0.0));
         }
     }
 
