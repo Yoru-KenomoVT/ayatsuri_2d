@@ -537,6 +537,7 @@ fn reimport_into(
         width: doc.width,
         height: doc.height,
         layers,
+        folders: doc.folders.clone(),
     })
     .map_err(|e| e.to_string())?;
     let nc = built.model.canvas;
@@ -2336,6 +2337,7 @@ mod import_paint_tests {
                     blend: ayatsuri_import::Blend::NORMAL,
                 })
                 .collect(),
+            folders: Vec::new(),
         }
     }
 

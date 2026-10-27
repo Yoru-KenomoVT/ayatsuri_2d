@@ -13,7 +13,7 @@
 // catch_unwind: a bad PSD is an error message, never a crashed editor.
 
 use crate::ImportError;
-use crate::layers::{Blend, Document, Layer};
+use crate::layers::{Blend, Document, Folder, Layer};
 
 /// Read a .psd into a layered document, bottom layer first.
 pub fn read_psd(bytes: &[u8]) -> Result<Document, ImportError> {
@@ -79,37 +79,71 @@ fn read_inner(bytes: &[u8]) -> Result<Document, ImportError> {
             clip_to_below: !l.is_clipping_mask(),
             // the psd crate keeps its BlendMode type private; its discriminants
             // are Photoshop's order
-            blend: {
-                let name = match l.blend_mode() as u8 {
-                    0 => "pass through",
-                    1 => "normal",
-                    3 => "darken",
-                    4 => "multiply",
-                    5 => "color burn",
-                    6 => "linear burn",
-                    8 => "lighten",
-                    9 => "screen",
-                    10 => "color dodge",
-                    11 => "linear dodge",
-                    13 => "overlay",
-                    14 => "soft light",
-                    15 => "hard light",
-                    16 => "vivid light",
-                    17 => "linear light",
-                    24 => "hue",
-                    26 => "color",
-                    _ => "",
-                };
-                crate::layers::paint_blend(name).unwrap_or_else(|| {
+            blend: crate::layers::paint_blend(blend_name(l.blend_mode() as u8)).unwrap_or_else(
+                || {
                     log::warn!(
                         "psd: layer {:?} blends as {:?}, which moc3 has no mode for; drawn normal",
                         l.name(),
                         l.blend_mode()
                     );
                     Blend::NORMAL
-                })
-            },
+                },
+            ),
         });
     }
-    Ok(Document { width: cw, height: ch, layers })
+    // folders that composite as one image: every group but pass-through
+    let mut folders = Vec::new();
+    for (id, g) in groups.iter() {
+        let code = g.blend_mode() as u8;
+        if code == 0 {
+            continue;
+        }
+        let mut path = vec![g.name().to_string()];
+        let mut cur = g.parent_id();
+        let mut hops = 0;
+        while let Some(pid) = cur {
+            let Some(p) = groups.get(&pid).filter(|_| pid != *id) else { break };
+            path.push(p.name().to_string());
+            cur = p.parent_id();
+            hops += 1;
+            if hops > 64 {
+                break;
+            }
+        }
+        path.reverse();
+        let blend = crate::layers::paint_blend(blend_name(code)).unwrap_or_else(|| {
+            log::warn!(
+                "psd: folder {:?} blends in a way moc3 has no mode for; drawn normal",
+                g.name()
+            );
+            Blend::NORMAL
+        });
+        folders.push(Folder { path, blend, opacity: g.opacity() as f32 / 255.0 });
+    }
+    Ok(Document { width: cw, height: ch, layers, folders })
+}
+
+/// The psd crate keeps its BlendMode type private; its discriminants are
+/// Photoshop's order.
+fn blend_name(code: u8) -> &'static str {
+    match code {
+        0 => "pass through",
+        1 => "normal",
+        3 => "darken",
+        4 => "multiply",
+        5 => "color burn",
+        6 => "linear burn",
+        8 => "lighten",
+        9 => "screen",
+        10 => "color dodge",
+        11 => "linear dodge",
+        13 => "overlay",
+        14 => "soft light",
+        15 => "hard light",
+        16 => "vivid light",
+        17 => "linear light",
+        24 => "hue",
+        26 => "color",
+        _ => "",
+    }
 }

@@ -67,6 +67,7 @@ mod tests {
             width: 128,
             height: 96,
             layers: vec![layer("red", 10, 20, 40, 30, rgba), layer("blue", 60, 50, 20, 20, blue)],
+            folders: Vec::new(),
         };
         let imported = crate::layers::build(&doc).unwrap();
         let mut model = imported.model;

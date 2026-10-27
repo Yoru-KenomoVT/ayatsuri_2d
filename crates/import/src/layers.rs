@@ -66,6 +66,26 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
     pub layers: Vec<Layer>,
+    /// The folders that composite as one image (not pass-through), by
+    /// their path: these become offscreen parts.
+    pub folders: Vec<Folder>,
+}
+
+/// A folder that blends as a whole, Photoshop's non-pass-through groups.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Folder {
+    /// Its own name last, enclosing names before it.
+    pub path: Vec<String>,
+    pub blend: Blend,
+    pub opacity: f32,
+}
+
+impl Folder {
+    /// Whether it looks any different from its layers drawn directly: a
+    /// Normal folder at full opacity does not, and costs nothing as a part.
+    pub fn needs_layer(&self) -> bool {
+        self.blend != Blend::NORMAL || self.opacity < 0.999
+    }
 }
 
 /// What an import hands back: the model plus its encoded texture pages.
@@ -187,7 +207,17 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
                         enabled: true,
                         binding: Binding::default(),
                         draw_orders: vec![500.0],
-                        offscreen: None,
+                        // a folder that blends as a whole draws offscreen
+                        offscreen: doc
+                            .folders
+                            .iter()
+                            .find(|f| f.path == sub && f.needs_layer())
+                            .map(|f| ayatsuri_format::model::Offscreen {
+                                masks: Vec::new(),
+                                inverted: false,
+                                blend: f.blend,
+                                opacities: vec![f.opacity],
+                            }),
                         blend_shapes: Vec::new(),
                     });
                     part_names.push(sub.last().cloned().unwrap_or_default());
@@ -331,4 +361,49 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
     model.parts = parts;
     model.art_meshes = meshes;
     Ok(Imported { model, textures, part_names, mesh_names, skipped, scaled })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer(name: &str, folder: &str, x: i32) -> Layer {
+        Layer {
+            name: name.into(),
+            groups: vec![folder.into()],
+            x,
+            y: 0,
+            width: 8,
+            height: 8,
+            rgba: vec![255; 8 * 8 * 4],
+            visible: true,
+            opacity: 1.0,
+            clip_to_below: false,
+            blend: Blend::NORMAL,
+        }
+    }
+
+    #[test]
+    fn a_blending_folder_becomes_an_offscreen_part() {
+        let screen = Blend { color: ColorBlend::Screen, alpha: AlphaBlend::Over };
+        let doc = Document {
+            width: 64,
+            height: 16,
+            layers: vec![layer("a", "Glow", 0), layer("b", "Plain", 20), layer("c", "Faded", 40)],
+            folders: vec![
+                Folder { path: vec!["Glow".into()], blend: screen, opacity: 1.0 },
+                Folder { path: vec!["Plain".into()], blend: Blend::NORMAL, opacity: 1.0 },
+                Folder { path: vec!["Faded".into()], blend: Blend::NORMAL, opacity: 0.5 },
+            ],
+        };
+        let built = build(&doc).unwrap();
+        let part = |name: &str| {
+            let i = built.part_names.iter().position(|n| n == name).unwrap();
+            built.model.parts[i].offscreen.clone()
+        };
+        let glow = part("Glow").expect("a Screen folder draws offscreen");
+        assert_eq!((glow.blend, glow.opacities), (screen, vec![1.0]));
+        assert!(part("Plain").is_none(), "a Normal folder at full opacity looks the same direct");
+        assert_eq!(part("Faded").map(|o| o.opacities), Some(vec![0.5]));
+    }
 }
