@@ -117,6 +117,9 @@ meshes and the Parts palette, and the requests from Discord testing.
   dark backdrop and the live mesh under it, which changed with every
   edit. Only the frozen art shows now; meshes clipped to it still follow
   its new shape.
+- **Shift+click in the Deformer palette** only reached rows of its own
+  kind: from a mesh to a deformer it picked just the deformer. It now
+  picks every row of the clicked kind between the two.
 - **Temporary Deform Tool**: Perspective has the side handles too, as in
   Cubism, sliding that side along itself; handles are bigger squares,
   grab where the press began, and show a hand cursor.

@@ -726,6 +726,9 @@ pub struct EditorUi {
     /// click); see `def_group` for when it counts.
     def_pick: Vec<usize>,
     def_anchor: Option<usize>,
+    /// The Deformer palette's last plain or Ctrl clicked row, deformer
+    /// (true) or mesh, for a Shift+click range across both kinds of row.
+    def_row_anchor: Option<(bool, usize)>,
     /// The Parts palette row under the pointer, outlined on the canvas.
     palette_hover: Option<Sel>,
     /// The Parts and Deformer palettes' search boxes.
@@ -1778,6 +1781,7 @@ impl Default for EditorUi {
             part_anchor: None,
             def_pick: Vec::new(),
             def_anchor: None,
+            def_row_anchor: None,
             palette_hover: None,
             part_search: String::new(),
             def_search: String::new(),
@@ -8863,6 +8867,53 @@ impl EditorUi {
         pick_in(pick, anchor, row, shift, ctrl, order);
     }
 
+    /// Shift+click in the Deformer palette when the last clicked row was the
+    /// other kind: every row of the clicked kind between the two is picked
+    /// (deformers as the outermost of them). False when the anchor is the
+    /// same kind, or gone, and the usual range applies.
+    fn pick_across(&mut self, deformer: bool, row: usize, all_rows: &[(bool, usize)]) -> bool {
+        let Some(anchor) = self.def_row_anchor.filter(|a| a.0 != deformer) else {
+            return false;
+        };
+        let at = |r: (bool, usize)| all_rows.iter().position(|&x| x == r);
+        let (Some(a), Some(b)) = (at(anchor), at((deformer, row))) else {
+            return false;
+        };
+        let (lo, hi) = (a.min(b), a.max(b));
+        let run: Vec<usize> = all_rows
+            .get(lo..=hi)
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| r.0 == deformer)
+            .map(|r| r.1)
+            .collect();
+        if deformer {
+            self.def_pick = match &self.session {
+                Some(s) => top_level_pick(s.puppet.model(), &run),
+                None => run,
+            };
+            self.def_anchor = Some(row);
+            self.selected = if self.def_pick.contains(&row) {
+                Some(Sel::Deformer(row))
+            } else {
+                self.def_pick.last().copied().map(Sel::Deformer)
+            };
+            self.multi_sel.clear();
+            self.part_pick.clear();
+        } else {
+            self.multi_sel = run;
+            self.mesh_anchor = Some(row);
+            self.selected = Some(Sel::Mesh(row));
+            self.def_pick.clear();
+        }
+        log::debug!(
+            "Deformer palette: Shift+click picked {} {} across both kinds of row",
+            if deformer { self.def_pick.len() } else { self.multi_sel.len() },
+            if deformer { "deformer(s)" } else { "mesh(es)" }
+        );
+        true
+    }
+
     /// A deformer row clicked with Ctrl or Shift (or plainly): the pick
     /// starts from the selected deformer, and the selection follows.
     fn pick_def_rows(&mut self, row: usize, shift: bool, ctrl: bool, order: &[usize]) {
@@ -9278,6 +9329,8 @@ impl EditorUi {
         let mut def_click: Option<usize> = None;
         let mut def_mesh_rows: Vec<usize> = Vec::new();
         let mut def_mesh_click: Option<usize> = None;
+        // every row top to bottom, deformers (true) and meshes
+        let mut all_rows: Vec<(bool, usize)> = Vec::new();
         let Some(s) = &mut self.session else {
             ui.weak(crate::i18n::tr("No model loaded."));
             return;
@@ -9398,6 +9451,7 @@ impl EditorUi {
                     paint_picked_row(ui, rect);
                 }
                 def_rows.push(i);
+                all_rows.push((true, i));
                 // drag a row onto a deformer to make it the parent
                 if resp.drag_started() && !self.def_locked.contains(&i) {
                     resp.dnd_set_drag_payload(Child::Deformer(i));
@@ -9638,6 +9692,7 @@ impl EditorUi {
                     // dropping beside a mesh puts it under the mesh's deformer
                     def_drop_target(ui, &resp, None, Some(i as u32), false, &mut def_cmd);
                     def_mesh_rows.push(mi);
+                    all_rows.push((false, mi));
                     if self.selected == Some(Sel::Mesh(mi)) || self.multi_sel.contains(&mi) {
                         paint_picked_row(ui, rect);
                     }
@@ -9778,7 +9833,12 @@ impl EditorUi {
             self.deselect_all();
         } else if let Some(i) = def_click {
             let (shift, ctrl) = ui.ctx().input(|i| (i.modifiers.shift, i.modifiers.command));
-            self.pick_def_rows(i, shift, ctrl, &def_rows);
+            if !(shift && self.pick_across(true, i, &all_rows)) {
+                self.pick_def_rows(i, shift, ctrl, &def_rows);
+            }
+            if !shift {
+                self.def_row_anchor = Some((true, i));
+            }
         }
         // what is being dragged follows the pointer
         if let Some(p) = egui::DragAndDrop::payload::<Child>(&ctx)
@@ -9831,8 +9891,15 @@ impl EditorUi {
         }
         if let Some(mi) = def_mesh_click {
             let (shift, ctrl) = ui.ctx().input(|i| (i.modifiers.shift, i.modifiers.command));
-            self.pick_rows(mi, shift, ctrl, &def_mesh_rows, false);
-            self.after_mesh_pick(mi, ctrl, shift);
+            if shift && self.pick_across(false, mi, &all_rows) {
+                self.after_mesh_pick(mi, ctrl, shift);
+            } else {
+                self.pick_rows(mi, shift, ctrl, &def_mesh_rows, false);
+                self.after_mesh_pick(mi, ctrl, shift);
+            }
+            if !shift {
+                self.def_row_anchor = Some((false, mi));
+            }
         }
     }
 
@@ -18976,6 +19043,26 @@ mod palette_pick_tests {
         // a mesh selection does not count as a deformer pick
         ed.selected = Some(Sel::Mesh(0));
         assert!(def_group(ed.selected, &ed.def_pick).is_empty());
+    }
+
+    #[test]
+    fn shift_click_reaches_across_mesh_and_deformer_rows() {
+        // deformer 0 holding mesh 5, then deformer 1 holding meshes 6 and 7
+        let rows = [(true, 0), (false, 5), (true, 1), (false, 6), (false, 7)];
+        let mut ed = EditorUi::new();
+        // a mesh clicked, then Shift on a deformer above it: the deformers
+        // between them are picked
+        ed.def_row_anchor = Some((false, 7));
+        assert!(ed.pick_across(true, 0, &rows));
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![0, 1]);
+        assert!(ed.multi_sel.is_empty());
+        // and the other way: meshes from a deformer down
+        ed.def_row_anchor = Some((true, 0));
+        assert!(ed.pick_across(false, 6, &rows));
+        assert_eq!(ed.multi_sel, vec![5, 6]);
+        assert!(ed.selected == Some(Sel::Mesh(6)) && ed.def_pick.is_empty());
+        // the same kind keeps the usual range
+        assert!(!ed.pick_across(true, 1, &rows));
     }
 
     #[test]
