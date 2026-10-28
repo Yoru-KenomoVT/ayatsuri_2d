@@ -1541,5 +1541,11 @@
   "Replace": "Vervangen",
   "Keep both": "Beide houden",
   "Discard the new line": "Nieuwe lijn weggooien",
-  "Delete Part (Child objects will remain)": "Part verwijderen (onderliggende objecten blijven)"
+  "Delete Part (Child objects will remain)": "Part verwijderen (onderliggende objecten blijven)",
+  "Change the draw order of all ArtMeshes…": "Tekenvolgorde van alle ArtMeshes wijzigen…",
+  "Change the draw order of all ArtMeshes": "Tekenvolgorde van alle ArtMeshes wijzigen",
+  "Auto setup": "Automatisch instellen",
+  "Manual setup": "Handmatig instellen",
+  "Interval": "Interval",
+  "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "In de volgorde van het Parts-palet, de bovenste rij het hoogst. Meshes in een tekenvolgordegroep houden de hunne."
 }

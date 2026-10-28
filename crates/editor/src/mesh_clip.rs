@@ -243,6 +243,27 @@ pub(crate) fn paste(
             }
         }
     }
+    // at a tied draw order the later mesh draws in front, and a pasted one
+    // is the last of all: the copies move, as one block in the order they
+    // came, to just after the front-most of their originals, so they stack
+    // right over them and not over everything (hair over a copied eye)
+    let before = next.art_meshes.len() - added.len();
+    let front = clip
+        .meshes
+        .iter()
+        .filter_map(|c| next.art_meshes.iter().take(before).position(|m| m.id == c.mesh.id))
+        .max();
+    if let Some(front) = front {
+        let pasted: Vec<usize> = added.iter().map(|&(i, _)| i).collect();
+        let mut order: Vec<usize> = (0..=front).collect();
+        order.extend(&pasted);
+        order.extend((front + 1..next.art_meshes.len()).filter(|i| !pasted.contains(i)));
+        if ayatsuri_core::palette::reorder_meshes(&mut next, &order) {
+            for (k, (i, _)) in added.iter_mut().enumerate() {
+                *i = front + 1 + k;
+            }
+        }
+    }
     if home {
         // same texture pages: an ordinary edit
         if !s.edit(|m| {

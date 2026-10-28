@@ -1541,5 +1541,11 @@
   "Replace": "置き換える",
   "Keep both": "両方残す",
   "Discard the new line": "新しい線を破棄",
-  "Delete Part (Child objects will remain)": "パーツを削除（子オブジェクトは残す）"
+  "Delete Part (Child objects will remain)": "パーツを削除（子オブジェクトは残す）",
+  "Change the draw order of all ArtMeshes…": "全アートメッシュの描画順を変更…",
+  "Change the draw order of all ArtMeshes": "全アートメッシュの描画順を変更",
+  "Auto setup": "自動設定",
+  "Manual setup": "手動設定",
+  "Interval": "間隔",
+  "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "パーツパレットの順で、一番上の行が最も大きくなります。描画順グループ内のメッシュはそのままです。"
 }

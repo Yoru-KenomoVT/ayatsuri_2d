@@ -82,6 +82,13 @@ meshes and the Parts palette, and the requests from Discord testing.
   groups, inherited clipping (exported to moc3 as hidden helper masks) and
   stroke mesh-mapping, whose 1, 2 and 3 vertices across lay the mesh out
   as Cubism's do.
+- **Change the draw order of all ArtMeshes** (Modeling > ArtMesh), as in
+  Cubism: every mesh gets its own draw order in Parts palette order, the
+  top row highest, spaced evenly across 0 to 1000 (Auto setup) or by a
+  chosen interval. Models imported from PSD, Krita, Clip Studio and the
+  other paint formats come in at 500 all round, as Cubism's do; this
+  spreads them out without changing how they stack. Meshes in a draw
+  order group keep theirs.
 - **Delete parts** in the Parts palette, as in Cubism: Delete or
   Backspace (or Delete in the right-click menu) removes the selected parts
   with everything inside them. **Delete Part (Child objects will remain)**
@@ -122,6 +129,10 @@ meshes and the Parts palette, and the requests from Discord testing.
   once the drag has gone 6 px and holds until release. A drag that would
   fold the box over itself is not taken, so the art cannot turn inside out
   (as in Krita).
+- **Pasted copies drew over everything**: a pasted mesh went to the end
+  of the stacking, so at a tied draw order (500 after an import) a copied
+  eye drew over the hair. Copies now go in as one block just above the
+  front-most of their originals.
 - **Pasted copies clip to each other**: copy an eye's white and iris
   together and the pasted iris clips to the pasted white, not the old one.
   Such a copy also leaves the original's clip group, so it can be clipped

@@ -642,6 +642,9 @@ pub struct EditorUi {
     /// colours so it is only rebuilt on resize or a theme change.
     home_wash: Option<(WashKey, egui::TextureHandle)>,
     show_ws_save: bool,
+    /// Change the draw order of all ArtMeshes, while open: Auto setup, and
+    /// the Manual setup interval.
+    draw_spread: Option<(bool, f32)>,
     ws_name: String,
     show_ws_manage: bool,
     pub(crate) settings_tab: usize,
@@ -1744,6 +1747,7 @@ impl Default for EditorUi {
             logo: None,
             home_wash: None,
             show_ws_save: false,
+            draw_spread: None,
             ws_name: String::new(),
             show_ws_manage: false,
             settings_tab: 0,
@@ -3628,6 +3632,19 @@ impl EditorUi {
                             false,
                             egui::Button::new(crate::i18n::tr("Convert to ArtPath")),
                         );
+                        ui.separator();
+                        if ui
+                            .add_enabled(
+                                self.session.is_some(),
+                                egui::Button::new(crate::i18n::tr(
+                                    "Change the draw order of all ArtMeshes…",
+                                )),
+                            )
+                            .clicked()
+                        {
+                            ui.close();
+                            self.draw_spread = Some((true, 10.0));
+                        }
                     });
                     if ui
                         .add_enabled(
@@ -5006,7 +5023,55 @@ impl EditorUi {
             }
         });
     }
+    /// Cubism's Change the draw order of all ArtMeshes: each mesh its own
+    /// draw order in Parts palette order, so a model imported at 500 all
+    /// round (as a PSD comes in) keeps its stacking with values to work from.
+    fn draw_spread_window(&mut self, ui: &mut Ui) {
+        let Some((mut auto, mut interval)) = self.draw_spread else { return };
+        let mut open = true;
+        let mut apply = false;
+        crate::windows::Dialog::new(crate::i18n::tr("Change the draw order of all ArtMeshes"))
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                ui.radio_value(&mut auto, true, crate::i18n::tr("Auto setup"));
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut auto, false, crate::i18n::tr("Manual setup"));
+                    ui.add_enabled(
+                        !auto,
+                        egui::DragValue::new(&mut interval).range(1.0..=500.0).speed(1.0),
+                    );
+                    ui.label(crate::i18n::tr("Interval"));
+                });
+                ui.weak(crate::i18n::tr(
+                    "In Parts palette order, the top row highest. Meshes in a draw order \
+                     group keep theirs.",
+                ));
+                ui.horizontal(|ui| {
+                    apply = ui.button(crate::i18n::tr("OK")).clicked();
+                    if ui.button(crate::i18n::tr("Cancel")).clicked() {
+                        self.draw_spread = None;
+                    }
+                });
+            });
+        if self.draw_spread.is_none() {
+            return;
+        }
+        self.draw_spread = (open && !apply).then_some((auto, interval));
+        if apply
+            && let Some(s) = &mut self.session
+            && s.edit(|m| {
+                ayatsuri_core::palette::spread_draw_orders(m, (!auto).then_some(interval))
+            })
+        {
+            log::info!(
+                "draw orders of all art meshes changed ({})",
+                if auto { "auto".to_string() } else { format!("every {interval}") }
+            );
+        }
+    }
+
     fn workspace_windows(&mut self, ui: &mut Ui) {
+        self.draw_spread_window(ui);
         let mut open = self.show_ws_save;
         let mut saved = false;
         crate::windows::Dialog::new(crate::i18n::tr("Save Workspace")).open(&mut open).show(

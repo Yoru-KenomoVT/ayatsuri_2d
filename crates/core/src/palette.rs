@@ -426,6 +426,49 @@ pub fn delete_parts(model: &mut Model, parts: &[usize], keep_children: bool) -> 
     true
 }
 
+/// Cubism's Change the draw order of all ArtMeshes: every mesh outside a
+/// draw order group (an offscreen part) gets its own draw order, in Parts
+/// palette order, the top row highest, `interval` apart; None spaces them
+/// evenly across 0 to 1000 (Auto setup). A mesh keyed to more than one
+/// draw order moves by the same amount on every key, so its changes stay.
+/// What it was drawn like does not change where the palette already gave
+/// the stacking. False when nothing changed.
+pub fn spread_draw_orders(model: &mut Model, interval: Option<f32>) -> bool {
+    let meshes: Vec<usize> = rows(model)
+        .into_iter()
+        .filter_map(|(r, _)| match r {
+            Row::Mesh(m) => Some(m),
+            Row::Part(_) => None,
+        })
+        .filter(|&m| {
+            !model.art_meshes.get(m).is_some_and(|x| {
+                crate::draworder::nearest_offscreen(model, x.parent_part).is_some()
+            })
+        })
+        .collect();
+    let n = meshes.len();
+    if n == 0 {
+        return false;
+    }
+    let step = interval
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or_else(|| (1000.0 / (n as f32 + 1.0)).floor().max(1.0));
+    let mut changed = false;
+    for (k, &m) in meshes.iter().enumerate() {
+        // the bottom row at one step, each row up one more
+        let want = (step * (n - k) as f32).clamp(0.0, 1000.0);
+        let Some(x) = model.art_meshes.get_mut(m) else { continue };
+        let Some(&first) = x.draw_orders.first() else { continue };
+        let by = want - first;
+        for d in &mut x.draw_orders {
+            let to = (*d + by).clamp(0.0, 1000.0);
+            changed |= to != *d;
+            *d = to;
+        }
+    }
+    changed
+}
+
 /// An id no part has yet: `PartN` from the part count up.
 pub fn free_part_id(model: &Model) -> String {
     let mut n = model.parts.len();
@@ -583,6 +626,23 @@ mod tests {
         let ids: Vec<&str> = m.art_meshes.iter().map(|x| x.id.as_str()).collect();
         assert_eq!(ids, ["back_hair", "skin", "white", "iris"]);
         assert_eq!(free_part_id(&m), "Part3");
+    }
+
+    #[test]
+    fn spreading_draw_orders_follows_the_palette() {
+        let mut m = face();
+        assert!(spread_draw_orders(&mut m, None));
+        // palette: iris, white, skin, back_hair (top first); 1000 / 5 = 200
+        let order = |id: &str| m.art_meshes.iter().find(|x| x.id == id).unwrap().draw_orders[0];
+        assert_eq!(
+            [order("iris"), order("white"), order("skin"), order("back_hair")],
+            [800.0, 600.0, 400.0, 200.0]
+        );
+        // a keyed mesh keeps its change between keys
+        m.art_meshes[1].draw_orders = vec![400.0, 450.0];
+        assert!(spread_draw_orders(&mut m, Some(10.0)));
+        assert_eq!(m.art_meshes[1].draw_orders, vec![20.0, 70.0]);
+        assert!(!spread_draw_orders(&mut m, Some(10.0)));
     }
 
     #[test]

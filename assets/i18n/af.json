@@ -1541,5 +1541,11 @@
   "Replace": "Vervang",
   "Keep both": "Hou albei",
   "Discard the new line": "Gooi die nuwe lyn weg",
-  "Delete Part (Child objects will remain)": "Skrap deel (kinderobjekte bly)"
+  "Delete Part (Child objects will remain)": "Skrap deel (kinderobjekte bly)",
+  "Change the draw order of all ArtMeshes…": "Verander die tekenvolgorde van alle ArtMeshes…",
+  "Change the draw order of all ArtMeshes": "Verander die tekenvolgorde van alle ArtMeshes",
+  "Auto setup": "Outomatiese opstelling",
+  "Manual setup": "Handmatige opstelling",
+  "Interval": "Interval",
+  "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "In die volgorde van die Parts-palet, die boonste ry die hoogste. Meshes in 'n tekenvolgordegroep behou hulle s'n."
 }
