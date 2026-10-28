@@ -11314,6 +11314,9 @@ impl EditorUi {
                 solo_view(s, &self.prefs).as_ref(),
                 // the atlas view leaves the art unclipped, as exported
                 &if self.atlas_view { Vec::new() } else { s.art_boxes() },
+                // Mesh Edit draws the mesh's art frozen above the scrim; the
+                // live one under it would show every edit re-cutting it
+                self.mesh_edit,
             );
             vp.add(cb);
         } else {
@@ -11328,7 +11331,7 @@ impl EditorUi {
                 .map(|d| (d, false))
                 .chain(draws.iter().filter(|d| soloed(d.mesh)).map(|d| (d, true)));
             for (d, front) in order {
-                if d.opacity <= 0.0 || d.indices.is_empty() {
+                if d.opacity <= 0.0 || d.indices.is_empty() || self.mesh_edit == Some(d.mesh) {
                     continue;
                 }
                 let texture = s.textures.get(d.texture as usize).and_then(|t| t.as_ref());

@@ -113,6 +113,7 @@ pub fn callback(
     pixels_per_point: f32,
     solo: Option<&Solo>,
     art: &[[f32; 4]],
+    hide: Option<usize>,
 ) -> egui::PaintCallback {
     let w = ((rect.width() * pixels_per_point) as u32).max(1);
     let h = ((rect.height() * pixels_per_point) as u32).max(1);
@@ -120,7 +121,7 @@ pub fn callback(
     let sy = -(scale * pixels_per_point / h as f32 * 2.0);
     let ox = (screen_origin.x - rect.min.x) * pixels_per_point / w as f32 * 2.0 - 1.0;
     let oy = 1.0 - (screen_origin.y - rect.min.y) * pixels_per_point / h as f32 * 2.0;
-    let mut packet = packet(puppet, w, h, [sx, sy, ox, oy], solo, art);
+    let mut packet = packet(puppet, w, h, [sx, sy, ox, oy], solo, art, hide);
     packet.textures = textures;
     packet.uploaded = Some(uploaded);
     packet.pages = pages;
@@ -238,7 +239,9 @@ pub struct Solo {
 /// order, mask sets where they change, offscreen part layers opened and
 /// landed around their meshes, and how canvas pixels map to the target.
 /// Textures and pages are left for the caller to attach. Each mesh shows
-/// only its own art, `art[mesh]` (none given: everything).
+/// only its own art, `art[mesh]` (none given: everything). `hide` is a
+/// mesh left undrawn (Mesh Edit draws its own copy), still a mask for the
+/// meshes clipped to it.
 pub fn packet(
     puppet: &Puppet,
     w: u32,
@@ -246,6 +249,7 @@ pub fn packet(
     to_ndc: [f32; 4],
     solo: Option<&Solo>,
     art: &[[f32; 4]],
+    hide: Option<usize>,
 ) -> Packet {
     let mut f = Frame {
         puppet,
@@ -264,7 +268,7 @@ pub fn packet(
     let mut front = Vec::new();
 
     for d in puppet.drawables() {
-        if d.opacity <= 0.0 || d.indices.is_empty() {
+        if d.opacity <= 0.0 || d.indices.is_empty() || hide == Some(d.mesh) {
             continue;
         }
         if solo.is_some_and(|s| s.meshes.contains(&d.mesh)) {
