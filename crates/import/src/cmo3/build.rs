@@ -155,7 +155,7 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
         });
     }
     let document = Document { width: cw, height: ch, layers: layers_in, folders: Vec::new() };
-    let imported = layers::build(&document)?;
+    let imported = layers::build_atlas(&document)?;
     let mut model: Model = imported.model;
     let c = model.canvas;
     let ppu = c.pixels_per_unit.max(1e-6);

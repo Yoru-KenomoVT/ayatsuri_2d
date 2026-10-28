@@ -41,16 +41,28 @@ impl AtlasWin {
         let sizes = s.page_sizes();
         let pieces = crate::atlas::pieces(s.puppet.model(), &sizes, &s.art_boxes());
         // the current state as the starting layout: pages at their largest size
-        let page_size = sizes
+        let page_size = pieces
             .iter()
+            .filter_map(|p| sizes.get(p.page))
             .map(|&(w, h)| w.max(h))
             .max()
             .unwrap_or(4096)
             .clamp(crate::atlas::MIN_PAGE, crate::atlas::MAX_PAGE);
-        let swatch = s.puppet.model().art_path_page.map(|p| p as usize);
-        let page_count = sizes.len().saturating_sub(usize::from(swatch.is_some())).max(1);
-        let places = pieces.iter().map(|p| Place { page: p.page, x: p.x, y: p.y }).collect();
-        AtlasWin {
+        // the pages meshes draw from now, in order (the old ones stay for
+        // undo, and the ArtPath swatch is not part of the atlas)
+        let mut used: Vec<usize> = pieces.iter().map(|p| p.page).collect();
+        used.sort_unstable();
+        used.dedup();
+        let page_count = used.len().max(1);
+        let places = pieces
+            .iter()
+            .map(|p| Place {
+                page: used.iter().position(|&u| u == p.page).unwrap_or(0),
+                x: p.x,
+                y: p.y,
+            })
+            .collect();
+        let mut win = AtlasWin {
             pieces,
             layout: Layout { page_size, pages: page_count, places },
             sizes,
@@ -64,7 +76,16 @@ impl AtlasWin {
             panning: false,
             custom: false,
             verified: false,
+        };
+        // the layers still on textures of their own: start from a packed
+        // layout to make the atlas from, at the size most models use
+        if s.atlas_pending() {
+            win.layout.page_size = crate::gpu_view::max_texture_side()
+                .unwrap_or(4096)
+                .clamp(crate::atlas::MIN_PAGE, 4096);
+            win.auto();
         }
+        win
     }
 
     fn auto(&mut self) {

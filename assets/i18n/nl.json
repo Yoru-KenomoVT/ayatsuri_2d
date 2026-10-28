@@ -1533,5 +1533,8 @@
   "Switch between Source Image and Texture Atlas": "Wisselen tussen bronafbeelding en textuuratlas",
   "Texture Atlas View": "Textuuratlasweergave",
   "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)": "Toon elke pixel die een mesh op de textuuratlas bedekt, zoals de export doet: een mesh die over een buur is gegroeid, toont die buur (T)",
-  "Texture Atlas View  ·  T to switch back": "Textuuratlasweergave  ·  T om terug te gaan"
+  "Texture Atlas View  ·  T to switch back": "Textuuratlasweergave  ·  T om terug te gaan",
+  "The texture atlas has not been made yet: each layer is still on a texture of its own": "De textuuratlas is nog niet gemaakt: elke laag staat nog op een eigen textuur",
+  "Make Texture Atlas…": "Textuuratlas maken…",
+  "Open the Texture Atlas to lay the layers out on pages": "Open de textuuratlas om de lagen op pagina's te plaatsen"
 }

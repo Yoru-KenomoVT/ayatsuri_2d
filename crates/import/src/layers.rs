@@ -1,8 +1,10 @@
 // Layered paint documents (PSD, Krita) into a fresh model, the way Cubism's
 // PSD import works: every group becomes a part, every visible pixel layer
-// an art mesh, and the layer pixels get trimmed and packed into texture
-// atlases. Meshes start as a two-triangle quad over the trimmed bounds;
-// riggers re-mesh them with the auto mesher.
+// an art mesh, and the layer pixels get trimmed. Each trimmed layer keeps a
+// texture of its own until the rigger makes the texture atlas (`build`);
+// `build_atlas` packs them onto atlas pages straight away. Meshes start as
+// a two-triangle quad over the trimmed bounds; riggers re-mesh them with
+// the auto mesher.
 
 use ayatsuri_format::model::{ArtMesh, Binding, Canvas, Model, Part};
 
@@ -182,7 +184,19 @@ fn pack(sizes: &[(u32, u32)]) -> Result<(Vec<Spot>, usize), ImportError> {
     Ok((out, page + 1))
 }
 
+/// Every layer on a texture of its own, the layer's trimmed pixels with
+/// `GAP` of clear space around them, as Cubism keeps the PSD's layers until
+/// its texture atlas is made.
 pub fn build(doc: &Document) -> Result<Imported, ImportError> {
+    build_with(doc, false)
+}
+
+/// The layers packed onto atlas pages of `PAGE` pixels.
+pub fn build_atlas(doc: &Document) -> Result<Imported, ImportError> {
+    build_with(doc, true)
+}
+
+fn build_with(doc: &Document, atlas: bool) -> Result<Imported, ImportError> {
     if doc.width == 0 || doc.height == 0 {
         return Err(ImportError::Export("document has no size".into()));
     }
@@ -266,7 +280,7 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
                 );
             }
         }
-        let limit = PAGE - GAP;
+        let limit = PAGE - 2 * GAP;
         if *tw > limit || *th > limit {
             let k = (limit as f32 / *tw as f32).min(limit as f32 / *th as f32);
             let (nw, nh) = (((*tw as f32 * k) as u32).max(1), ((*th as f32 * k) as u32).max(1));
@@ -276,10 +290,16 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
         tiles.push(img);
     }
     let sizes: Vec<(u32, u32)> = tiles.iter().map(|t| (t.width(), t.height())).collect();
-    let (spots, pages) = pack(&sizes)?;
-
-    let mut atlases: Vec<image::RgbaImage> =
-        (0..pages).map(|_| image::RgbaImage::new(PAGE, PAGE)).collect();
+    let (spots, mut atlases): (Vec<Spot>, Vec<image::RgbaImage>) = if atlas {
+        let (spots, pages) = pack(&sizes)?;
+        (spots, (0..pages).map(|_| image::RgbaImage::new(PAGE, PAGE)).collect())
+    } else {
+        // clear space all round, so filtering past the art's edge (and the
+        // page edge the sampler clamps to) only ever finds nothing
+        let spots = (0..sizes.len()).map(|i| (i, GAP, GAP)).collect();
+        let pages = sizes.iter().map(|&(w, h)| image::RgbaImage::new(w + 2 * GAP, h + 2 * GAP));
+        (spots, pages.collect())
+    };
 
     // model units: one unit per canvas height, origin at the canvas centre
     let ppu = doc.height as f32;
@@ -302,9 +322,13 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             clip_base = Some(n as u32);
             Vec::new()
         };
-        if let Some(atlas) = atlases.get_mut(*page) {
-            image::imageops::replace(atlas, tile, *ax as i64, *ay as i64);
-        }
+        let (pw, ph) = match atlases.get_mut(*page) {
+            Some(img) => {
+                image::imageops::replace(img, tile, *ax as i64, *ay as i64);
+                (img.width() as f32, img.height() as f32)
+            }
+            None => (PAGE as f32, PAGE as f32),
+        };
         // the quad, in canvas pixels then model units
         let left = (layer.x + *tx as i32) as f32;
         let top = (layer.y + *ty as i32) as f32;
@@ -317,9 +341,8 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             to_unit(right, bottom),
             to_unit(left, bottom),
         ];
-        let p = PAGE as f32;
-        let (u0, v0) = (*ax as f32 / p, *ay as f32 / p);
-        let (u1, v1) = ((*ax + tile.width()) as f32 / p, (*ay + tile.height()) as f32 / p);
+        let (u0, v0) = (*ax as f32 / pw, *ay as f32 / ph);
+        let (u1, v1) = ((*ax + tile.width()) as f32 / pw, (*ay + tile.height()) as f32 / ph);
         meshes.push(ArtMesh {
             id: id_of("ArtMesh", n),
             parent_part: part_for(&layer.groups, &mut parts),

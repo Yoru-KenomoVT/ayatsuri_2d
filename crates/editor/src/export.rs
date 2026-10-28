@@ -136,7 +136,11 @@ fn write(path: &Path, bytes: &[u8], written: &mut Vec<PathBuf>) -> Result<(), St
 pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, String> {
     let name = safe(&opt.name);
     // inherited clips go out as hidden helper masks, on copies
-    let expanded = crate::inherit_export::expand(s.puppet.model(), &s.texture_pngs)?;
+    // pages no mesh draws from (kept for undo while the model is open)
+    // stay behind
+    let mut base = s.puppet.model().clone();
+    let (base_pngs, _) = crate::session::prune_pages(&mut base, s.texture_pngs.clone());
+    let expanded = crate::inherit_export::expand(&base, &base_pngs)?;
     if let Some(e) = &expanded {
         log::info!(
             "export: {} inherited clip(s) carried by {} helper mask(s)",
@@ -144,8 +148,8 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
             e.helpers
         );
     }
-    let model = expanded.as_ref().map_or(s.puppet.model(), |e| &e.model);
-    let pngs = expanded.as_ref().map_or(&s.texture_pngs, |e| &e.pngs);
+    let model = expanded.as_ref().map_or(&base, |e| &e.model);
+    let pngs = expanded.as_ref().map_or(&base_pngs, |e| &e.pngs);
     let mut written = Vec::new();
 
     let moc = ayatsuri_import::to_moc3(model, opt.version).map_err(|e| e.to_string())?;

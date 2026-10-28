@@ -1533,5 +1533,8 @@
   "Switch between Source Image and Texture Atlas": "원본 이미지와 텍스처 아틀라스 전환",
   "Texture Atlas View": "텍스처 아틀라스 보기",
   "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)": "각 메시가 텍스처 아틀라스에서 덮는 모든 픽셀을 내보내기와 같이 표시합니다. 이웃까지 커진 메시는 이웃이 보입니다(T)",
-  "Texture Atlas View  ·  T to switch back": "텍스처 아틀라스 보기  ·  T로 돌아가기"
+  "Texture Atlas View  ·  T to switch back": "텍스처 아틀라스 보기  ·  T로 돌아가기",
+  "The texture atlas has not been made yet: each layer is still on a texture of its own": "텍스처 아틀라스가 아직 만들어지지 않았습니다. 각 레이어가 아직 자기 텍스처에 있습니다",
+  "Make Texture Atlas…": "텍스처 아틀라스 만들기…",
+  "Open the Texture Atlas to lay the layers out on pages": "텍스처 아틀라스를 열어 레이어를 페이지에 배치합니다"
 }

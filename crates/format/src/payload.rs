@@ -18,6 +18,9 @@ pub struct Meta {
     /// Record a timelapse beside this project: None follows the editor's
     /// Settings default.
     pub timelapse: Option<bool>,
+    /// The texture pages that hold one paint layer each, as it came in,
+    /// before the texture atlas was made from them. Empty in older files.
+    pub layer_pages: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

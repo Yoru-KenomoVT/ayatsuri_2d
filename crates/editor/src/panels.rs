@@ -10011,12 +10011,15 @@ impl EditorUi {
         let sizes = s.page_sizes();
         let art = s.art_boxes();
         let model = s.puppet.model();
-        if outgrown.is_empty() {
+        // layers still on their own textures have no neighbours to show;
+        // the atlas waits for the rigger to make it
+        if outgrown.is_empty() || s.atlas_pending() {
             return;
         }
         let pieces = crate::atlas::pieces(model, &sizes, &art);
-        let page = sizes
+        let page = pieces
             .iter()
+            .filter_map(|p| sizes.get(p.page))
             .map(|&(w, h)| w.max(h))
             .max()
             .unwrap_or(4096)
@@ -13663,12 +13666,14 @@ impl EditorUi {
             if let Some(p) = ptr
                 && view.contains(p)
             {
-                vp.circle_stroke(p, r, Stroke::new(1.2, theme::pal().accent));
+                brush_ring(ui.ctx(), view, p, r, theme::pal().accent);
                 if self.dbrush_hardness > 0.02 {
-                    vp.circle_stroke(
+                    brush_ring(
+                        ui.ctx(),
+                        view,
                         p,
                         r * self.dbrush_hardness,
-                        Stroke::new(1.0, theme::pal().accent.gamma_multiply(0.5)),
+                        theme::pal().accent.gamma_multiply(0.5),
                     );
                 }
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -13789,7 +13794,7 @@ impl EditorUi {
                 && resp.hovered()
             {
                 let col = if alt { theme::pal().text_faint } else { self.disp.weight_color };
-                vp.circle_stroke(p, r, Stroke::new(1.2, col.gamma_multiply(2.0)));
+                brush_ring(ui.ctx(), view, p, r, col.gamma_multiply(2.0));
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
         }
@@ -14602,7 +14607,7 @@ impl EditorUi {
                         self.erase_marked.clear();
                     }
                     if let Some(ptr) = ptr {
-                        vp.circle_stroke(ptr, r, Stroke::new(1.2, theme::pal().rotation_red));
+                        brush_ring(ui.ctx(), view, ptr, r, theme::pal().rotation_red);
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                     }
                 } else {
@@ -15062,14 +15067,46 @@ impl EditorUi {
                 MeshOp::Connect(mi, a, b) => connect_pair(&mut self.pending_edges, s, mi, a, b),
                 MeshOp::Cut(mi, a, b) => {
                     let key = (a.min(b), a.max(b));
+                    let has_edge = ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b);
                     let pending = self.pending_edges.entry(mi).or_default();
                     if let Some(at) = pending.iter().position(|&e| e == key) {
                         pending.remove(at);
                         log::debug!("mesh {mi}: line {a}-{b} removed");
-                        true
-                    } else if ayatsuri_core::edit::has_edge(s.puppet.model(), mi, a, b) {
+                        // a line drawn over an edge (an undone cut) goes with it
+                        !has_edge || s.edit(|m| ayatsuri_core::edit::remove_edge(m, mi, a, b))
+                    } else if has_edge {
+                        // the faces on the edge go with it; their other sides
+                        // stay as lines, as Cubism keeps them
+                        let sides: Vec<(u16, u16)> = s
+                            .puppet
+                            .model()
+                            .art_meshes
+                            .get(mi)
+                            .map(|m| {
+                                m.indices
+                                    .as_chunks::<3>()
+                                    .0
+                                    .iter()
+                                    .filter(|t| t.contains(&a) && t.contains(&b))
+                                    .flat_map(|&[x, y, z]| [(x, y), (y, z), (z, x)])
+                                    .map(|(x, y)| (x.min(y), x.max(y)))
+                                    .filter(|&e| e != key)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         log::debug!("mesh {mi}: edge {a}-{b} cut");
-                        s.edit(|m| ayatsuri_core::edit::remove_edge(m, mi, a, b))
+                        let ok = s.edit(|m| ayatsuri_core::edit::remove_edge(m, mi, a, b));
+                        if ok {
+                            let model = s.puppet.model();
+                            for (x, y) in sides {
+                                if !ayatsuri_core::edit::has_edge(model, mi, x, y)
+                                    && !pending.contains(&(x, y))
+                                {
+                                    pending.push((x, y));
+                                }
+                            }
+                        }
+                        ok
                     } else {
                         log::debug!("mesh {mi}: {a} and {b} were not connected");
                         true
@@ -18213,6 +18250,16 @@ fn show_in_folder(path: &Path) -> std::io::Result<()> {
     Command::new("xdg-open").arg(folder).spawn().map(|_| ())
 }
 
+/// A brush's circle under the pointer, drawn above the canvas and the
+/// mesh overlay with a dark edge, so it shows over any art.
+fn brush_ring(ctx: &egui::Context, view: Rect, at: Pos2, r: f32, color: Color32) {
+    let painter = ctx
+        .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("brush-ring")))
+        .with_clip_rect(view);
+    painter.circle_stroke(at, r, Stroke::new(3.0, Color32::from_black_alpha(140)));
+    painter.circle_stroke(at, r, Stroke::new(1.4, color));
+}
+
 #[cfg(test)]
 mod pair_color_tests {
     use super::*;
@@ -19653,6 +19700,13 @@ mod atlas_leak_tests {
         let art = ayatsuri_import::from_layers(&doc).unwrap();
         let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
         s.add_imported(&ctx, art, std::path::Path::new("a.psd")).unwrap();
+        // the layers come in on pages of their own; the atlas is made first
+        assert!(s.atlas_pending());
+        let sizes = s.page_sizes();
+        let pieces = crate::atlas::pieces(s.puppet.model(), &sizes, &s.art_boxes());
+        let layout = crate::atlas::auto_layout(&pieces, 256, false).unwrap();
+        s.apply_atlas(&ctx, &pieces, &layout).unwrap();
+        assert!(!s.atlas_pending());
         let red = (0..2).find(|&i| s.mesh_name(i) == "Red").unwrap();
         let blue = 1 - red;
         // the red mesh's right edge moves out over the blue layer's art
