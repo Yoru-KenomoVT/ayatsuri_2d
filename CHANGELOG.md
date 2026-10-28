@@ -138,6 +138,10 @@ meshes and the Parts palette, and the requests from Discord testing.
   Such a copy also leaves the original's clip group, so it can be clipped
   by other meshes without changing the original. A pasted copy takes a new
   `ArtMeshN` ID instead of `<id>_copy`.
+- **Clip by's list did not pick**: a click on a mesh in the list took the
+  focus off the field first, which read the typed text as an ID, warned
+  that no mesh had it and closed the list before the click landed. The
+  list now stays open for the click and adds the mesh clicked.
 - **Clip by took only mesh IDs**: a typed name (`eye`, or one with spaces
   like `Highlight L T1`) now picks that mesh when the field is left, not
   only when Enter is pressed.

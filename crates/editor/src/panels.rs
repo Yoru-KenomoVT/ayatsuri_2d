@@ -19642,7 +19642,13 @@ fn clip_by_row(
             })
             .collect();
         matches.sort_by_key(|&mi| !is_path(mi));
-        if r.lost_focus() {
+        // a press on the list takes the focus off the field first: that is
+        // a pick on its way, not the end of typing, so the list stays and
+        // the text waits for the click
+        let hover = suggest.with("hover");
+        let over_list = ui.ctx().data(|d| d.get_temp::<bool>(hover)).unwrap_or(false);
+        ui.ctx().data_mut(|d| d.insert_temp(hover, false));
+        if r.lost_focus() && !(over_list && !enter && !esc) {
             if esc {
                 text.clear();
             } else if !text.trim().is_empty() {
@@ -19684,6 +19690,8 @@ fn clip_by_row(
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.set_width(240.0);
+                let over = ui.ui_contains_pointer();
+                ui.ctx().data_mut(|d| d.insert_temp(hover, over));
                 if matches.is_empty() {
                     ui.weak(crate::i18n::tr("No other mesh matches"));
                     return;
