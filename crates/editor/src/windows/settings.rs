@@ -755,9 +755,7 @@ impl EditorUi {
         row(
             ui,
             crate::i18n::tr("Pen mode"),
-            crate::i18n::tr(
-                "Looser clicks for a pen: a tap may drift a little, a double tap take longer",
-            ),
+            crate::i18n::tr("A pen's double tap may take longer"),
             |ui| {
                 save |= ui.checkbox(&mut self.prefs.pen_mode, "").changed();
             },

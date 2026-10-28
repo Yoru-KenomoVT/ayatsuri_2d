@@ -1491,7 +1491,6 @@
   "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "キャンバスの右クリックメニューの上部に、ポインタ下のメッシュの上にあるデフォーマを表示して選択できます",
   "PEN TABLET": "ペンタブレット",
   "Pen mode": "ペンモード",
-  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "ペン向けにクリック判定をゆるめます：タップが少しずれても、ダブルタップが遅くても認識します",
   "Pressure": "筆圧",
   "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "筆圧が変形ブラシ、ブラシ選択、グルーのウェイトブラシ、メッシュ消しゴムで何を変えるか",
   "On": "オン",
@@ -1536,5 +1535,6 @@
   "Texture Atlas View  ·  T to switch back": "テクスチャアトラス表示  ·  T で戻る",
   "The texture atlas has not been made yet: each layer is still on a texture of its own": "テクスチャアトラスがまだ作成されていません。各レイヤーはまだそれぞれのテクスチャにあります",
   "Make Texture Atlas…": "テクスチャアトラスを作成…",
-  "Open the Texture Atlas to lay the layers out on pages": "テクスチャアトラスを開いてレイヤーをページに配置します"
+  "Open the Texture Atlas to lay the layers out on pages": "テクスチャアトラスを開いてレイヤーをページに配置します",
+  "A pen's double tap may take longer": "ペンのダブルタップの間隔を長めに取ります"
 }

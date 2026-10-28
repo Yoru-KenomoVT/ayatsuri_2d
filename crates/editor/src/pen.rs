@@ -4,8 +4,7 @@
 // reads it (the tablet's device, the system's events), since the window
 // layer does not. Here it is read each frame, smoothed against jitter, and shaped
 // by the user's curve; the brushes ask for it as a size and a strength
-// factor. Pen mode also loosens what counts as a click, since a pen hand
-// drifts a few pixels on a tap.
+// factor. Pen mode also gives a double tap longer.
 
 use egui::{Event, TouchPhase};
 
@@ -140,10 +139,12 @@ pub(crate) fn shape(p: f32, curve: f32, min: f32) -> f32 {
     min + (1.0 - min) * p.clamp(0.0, 1.0).powf(curve.max(0.05))
 }
 
-/// Pen mode loosens clicks for a pen hand: a tap may drift further and a
-/// double tap may take longer. Set every frame; cheap when unchanged.
+/// Pen mode gives a pen hand longer for a double tap. The click distance
+/// stays as it is: egui starts a drag only past it, so widening it made
+/// every drag start late, for the mouse too. Set every frame; cheap when
+/// unchanged.
 pub(crate) fn apply_click_options(ctx: &egui::Context, pen_mode: bool) {
-    let (dist, double) = if pen_mode { (14.0, 0.45) } else { (6.0, 0.3) };
+    let (dist, double) = (6.0, if pen_mode { 0.45 } else { 0.3 });
     let differs = ctx.options(|o| {
         o.input_options.max_click_dist != dist || o.input_options.max_double_click_delay != double
     });

@@ -1491,7 +1491,6 @@
   "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "在画布右键菜单顶部显示指针下网格之上的变形器，可从中选择",
   "PEN TABLET": "数位板",
   "Pen mode": "笔模式",
-  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "为笔放宽点击判定：轻点时稍有偏移、双击稍慢也能识别",
   "Pressure": "压感",
   "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "压感在变形笔刷、笔刷选择、黏合权重笔刷和网格橡皮擦上改变什么",
   "On": "开启",
@@ -1536,5 +1535,6 @@
   "Texture Atlas View  ·  T to switch back": "纹理集视图  ·  按 T 返回",
   "The texture atlas has not been made yet: each layer is still on a texture of its own": "纹理集尚未生成：每个图层仍在各自的纹理上",
   "Make Texture Atlas…": "生成纹理集…",
-  "Open the Texture Atlas to lay the layers out on pages": "打开纹理集，将图层排布到页面上"
+  "Open the Texture Atlas to lay the layers out on pages": "打开纹理集，将图层排布到页面上",
+  "A pen's double tap may take longer": "允许笔的双击间隔更长"
 }

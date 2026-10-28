@@ -1491,7 +1491,6 @@
   "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "캔버스 우클릭 메뉴 맨 위에 포인터 아래 메시의 상위 디포머를 표시해 선택할 수 있습니다",
   "PEN TABLET": "펜 태블릿",
   "Pen mode": "펜 모드",
-  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "펜에 맞게 클릭 판정을 느슨하게 합니다: 탭이 조금 움직여도, 더블 탭이 느려도 인식합니다",
   "Pressure": "필압",
   "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "필압이 변형 브러시, 브러시 선택, 글루 가중치 브러시, 메시 지우개에서 무엇을 바꾸는지",
   "On": "켜기",
@@ -1536,5 +1535,6 @@
   "Texture Atlas View  ·  T to switch back": "텍스처 아틀라스 보기  ·  T로 돌아가기",
   "The texture atlas has not been made yet: each layer is still on a texture of its own": "텍스처 아틀라스가 아직 만들어지지 않았습니다. 각 레이어가 아직 자기 텍스처에 있습니다",
   "Make Texture Atlas…": "텍스처 아틀라스 만들기…",
-  "Open the Texture Atlas to lay the layers out on pages": "텍스처 아틀라스를 열어 레이어를 페이지에 배치합니다"
+  "Open the Texture Atlas to lay the layers out on pages": "텍스처 아틀라스를 열어 레이어를 페이지에 배치합니다",
+  "A pen's double tap may take longer": "펜의 더블 탭 간격을 더 길게 허용합니다"
 }
