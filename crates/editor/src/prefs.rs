@@ -182,8 +182,7 @@ pub struct Prefs {
     /// (1 to 100; 0 is the default, 40).
     pub smooth_drag: bool,
     pub smooth_drag_amount: u32,
-    /// Pen tablet: looser clicks for a pen hand (a tap may drift further,
-    /// a double tap take longer).
+    /// Pen tablet: a double tap may take longer.
     pub pen_mode: bool,
     /// Ignore pen pressure altogether.
     pub pen_pressure_off: bool,

@@ -107,6 +107,11 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Dragging felt wrong with Pen mode on**, pen and mouse alike: it let a
+  press drift 14 px before a drag began, so every drag started late. In
+  Mesh Edit the point was then missed, or trailed the pointer and its
+  texture shifted. Pen mode no longer changes when a drag starts, and
+  Mesh Edit grabs the point where the press began.
 - **Brush circles** (Mesh Edit's eraser, Deform Brush, weight painting)
   could be hidden by the art under them; they now draw on top, with a
   dark edge.
@@ -182,7 +187,7 @@ meshes and the Parts palette, and the requests from Discord testing.
   can size and weight the Deform Brush, Brush Selection, the glue weight
   brush and the mesh eraser, through a pressure curve and a lightest-touch
   floor, smoothed against jitter, with a meter to test the pen. Pen mode
-  loosens clicks for a pen hand. Pressure works on Windows and Linux and
+  gives a pen's double tap longer. Pressure works on Windows and Linux and
   is in for macOS but untested there. On Wayland the pen comes through the
   tablet protocol, as in Krita, so it clicks and drags even where the
   compositor's own fallback drops a pen's clicks (Hyprland 0.56); on X11

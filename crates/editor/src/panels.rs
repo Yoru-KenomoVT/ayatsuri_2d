@@ -14811,9 +14811,21 @@ impl EditorUi {
                         Some(MeshOp::EraseMany(mi, self.mesh_picked.iter().copied().collect()));
                 }
                 // points drag in Select and in the point and line tools
+                // a drag only starts once the pointer has gone past the click
+                // distance (wider in pen mode), so the point it grabs is the
+                // one where the press began, and that first stretch counts
+                let press = ui.ctx().input(|i| i.pointer.press_origin());
+                let near_press = press.and_then(|o| {
+                    screen_pts
+                        .iter()
+                        .enumerate()
+                        .map(|(vi, sp)| (vi, sp.distance(o)))
+                        .filter(|&(_, d)| d < reach)
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                });
                 if !space && !alt && matches!(self.mesh_mode, 0 | 1 | 3 | 4) {
                     if resp.drag_started()
-                        && let Some((vi, _)) = near
+                        && let Some((vi, _)) = near_press.or(near)
                         && let Some(local) = s.puppet.mesh_local_positions(mi)
                     {
                         let m_uvs = s
@@ -14838,7 +14850,10 @@ impl EditorUi {
                     {
                         // screen motion to model units, then through the
                         // parent deformer's local jacobian to parent space
-                        let delta = resp.drag_delta();
+                        let delta = match (resp.drag_started(), press, ptr) {
+                            (true, Some(o), Some(p)) => p - o,
+                            _ => resp.drag_delta(),
+                        };
                         let mdx = delta.x / (scale * c.pixels_per_unit);
                         let mdy = delta.y / (scale * c.pixels_per_unit);
                         let at = d.vertex * 2;

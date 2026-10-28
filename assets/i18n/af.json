@@ -1491,7 +1491,6 @@
   "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from": "Bo-aan die doek se regsklikkieslys: die vervormers bo die maas onder die wyser, om uit te kies",
   "PEN TABLET": "PENTABLET",
   "Pen mode": "Penmodus",
-  "Looser clicks for a pen: a tap may drift a little, a double tap take longer": "Losser klikke vir 'n pen: 'n tik mag effens skuif, 'n dubbeltik mag langer neem",
   "Pressure": "Druk",
   "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser": "Wat pendruk verander aan die vervormkwas, kwaskeuse, die gom-gewigkwas en die maas-uitveër",
   "On": "Aan",
@@ -1536,5 +1535,6 @@
   "Texture Atlas View  ·  T to switch back": "Tekstuuratlas-aansig  ·  T om terug te gaan",
   "The texture atlas has not been made yet: each layer is still on a texture of its own": "Die tekstuuratlas is nog nie gemaak nie: elke laag is nog op sy eie tekstuur",
   "Make Texture Atlas…": "Maak tekstuuratlas…",
-  "Open the Texture Atlas to lay the layers out on pages": "Maak die tekstuuratlas oop om die lae op bladsye uit te lê"
+  "Open the Texture Atlas to lay the layers out on pages": "Maak die tekstuuratlas oop om die lae op bladsye uit te lê",
+  "A pen's double tap may take longer": "'n Pen se dubbeltik mag langer neem"
 }
