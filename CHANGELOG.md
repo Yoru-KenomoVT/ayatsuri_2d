@@ -123,6 +123,11 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **Temporary Deform Tool**: Perspective has the side handles too, as in
   Cubism, sliding that side along itself; handles are bigger squares,
   grab where the press began, and show a hand cursor.
+- **Perspective and Distort move the art as Cubism's do**: evenly, with
+  the box's middle at the average of its corners, instead of toward a
+  vanishing point. A Perspective corner keeps to the side the drag mostly
+  goes along again, its partner mirroring it, and the anchor rides with
+  the box.
 - **Brush circles** (Mesh Edit's eraser, Deform Brush, weight painting)
   could be hidden by the art under them; they now draw on top, with a
   dark edge.

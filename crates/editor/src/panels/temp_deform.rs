@@ -159,70 +159,6 @@ impl ViewXf {
 
 // ---- the maths -------------------------------------------------------
 
-type M3 = [[f64; 3]; 3];
-
-/// The projective map taking the unit square's corners (0,0) (1,0) (1,1)
-/// (0,1) to `q`'s.
-fn square_to_quad(q: &[V; 4]) -> M3 {
-    let [(x0, y0), (x1, y1), (x2, y2), (x3, y3)] = q.map(|p| (f64::from(p.x), f64::from(p.y)));
-    let (sx, sy) = (x0 - x1 + x2 - x3, y0 - y1 + y2 - y3);
-    if sx.abs() < 1e-12 && sy.abs() < 1e-12 {
-        return [[x1 - x0, x2 - x1, x0], [y1 - y0, y2 - y1, y0], [0.0, 0.0, 1.0]];
-    }
-    let (dx1, dx2, dy1, dy2) = (x1 - x2, x3 - x2, y1 - y2, y3 - y2);
-    let den = dx1 * dy2 - dx2 * dy1;
-    let g = (sx * dy2 - dx2 * sy) / den;
-    let h = (dx1 * sy - sx * dy1) / den;
-    [
-        [x1 - x0 + g * x1, x3 - x0 + h * x3, x0],
-        [y1 - y0 + g * y1, y3 - y0 + h * y3, y0],
-        [g, h, 1.0],
-    ]
-}
-
-fn mul(a: &M3, b: &M3) -> M3 {
-    let [b0, b1, b2] = *b;
-    a.map(|[x, y, z]| {
-        let mut row = [0.0; 3];
-        for (o, ((p, q), r)) in row.iter_mut().zip(b0.iter().zip(b1).zip(b2)) {
-            *o = x * p + y * q + z * r;
-        }
-        row
-    })
-}
-
-fn invert(m: &M3) -> Option<M3> {
-    let [[a, b, c], [d, e, f], [g, h, i]] = *m;
-    let (ca, cb, cc) = (e * i - f * h, f * g - d * i, d * h - e * g);
-    let det = a * ca + b * cb + c * cc;
-    if det.abs() < 1e-18 || !det.is_finite() {
-        return None;
-    }
-    Some([
-        [ca / det, (c * h - b * i) / det, (b * f - c * e) / det],
-        [cb / det, (a * i - c * g) / det, (c * d - a * f) / det],
-        [cc / det, (b * g - a * h) / det, (a * e - b * d) / det],
-    ])
-}
-
-/// The map taking quad `from` onto quad `to`.
-fn quad_map(from: &[V; 4], to: &[V; 4]) -> Option<M3> {
-    Some(mul(&square_to_quad(to), &invert(&square_to_quad(from))?))
-}
-
-fn apply(m: &M3, p: V) -> V {
-    let (x, y) = (f64::from(p.x), f64::from(p.y));
-    let w = m[2][0] * x + m[2][1] * y + m[2][2];
-    if w.abs() < 1e-9 {
-        return p;
-    }
-    let q = vec2(
-        ((m[0][0] * x + m[0][1] * y + m[0][2]) / w) as f32,
-        ((m[1][0] * x + m[1][1] * y + m[1][2]) / w) as f32,
-    );
-    if q.x.is_finite() && q.y.is_finite() { q } else { p }
-}
-
 /// A grid point at `uv` (cell units); outside the grid the edge cells
 /// carry on.
 fn grid_eval(now: &[V], cols: usize, rows: usize, uv: V) -> V {
@@ -232,6 +168,16 @@ fn grid_eval(now: &[V], cols: usize, rows: usize, uv: V) -> V {
     let at = |c: usize, r: usize| now.get(r * (cols + 1) + c).copied().unwrap_or(V::ZERO);
     let (p00, p10, p01, p11) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
     p00 * (1.0 - fu) * (1.0 - fv) + p10 * fu * (1.0 - fv) + p01 * (1.0 - fu) * fv + p11 * fu * fv
+}
+
+/// A point bound in box `rest` carried to box `now` (corners clockwise
+/// from the top left), bilinearly, as Cubism's Perspective and Distort
+/// move the art: rows and columns stay evenly spaced, and the box's
+/// middle goes to the average of its corners.
+fn quad_carry(rest: &[V; 4], now: &[V; 4], p: V) -> V {
+    let grid = |q: &[V; 4]| [q[0], q[1], q[3], q[2]];
+    let uv = grid_find(&grid(rest), 1, 1, p, vec2(0.5, 0.5));
+    grid_eval(&grid(now), 1, 1, uv)
 }
 
 /// The grid place of world point `p`, by Newton from `guess`.
@@ -384,10 +330,9 @@ impl Frame {
     /// Where the bound points are now.
     fn map(&self, base: &[V]) -> Vec<V> {
         match self {
-            Frame::Quad { rest, now, .. } => match quad_map(rest, now) {
-                Some(m) => base.iter().map(|&p| apply(&m, p)).collect(),
-                None => base.to_vec(),
-            },
+            Frame::Quad { rest, now, .. } => {
+                base.iter().map(|&p| quad_carry(rest, now, p)).collect()
+            }
             Frame::Grid { cols, rows, now, uv } => {
                 uv.iter().map(|&q| grid_eval(now, *cols, *rows, q)).collect()
             }
@@ -491,13 +436,16 @@ fn quad_drag(
                 let h = (q0[1] - q0[0]).normalized();
                 let v = (q0[3] - q0[0]).normalized();
                 let (dh, dv) = (d.dot(h), d.dot(v));
-                // the corner follows the pointer on both axes; its partner
-                // across the top or bottom edge mirrors the sideways part
-                // and its partner down the side mirrors the up and down
-                // part, so a diagonal drag tilts both ways at once
-                bump(&mut q, i, h * dh + v * dv);
-                bump(&mut q, i ^ 1, -(h * dh));
-                bump(&mut q, 3 - i, -(v * dv));
+                // as Cubism's: the corner keeps to one of its sides, the
+                // way the drag mostly goes, and the corner across that side
+                // mirrors it, so the box tapers on that side only
+                if dh.abs() >= dv.abs() {
+                    bump(&mut q, i, h * dh);
+                    bump(&mut q, i ^ 1, -(h * dh));
+                } else {
+                    bump(&mut q, i, v * dv);
+                    bump(&mut q, 3 - i, -(v * dv));
+                }
             }
             _ => bump(&mut q, i, d),
         },
@@ -640,7 +588,15 @@ impl TempDeform {
         let delta = to - d.from;
         match (&mut self.frame, &d.frame) {
             (Frame::Quad { now, anchor, rest }, Frame::Quad { now: q0, anchor: a0, .. }) => {
-                let (q, a) = quad_drag(self.method, q0, *a0, d.grab, d.mode, d.from, to, snap);
+                let (q, mut a) = quad_drag(self.method, q0, *a0, d.grab, d.mode, d.from, to, snap);
+                // the anchor rides with the box as Cubism's does, except
+                // where it is the pivot (Rotation, Enlarge/Reduce)
+                if d.mode == Mode::Deform
+                    && d.grab != Grab::Anchor
+                    && matches!(self.method, Method::Free | Method::Perspective | Method::Distort)
+                {
+                    a = quad_carry(q0, &q, *a0);
+                }
                 *now = q;
                 *anchor = a;
                 if d.mode == Mode::Control || d.grab == Grab::Anchor {
@@ -1197,25 +1153,6 @@ mod tests {
     }
 
     #[test]
-    fn quad_map_is_identity_on_the_same_box() {
-        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
-        let m = quad_map(&q, &q).unwrap();
-        for p in [vec2(1.0, 1.0), vec2(-3.0, 7.0), vec2(4.0, 2.0)] {
-            assert!(close(apply(&m, p), p));
-        }
-    }
-
-    #[test]
-    fn quad_map_takes_corners_to_corners() {
-        let from = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
-        let to = [vec2(1.0, 1.0), vec2(6.0, 0.0), vec2(5.0, 4.0), vec2(0.5, 3.0)];
-        let m = quad_map(&from, &to).unwrap();
-        for i in 0..4 {
-            assert!(close(apply(&m, from[i]), to[i]), "corner {i}");
-        }
-    }
-
-    #[test]
     fn zoom_scales_about_the_anchor() {
         let q = [vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0)];
         let (n, a) = quad_drag(
@@ -1289,24 +1226,46 @@ mod tests {
     }
 
     #[test]
-    fn perspective_follows_a_diagonal_drag_on_both_axes() {
+    fn perspective_corner_keeps_to_the_side_the_drag_mostly_goes() {
         let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
-        let (n, _) = quad_drag(
-            Method::Perspective,
-            &q,
-            vec2(2.0, 1.0),
-            Grab::Corner(0),
-            Mode::Deform,
-            vec2(0.0, 0.0),
-            vec2(1.0, 0.5),
-            false,
-        );
-        // the corner goes where the pointer went; the top partner mirrors
-        // the sideways part, the side partner the downward part
-        assert!(close(n[0], vec2(1.0, 0.5)));
-        assert!(close(n[1], vec2(3.0, 0.0)));
-        assert!(close(n[3], vec2(0.0, 1.5)));
-        assert!(close(n[2], q[2]));
+        let drag = |to: V| {
+            quad_drag(
+                Method::Perspective,
+                &q,
+                vec2(2.0, 1.0),
+                Grab::Corner(0),
+                Mode::Deform,
+                vec2(0.0, 0.0),
+                to,
+                false,
+            )
+            .0
+        };
+        // mostly sideways: along the top, the top partner mirrors
+        let n = drag(vec2(1.0, 0.4));
+        assert!(close(n[0], vec2(1.0, 0.0)) && close(n[1], vec2(3.0, 0.0)));
+        assert!(close(n[2], q[2]) && close(n[3], q[3]));
+        // mostly down: along the side, the side partner mirrors
+        let n = drag(vec2(0.2, 0.5));
+        assert!(close(n[0], vec2(0.0, 0.5)) && close(n[3], vec2(0.0, 1.5)));
+        assert!(close(n[1], q[1]) && close(n[2], q[2]));
+    }
+
+    #[test]
+    fn the_box_carries_art_bilinearly() {
+        let rest = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        // the top narrowed to a quarter of its width
+        let now = [vec2(1.5, 0.0), vec2(2.5, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        // the middle goes to the corners' average, not a vanishing point
+        assert!(close(quad_carry(&rest, &now, vec2(2.0, 1.0)), vec2(2.0, 1.0)));
+        // halfway down the left side stays halfway down the new side
+        assert!(close(quad_carry(&rest, &now, vec2(0.0, 1.0)), vec2(0.75, 1.0)));
+        // corners go to corners
+        for i in 0..4 {
+            assert!(close(quad_carry(&rest, &now, rest[i]), now[i]), "corner {i}");
+        }
+        // an unchanged box leaves points where they are
+        assert!(close(quad_carry(&rest, &rest, vec2(3.1, 0.7)), vec2(3.1, 0.7)));
     }
 
     #[test]
