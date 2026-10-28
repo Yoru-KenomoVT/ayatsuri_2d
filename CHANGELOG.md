@@ -112,6 +112,12 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Perspective corners no longer jump mid-drag**: a corner picked the
+  side it keeps to from the drag every frame, so a drag near the diagonal
+  flipped the taper from one side to the other. The side is now chosen
+  once the drag has gone 6 px and holds until release. A drag that would
+  fold the box over itself is not taken, so the art cannot turn inside out
+  (as in Krita).
 - **Pasted copies clip to each other**: copy an eye's white and iris
   together and the pasted iris clips to the pasted white, not the old one.
   Such a copy also leaves the original's clip group, so it can be clipped
