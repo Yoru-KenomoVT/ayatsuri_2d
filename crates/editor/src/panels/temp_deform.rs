@@ -112,6 +112,10 @@ struct Drag {
     /// Bound positions when the drag began.
     start: Vec<V>,
     live: Vec<Option<LiveDrag>>,
+    /// Perspective: the side a corner keeps to (true along the top and
+    /// bottom), chosen once the drag has gone a few pixels and kept until
+    /// release, so the taper cannot flip sides mid-drag.
+    side: Option<bool>,
 }
 
 pub(super) struct TempDeform {
@@ -158,6 +162,10 @@ impl ViewXf {
 }
 
 // ---- the maths -------------------------------------------------------
+
+/// How far (screen pixels) a Perspective corner drag goes before its side
+/// is chosen for good.
+const SIDE_PX: f32 = 6.0;
 
 /// A grid point at `uv` (cell units); outside the grid the edge cells
 /// carry on.
@@ -369,9 +377,32 @@ impl Frame {
     }
 }
 
+/// Whether a Perspective corner drag of `d` goes mostly along the top and
+/// bottom of box `q0` (else along its sides).
+fn along_top(q0: &[V; 4], d: V) -> bool {
+    let h = (q0[1] - q0[0]).normalized();
+    let v = (q0[3] - q0[0]).normalized();
+    d.dot(h).abs() >= d.dot(v).abs()
+}
+
+/// Whether the box's corners turn the same way all round: a box folded
+/// over itself (or flat) cannot carry art, as Krita refuses it too.
+fn convex(q: &[V; 4]) -> bool {
+    let turn = |i: usize| {
+        let (a, b, c) = (at(q, i), at(q, (i + 1) % 4), at(q, (i + 2) % 4));
+        let (u, w) = (b - a, c - b);
+        u.x * w.y - u.y * w.x
+    };
+    let t: Vec<f32> = (0..4).map(turn).collect();
+    let scale = q.iter().map(|p| (*p - q[0]).length_sq()).fold(0.0, f32::max);
+    let eps = 1e-6 * scale.max(1e-12);
+    t.iter().all(|&x| x > eps) || t.iter().all(|&x| x < -eps)
+}
+
 #[allow(clippy::too_many_arguments)]
-/// The box after dragging `grab` from `from` to `to` (world units).
-fn quad_drag(
+/// The box after dragging `grab` from `from` to `to` (world units), a
+/// Perspective corner kept to `side` when it is set (see `Drag::side`).
+fn quad_drag_side(
     method: Method,
     q0: &[V; 4],
     a0: V,
@@ -380,6 +411,7 @@ fn quad_drag(
     from: V,
     to: V,
     snap: bool,
+    side: Option<bool>,
 ) -> ([V; 4], V) {
     let d = to - from;
     let mut q = *q0;
@@ -439,7 +471,7 @@ fn quad_drag(
                 // as Cubism's: the corner keeps to one of its sides, the
                 // way the drag mostly goes, and the corner across that side
                 // mirrors it, so the box tapers on that side only
-                if dh.abs() >= dv.abs() {
+                if side.unwrap_or(dh.abs() >= dv.abs()) {
                     bump(&mut q, i, h * dh);
                     bump(&mut q, i ^ 1, -(h * dh));
                 } else {
@@ -577,7 +609,17 @@ impl TempDeform {
         }
     }
 
-    fn drag_to(&mut self, to: V, shift: bool) {
+    fn drag_to(&mut self, to: V, shift: bool, px: f32) {
+        if let Some(d) = &mut self.drag
+            && d.side.is_none()
+            && self.method == Method::Perspective
+            && d.mode == Mode::Deform
+            && matches!(d.grab, Grab::Corner(_))
+            && let Frame::Quad { now: q0, .. } = &d.frame
+            && (to - d.from).length() * px >= SIDE_PX
+        {
+            d.side = Some(along_top(q0, to - d.from));
+        }
         let Some(d) = &self.drag else { return };
         // Shift: turning snaps the angle, anything else moves straight
         let turning = matches!(d.grab, Grab::Stalk)
@@ -588,7 +630,12 @@ impl TempDeform {
         let delta = to - d.from;
         match (&mut self.frame, &d.frame) {
             (Frame::Quad { now, anchor, rest }, Frame::Quad { now: q0, anchor: a0, .. }) => {
-                let (q, mut a) = quad_drag(self.method, q0, *a0, d.grab, d.mode, d.from, to, snap);
+                let (q, mut a) =
+                    quad_drag_side(self.method, q0, *a0, d.grab, d.mode, d.from, to, snap, d.side);
+                // a drag that would fold the box over is not taken
+                if convex(q0) && !convex(&q) {
+                    return;
+                }
                 // the anchor rides with the box as Cubism's does, except
                 // where it is the pivot (Rotation, Enlarge/Reduce)
                 if d.mode == Mode::Deform
@@ -928,15 +975,22 @@ impl EditorUi {
             } else {
                 Vec::new()
             };
-            td.drag =
-                Some(Drag { grab, mode, from: xf.world(p), frame: td.frame.clone(), start, live });
+            td.drag = Some(Drag {
+                grab,
+                mode,
+                from: xf.world(p),
+                frame: td.frame.clone(),
+                start,
+                live,
+                side: None,
+            });
         }
 
         if td.drag.is_some()
             && resp.dragged()
             && let Some(p) = ptr
         {
-            td.drag_to(xf.world(p), mods.shift);
+            td.drag_to(xf.world(p), mods.shift, xf.px());
             let now = td.frame.map(&td.base);
             if let Some(d) = &td.drag
                 && !d.live.is_empty()
@@ -1152,6 +1206,20 @@ impl EditorUi {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
+    fn quad_drag(
+        method: Method,
+        q0: &[V; 4],
+        a0: V,
+        grab: Grab,
+        mode: Mode,
+        from: V,
+        to: V,
+        snap: bool,
+    ) -> ([V; 4], V) {
+        quad_drag_side(method, q0, a0, grab, mode, from, to, snap, None)
+    }
+
     fn close(a: V, b: V) -> bool {
         (a - b).length() < 1e-3
     }
@@ -1263,6 +1331,42 @@ mod tests {
         let n = drag(vec2(0.2, 0.5));
         assert!(close(n[0], vec2(0.0, 0.5)) && close(n[3], vec2(0.0, 1.5)));
         assert!(close(n[1], q[1]) && close(n[2], q[2]));
+    }
+
+    #[test]
+    fn a_locked_perspective_side_holds_across_the_diagonal() {
+        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        let drag = |to: V, side| {
+            quad_drag_side(
+                Method::Perspective,
+                &q,
+                vec2(2.0, 1.0),
+                Grab::Corner(0),
+                Mode::Deform,
+                vec2(0.0, 0.0),
+                to,
+                false,
+                side,
+            )
+            .0
+        };
+        // begun sideways, the drag turns mostly down: still along the top
+        assert!(along_top(&q, vec2(1.0, 0.4)));
+        let n = drag(vec2(0.3, 0.6), Some(true));
+        assert!(close(n[0], vec2(0.3, 0.0)) && close(n[1], vec2(3.7, 0.0)));
+        assert!(close(n[3], q[3]));
+    }
+
+    #[test]
+    fn a_folded_box_is_not_convex() {
+        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        assert!(convex(&q));
+        // the top left corner dragged past the top right: the box folds
+        let folded = [vec2(5.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        assert!(!convex(&folded));
+        // a flat box carries nothing either
+        let flat = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 0.0), vec2(0.0, 0.0)];
+        assert!(!convex(&flat));
     }
 
     #[test]
