@@ -261,23 +261,27 @@ pub struct PtOut {
 pub fn mirror_moves(moves: &mut Vec<(usize, Vec2)>, pts: &[Pos2], axis_x: f32, tol: f32) {
     let given: Vec<(usize, Vec2)> = moves.clone();
     for (i, d) in given {
-        let Some(p) = pts.get(i) else { continue };
-        if (p.x - axis_x).abs() <= tol {
-            continue;
-        }
-        let want = pos2(2.0 * axis_x - p.x, p.y);
-        let partner = pts
-            .iter()
-            .enumerate()
-            .filter(|(j, q)| *j != i && q.distance(want) <= tol)
-            .min_by(|a, b| a.1.distance(want).total_cmp(&b.1.distance(want)))
-            .map(|(j, _)| j);
-        if let Some(j) = partner
+        if let Some(j) = mirror_partner(pts, i, axis_x, tol)
             && !moves.iter().any(|(k, _)| *k == j)
         {
             moves.push((j, Vec2::new(-d.x, d.y)));
         }
     }
+}
+
+/// The point across the vertical axis at `axis_x` from point `i`, within
+/// `tol`; none for a point on the axis itself.
+pub fn mirror_partner(pts: &[Pos2], i: usize, axis_x: f32, tol: f32) -> Option<usize> {
+    let p = pts.get(i)?;
+    if (p.x - axis_x).abs() <= tol {
+        return None;
+    }
+    let want = pos2(2.0 * axis_x - p.x, p.y);
+    pts.iter()
+        .enumerate()
+        .filter(|(j, q)| *j != i && q.distance(want) <= tol)
+        .min_by(|a, b| a.1.distance(want).total_cmp(&b.1.distance(want)))
+        .map(|(j, _)| j)
 }
 
 impl PointState {
@@ -808,6 +812,17 @@ mod tests {
         assert!((by(0) - 10.0).abs() < 1e-4);
         assert!((by(1) - 5.0).abs() < 1e-4);
         assert_eq!(by(2), 0.0);
+    }
+
+    #[test]
+    fn mirror_partner_is_the_point_across_the_axis() {
+        let pts = [pos2(40.0, 10.0), pos2(60.0, 10.5), pos2(50.0, 30.0), pos2(70.0, 10.0)];
+        // 40 mirrors to 60 across x = 50, within the tolerance
+        assert_eq!(mirror_partner(&pts, 0, 50.0, 2.0), Some(1));
+        assert_eq!(mirror_partner(&pts, 1, 50.0, 2.0), Some(0));
+        // a point on the axis has no partner, nor one with nothing across
+        assert_eq!(mirror_partner(&pts, 2, 50.0, 2.0), None);
+        assert_eq!(mirror_partner(&pts, 3, 50.0, 2.0), None);
     }
 
     #[test]
