@@ -199,6 +199,8 @@ pub struct Session {
     /// Name, visibility and reset shape of meshes an edit removed, by id,
     /// so undoing the delete gets them back.
     departed: HashMap<String, MeshExtras>,
+    /// The same for parts: name and visibility.
+    parts_departed: HashMap<String, (String, bool)>,
     pub deformer_shown: Vec<bool>,
     /// Label colors on parameter rows, palette only, saved in .aom.
     pub param_colors: Vec<Option<[u8; 3]>>,
@@ -908,6 +910,7 @@ impl Session {
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
+        self.parts_departed = old.parts_departed;
         self.undo = old.undo;
         self.push_undo(before);
         self.redo.clear();
@@ -999,6 +1002,7 @@ impl Session {
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
+        self.parts_departed = old.parts_departed;
         self.undo = old.undo;
         self.push_undo(before);
         self.redo.clear();
@@ -1431,6 +1435,7 @@ impl Session {
             mesh_shown: vec![true; n_meshes],
             solo: None,
             departed: HashMap::new(),
+            parts_departed: HashMap::new(),
             deformer_shown: vec![true; n_defs],
             param_colors: vec![None; n_params],
             key_colors: Vec::new(),
@@ -1795,12 +1800,39 @@ impl Session {
         self.original_meshes = originals;
     }
 
+    /// Part names and eyes beside an edited model, as `follow_mesh_ids` does
+    /// for meshes: by index while the parts stay, else by id. Gives each
+    /// part the index it had before, when it had one.
+    fn follow_part_ids(&mut self, next: &Model) -> Vec<Option<usize>> {
+        let now = &self.puppet.model().parts;
+        if now.len() == next.parts.len() {
+            return (0..now.len()).map(Some).collect();
+        }
+        for (i, p) in now.iter().enumerate() {
+            let extras = (
+                self.part_names.get(i).cloned().unwrap_or_default(),
+                self.part_shown.get(i).copied().unwrap_or(true),
+            );
+            self.parts_departed.insert(p.id.clone(), extras);
+        }
+        let from = next.parts.iter().map(|p| now.iter().position(|q| q.id == p.id)).collect();
+        let (names, shown) = next
+            .parts
+            .iter()
+            .map(|p| self.parts_departed.remove(&p.id).unwrap_or((String::new(), true)))
+            .unzip();
+        self.part_names = names;
+        self.part_shown = shown;
+        from
+    }
+
     /// Swap in an edited model, carrying over values and visibility.
     fn rebuild_from(&mut self, model: Model) {
         let values: Vec<f32> =
             (0..self.puppet.model().parameters.len()).map(|i| self.puppet.value(i)).collect();
         self.param_keys = keys_of(&model);
         self.follow_mesh_ids(&model);
+        let part_from = self.follow_part_ids(&model);
         self.deformer_names =
             follow_deformer_names(&self.deformer_names, self.puppet.model(), &model);
         let mut puppet = Puppet::new(model);
@@ -1809,7 +1841,11 @@ impl Session {
         }
         // keep each part's view opacity (the eye sets 0 or 1, the slider anything)
         for (i, shown) in self.part_shown.iter().enumerate() {
-            let now = self.puppet.part_user_opacity(i);
+            let now = part_from
+                .get(i)
+                .copied()
+                .flatten()
+                .map_or(1.0, |o| self.puppet.part_user_opacity(o));
             puppet.set_part_opacity(i, if *shown { now.max(0.01) } else { 0.0 });
         }
         for (i, shown) in self.mesh_shown.iter().enumerate() {

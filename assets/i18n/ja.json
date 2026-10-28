@@ -1540,5 +1540,6 @@
   "The new line would replace the stroke you have not confirmed yet.": "新しい線は、まだ確定していないストロークを置き換えます。",
   "Replace": "置き換える",
   "Keep both": "両方残す",
-  "Discard the new line": "新しい線を破棄"
+  "Discard the new line": "新しい線を破棄",
+  "Delete Part (Child objects will remain)": "パーツを削除（子オブジェクトは残す）"
 }

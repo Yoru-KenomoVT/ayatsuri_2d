@@ -1540,5 +1540,6 @@
   "The new line would replace the stroke you have not confirmed yet.": "Die nuwe lyn sal die haal vervang wat jy nog nie bevestig het nie.",
   "Replace": "Vervang",
   "Keep both": "Hou albei",
-  "Discard the new line": "Gooi die nuwe lyn weg"
+  "Discard the new line": "Gooi die nuwe lyn weg",
+  "Delete Part (Child objects will remain)": "Skrap deel (kinderobjekte bly)"
 }

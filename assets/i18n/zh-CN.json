@@ -1540,5 +1540,6 @@
   "The new line would replace the stroke you have not confirmed yet.": "新的线条将替换尚未确定的笔画。",
   "Replace": "替换",
   "Keep both": "保留两者",
-  "Discard the new line": "放弃新线条"
+  "Discard the new line": "放弃新线条",
+  "Delete Part (Child objects will remain)": "删除部件（保留子对象）"
 }

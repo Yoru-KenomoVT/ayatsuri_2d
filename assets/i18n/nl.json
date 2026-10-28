@@ -1540,5 +1540,6 @@
   "The new line would replace the stroke you have not confirmed yet.": "De nieuwe lijn vervangt de streek die je nog niet hebt bevestigd.",
   "Replace": "Vervangen",
   "Keep both": "Beide houden",
-  "Discard the new line": "Nieuwe lijn weggooien"
+  "Discard the new line": "Nieuwe lijn weggooien",
+  "Delete Part (Child objects will remain)": "Part verwijderen (onderliggende objecten blijven)"
 }

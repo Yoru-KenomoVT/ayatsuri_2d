@@ -2937,6 +2937,20 @@ impl EditorUi {
         {
             let meshes = self.mesh_pick_with(mi);
             self.delete_meshes(meshes);
+        } else if self.selected_glue.is_none()
+            && self.mesh_edit.is_none()
+            && !timeline_has_keys
+            && self.tool == Tool::Arrow
+            && !ui.ctx().egui_wants_keyboard_input()
+            && !self.param_focus
+            && let Some(Sel::Part(p)) = self.selected
+            && ui.ctx().input(|i| {
+                (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+                    && !i.modifiers.command
+            })
+        {
+            let parts = if self.part_pick.contains(&p) { self.part_pick.clone() } else { vec![p] };
+            self.delete_parts(parts, false);
         }
         // Cut, Copy and Paste for whole art meshes; Mesh Edit has its own,
         // for points. Ctrl+Shift+C stays Copy Form.
@@ -8367,6 +8381,7 @@ impl EditorUi {
             f.request_focus();
         }
         let mut take_new: Option<bool> = None;
+        let mut delete_parts: Option<(Vec<usize>, bool)> = None;
         ui.horizontal(|ui| {
             let new = ui.small_button(egui_phosphor::regular::FOLDER_PLUS).on_hover_text(
                 crate::i18n::tr("New Part. Shift+click puts the selected objects in it"),
@@ -8708,6 +8723,21 @@ impl EditorUi {
                         rename_part = Some(i);
                         ui.close();
                     }
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new(crate::i18n::tr("Delete")).shortcut_text("Del"))
+                        .clicked()
+                    {
+                        delete_parts = Some((targets.clone(), false));
+                        ui.close();
+                    }
+                    if ui
+                        .button(crate::i18n::tr("Delete Part (Child objects will remain)"))
+                        .clicked()
+                    {
+                        delete_parts = Some((targets.clone(), true));
+                        ui.close();
+                    }
                 });
 
                 if dnd {
@@ -8812,6 +8842,9 @@ impl EditorUi {
         }
         if let Some(i) = rename_part {
             self.open_part_rename(i);
+        }
+        if let Some((parts, keep)) = delete_parts {
+            self.delete_parts(parts, keep);
         }
         if let Some(i) = group_part {
             if !self.part_pick.contains(&i) {
@@ -9166,6 +9199,58 @@ impl EditorUi {
         self.multi_sel.clear();
         self.selected_glue = None;
         self.remap_mesh_state(&remap);
+    }
+
+    /// Delete parts, with what is inside them or (`keep_children`) leaving
+    /// it to their parents; meshes picked with them go too.
+    fn delete_parts(&mut self, parts: Vec<usize>, keep_children: bool) {
+        if self.mesh_edit.is_some() {
+            log::warn!("leave Mesh Edit before deleting parts");
+            return;
+        }
+        let Some(s) = &mut self.session else { return };
+        let names: Vec<String> = parts
+            .iter()
+            .map(|&p| {
+                s.part_names.get(p).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| {
+                    s.puppet.model().parts.get(p).map(|x| x.id.clone()).unwrap_or_default()
+                })
+            })
+            .collect();
+        let meshes = self.multi_sel.clone();
+        let ids: Vec<String> = s.puppet.model().art_meshes.iter().map(|m| m.id.clone()).collect();
+        if !s.edit(|m| {
+            // meshes first: they do not move part numbers
+            let any = ayatsuri_core::edit::delete_art_meshes(m, &meshes);
+            ayatsuri_core::palette::delete_parts(m, &parts, keep_children) || any
+        }) {
+            return;
+        }
+        log::info!(
+            "deleted part(s) {}{}",
+            names.join(", "),
+            if keep_children { ", children kept" } else { "" }
+        );
+        let now: std::collections::HashMap<&str, usize> = s
+            .puppet
+            .model()
+            .art_meshes
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id.as_str(), i))
+            .collect();
+        let moved: Vec<Option<usize>> =
+            ids.iter().map(|id| now.get(id.as_str()).copied()).collect();
+        self.selected = None;
+        self.part_pick.clear();
+        self.part_anchor = None;
+        self.part_collapsed.clear();
+        self.def_pick.clear();
+        self.def_anchor = None;
+        self.def_locked.clear();
+        self.def_collapsed.clear();
+        self.selected_glue = None;
+        self.remap_mesh_state(&|i| moved.get(i).copied().flatten());
     }
 
     /// Renumber what the editor keeps per mesh after the meshes moved:
