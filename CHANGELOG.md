@@ -129,6 +129,9 @@ meshes and the Parts palette, and the requests from Discord testing.
   goes along again, its partner mirroring it, and the anchor rides with
   the box.
 - **The Solo chip's close mark** showed as an empty box.
+- **Mirror Edit did nothing in Mesh Edit.** Dragging a point now moves
+  its mirror across the axis the other way (live, one undo step), and
+  deleting a point deletes its mirror.
 - **Stroke mesh-mapping**: a new line that would redraw a stroke you have
   not confirmed asks first (Replace, Keep both, or Discard the new line),
   so a slip no longer throws it away. Grabbing a control point takes the

@@ -961,7 +961,14 @@ struct MeshDrag {
     start: Vec<Pos2>,
     indices: Vec<u16>,
     model_uvs: Vec<f32>,
+    /// Mirror Edit: the point across the axis, and how far it has moved
+    /// (parent space), mirroring this one.
+    partner: Option<(usize, f32, f32)>,
 }
+
+/// A Mesh Edit point move: the vertex, how far (parent space), and the
+/// texture coordinate it slides to when known.
+type PointMove = (usize, f32, f32, Option<(f32, f32)>);
 
 /// Where `p` falls on a mesh as (triangle corners, weights): inside the
 /// triangle holding it, else extended from the nearest one, so a point
@@ -14319,6 +14326,9 @@ impl EditorUi {
             Move(usize, usize, f32, f32),
             /// Mesh Edit's move: the vertex slides over the art (new uv).
             Slide(usize, usize, f32, f32, (f32, f32)),
+            /// Several points moved in one undo step (a point and its
+            /// mirror): each slides over the art when its uv is known.
+            SlideMany(usize, Vec<PointMove>),
             Add(usize, usize, [f32; 3]),
             /// A point placed by weights on three others, optionally
             /// closing a face onto an edge, with lines to `links`; `follow`
@@ -14905,6 +14915,11 @@ impl EditorUi {
                             .get(mi)
                             .map(|m| m.uvs.clone())
                             .unwrap_or_default();
+                        let partner = mirror_x
+                            .and_then(|ax| {
+                                point_edit::mirror_partner(&screen_pts, vi, ax, mirror_tol)
+                            })
+                            .map(|j| (j, 0.0, 0.0));
                         self.mesh_drag = Some(MeshDrag {
                             vertex: vi,
                             local,
@@ -14913,6 +14928,7 @@ impl EditorUi {
                             start: screen_pts.clone(),
                             indices: g.indices.to_vec(),
                             model_uvs: m_uvs,
+                            partner,
                         });
                     }
                     if resp.dragged()
@@ -14932,6 +14948,14 @@ impl EditorUi {
                         let (ldx, ldy) = parent_delta(&s.puppet, parent, px, py, mdx, mdy);
                         d.dx += ldx;
                         d.dy += ldy;
+                        // the mirror moves the other way across the axis
+                        if let Some((j, pdx, pdy)) = &mut d.partner {
+                            let qx = d.local.get(*j * 2).copied().unwrap_or(0.0) + *pdx;
+                            let qy = d.local.get(*j * 2 + 1).copied().unwrap_or(0.0) + *pdy;
+                            let (ldx, ldy) = parent_delta(&s.puppet, parent, qx, qy, -mdx, mdy);
+                            *pdx += ldx;
+                            *pdy += ldy;
+                        }
                     }
                     if resp.drag_stopped()
                         && let Some(d) = self.mesh_drag.take()
@@ -14941,18 +14965,68 @@ impl EditorUi {
                         let uv = ptr
                             .and_then(|p| mesh_weights(&d.start, &d.indices, p))
                             .and_then(|(t, w)| mix_uv(&d.model_uvs, t, w));
-                        mesh_op = Some(match uv {
-                            Some(uv) => MeshOp::Slide(mi, d.vertex, d.dx, d.dy, uv),
-                            None => MeshOp::Move(mi, d.vertex, d.dx, d.dy),
+                        mesh_op = Some(match (uv, d.partner) {
+                            (uv, Some((j, pdx, pdy))) => {
+                                // the mirror's drop: its start, moved the
+                                // pointer's way flipped across the axis
+                                let drop = ptr.zip(d.start.get(d.vertex)).zip(d.start.get(j)).map(
+                                    |((p, &a), &b)| pos2(b.x - (p.x - a.x), b.y + (p.y - a.y)),
+                                );
+                                let puv = drop
+                                    .and_then(|p| mesh_weights(&d.start, &d.indices, p))
+                                    .and_then(|(t, w)| mix_uv(&d.model_uvs, t, w));
+                                MeshOp::SlideMany(
+                                    mi,
+                                    vec![(d.vertex, d.dx, d.dy, uv), (j, pdx, pdy, puv)],
+                                )
+                            }
+                            (Some(uv), None) => MeshOp::Slide(mi, d.vertex, d.dx, d.dy, uv),
+                            (None, None) => MeshOp::Move(mi, d.vertex, d.dx, d.dy),
                         });
                     }
                 }
+                // Mirror Edit: deleting a point deletes its mirror too
+                if let Some(ax) = mirror_x {
+                    let with_mirrors = |list: Vec<usize>| -> Vec<usize> {
+                        let mut out = list.clone();
+                        for &v in &list {
+                            if let Some(j) =
+                                point_edit::mirror_partner(&screen_pts, v, ax, mirror_tol)
+                                && !out.contains(&j)
+                            {
+                                out.push(j);
+                            }
+                        }
+                        out
+                    };
+                    mesh_op = match mesh_op {
+                        Some(MeshOp::Del(m, v)) => {
+                            let all = with_mirrors(vec![v]);
+                            Some(if all.len() > 1 {
+                                MeshOp::EraseMany(m, all)
+                            } else {
+                                MeshOp::Del(m, v)
+                            })
+                        }
+                        Some(MeshOp::EraseMany(m, list)) => {
+                            Some(MeshOp::EraseMany(m, with_mirrors(list)))
+                        }
+                        other => other,
+                    };
+                }
 
-                // live preview: the dragged vertex follows the pointer
-                if let (Some(d), Some(ptr)) = (&self.mesh_drag, ptr)
-                    && let Some(sp) = screen_pts.get_mut(d.vertex)
-                {
-                    *sp = ptr;
+                // live preview: the dragged vertex follows the pointer, and
+                // its mirror the other way across the axis
+                if let (Some(d), Some(ptr)) = (&self.mesh_drag, ptr) {
+                    if let Some((j, _, _)) = d.partner
+                        && let (Some(&a), Some(&b)) = (d.start.get(d.vertex), d.start.get(j))
+                        && let Some(sp) = screen_pts.get_mut(j)
+                    {
+                        *sp = pos2(b.x - (ptr.x - a.x), b.y + (ptr.y - a.y));
+                    }
+                    if let Some(sp) = screen_pts.get_mut(d.vertex) {
+                        *sp = ptr;
+                    }
                 }
 
                 // the art above the scrim, frozen as it was on entry: moving,
@@ -15127,6 +15201,21 @@ impl EditorUi {
                 }
                 MeshOp::Slide(mi, vi, dx, dy, uv) => {
                     s.edit(|m| ayatsuri_core::edit::slide_vertex(m, mi, vi, dx, dy, uv))
+                }
+                MeshOp::SlideMany(mi, moves) => {
+                    log::debug!("mesh {mi}: {} point(s) moved (Mirror Edit)", moves.len());
+                    s.edit(|m| {
+                        let mut any = false;
+                        for &(vi, dx, dy, uv) in &moves {
+                            any |= match uv {
+                                Some(uv) => {
+                                    ayatsuri_core::edit::slide_vertex(m, mi, vi, dx, dy, uv)
+                                }
+                                None => ayatsuri_core::edit::move_vertex(m, mi, vi, dx, dy),
+                            };
+                        }
+                        any
+                    })
                 }
                 MeshOp::Add(mi, ti, w) => {
                     let n = s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count);
