@@ -4,7 +4,10 @@ This repository is not uniformly licensed, deliberately.
 
     LICENSE                     GPL-3.0       applies to the project generally
     crates/openmoc3/LICENSE     MIT           see crates/openmoc3/NOTICE
-    crates/ayatsumi_abi/LICENSE Apache-2.0    the C ABI
+    crates/core/LICENSE         MIT           the runtime
+    crates/format/LICENSE       MIT           the model types it runs
+    crates/import/LICENSE       MIT           the loaders the C ABI uses
+    crates/capi/LICENSE         Apache-2.0    the C ABI
 
 Screenshots in `docs/media` that show third-party artwork are not covered by
 any of these: the art belongs to its artist and is used with permission
@@ -27,27 +30,25 @@ these builds), and the codecs it carries are between the user and ffmpeg.
 
 ## The C ABI is Apache-2.0
 
-Settled. `ayatsumi_abi` is Apache-2.0, chosen over MIT for the explicit patent
+Settled. `ayatsuri-capi` is Apache-2.0, chosen over MIT for the explicit patent
 grant: a boundary that other people's products link against is exactly where an
 unstated patent position is worth removing.
 
-## Still open: the runtime
+## The runtime is MIT
 
-`ayatsuri_core` has not been decided, and until it is, the permissive ABI does
-not yet buy an embedder anything.
+Settled in 0.6.0. `ayatsuri-core` (the runtime), `ayatsuri-format` (the model
+it runs) and `ayatsuri-import` (the `.aom` and `.moc3` loaders) are MIT. These
+are everything the C ABI links, so a closed game or app can embed the whole
+runtime, not only its header.
 
-The reason is linking. The ABI has no dependencies today, so its licence stands
-alone. The moment it links the runtime, anything linking the ABI links the
-runtime transitively, and a GPL-3.0 runtime makes the combined work GPL-3.0. A
-permissive wrapper around a copyleft core is permissive in name only.
+The reason is linking. Anything linking the ABI links the runtime
+transitively, and a GPL-3.0 runtime would make the combined work GPL-3.0: a
+permissive wrapper around a copyleft core is permissive in name only. A puppet
+runtime nothing can embed is a runtime nobody uses, and VTube Studio and
+proprietary games are the embedders that make it worth building.
 
-So the real question is unchanged and now narrower:
-
-- **Permissive runtime.** A puppet runtime nothing can embed is a runtime nobody
-  uses. VTube Studio and proprietary games are the embedders that make this
-  worth building, and copyleft rules them out.
-- **Copyleft runtime.** Protects the work from a proprietary fork, at the cost
-  of the integrations that are the point of having a C ABI at all.
+Parts of the runtime are ported from PurismCore (MIT), whose copyright notice
+each of these crates' `LICENSE` keeps (see `docs/provenance.md`).
 
 The editor is a separate and easier case. Nothing links an application, so
 copyleft there costs nothing and does protect against a proprietary fork.
