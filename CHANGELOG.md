@@ -111,7 +111,8 @@ meshes and the Parts palette, and the requests from Discord testing.
   press drift 14 px before a drag began, so every drag started late. In
   Mesh Edit the point was then missed, or trailed the pointer and its
   texture shifted. Pen mode no longer changes when a drag starts, and
-  Mesh Edit grabs the point where the press began.
+  Mesh Edit grabs the point where the press began, and shows a closed
+  hand while a point is held.
 - **Brush circles** (Mesh Edit's eraser, Deform Brush, weight painting)
   could be hidden by the art under them; they now draw on top, with a
   dark edge.

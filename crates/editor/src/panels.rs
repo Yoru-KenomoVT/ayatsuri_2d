@@ -14938,7 +14938,11 @@ impl EditorUi {
                     };
                     vp.circle(*sp, r, fill, Stroke::new(1.0, theme::pal().accent));
                 }
-                if hover_vi.is_some() && !space && !matches!(self.mesh_mode, 5 | 7) {
+                // a held point shows the closed hand; one under the pointer
+                // the pointing hand
+                if self.mesh_drag.is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                } else if hover_vi.is_some() && !space && !matches!(self.mesh_mode, 5 | 7) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 for &(x, y) in self.pending_edges.get(&mi).map(|v| v.as_slice()).unwrap_or(&[]) {
