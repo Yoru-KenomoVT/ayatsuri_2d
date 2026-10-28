@@ -10797,24 +10797,43 @@ impl EditorUi {
             ui.weak(crate::i18n::tr("No textures."));
             return;
         };
-        if ui.button(crate::i18n::tr("Edit atlas…")).clicked() {
+        // only atlas pages meshes draw from: pages holding one paint layer
+        // wait for the atlas, and old pages stay only for undo
+        let model = s.puppet.model();
+        let shown: Vec<usize> = (0..s.textures.len())
+            .filter(|&i| !s.layer_pages.get(i).copied().unwrap_or(false))
+            .filter(|&i| {
+                model.art_meshes.iter().any(|m| m.texture as usize == i)
+                    || (!model.art_paths.is_empty() && model.art_path_page == Some(i as u32))
+            })
+            .collect();
+        let pending = s.atlas_pending();
+        if pending {
+            ui.weak(crate::i18n::tr(
+                "The texture atlas has not been made yet: each layer is still on a texture of its own",
+            ));
+            if ui.button(crate::i18n::tr("Make Texture Atlas…")).clicked() {
+                open_atlas = true;
+            }
+        } else if ui.button(crate::i18n::tr("Edit atlas…")).clicked() {
             open_atlas = true;
         }
+        if shown.is_empty() && !pending {
+            ui.weak(crate::i18n::tr("No textures."));
+        }
         ScrollArea::vertical().id_salt("textures").show(ui, |ui| {
-            for (i, t) in s.textures.iter().enumerate() {
+            // numbered as the export will write them
+            for (n, &i) in shown.iter().enumerate() {
+                let Some(t) = s.textures.get(i) else { continue };
                 match t {
                     Some(t) => {
-                        ui.weak(format!(
-                            "{}: {}",
-                            i,
-                            s.texture_names.get(i).cloned().unwrap_or_else(|| "?".into())
-                        ));
+                        ui.weak(format!("{n}: texture_{n:02}"));
                         let size = t.size_vec2();
                         let w = ui.available_width().min(160.0);
                         ui.image((t.id(), vec2(w, w * size.y / size.x.max(1.0))));
                     }
                     None => {
-                        ui.weak(crate::i18n::trf("{index}: failed to load", &[("index", &i)]));
+                        ui.weak(crate::i18n::trf("{index}: failed to load", &[("index", &n)]));
                     }
                 }
             }
