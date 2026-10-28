@@ -128,6 +128,7 @@ meshes and the Parts palette, and the requests from Discord testing.
   vanishing point. A Perspective corner keeps to the side the drag mostly
   goes along again, its partner mirroring it, and the anchor rides with
   the box.
+- **The Solo chip's close mark** showed as an empty box.
 - **Brush circles** (Mesh Edit's eraser, Deform Brush, weight painting)
   could be hidden by the art under them; they now draw on top, with a
   dark edge.

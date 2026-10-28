@@ -17795,7 +17795,13 @@ fn solo_badge(ui: &mut Ui, view: Rect, s: &mut Session, prefs: &mut Prefs) -> bo
             let off = ui
                 .add(
                     egui::Button::new(
-                        egui::RichText::new(format!("{}  ✕", crate::i18n::tr("Solo"))).strong(),
+                        // the icon font's X: the bold text font has no ✕ and drew a box
+                        egui::RichText::new(format!(
+                            "{}  {}",
+                            crate::i18n::tr("Solo"),
+                            egui_phosphor::regular::X
+                        ))
+                        .strong(),
                     )
                     .fill(theme::pal().accent),
                 )
