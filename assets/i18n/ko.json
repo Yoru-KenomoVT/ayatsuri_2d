@@ -1541,5 +1541,11 @@
   "Replace": "대체",
   "Keep both": "둘 다 유지",
   "Discard the new line": "새 선 버리기",
-  "Delete Part (Child objects will remain)": "파츠 삭제 (자식 오브젝트는 남김)"
+  "Delete Part (Child objects will remain)": "파츠 삭제 (자식 오브젝트는 남김)",
+  "Change the draw order of all ArtMeshes…": "모든 아트메시의 그리기 순서 변경…",
+  "Change the draw order of all ArtMeshes": "모든 아트메시의 그리기 순서 변경",
+  "Auto setup": "자동 설정",
+  "Manual setup": "수동 설정",
+  "Interval": "간격",
+  "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "파츠 팔레트 순서대로, 맨 위 행이 가장 큽니다. 그리기 순서 그룹 안의 메시는 그대로입니다."
 }

@@ -64,7 +64,7 @@ pub fn group_totals(model: &Model) -> Vec<u32> {
 
 /// The nearest offscreen part above `start` (a parent part index), walking
 /// up at most once per part so a loop in a broken file cannot spin.
-fn nearest_offscreen(model: &Model, start: Option<u32>) -> Option<u32> {
+pub(crate) fn nearest_offscreen(model: &Model, start: Option<u32>) -> Option<u32> {
     let mut at = start;
     for _ in 0..model.parts.len() {
         let pi = at?;

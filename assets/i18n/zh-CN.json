@@ -1541,5 +1541,11 @@
   "Replace": "替换",
   "Keep both": "保留两者",
   "Discard the new line": "放弃新线条",
-  "Delete Part (Child objects will remain)": "删除部件（保留子对象）"
+  "Delete Part (Child objects will remain)": "删除部件（保留子对象）",
+  "Change the draw order of all ArtMeshes…": "更改所有图形网格的绘制顺序…",
+  "Change the draw order of all ArtMeshes": "更改所有图形网格的绘制顺序",
+  "Auto setup": "自动设置",
+  "Manual setup": "手动设置",
+  "Interval": "间隔",
+  "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "按部件面板的顺序，最上面一行最大。绘制顺序组中的网格保持不变。"
 }
