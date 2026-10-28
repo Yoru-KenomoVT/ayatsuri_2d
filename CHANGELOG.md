@@ -129,6 +129,9 @@ meshes and the Parts palette, and the requests from Discord testing.
   goes along again, its partner mirroring it, and the anchor rides with
   the box.
 - **The Solo chip's close mark** showed as an empty box.
+- **Undo ended the Temporary Deform Tool.** It stays on now, with a
+  fresh box around the art where the undo left it; changing parameters
+  still ends it.
 - **Mirror Edit did nothing in Mesh Edit.** Dragging a point now moves
   its mirror across the axis the other way (live, one undo step), and
   deleting a point deletes its mirror.
