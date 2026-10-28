@@ -93,8 +93,8 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **Opening a PSD, Krita or Clip Studio file no longer packs a texture
   atlas**, as in Cubism: each layer keeps a texture of its own, saved in
   the .aom, so the paint file isn't needed afterwards. Make the atlas in
-  Modeling > Texture Atlas when you're ready; until then the moc3 export
-  says so and opens it for you.
+  Modeling > Texture Atlas when you're ready; until then the Texture
+  panel shows no pages, and it and the moc3 export offer to make it.
 - **Delete edge keeps the other lines**: cutting one side of a triangle
   leaves its other two sides as lines instead of removing them too.
 - **Parameters drag like layers**, into and out of folders.
