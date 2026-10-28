@@ -90,6 +90,10 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Changed
 
+- **The runtime is MIT**: `ayatsuri-core`, `ayatsuri-format` and
+  `ayatsuri-import`, everything the C ABI links, move from GPL-3.0 to MIT,
+  so closed games and apps can embed Ayatsuri2D models through the
+  Apache-2.0 C ABI. The editor stays GPL-3.0. See LICENSING.md.
 - **The texture atlas waits for export**: leaving Mesh Edit no longer lays
   the atlas out again by itself, so rigging and animating never rewrite
   the textures. When a mesh has grown past its art, the moc3 export says
