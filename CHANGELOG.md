@@ -112,6 +112,14 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Pasted copies clip to each other**: copy an eye's white and iris
+  together and the pasted iris clips to the pasted white, not the old one.
+  Such a copy also leaves the original's clip group, so it can be clipped
+  by other meshes without changing the original. A pasted copy takes a new
+  `ArtMeshN` ID instead of `<id>_copy`.
+- **Clip by took only mesh IDs**: a typed name (`eye`, or one with spaces
+  like `Highlight L T1`) now picks that mesh when the field is left, not
+  only when Enter is pressed.
 - **Dragging felt wrong with Pen mode on**, pen and mouse alike: it let a
   press drift 14 px before a drag began, so every drag started late. In
   Mesh Edit the point was then missed, or trailed the pointer and its

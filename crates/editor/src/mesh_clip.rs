@@ -144,6 +144,8 @@ pub(crate) fn paste(
     let mut next: Model = s.puppet.model().clone();
     let mut pngs = s.texture_pngs.clone();
     let mut added = Vec::new();
+    // each pasted mesh's index, by the id it was copied with
+    let mut copies: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for c in &clip.meshes {
         let mut mesh = c.mesh.clone();
         let kept = !next.art_meshes.iter().any(|m| m.id == mesh.id);
@@ -206,13 +208,40 @@ pub(crate) fn paste(
             path = None;
         }
         let beside = if home { Some(mesh.id.clone()) } else { None };
+        let original = mesh.id.clone();
         let i = ayatsuri_core::edit::insert_art_mesh(&mut next, mesh, path, beside.as_deref());
+        copies.insert(original, i);
         let name = if kept || !home {
             c.name.clone()
         } else {
             crate::i18n::trf("{name} copy", &[("name", &c.name)])
         };
         added.push((i, name));
+    }
+    // a mask copied along clips the copies (an eye's white clips the copied
+    // iris, not the old one); the rest stay on the meshes they named. Such a
+    // copy leaves its clip group, whose masks are the originals'.
+    for (c, &(i, _)) in clip.meshes.iter().zip(&added) {
+        let mut moved = false;
+        let masks: Vec<u32> = c
+            .masks
+            .iter()
+            .filter_map(|id| match copies.get(id) {
+                Some(&k) => {
+                    moved = true;
+                    Some(k)
+                }
+                None => next.art_meshes.iter().position(|m| &m.id == id),
+            })
+            .filter(|&k| k != i)
+            .map(|k| k as u32)
+            .collect();
+        if let Some(m) = next.art_meshes.get_mut(i) {
+            m.masks = masks;
+            if moved {
+                m.clip_group = None;
+            }
+        }
     }
     if home {
         // same texture pages: an ordinary edit

@@ -1418,7 +1418,7 @@ pub fn delete_art_meshes(model: &mut Model, meshes: &[usize]) -> bool {
 
 /// Put an art mesh (a copy from the clipboard) into the model and return its
 /// index. It keeps its id when that is free (a cut and paste is a move),
-/// else takes `<id>_copy`, `<id>_copy2`...; it draws next to the mesh named
+/// else takes a new `ArtMeshN` (see `free_mesh_id`); it draws next to the mesh named
 /// `beside` when that is still there, else among its part's meshes, else
 /// at the end of the top group. Its ArtPath comes with it. Masks pointing
 /// past the end are dropped; glue is not copied.
@@ -1428,16 +1428,8 @@ pub fn insert_art_mesh(
     path: Option<ayatsuri_format::model::ArtPath>,
     beside: Option<&str>,
 ) -> usize {
-    let taken = |id: &str, m: &Model| m.art_meshes.iter().any(|x| x.id == id);
-    if taken(&mesh.id, model) {
-        let base = format!("{}_copy", mesh.id);
-        let mut id = base.clone();
-        let mut n = 2;
-        while taken(&id, model) {
-            id = format!("{base}{n}");
-            n += 1;
-        }
-        mesh.id = id;
+    if model.art_meshes.iter().any(|x| x.id == mesh.id) {
+        mesh.id = free_mesh_id(model);
     }
     let count = model.art_meshes.len() as u32;
     mesh.masks.retain(|&x| x < count);
@@ -1512,6 +1504,18 @@ pub fn insert_art_mesh(
         hops += 1;
     }
     index
+}
+
+/// An id no art mesh has yet: `ArtMeshN` from the mesh count up.
+pub fn free_mesh_id(model: &Model) -> String {
+    let mut n = model.art_meshes.len();
+    loop {
+        let id = format!("ArtMesh{n}");
+        if !model.art_meshes.iter().any(|m| m.id == id) {
+            return id;
+        }
+        n += 1;
+    }
 }
 
 /// The ArtPath behind a mesh, if it was drawn as one.
@@ -5252,12 +5256,12 @@ mod tests {
         let copy = m.art_meshes[1].clone();
         let i = insert_art_mesh(&mut m, copy.clone(), None, Some("M1"));
         assert_eq!(i, 3);
-        assert_eq!(m.art_meshes[3].id, "M1_copy");
+        assert_eq!(m.art_meshes[3].id, "ArtMesh3");
         let objects: Vec<u32> = m.draw_groups[1].items.iter().map(|it| it.object).collect();
         assert_eq!(objects, vec![1, 3, 2]);
         assert_eq!((m.draw_groups[1].total, m.draw_groups[0].total), (3, 4));
         assert_eq!(insert_art_mesh(&mut m, copy, None, Some("M1")), 4);
-        assert_eq!(m.art_meshes[4].id, "M1_copy2");
+        assert_eq!(m.art_meshes[4].id, "ArtMesh4");
         // cut M2, paste it back: the id is free again, so it keeps it
         let cut = m.art_meshes[2].clone();
         assert!(delete_art_meshes(&mut m, &[2]));
