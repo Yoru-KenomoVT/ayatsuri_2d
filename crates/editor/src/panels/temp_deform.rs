@@ -510,6 +510,14 @@ fn quad_drag(
                     q = q0.map(|p| p + u * ((s - 1.0) * (p - a0).dot(u) / u.length_sq()));
                 }
             }
+            Method::Perspective => {
+                // as Cubism's: the side slides along itself, a shear, and
+                // the opposite side stays
+                let e = (at(q0, (i + 1) % 4) - at(q0, i)).normalized();
+                let along = e * d.dot(e);
+                bump(&mut q, i, along);
+                bump(&mut q, (i + 1) % 4, along);
+            }
             _ => {
                 bump(&mut q, i, d);
                 bump(&mut q, (i + 1) % 4, d);
@@ -524,7 +532,6 @@ fn handles(method: Method) -> (bool, bool) {
     // (edge handles, rotation stalk)
     match method {
         Method::Rotation => (false, true),
-        Method::Perspective => (false, false),
         _ => (true, false),
     }
 }
@@ -595,7 +602,7 @@ impl TempDeform {
     }
 
     fn hit(&self, ptr: Pos2, xf: &ViewXf) -> Option<Grab> {
-        let near = |p: V| xf.screen(p).distance(ptr) <= 7.0;
+        let near = |p: V| xf.screen(p).distance(ptr) <= 10.0;
         match &self.frame {
             Frame::Quad { now, anchor, .. } => {
                 let (edges, stalk_on) = handles(self.method);
@@ -933,9 +940,13 @@ impl EditorUi {
             td.frame.rebind(&held);
         }
 
+        // a drag only starts once the pointer has gone past the click
+        // distance, so the handle is the one where the press began, and
+        // the drag counts from there
+        let press = ui.ctx().input(|i| i.pointer.press_origin());
         if !space
             && resp.drag_started()
-            && let Some(p) = resp.interact_pointer_pos()
+            && let Some(p) = press.or_else(|| resp.interact_pointer_pos())
             && let Some(grab) = td.hit(p, &xf)
             && !(mods.alt && matches!(td.frame, Frame::Path { .. }))
         {
@@ -1034,15 +1045,32 @@ impl EditorUi {
         let line = Stroke::new(1.2, theme::pal().accent);
         let red = Color32::from_rgb(0xE8, 0x3A, 0x3A);
         let hover = ptr.filter(|p| view.contains(*p)).and_then(|p| td.hit(p, &xf));
+        // the box's handles are squares, as Cubism draws them; grid and
+        // path points stay round
         let dot = |p: V, g: Grab| {
-            let r = if hover == Some(g) || td.drag.as_ref().is_some_and(|d| d.grab == g) {
-                5.0
+            let hot = hover == Some(g) || td.drag.as_ref().is_some_and(|d| d.grab == g);
+            let at = xf.screen(p);
+            if matches!(g, Grab::Corner(_) | Grab::Edge(_) | Grab::Stalk) {
+                let r = if hot { 6.0 } else { 4.5 };
+                let sq = Rect::from_center_size(at, vec2(r * 2.0, r * 2.0));
+                vp.rect_filled(sq, 0.0, red);
+                vp.rect_stroke(
+                    sq,
+                    0.0,
+                    Stroke::new(1.0, Color32::from_black_alpha(200)),
+                    egui::StrokeKind::Outside,
+                );
             } else {
-                3.6
-            };
-            vp.circle_filled(xf.screen(p), r, red);
-            vp.circle_stroke(xf.screen(p), r, Stroke::new(1.0, Color32::WHITE));
+                let r = if hot { 5.0 } else { 3.6 };
+                vp.circle_filled(at, r, red);
+                vp.circle_stroke(at, r, Stroke::new(1.0, Color32::WHITE));
+            }
         };
+        if td.drag.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if hover.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         match &td.frame {
             Frame::Quad { now, anchor, .. } => {
                 for i in 0..4 {
@@ -1238,6 +1266,25 @@ mod tests {
         );
         assert!(close(n[0], vec2(1.0, 0.0)));
         assert!(close(n[1], vec2(3.0, 0.0)));
+        assert!(close(n[2], q[2]) && close(n[3], q[3]));
+    }
+
+    #[test]
+    fn perspective_side_handle_slides_that_side_along_itself() {
+        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        let (n, _) = quad_drag(
+            Method::Perspective,
+            &q,
+            vec2(2.0, 1.0),
+            Grab::Edge(0),
+            Mode::Deform,
+            vec2(2.0, 0.0),
+            vec2(3.0, 0.7),
+            false,
+        );
+        // the top slides right; the drag's downward part does nothing
+        assert!(close(n[0], vec2(1.0, 0.0)));
+        assert!(close(n[1], vec2(5.0, 0.0)));
         assert!(close(n[2], q[2]) && close(n[3], q[3]));
     }
 
