@@ -19582,8 +19582,14 @@ fn clip_by_row(
                 text.clear();
             } else if !text.trim().is_empty() {
                 let (found, unknown) = crate::mesh_clip::resolve_ids(model, mesh, &text);
-                if found.is_empty() && enter {
-                    // not an ID: the top suggestion
+                // a whole name or ID (names have spaces), else the top suggestion
+                let exact = matches.iter().copied().find(|&mi| {
+                    s.mesh_name(mi).to_lowercase() == needle
+                        || model.art_meshes.get(mi).is_some_and(|m| m.id.to_lowercase() == needle)
+                });
+                if let Some(mi) = exact.filter(|_| found.is_empty() || !unknown.is_empty()) {
+                    add(&mut want, mi);
+                } else if found.is_empty() {
                     if let Some(&mi) = matches.first() {
                         add(&mut want, mi);
                     }
