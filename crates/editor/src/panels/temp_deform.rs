@@ -840,10 +840,24 @@ impl EditorUi {
             let tol = 0.75 / xf.px();
             let moved = now.len() != mapped.len()
                 || now.iter().zip(&mapped).any(|(a, b)| (*a - *b).length() > tol);
-            if values != td.values || moved {
-                log::info!("Temporary Deform Tool released: the parameters or the model changed");
+            if values != td.values {
+                log::info!("Temporary Deform Tool released: the parameters changed");
                 self.end_temp_deform();
                 return;
+            }
+            if moved {
+                // undo or redo moved the art on this key: stay, with a
+                // fresh box around where it is now
+                let before = td.targets.len();
+                td.rebuild(s);
+                if td.targets.len() != before || td.current(s).len() != td.base.len() {
+                    log::info!("Temporary Deform Tool released: the objects changed");
+                    self.end_temp_deform();
+                    return;
+                }
+                log::debug!(
+                    "Temporary Deform Tool: the art moved (undo or redo), box fitted again"
+                );
             }
         }
 
