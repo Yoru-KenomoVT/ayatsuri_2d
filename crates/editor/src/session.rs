@@ -219,6 +219,15 @@ pub struct Session {
     pub timelapse_on: bool,
     /// The project's own Record timelapse setting; None follows Settings.
     pub timelapse_pref: Option<bool>,
+    /// Per texture page: it holds one paint layer, as it came in. Meshes
+    /// drawing from such pages wait for the texture atlas, which is made
+    /// when the rigger asks (Texture Atlas, or the export's button), as in
+    /// Cubism. Pages are never dropped while the model is open (undo may
+    /// point back at any of them); saving and exporting leave out the ones
+    /// no mesh uses.
+    pub layer_pages: Vec<bool>,
+    /// Reset shapes by (mesh ID, page), see `stash_art`.
+    art_by_page: HashMap<(String, u32), (Vec<f32>, Vec<u16>)>,
     pub bezier_nets: HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     undo: Vec<Model>,
     redo: Vec<Model>,
@@ -369,6 +378,17 @@ fn trim_history_to(steps: &mut Vec<Model>, max_steps: usize, budget: usize) {
 /// colour page while paths exist), renumbering the meshes' pages. Returns
 /// the pages kept and how many went.
 pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, usize) {
+    let flags = vec![false; pngs.len()];
+    let (kept, _, dropped) = prune_pages_with(model, pngs, flags);
+    (kept, dropped)
+}
+
+/// `prune_pages`, carrying a flag per page along with the pages kept.
+pub(crate) fn prune_pages_with<T>(
+    model: &mut Model,
+    pngs: Vec<Vec<u8>>,
+    flags: Vec<T>,
+) -> (Vec<Vec<u8>>, Vec<T>, usize) {
     let mut used = vec![false; pngs.len()];
     for m in &model.art_meshes {
         if let Some(u) = used.get_mut(m.texture as usize) {
@@ -382,7 +402,7 @@ pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>
     }
     let dropped = used.iter().filter(|u| !**u).count();
     if dropped == 0 || used.iter().all(|u| !*u) {
-        return (pngs, 0);
+        return (pngs, flags, 0);
     }
     let mut new_index = vec![0u32; used.len()];
     let mut next = 0u32;
@@ -399,8 +419,9 @@ pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>
         .art_path_page
         .filter(|p| used.get(*p as usize).copied().unwrap_or(false))
         .and_then(|p| new_index.get(p as usize).copied());
+    let flags = flags.into_iter().zip(&used).filter(|(_, u)| **u).map(|(f, _)| f).collect();
     let kept = pngs.into_iter().zip(used).filter(|(_, u)| *u).map(|(p, _)| p).collect();
-    (kept, dropped)
+    (kept, flags, dropped)
 }
 
 /// What a re-import did: meshes given new art, layers with no mesh to go
@@ -582,14 +603,17 @@ fn reimport_into(
         }
         report.updated += 1;
     }
+    // the old art's pages stay while the model is open, for undo
     let mut pngs = s.texture_pngs.clone();
     pngs.extend(built.textures);
-    let (pngs, dropped) = prune_pages(&mut next, pngs);
-    if dropped > 0 {
-        info!("re-import: {dropped} page(s) of old art no longer used, removed");
-    }
+    let (old, all) = (s.texture_pngs.len(), pngs.len());
+    s.stash_art();
     s.swap_in(ctx, next, pngs)?;
     s.original_meshes = originals;
+    s.stash_art();
+    // the new layers each came in on a page of their own
+    s.layer_pages.truncate(old);
+    s.layer_pages.resize(all, true);
     Ok(report)
 }
 
@@ -665,7 +689,8 @@ impl Session {
     }
 
     /// A paint document becomes a brand new model: groups as parts, layers
-    /// as quad meshes, pixels packed into atlases. It starts unsaved, since
+    /// as quad meshes, each layer's pixels on a texture of its own until
+    /// the texture atlas is made. It starts unsaved, since
     /// the .psd, .kra or .clip is the source and not a model file.
     fn load_paint(ctx: &Context, path: &Path, ext: &str) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -697,6 +722,7 @@ impl Session {
         let mesh_names = imported.mesh_names.clone();
         let mut s =
             Self::from_parts(ctx, name, imported.model, imported.textures, tex_names, None, path)?;
+        s.layer_pages = vec![true; s.texture_pngs.len()];
         if part_names.len() == s.part_names.len() {
             s.part_names = part_names;
         }
@@ -874,6 +900,11 @@ impl Session {
         self.timelapse = old.timelapse;
         self.timelapse_on = old.timelapse_on;
         self.timelapse_pref = old.timelapse_pref;
+        // pages that came in with the new set hold atlas pages unless the
+        // caller says otherwise
+        self.layer_pages = old.layer_pages;
+        self.layer_pages.resize(self.texture_pngs.len(), false);
+        self.art_by_page = old.art_by_page;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
@@ -960,6 +991,11 @@ impl Session {
         self.timelapse = old.timelapse;
         self.timelapse_on = old.timelapse_on;
         self.timelapse_pref = old.timelapse_pref;
+        // the document's layers each came in on a page of their own
+        self.layer_pages = old.layer_pages;
+        self.layer_pages.resize(old.texture_pngs.len(), false);
+        self.layer_pages.resize(self.texture_pngs.len(), true);
+        self.art_by_page = old.art_by_page;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
@@ -996,9 +1032,16 @@ impl Session {
         };
         let pngs: Vec<Vec<u8>> = payload.textures.into_iter().map(|b| b.into_vec()).collect();
         let mut model = payload.model;
-        let (pngs, dropped) = prune_pages(&mut model, pngs);
+        let mut layer_pages = vec![false; pngs.len()];
+        for &i in &payload.meta.layer_pages {
+            if let Some(l) = layer_pages.get_mut(i as usize) {
+                *l = true;
+            }
+        }
+        let (pngs, layer_pages, dropped) = prune_pages_with(&mut model, pngs, layer_pages);
         let tex_names = (0..pngs.len()).map(|i| format!("texture_{i:02}")).collect();
         let mut s = Self::from_parts(ctx, name, model, pngs, tex_names, None, path)?;
+        s.layer_pages = layer_pages;
         if dropped > 0 {
             info!("left out {dropped} texture page(s) no mesh uses; saving makes it stick");
             s.modified = true;
@@ -1398,6 +1441,8 @@ impl Session {
             timelapse: crate::timelapse::Recorder::default(),
             timelapse_on: true,
             timelapse_pref: None,
+            layer_pages: Vec::new(),
+            art_by_page: HashMap::new(),
             bezier_nets: HashMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1494,9 +1539,18 @@ impl Session {
             .collect()
     }
 
+    /// Some mesh still draws from a page holding one paint layer: the
+    /// texture atlas has not been made since that art came in.
+    pub fn atlas_pending(&self) -> bool {
+        let m = self.puppet.model();
+        m.art_meshes
+            .iter()
+            .any(|am| self.layer_pages.get(am.texture as usize).copied().unwrap_or(false))
+    }
+
     /// Lay the texture atlas out again: the pieces go where the layout says,
-    /// on fresh pages of its size, every mesh's uvs follow, and the ArtPath
-    /// swatch page (if any) rides along unchanged at the end. One undo step.
+    /// on fresh pages of its size after the old ones, and every mesh's uvs
+    /// follow. One undo step.
     pub fn apply_atlas(
         &mut self,
         ctx: &Context,
@@ -1514,7 +1568,10 @@ impl Session {
                 .map(|img| img.into_rgba8())
         };
         let pages = crate::atlas::build_pages(pieces, layout, decode);
-        let mut out: Vec<Vec<u8>> = Vec::with_capacity(pages.len() + 1);
+        // the new pages go after the old ones, which stay for undo (and the
+        // ArtPath swatch page keeps its place)
+        let first_new = self.texture_pngs.len() as u32;
+        let mut out = self.texture_pngs.clone();
         for img in pages {
             let mut png = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -1522,24 +1579,8 @@ impl Session {
             out.push(png);
         }
         let mut next = self.puppet.model().clone();
-        crate::atlas::apply_to_model(&mut next, pieces, layout, &sizes, 0);
-        // the swatch page keeps its pixels; it moves to the end
-        if let Some(sw) = next.art_path_page {
-            let new_index = out.len() as u32;
-            if let Some(png) = self.texture_pngs.get(sw as usize) {
-                out.push(png.clone());
-            }
-            for m in &mut next.art_meshes {
-                if m.texture == sw {
-                    m.texture = new_index;
-                }
-            }
-            next.art_path_page = Some(new_index);
-        }
-        let (out, dropped) = prune_pages(&mut next, out);
-        if dropped > 0 {
-            info!("atlas: {dropped} empty page(s) removed");
-        }
+        crate::atlas::apply_to_model(&mut next, pieces, layout, &sizes, first_new);
+        self.stash_art();
         self.swap_in(ctx, next, out)?;
         // the atlas is a fresh set of quads underneath every mesh
         self.original_meshes = self
@@ -1549,6 +1590,7 @@ impl Session {
             .iter()
             .map(|m| (m.uvs.clone(), m.indices.clone()))
             .collect();
+        self.stash_art();
         info!("atlas: {} page(s) of {} px", layout.pages, layout.page_size);
         Ok(())
     }
@@ -1654,11 +1696,41 @@ impl Session {
         }
     }
 
+    /// Note each mesh's reset shape (and so its art box) under the page it
+    /// draws from, so an undo that moves meshes back to older pages (atlas,
+    /// re-import) finds the art boxes those pages had.
+    fn stash_art(&mut self) {
+        let m = self.puppet.model();
+        for (am, orig) in m.art_meshes.iter().zip(&self.original_meshes) {
+            self.art_by_page.insert((am.id.clone(), am.texture), orig.clone());
+        }
+    }
+
+    /// After undo or redo: each mesh now on another page than `was` takes
+    /// the reset shape noted for that page.
+    fn unstash_art(&mut self, was: &HashMap<String, u32>) {
+        let m = self.puppet.model();
+        for (am, orig) in m.art_meshes.iter().zip(self.original_meshes.iter_mut()) {
+            if was.get(&am.id) == Some(&am.texture) {
+                continue;
+            }
+            if let Some(o) = self.art_by_page.get(&(am.id.clone(), am.texture)) {
+                *orig = o.clone();
+            }
+        }
+    }
+
+    fn pages_now(&self) -> HashMap<String, u32> {
+        self.puppet.model().art_meshes.iter().map(|m| (m.id.clone(), m.texture)).collect()
+    }
+
     pub fn undo(&mut self) {
         if let Some(previous) = self.undo.pop() {
             self.redo.push(self.puppet.model().clone());
             trim_history(&mut self.redo);
+            let was = self.pages_now();
             self.rebuild_from(previous);
+            self.unstash_art(&was);
             self.modified = true;
             log::info!("undo ({} left)", self.undo.len());
         }
@@ -1668,7 +1740,9 @@ impl Session {
         if let Some(next) = self.redo.pop() {
             self.undo.push(self.puppet.model().clone());
             trim_history(&mut self.undo);
+            let was = self.pages_now();
             self.rebuild_from(next);
+            self.unstash_art(&was);
             self.modified = true;
             log::info!("redo");
         }
@@ -1833,19 +1907,25 @@ impl Session {
 
     /// The model, textures, animations and display info as one payload.
     fn payload(&self) -> AomPayload {
+        // pages no mesh draws from any more stay behind
+        let mut model = self.puppet.model().clone();
+        let (pngs, layer_pages, _) =
+            prune_pages_with(&mut model, self.texture_pngs.clone(), self.layer_pages.clone());
         AomPayload {
             meta: Meta {
                 name: self.name.clone(),
                 author: self.author.clone(),
                 tool: format!("Ayatsuri2D {}", env!("CARGO_PKG_VERSION")),
                 timelapse: self.timelapse_pref,
+                layer_pages: layer_pages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| **l)
+                    .map(|(i, _)| i as u32)
+                    .collect(),
             },
-            model: self.puppet.model().clone(),
-            textures: self
-                .texture_pngs
-                .iter()
-                .map(|b| serde_bytes::ByteBuf::from(b.clone()))
-                .collect(),
+            model,
+            textures: pngs.into_iter().map(serde_bytes::ByteBuf::from).collect(),
             animations: self.animations.clone(),
             compositions: self.compositions.clone(),
             playlists: self.playlists.clone(),
@@ -2540,6 +2620,56 @@ mod import_paint_tests {
         assert_eq!(kept, vec![vec![0u8], vec![2u8]]);
         let pages: Vec<u32> = m.art_meshes.iter().map(|a| a.texture).collect();
         assert_eq!(pages, vec![0, 1, 1]);
+    }
+
+    #[test]
+    fn layers_wait_on_their_own_pages_until_the_atlas_is_made() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        let art = ayatsuri_import::from_layers(&doc(
+            400,
+            300,
+            &[("Body", "Torso", 10, 10, 30), ("Arm", "Torso", 100, 40, 20)],
+        ))
+        .unwrap();
+        s.add_imported(&ctx, art, Path::new("a.psd")).unwrap();
+        assert_eq!(s.texture_pngs.len(), 2, "one page per layer");
+        assert!(s.atlas_pending());
+        let loose = s.puppet.model().clone();
+        let loose_art = s.art_boxes();
+
+        let sizes = s.page_sizes();
+        let pieces = crate::atlas::pieces(s.puppet.model(), &sizes, &s.art_boxes());
+        let layout = crate::atlas::auto_layout(&pieces, 256, false).unwrap();
+        s.apply_atlas(&ctx, &pieces, &layout).unwrap();
+        assert!(!s.atlas_pending());
+        let packed = s.puppet.model().clone();
+        assert!(packed.art_meshes.iter().all(|m| m.texture == 2), "both on the new page");
+
+        // undo finds the layer pages and their art boxes again
+        s.undo();
+        assert!(s.atlas_pending());
+        for (m, l) in s.puppet.model().art_meshes.iter().zip(&loose.art_meshes) {
+            assert_eq!((m.texture, &m.uvs), (l.texture, &l.uvs));
+        }
+        assert_eq!(s.art_boxes(), loose_art);
+        s.redo();
+        assert!(!s.atlas_pending());
+
+        // saving leaves the old pages out; the layer pages stay marked
+        let dir = std::env::temp_dir().join(format!("ayatsuri-atlas-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.aom");
+        s.save_aom(&path).unwrap();
+        let back = Session::load_aom(&ctx, &path).unwrap();
+        assert_eq!(back.texture_pngs.len(), 1);
+        assert!(!back.atlas_pending());
+        s.undo();
+        s.save_aom(&path).unwrap();
+        let back = Session::load_aom(&ctx, &path).unwrap();
+        assert_eq!(back.texture_pngs.len(), 2);
+        assert!(back.atlas_pending(), "still waiting for the atlas after reopening");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

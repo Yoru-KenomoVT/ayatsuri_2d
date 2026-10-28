@@ -885,8 +885,12 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
             blend: Blend::NORMAL,
         });
     }
-    let packed =
-        layers::build(&Document { width: cw, height: ch, layers: layers_in, folders: Vec::new() })?;
+    let packed = layers::build_atlas(&Document {
+        width: cw,
+        height: ch,
+        layers: layers_in,
+        folders: Vec::new(),
+    })?;
     let pc = packed.model.canvas;
     let page = PAGE as f32;
     let mut placed: Vec<Placed> = Vec::with_capacity(materials.len());

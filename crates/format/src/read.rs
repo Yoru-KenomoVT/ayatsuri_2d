@@ -93,6 +93,7 @@ mod tests {
                 author: String::new(),
                 tool: "test".into(),
                 timelapse: None,
+                layer_pages: Vec::new(),
             },
             model,
             textures: vec![serde_bytes::ByteBuf::from(vec![1u8, 2, 3])],

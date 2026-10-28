@@ -1533,5 +1533,8 @@
   "Switch between Source Image and Texture Atlas": "元画像とテクスチャアトラスを切り替え",
   "Texture Atlas View": "テクスチャアトラス表示",
   "Show every pixel each mesh covers on the texture atlas, as the export will: a mesh grown over its neighbour shows that neighbour (T)": "各メッシュがテクスチャアトラス上で覆うすべてのピクセルを、エクスポートと同じように表示します。隣にはみ出したメッシュには隣の絵が表示されます（T）",
-  "Texture Atlas View  ·  T to switch back": "テクスチャアトラス表示  ·  T で戻る"
+  "Texture Atlas View  ·  T to switch back": "テクスチャアトラス表示  ·  T で戻る",
+  "The texture atlas has not been made yet: each layer is still on a texture of its own": "テクスチャアトラスがまだ作成されていません。各レイヤーはまだそれぞれのテクスチャにあります",
+  "Make Texture Atlas…": "テクスチャアトラスを作成…",
+  "Open the Texture Atlas to lay the layers out on pages": "テクスチャアトラスを開いてレイヤーをページに配置します"
 }

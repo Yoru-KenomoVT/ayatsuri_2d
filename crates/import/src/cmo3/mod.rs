@@ -69,7 +69,7 @@ mod tests {
             layers: vec![layer("red", 10, 20, 40, 30, rgba), layer("blue", 60, 50, 20, 20, blue)],
             folders: Vec::new(),
         };
-        let imported = crate::layers::build(&doc).unwrap();
+        let imported = crate::layers::build_atlas(&doc).unwrap();
         let mut model = imported.model;
         // a 5.3 blend on one mesh, a compatible one on the other
         model.art_meshes[0].blend =

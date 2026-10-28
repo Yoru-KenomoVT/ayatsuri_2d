@@ -90,6 +90,13 @@ meshes and the Parts palette, and the requests from Discord testing.
   the textures. When a mesh has grown past its art, the moc3 export says
   so and offers **Lay out the atlas**; Settings can turn the old automatic
   layout back on.
+- **Opening a PSD, Krita or Clip Studio file no longer packs a texture
+  atlas**, as in Cubism: each layer keeps a texture of its own, saved in
+  the .aom, so the paint file isn't needed afterwards. Make the atlas in
+  Modeling > Texture Atlas when you're ready; until then the moc3 export
+  says so and opens it for you.
+- **Delete edge keeps the other lines**: cutting one side of a triangle
+  leaves its other two sides as lines instead of removing them too.
 - **Parameters drag like layers**, into and out of folders.
 - **Clicking another mesh inside the selected one's box** switches to it
   instead of grabbing the box.
@@ -100,6 +107,12 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Brush circles** (Mesh Edit's eraser, Deform Brush, weight painting)
+  could be hidden by the art under them; they now draw on top, with a
+  dark edge.
+- **Undo after making the texture atlas or re-importing art** put meshes
+  back on texture pages that were already gone, so they showed the wrong
+  art. Old pages now stay until the model is saved.
 - **Texture atlas**: a mesh could show a sliver of its neighbour's art at
   its edge. Each piece is now masked to its own art, with wider gaps.
 - **Zooming at the limit** no longer flings the canvas away.
