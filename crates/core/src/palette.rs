@@ -346,6 +346,86 @@ pub fn new_part(
     index
 }
 
+/// Cubism's Delete on parts: each part goes with every part, deformer and
+/// art mesh inside it. With `keep_children` (Delete Selected Parts, Child
+/// objects will remain) only the parts go, and what was in them moves up to
+/// the nearest part that stays. References past them shift down.
+pub fn delete_parts(model: &mut Model, parts: &[usize], keep_children: bool) -> bool {
+    let n = model.parts.len();
+    let gone: Vec<bool> = (0..n)
+        .map(|p| parts.iter().any(|&q| q == p || (!keep_children && q < n && within(model, p, q))))
+        .collect();
+    if !gone.contains(&true) {
+        return false;
+    }
+    let is_gone = |p: Option<u32>| p.is_some_and(|p| gone.get(p as usize) == Some(&true));
+    if !keep_children {
+        let meshes: Vec<usize> = model
+            .art_meshes
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| is_gone(m.parent_part))
+            .map(|(i, _)| i)
+            .collect();
+        crate::edit::delete_art_meshes(model, &meshes);
+        // from the back, so the indices still to go do not move
+        for d in (0..model.deformers.len()).rev() {
+            if model.deformers.get(d).is_some_and(|x| is_gone(x.parent_part)) {
+                crate::edit::delete_deformer(model, d);
+            }
+        }
+    }
+    // how many deleted parts come before each one
+    let before: Vec<u32> = gone
+        .iter()
+        .scan(0u32, |c, &g| {
+            let at = *c;
+            *c += u32::from(g);
+            Some(at)
+        })
+        .collect();
+    // the nearest part that stays, numbered as it will be
+    let parents: Vec<Option<u32>> = model.parts.iter().map(|p| p.parent_part).collect();
+    let up = |mut at: Option<u32>| {
+        for _ in 0..=n {
+            match at {
+                Some(p) if gone.get(p as usize) == Some(&true) => {
+                    at = parents.get(p as usize).copied().flatten();
+                }
+                Some(p) => return before.get(p as usize).map(|b| p - b),
+                None => return None,
+            }
+        }
+        None
+    };
+    for m in &mut model.art_meshes {
+        m.parent_part = up(m.parent_part);
+    }
+    for d in &mut model.deformers {
+        d.parent_part = up(d.parent_part);
+    }
+    for p in &mut model.parts {
+        p.parent_part = up(p.parent_part);
+    }
+    // a deleted part's draw order group cannot be patched, so build them anew
+    let grouped = model
+        .draw_groups
+        .iter()
+        .flat_map(|g| &g.items)
+        .any(|it| it.part && gone.get(it.object as usize) == Some(&true));
+    for g in &mut model.draw_groups {
+        for it in g.items.iter_mut().filter(|it| it.part) {
+            it.object -= before.get(it.object as usize).copied().unwrap_or(0);
+        }
+    }
+    let mut keep = gone.iter().map(|g| !g);
+    model.parts.retain(|_| keep.next().unwrap_or(true));
+    if grouped {
+        model.draw_groups = crate::draworder::synthesize(model);
+    }
+    true
+}
+
 /// An id no part has yet: `PartN` from the part count up.
 pub fn free_part_id(model: &Model) -> String {
     let mut n = model.parts.len();
@@ -503,5 +583,25 @@ mod tests {
         let ids: Vec<&str> = m.art_meshes.iter().map(|x| x.id.as_str()).collect();
         assert_eq!(ids, ["back_hair", "skin", "white", "iris"]);
         assert_eq!(free_part_id(&m), "Part3");
+    }
+
+    #[test]
+    fn a_deleted_part_takes_what_is_inside_it() {
+        let mut m = face();
+        m.parts.push(part("Hair", None));
+        m.art_meshes[0].parent_part = Some(2);
+        assert!(delete_parts(&mut m, &[0], false));
+        assert_eq!(shown(&m), ["Hair", "  back_hair"]);
+        assert_eq!(m.art_meshes[0].parent_part, Some(0));
+    }
+
+    #[test]
+    fn a_part_deleted_alone_leaves_its_children_to_its_parent() {
+        let mut m = face();
+        assert!(delete_parts(&mut m, &[1], true));
+        assert_eq!(shown(&m), ["Face", "  iris", "  white", "  skin", "back_hair"]);
+        assert!(delete_parts(&mut m, &[0], true));
+        assert_eq!(shown(&m), ["iris", "white", "skin", "back_hair"]);
+        assert!(m.parts.is_empty());
     }
 }

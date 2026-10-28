@@ -82,6 +82,11 @@ meshes and the Parts palette, and the requests from Discord testing.
   groups, inherited clipping (exported to moc3 as hidden helper masks) and
   stroke mesh-mapping, whose 1, 2 and 3 vertices across lay the mesh out
   as Cubism's do.
+- **Delete parts** in the Parts palette, as in Cubism: Delete or
+  Backspace (or Delete in the right-click menu) removes the selected parts
+  with everything inside them. **Delete Part (Child objects will remain)**
+  removes only the parts and moves their contents up to the parent part.
+  Undo brings the parts back with their names.
 
 ### Changed
 

@@ -1540,5 +1540,6 @@
   "The new line would replace the stroke you have not confirmed yet.": "새 선이 아직 확정하지 않은 스트로크를 대체합니다.",
   "Replace": "대체",
   "Keep both": "둘 다 유지",
-  "Discard the new line": "새 선 버리기"
+  "Discard the new line": "새 선 버리기",
+  "Delete Part (Child objects will remain)": "파츠 삭제 (자식 오브젝트는 남김)"
 }
