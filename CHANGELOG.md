@@ -129,6 +129,11 @@ meshes and the Parts palette, and the requests from Discord testing.
   goes along again, its partner mirroring it, and the anchor rides with
   the box.
 - **The Solo chip's close mark** showed as an empty box.
+- **Stroke mesh-mapping**: a new line that would redraw a stroke you have
+  not confirmed asks first (Replace, Keep both, or Discard the new line),
+  so a slip no longer throws it away. Grabbing a control point takes the
+  one where the press began. With Maintain current mesh off, the points
+  and lines that confirming removes are marked while you draw.
 - **Brush circles** (Mesh Edit's eraser, Deform Brush, weight painting)
   could be hidden by the art under them; they now draw on top, with a
   dark edge.
