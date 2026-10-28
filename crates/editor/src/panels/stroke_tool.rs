@@ -4,7 +4,9 @@
 // Shift+drag to draw another stroke, drag away from the path to redraw it.
 // Width handles (orange circles): Ctrl+click the line adds one, Ctrl+Alt+
 // click deletes one, Ctrl+drag sets the width. Shift+E or the button at the
-// canvas's top left confirms; Delete cancels.
+// canvas's top left confirms; Delete cancels. A new line that would redraw
+// an unconfirmed stroke asks first, so a slip does not throw the stroke
+// away.
 //
 // Strokes are kept in canvas pixels; the canvas borrows the session while
 // it draws, so this hands back what to do and the palette applies it.
@@ -30,6 +32,9 @@ pub(super) struct StrokeEdit {
     pub(super) mesh: usize,
     pub(super) strokes: Vec<Stroke>,
     drag: Option<Drag>,
+    /// A new line that would redraw stroke `.0`, waiting for the rigger to
+    /// say whether to replace it.
+    ask: Option<(usize, Stroke)>,
 }
 
 enum Drag {
@@ -91,20 +96,27 @@ pub(super) fn stroke_tool(
     opts: &StrokeOpts,
     view: View,
     mods: (bool, bool, bool),
+    // the mesh as shown now: screen points and faces, for the preview of
+    // what Maintain current mesh off removes
+    existing: (&[Pos2], &[u16]),
 ) -> Option<StrokeAct> {
     let (alt, ctrl, shift) = mods;
     if state.as_ref().is_none_or(|e| e.mesh != mesh) {
-        *state = Some(StrokeEdit { mesh, strokes: Vec::new(), drag: None });
+        *state = Some(StrokeEdit { mesh, strokes: Vec::new(), drag: None, ask: None });
     }
     let edit = state.as_mut()?;
     let set = &opts.settings;
     let ptr = ui.ctx().input(|i| i.pointer.latest_pos());
 
+    // a drag only starts once the pointer has gone past the click distance,
+    // so what it takes hold of is what was under the press
+    let press = ui.ctx().input(|i| i.pointer.press_origin());
+    let probe = if resp.drag_started() { press.or(ptr) } else { ptr };
     // what is under the pointer: a control point, a width handle, the line
     let mut on_point: Option<(usize, usize)> = None;
     let mut on_handle: Option<(usize, usize)> = None;
     let mut on_line: Option<(usize, f32)> = None;
-    if let Some(p) = ptr {
+    if let Some(p) = probe {
         let px = view.px(p);
         let mut best = REACH;
         for (si, s) in edit.strokes.iter().enumerate() {
@@ -140,9 +152,53 @@ pub(super) fn stroke_tool(
         }
     }
 
+    // the replace question takes the canvas until it is answered
+    if let Some((i, new)) = edit.ask.take() {
+        let mut answer: Option<u8> = None;
+        let at = view.rect.center() - vec2(150.0, 40.0);
+        egui::Area::new(egui::Id::new("stroke-replace"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(at)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(300.0);
+                    ui.label(tr(
+                        "The new line would replace the stroke you have not confirmed yet.",
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr("Replace")).clicked() {
+                            answer = Some(0);
+                        }
+                        if ui.button(tr("Keep both")).clicked() {
+                            answer = Some(1);
+                        }
+                        if ui.button(tr("Discard the new line")).clicked() {
+                            answer = Some(2);
+                        }
+                    });
+                });
+            });
+        let esc = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+        match (answer, esc) {
+            (Some(0), _) => {
+                if let Some(old) = edit.strokes.get_mut(i) {
+                    *old = new;
+                }
+                log::debug!("stroke mesh: stroke {i} redrawn");
+            }
+            (Some(1), _) => edit.strokes.push(new),
+            (Some(_), _) | (None, true) => log::debug!("stroke mesh: new line discarded"),
+            (None, false) => edit.ask = Some((i, new)),
+        }
+        // nothing else on the canvas this frame
+        edit.drag = None;
+        draw(vp, edit, set, view, existing, opts.maintain);
+        return None;
+    }
+
     // drags: a handle with Ctrl, a control point, else a new stroke
     if resp.drag_started()
-        && let Some(p) = resp.interact_pointer_pos()
+        && let Some(p) = probe
     {
         let px = view.px(p);
         edit.drag = if ctrl {
@@ -206,8 +262,9 @@ pub(super) fn stroke_tool(
         });
         if points.len() >= 2 && long.sum::<f32>() * view.scale > 6.0 {
             let stroke = Stroke::new(points);
-            match replaces.and_then(|i| edit.strokes.get_mut(i)) {
-                Some(old) => *old = stroke,
+            // redrawing a stroke throws it away: ask first
+            match replaces.filter(|&i| i < edit.strokes.len()) {
+                Some(i) => edit.ask = Some((i, stroke)),
                 None => edit.strokes.push(stroke),
             }
         }
@@ -262,9 +319,65 @@ pub(super) fn stroke_tool(
         edit.drag = None;
     }
 
-    // the mesh it makes, then the strokes over it
+    draw(vp, edit, set, view, existing, opts.maintain);
+    if on_point.is_some() || (ctrl && on_handle.is_some()) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    } else {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+
+    // Confirm stroke being edited, at the canvas's top left
+    let mut confirm = !typing && confirm_key && !edit.strokes.is_empty();
+    if !edit.strokes.is_empty() {
+        let text = tr("Confirm stroke being edited (Click here [Shift+E])");
+        let font = FontId::proportional(12.0);
+        let galley = vp.layout_no_wrap(text.to_string(), font.clone(), theme::pal().text);
+        let r =
+            Rect::from_min_size(view.rect.min + vec2(10.0, 44.0), galley.size() + vec2(16.0, 10.0));
+        let hit = ui.interact(r, egui::Id::new("stroke-confirm"), Sense::click());
+        let fill = if hit.hovered() { theme::pal().header } else { theme::pal().chrome };
+        vp.rect_filled(r, 4.0, fill);
+        vp.rect_stroke(r, 4.0, Line::new(1.0, theme::pal().accent), egui::StrokeKind::Outside);
+        vp.text(r.center(), Align2::CENTER_CENTER, text, font, theme::pal().accent);
+        confirm |= hit.clicked();
+    }
+    confirm.then_some(StrokeAct::Confirm)
+}
+
+/// The strokes, the mesh they make, and (with Maintain current mesh off)
+/// the points and lines of the mesh now that confirming removes.
+fn draw(
+    vp: &Painter,
+    edit: &StrokeEdit,
+    set: &Settings,
+    view: View,
+    existing: (&[Pos2], &[u16]),
+    maintain: bool,
+) {
     let red = theme::pal().rotation_red;
     let (pts, tris) = stroke_mesh::build_all(&edit.strokes, set);
+    if !maintain && !tris.is_empty() {
+        let (scr_old, idx) = existing;
+        let old_px: Vec<P> = scr_old.iter().map(|&p| view.px(p)).collect();
+        let old_tris: Vec<[u16; 3]> = idx.as_chunks::<3>().0.to_vec();
+        let (keep, kept) = stroke_mesh::keep_existing(&old_px, &old_tris, &pts, &tris, false);
+        let gone = Line::new(1.0, Color32::from_white_alpha(70));
+        for t in old_tris.iter().filter(|t| !kept.contains(t)) {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                if let (Some(&pa), Some(&pb)) = (scr_old.get(a as usize), scr_old.get(b as usize)) {
+                    vp.add(egui::Shape::dashed_line(&[pa, pb], gone, 2.0, 3.0));
+                }
+            }
+        }
+        for (p, k) in scr_old.iter().zip(&keep) {
+            if !k {
+                let d = 3.5;
+                let x = Line::new(1.5, red);
+                vp.line_segment([*p - vec2(d, d), *p + vec2(d, d)], x);
+                vp.line_segment([*p - vec2(d, -d), *p + vec2(d, -d)], x);
+            }
+        }
+    }
     let scr: Vec<Pos2> = pts.iter().map(|&p| view.screen(p)).collect();
     let dash = Line::new(1.0, red);
     for t in &tris {
@@ -296,28 +409,6 @@ pub(super) fn stroke_tool(
         let line: Vec<Pos2> = samples.iter().map(|&p| view.screen(p)).collect();
         vp.add(egui::Shape::line(line, Line::new(1.5, theme::pal().accent)));
     }
-    if on_point.is_some() || (ctrl && on_handle.is_some()) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    } else {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-    }
-
-    // Confirm stroke being edited, at the canvas's top left
-    let mut confirm = !typing && confirm_key && !edit.strokes.is_empty();
-    if !edit.strokes.is_empty() {
-        let text = tr("Confirm stroke being edited (Click here [Shift+E])");
-        let font = FontId::proportional(12.0);
-        let galley = vp.layout_no_wrap(text.to_string(), font.clone(), theme::pal().text);
-        let r =
-            Rect::from_min_size(view.rect.min + vec2(10.0, 44.0), galley.size() + vec2(16.0, 10.0));
-        let hit = ui.interact(r, egui::Id::new("stroke-confirm"), Sense::click());
-        let fill = if hit.hovered() { theme::pal().header } else { theme::pal().chrome };
-        vp.rect_filled(r, 4.0, fill);
-        vp.rect_stroke(r, 4.0, Line::new(1.0, theme::pal().accent), egui::StrokeKind::Outside);
-        vp.text(r.center(), Align2::CENTER_CENTER, text, font, theme::pal().accent);
-        confirm |= hit.clicked();
-    }
-    confirm.then_some(StrokeAct::Confirm)
 }
 
 /// Where a point of the art's display lands on the texture: barycentric in
@@ -509,6 +600,7 @@ mod tests {
             mesh: 0,
             strokes: vec![Stroke::new(vec![px(0.1, 0.5), px(0.9, 0.5)])],
             drag: None,
+            ask: None,
         });
         ed.apply_stroke_mesh();
         let s = ed.session.as_mut().unwrap();
@@ -547,6 +639,7 @@ mod tests {
             mesh: 0,
             strokes: vec![Stroke::new(vec![px(-0.1, 0.0), px(1.1, 0.0)])],
             drag: None,
+            ask: None,
         });
         ed.apply_stroke_mesh();
         let n = ed.session.as_ref().unwrap().puppet.model().art_meshes[0].vertex_count;

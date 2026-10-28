@@ -1536,5 +1536,9 @@
   "The texture atlas has not been made yet: each layer is still on a texture of its own": "テクスチャアトラスがまだ作成されていません。各レイヤーはまだそれぞれのテクスチャにあります",
   "Make Texture Atlas…": "テクスチャアトラスを作成…",
   "Open the Texture Atlas to lay the layers out on pages": "テクスチャアトラスを開いてレイヤーをページに配置します",
-  "A pen's double tap may take longer": "ペンのダブルタップの間隔を長めに取ります"
+  "A pen's double tap may take longer": "ペンのダブルタップの間隔を長めに取ります",
+  "The new line would replace the stroke you have not confirmed yet.": "新しい線は、まだ確定していないストロークを置き換えます。",
+  "Replace": "置き換える",
+  "Keep both": "両方残す",
+  "Discard the new line": "新しい線を破棄"
 }

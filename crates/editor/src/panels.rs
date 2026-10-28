@@ -15052,6 +15052,7 @@ impl EditorUi {
                         &self.tool_opts.stroke,
                         sv,
                         (alt, ctrl, shift),
+                        (&screen_pts, g.indices),
                     );
                     if act == Some(stroke_tool::StrokeAct::Confirm) {
                         self.stroke_confirm = true;

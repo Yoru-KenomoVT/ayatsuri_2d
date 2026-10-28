@@ -1536,5 +1536,9 @@
   "The texture atlas has not been made yet: each layer is still on a texture of its own": "텍스처 아틀라스가 아직 만들어지지 않았습니다. 각 레이어가 아직 자기 텍스처에 있습니다",
   "Make Texture Atlas…": "텍스처 아틀라스 만들기…",
   "Open the Texture Atlas to lay the layers out on pages": "텍스처 아틀라스를 열어 레이어를 페이지에 배치합니다",
-  "A pen's double tap may take longer": "펜의 더블 탭 간격을 더 길게 허용합니다"
+  "A pen's double tap may take longer": "펜의 더블 탭 간격을 더 길게 허용합니다",
+  "The new line would replace the stroke you have not confirmed yet.": "새 선이 아직 확정하지 않은 스트로크를 대체합니다.",
+  "Replace": "대체",
+  "Keep both": "둘 다 유지",
+  "Discard the new line": "새 선 버리기"
 }
