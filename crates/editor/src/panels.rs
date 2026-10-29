@@ -12415,7 +12415,7 @@ impl EditorUi {
                             if let Some(cp) = moved.get_mut(gp.point) {
                                 *cp += gp.ptr - gp.start;
                             }
-                            let offs = point_edit::follow_path(bind, &gp.verts, &moved);
+                            let offs = point_edit::follow_path(bind, &gp.verts, &moved, gp.point);
                             for &(vi, d) in &offs {
                                 if let (Some(p), Some(v)) = (pts.get_mut(vi), gp.verts.get(vi)) {
                                     *p = *v + d;
@@ -16108,8 +16108,12 @@ fn nearest_within(pts: &[Pos2], p: Pos2, reach: f32) -> Option<usize> {
 /// A deform path: the line, control points, and around each point the red
 /// width circle with the blue hardness circle inside, as in Cubism.
 fn draw_path(vp: &egui::Painter, pts: &[Pos2], width: f32, hardness: f32, hot: Option<usize>) {
+    // the curve the mesh follows, not straight lines between the points
     if pts.len() > 1 {
-        vp.add(egui::Shape::line(pts.to_vec(), Stroke::new(1.6, theme::pal().warp_green)));
+        let ctrl: Vec<Vec2> = pts.iter().map(|p| p.to_vec2()).collect();
+        let curve: Vec<Pos2> =
+            crate::bend_path::Curve::new(&ctrl).pts.iter().map(|p| p.to_pos2()).collect();
+        vp.add(egui::Shape::line(curve, Stroke::new(1.6, theme::pal().warp_green)));
     }
     for (i, &p) in pts.iter().enumerate() {
         vp.circle_stroke(p, width, Stroke::new(1.0, theme::pal().rotation_red.gamma_multiply(0.5)));

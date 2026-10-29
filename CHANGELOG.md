@@ -123,6 +123,17 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Deform paths bend the art smoothly, as in Cubism**: the path is one
+  smooth curve through its points (it was straight lines between them, so
+  the mesh creased at every point), and the whole mesh follows it. Deform
+  Path width and hardness now work as Cubism's do: around the point being
+  dragged the mesh holds its shape and turns as one piece, instead of the
+  width marking how far the path reached.
+- **Temporary Path Deformation no longer folds the art over a few drags**:
+  after each drag the art was tied again to the bent path, so points on the
+  inside of a bend jumped to other parts of it. The ties made on the path
+  as laid are kept, and its curve no longer overshoots where points sit
+  unevenly.
 - **Deform Path places points with a pen**: a pen tap moves a few pixels
   and was read as a drag, so no point went down. A short press now places
   one, and at edit level 1, where paths are hidden, the tool says to switch

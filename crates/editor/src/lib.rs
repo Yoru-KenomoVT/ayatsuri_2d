@@ -9,6 +9,7 @@
 mod api;
 mod atlas;
 mod audio;
+mod bend_path;
 mod color_pick;
 mod discord;
 pub mod dock;
