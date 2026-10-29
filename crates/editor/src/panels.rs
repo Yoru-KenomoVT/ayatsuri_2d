@@ -17486,17 +17486,13 @@ fn param_slider(
         let selected = held > 0 && (*value - k).abs() <= span * 1e-4;
         let red = Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35));
         if look.blend {
-            // Cubism's blend shape keys: squares, hollow when the selected
-            // objects lack the key, green when they have it
-            let fill =
-                if held > 0 { Color32::from_rgb(0x4C, 0xC0, 0x6A) } else { theme::pal().panel_bg };
-            let edge =
-                if held > 0 { Stroke::new(1.0, Color32::from_rgb(0x2E, 0x7D, 0x40)) } else { ring };
+            // a blend shape parameter's keys are squares, as in Cubism, in the
+            // key's colour like any other key
             painter.rect(
                 Rect::from_center_size(at, vec2(7.2, 7.2)),
                 0.0,
                 fill,
-                edge,
+                ring,
                 egui::StrokeKind::Inside,
             );
             // the selected key: the slider sits on it
