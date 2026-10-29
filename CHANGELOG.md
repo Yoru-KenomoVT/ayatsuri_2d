@@ -132,8 +132,9 @@ meshes and the Parts palette, and the requests from Discord testing.
 - **Blend shape keys on warps, rotation deformers and parts did not show**
   on the Parameter palette's sliders: only art meshes' were counted, so a
   key added to a deformer looked as if it had not been added. They show
-  now, and a blend shape parameter's slider handle is a square, like its
-  keys, as in Cubism.
+  now as squares, hollow when the selected objects lack the key and green
+  when they have it, and a blend shape parameter's slider handle is a
+  square too.
 - **Extended interpolation's keyframes show on the slider**: the keys its
   Score adds between each pair of keys (where the moc3 export writes them)
   are marked as small hollow dots.
