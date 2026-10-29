@@ -189,6 +189,9 @@ pub struct Session {
     /// Every key value each parameter has anywhere in the model, sorted,
     /// for the key dots on the sliders.
     pub param_keys: Vec<Vec<f32>>,
+    /// Per parameter: the keyframes extended interpolation adds between
+    /// keys (its Score), as the moc3 export writes them; drawn on the slider.
+    pub param_curve_points: Vec<Vec<f32>>,
     /// Per-part and per-mesh show/hide from the Parts palette eye column.
     pub part_shown: Vec<bool>,
     pub mesh_shown: Vec<bool>,
@@ -1359,6 +1362,7 @@ impl Session {
         }
 
         let param_keys = keys_of(&model);
+        let param_curve_points = curve_points_of(&model);
 
         let mut combined: Vec<(usize, usize)> = cdi
             .combined
@@ -1417,6 +1421,7 @@ impl Session {
 
             groups,
             param_keys,
+            param_curve_points,
             author: String::new(),
             modified: false,
             preview_tex,
@@ -1831,6 +1836,7 @@ impl Session {
         let values: Vec<f32> =
             (0..self.puppet.model().parameters.len()).map(|i| self.puppet.value(i)).collect();
         self.param_keys = keys_of(&model);
+        self.param_curve_points = curve_points_of(&model);
         self.follow_mesh_ids(&model);
         let part_from = self.follow_part_ids(&model);
         self.deformer_names =
@@ -2324,8 +2330,16 @@ fn keys_of(model: &Model) -> Vec<Vec<f32>> {
             add(&g.binding);
         }
     }
-    // blend shape keys, with the base key at 0.0 among them
-    for shape in model.art_meshes.iter().flat_map(|m| &m.blend_shapes) {
+    // blend shape keys, with the base key at 0.0 among them, on every kind
+    // of object that takes them
+    let shapes = model
+        .art_meshes
+        .iter()
+        .flat_map(|m| &m.blend_shapes)
+        .chain(model.deformers.iter().flat_map(|d| &d.blend_shapes))
+        .chain(model.parts.iter().flat_map(|p| &p.blend_shapes))
+        .chain(model.glues.iter().flat_map(|g| &g.blend_shapes));
+    for shape in shapes {
         if let Some(keys) = param_keys.get_mut(shape.parameter as usize) {
             keys.extend_from_slice(&shape.keys);
             keys.push(0.0);
@@ -2336,6 +2350,39 @@ fn keys_of(model: &Model) -> Vec<Vec<f32>> {
         keys.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
     }
     param_keys
+}
+
+/// Per parameter, the values extended interpolation puts keyframes at
+/// between an object's keys: `points` of them, evenly spaced, between each
+/// pair, on an axis with three keys or more, where `bake_curves` puts them.
+fn curve_points_of(model: &Model) -> Vec<Vec<f32>> {
+    let mut out: Vec<Vec<f32>> = vec![Vec::new(); model.parameters.len()];
+    let bindings = model
+        .parts
+        .iter()
+        .map(|p| &p.binding)
+        .chain(model.deformers.iter().map(|d| &d.binding))
+        .chain(model.art_meshes.iter().map(|m| &m.binding));
+    for b in bindings {
+        for c in &b.curves {
+            let Some(axis) = b.axes.iter().find(|a| a.parameter == c.parameter) else { continue };
+            let Some(list) = out.get_mut(c.parameter as usize) else { continue };
+            if axis.keys.len() < 3 {
+                continue;
+            }
+            let steps = usize::from(c.kind.points().clamp(1, 20)) + 1;
+            for pair in axis.keys.windows(2) {
+                if let [lo, hi] = *pair {
+                    list.extend((1..steps).map(|i| lo + (hi - lo) * i as f32 / steps as f32));
+                }
+            }
+        }
+    }
+    for list in &mut out {
+        list.sort_by(f32::total_cmp);
+        list.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
+    }
+    out
 }
 
 // models load on a worker thread so the window keeps answering; that
@@ -2376,6 +2423,66 @@ mod send_check {
     #[test]
     fn session_can_cross_threads() {
         is_send::<super::Session>();
+    }
+}
+
+#[cfg(test)]
+mod slider_key_tests {
+    use super::*;
+    use ayatsuri_format::model::{AxisCurve, BindingAxis, BlendShape, CurveKind, Parameter, Part};
+
+    fn param(id: &str, blend: bool) -> Parameter {
+        Parameter {
+            id: id.into(),
+            min: if blend { 0.0 } else { -30.0 },
+            max: if blend { 1.0 } else { 30.0 },
+            default: 0.0,
+            repeat: false,
+            decimals: 1,
+            blend_shape: blend,
+        }
+    }
+
+    /// A part keyed on Angle X at -30, 0 and 30 with an SNS curve of two
+    /// points, and a blend shape on Smile with a key at 1.
+    fn model() -> Model {
+        let mut m = Model::new();
+        m.parameters = vec![param("ParamAngleX", false), param("Smile", true)];
+        let mut binding = Binding::default();
+        binding.axes.push(BindingAxis { parameter: 0, keys: vec![-30.0, 0.0, 30.0] });
+        binding.curves.push(AxisCurve { parameter: 0, kind: CurveKind::Sns { points: 2 } });
+        m.parts.push(Part {
+            id: "Head".into(),
+            parent_part: None,
+            visible: true,
+            enabled: true,
+            binding,
+            draw_orders: vec![500.0; 3],
+            offscreen: None,
+            blend_shapes: vec![BlendShape { parameter: 1, keys: vec![1.0], ..Default::default() }],
+        });
+        m
+    }
+
+    #[test]
+    fn a_blend_shape_off_a_mesh_shows_its_keys() {
+        let keys = keys_of(&model());
+        assert_eq!(keys[0], vec![-30.0, 0.0, 30.0]);
+        // the base key at 0 and the shape's own key, though the shape is on a part
+        assert_eq!(keys[1], vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn extended_interpolation_marks_its_keyframes_between_keys() {
+        let points = curve_points_of(&model());
+        assert_eq!(points[0], vec![-20.0, -10.0, 10.0, 20.0]);
+        assert!(points[1].is_empty());
+        // with two keys there is no curve, so nothing between them
+        let mut m = model();
+        if let Some(a) = m.parts[0].binding.axes.first_mut() {
+            a.keys = vec![-30.0, 30.0];
+        }
+        assert!(curve_points_of(&m)[0].is_empty());
     }
 }
 

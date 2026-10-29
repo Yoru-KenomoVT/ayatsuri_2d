@@ -129,6 +129,14 @@ meshes and the Parts palette, and the requests from Discord testing.
   once the drag has gone 6 px and holds until release. A drag that would
   fold the box over itself is not taken, so the art cannot turn inside out
   (as in Krita).
+- **Blend shape keys on warps, rotation deformers and parts did not show**
+  on the Parameter palette's sliders: only art meshes' were counted, so a
+  key added to a deformer looked as if it had not been added. They show
+  now, and a blend shape parameter's slider handle is a square, like its
+  keys, as in Cubism.
+- **Extended interpolation's keyframes show on the slider**: the keys its
+  Score adds between each pair of keys (where the moc3 export writes them)
+  are marked as small hollow dots.
 - **Pasted copies drew over everything**: a pasted mesh went to the end
   of the stacking, so at a tied draw order (500 after an import) a copied
   eye drew over the hair. Copies now go in as one block just above the
