@@ -123,6 +123,10 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Deform Path places points with a pen**: a pen tap moves a few pixels
+  and was read as a drag, so no point went down. A short press now places
+  one, and at edit level 1, where paths are hidden, the tool says to switch
+  to level 2 or 3 instead of ignoring the clicks.
 - **Perspective corners no longer jump mid-drag**: a corner picked the
   side it keeps to from the drag every frame, so a drag near the diagonal
   flipped the taper from one side to the other. The side is now chosen
