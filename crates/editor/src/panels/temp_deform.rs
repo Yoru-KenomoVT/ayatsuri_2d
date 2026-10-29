@@ -12,6 +12,7 @@
 use egui::{Align2, Color32, FontId, Pos2, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
 
 use super::{EditorUi, LiveDrag, LiveTarget, Sel, Tool, parent_delta};
+use crate::bend_path::{Curve, SPAN, Tie};
 use crate::i18n::tr;
 use crate::session::Session;
 use crate::theme;
@@ -74,17 +75,7 @@ enum Frame {
     /// place in the grid (cell units).
     Grid { cols: usize, rows: usize, now: Vec<V>, uv: Vec<V> },
     /// Control points as bound and now, and each bound point's place.
-    Path { rest: Vec<V>, now: Vec<V>, bind: Vec<PathBind> },
-}
-
-/// A point held by a path: the sample span, how far along it, and its
-/// offset in the path's local frame there.
-#[derive(Clone, Copy, Debug)]
-struct PathBind {
-    k: usize,
-    t: f32,
-    a: f32,
-    b: f32,
+    Path { rest: Vec<V>, now: Vec<V>, bind: Vec<Tie> },
 }
 
 /// Which control a drag holds.
@@ -210,86 +201,10 @@ fn grid_find(now: &[V], cols: usize, rows: usize, p: V, guess: V) -> V {
     uv
 }
 
-/// The path through its control points as a smooth curve (Catmull-Rom),
-/// sampled the same way for any points so rest and now line up.
-const SPAN: usize = 12;
-
+/// The path through its control points as a smooth curve, sampled the
+/// same way for any points so rest and now line up.
 fn path_samples(pts: &[V]) -> Vec<V> {
-    if pts.len() < 2 {
-        return pts.to_vec();
-    }
-    let n = pts.len();
-    let pick = |i: isize| at(pts, i.clamp(0, n as isize - 1) as usize);
-    let mut out = Vec::with_capacity((n - 1) * SPAN + 1);
-    for i in 0..n - 1 {
-        let (p0, p1, p2, p3) =
-            (pick(i as isize - 1), pick(i as isize), pick(i as isize + 1), pick(i as isize + 2));
-        for s in 0..SPAN {
-            let t = s as f32 / SPAN as f32;
-            let (t2, t3) = (t * t, t * t * t);
-            out.push(
-                ((p1 * 2.0)
-                    + (p2 - p0) * t
-                    + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2
-                    + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * t3)
-                    * 0.5,
-            );
-        }
-    }
-    out.push(at(pts, n - 1));
-    out
-}
-
-/// Unit tangents at each sample.
-fn tangents(s: &[V]) -> Vec<V> {
-    let n = s.len();
-    (0..n)
-        .map(|i| {
-            let d = at(s, (i + 1).min(n - 1)) - at(s, i.saturating_sub(1));
-            d.normalized()
-        })
-        .collect()
-}
-
-/// The point and frame at span `k`, fraction `t`.
-fn path_frame(s: &[V], tg: &[V], k: usize, t: f32) -> (V, V, V) {
-    let p = at(s, k) + (at(s, k + 1) - at(s, k)) * t;
-    let tan = (at(tg, k) * (1.0 - t) + at(tg, k + 1) * t).normalized();
-    (p, tan, vec2(-tan.y, tan.x))
-}
-
-fn path_bind(rest: &[V], p: V) -> PathBind {
-    let s = path_samples(rest);
-    if s.len() < 2 {
-        let d = s.first().map_or(V::ZERO, |&o| p - o);
-        return PathBind { k: 0, t: 0.0, a: d.x, b: d.y };
-    }
-    let mut best = (f32::MAX, 0, 0.0);
-    for k in 0..s.len() - 1 {
-        let (a, b) = (at(&s, k), at(&s, k + 1));
-        let ab = b - a;
-        let t = if ab.length_sq() > 0.0 {
-            ((p - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let d = (a + ab * t - p).length_sq();
-        if d < best.0 {
-            best = (d, k, t);
-        }
-    }
-    let tg = tangents(&s);
-    let (o, tan, nor) = path_frame(&s, &tg, best.1, best.2);
-    PathBind { k: best.1, t: best.2, a: (p - o).dot(tan), b: (p - o).dot(nor) }
-}
-
-fn path_eval(s: &[V], tg: &[V], b: &PathBind) -> V {
-    if s.len() < 2 {
-        return s.first().map_or(V::ZERO, |&o| o + vec2(b.a, b.b));
-    }
-    let k = b.k.min(s.len() - 2);
-    let (o, tan, nor) = path_frame(s, tg, k, b.t);
-    o + tan * b.a + nor * b.b
+    Curve::new(pts).pts
 }
 
 impl Frame {
@@ -348,9 +263,8 @@ impl Frame {
                 if rest.is_empty() {
                     return base.to_vec();
                 }
-                let s = path_samples(now);
-                let tg = if s.len() >= 2 { tangents(&s) } else { Vec::new() };
-                bind.iter().map(|b| path_eval(&s, &tg, b)).collect()
+                let c = Curve::new(now);
+                bind.iter().map(|b| c.place(b)).collect()
             }
         }
     }
@@ -370,7 +284,8 @@ impl Frame {
                 *bind = if rest.is_empty() {
                     Vec::new()
                 } else {
-                    held.iter().map(|&p| path_bind(rest, p)).collect()
+                    let c = Curve::new(rest);
+                    held.iter().map(|&p| c.tie(p)).collect()
                 };
             }
         }
@@ -1056,7 +971,12 @@ impl EditorUi {
                 s.puppet.update();
                 let landed = td.current(s);
                 td.base = landed.clone();
-                td.frame.rebind(&landed);
+                // a path keeps the ties made on the path as laid: tied again
+                // to the bent path, points on the inside of a bend would
+                // jump to other spans, and each drag would fold the art more
+                if !matches!(td.frame, Frame::Path { .. }) {
+                    td.frame.rebind(&landed);
+                }
                 if let Frame::Quad { rest, now, .. } = &mut td.frame {
                     *rest = *now;
                 }
