@@ -17454,17 +17454,6 @@ fn param_slider(
         [pos2(x_of(min), cy), pos2(x_of(max), cy)],
         Stroke::new(1.0, theme::pal().track),
     );
-    // a blend shape parameter is marked by a rectangular border at 0.0, its
-    // base key, keys or not (Cubism manual, "Blend Shape")
-    if look.blend && (min..=max).contains(&0.0) {
-        let r = Rect::from_center_size(pos2(x_of(0.0), cy), vec2(10.0, 13.0));
-        painter.rect_stroke(
-            r,
-            0.0,
-            Stroke::new(1.2, theme::pal().text_faint),
-            egui::StrokeKind::Middle,
-        );
-    }
     // the keyframes extended interpolation adds between keys: small hollow
     // marks, under the keys, as they are not keys you edit
     for &k in between {
@@ -17494,21 +17483,26 @@ fn param_slider(
         } else {
             Stroke::new(1.6, Color32::from_rgb(0x4C, 0xC0, 0x6A))
         };
-        // a blend shape parameter's keys are rectangles, as in Cubism
         let selected = held > 0 && (*value - k).abs() <= span * 1e-4;
         let red = Stroke::new(1.4, Color32::from_rgb(0xE5, 0x39, 0x35));
         if look.blend {
-            let size = if held > 0 { vec2(6.0, 9.0) } else { vec2(5.0, 8.0) };
+            // Cubism's blend shape keys: squares, hollow when the selected
+            // objects lack the key, green when they have it
+            let fill =
+                if held > 0 { Color32::from_rgb(0x4C, 0xC0, 0x6A) } else { theme::pal().panel_bg };
+            let edge =
+                if held > 0 { Stroke::new(1.0, Color32::from_rgb(0x2E, 0x7D, 0x40)) } else { ring };
             painter.rect(
-                Rect::from_center_size(at, size),
+                Rect::from_center_size(at, vec2(7.2, 7.2)),
                 0.0,
                 fill,
-                ring,
-                egui::StrokeKind::Middle,
+                edge,
+                egui::StrokeKind::Inside,
             );
+            // the selected key: the slider sits on it
             if selected {
                 painter.rect_stroke(
-                    Rect::from_center_size(at, vec2(9.0, 12.0)),
+                    Rect::from_center_size(at, vec2(10.0, 12.0)),
                     0.0,
                     red,
                     egui::StrokeKind::Middle,
@@ -17532,7 +17526,7 @@ fn param_slider(
     let handle = pos2(x_of(*value), cy);
     if look.blend {
         painter.rect_filled(
-            Rect::from_center_size(handle, vec2(8.0, 10.0)),
+            Rect::from_center_size(handle, vec2(7.2, 9.0)),
             0.0,
             theme::pal().accent,
         );
