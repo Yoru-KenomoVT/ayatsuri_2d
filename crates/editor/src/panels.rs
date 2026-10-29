@@ -17369,7 +17369,8 @@ impl EditorUi {
             let axes = binding.map(|b| b.axes.as_slice()).unwrap_or_default();
             let shapes = match *t {
                 Target::ArtMesh(i) => model.art_meshes.get(i).map(|m| m.blend_shapes.as_slice()),
-                _ => None,
+                Target::Deformer(i) => model.deformers.get(i).map(|d| d.blend_shapes.as_slice()),
+                Target::Part(i) => model.parts.get(i).map(|p| p.blend_shapes.as_slice()),
             };
             let held = axes.iter().map(|a| (a.parameter, a.keys.clone())).chain(
                 shapes.unwrap_or_default().iter().map(|b| {
@@ -17439,7 +17440,7 @@ fn param_slider(
     width: f32,
     value: &mut f32,
     (min, max, default): (f32, f32, f32),
-    keys: &[f32],
+    (keys, between): (&[f32], &[f32]),
     look: &KeyLook,
 ) -> (bool, egui::Response, bool) {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click_and_drag());
@@ -17463,6 +17464,11 @@ fn param_slider(
             Stroke::new(1.2, theme::pal().text_faint),
             egui::StrokeKind::Middle,
         );
+    }
+    // the keyframes extended interpolation adds between keys: small hollow
+    // marks, under the keys, as they are not keys you edit
+    for &k in between {
+        painter.circle_stroke(pos2(x_of(k), cy), 1.8, Stroke::new(1.0, theme::pal().text_faint));
     }
     for &k in keys {
         let at = pos2(x_of(k), cy);
@@ -17522,7 +17528,17 @@ fn param_slider(
         [pos2(dx, cy - 4.0), pos2(dx, cy + 4.0)],
         Stroke::new(1.0, theme::pal().track),
     );
-    painter.circle_filled(pos2(x_of(*value), cy), 4.5, theme::pal().accent);
+    // the handle: a square on a blend shape parameter, as its keys are
+    let handle = pos2(x_of(*value), cy);
+    if look.blend {
+        painter.rect_filled(
+            Rect::from_center_size(handle, vec2(8.0, 10.0)),
+            0.0,
+            theme::pal().accent,
+        );
+    } else {
+        painter.circle_filled(handle, 4.5, theme::pal().accent);
+    }
 
     let mut changed = false;
     // the left button only: a right-click opens the menu and must leave the
@@ -18119,6 +18135,7 @@ fn parameter_row(
     };
     let display = s.param_names.get(pi).cloned().unwrap_or_default();
     let keys = s.param_keys.get(pi).cloned().unwrap_or_default();
+    let between = s.param_curve_points.get(pi).cloned().unwrap_or_default();
     let mut v = s.puppet.value(pi);
     ui.horizontal(|ui| {
         // Cubism's "link parameters below": joins this row with the next
@@ -18189,8 +18206,14 @@ fn parameter_row(
             }
         }
         let slider_w = (ui.available_width() - 68.0).max(40.0);
-        let (changed, slider_resp, on_key) =
-            param_slider(ui, slider_w, &mut v, (min, max, default), &keys, &marks.look(pi));
+        let (changed, slider_resp, on_key) = param_slider(
+            ui,
+            slider_w,
+            &mut v,
+            (min, max, default),
+            (&keys, &between),
+            &marks.look(pi),
+        );
         if slider_resp.is_pointer_button_down_on() {
             s.params_held.push(pi);
         }
