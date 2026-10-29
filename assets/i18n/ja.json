@@ -1547,5 +1547,6 @@
   "Auto setup": "自動設定",
   "Manual setup": "手動設定",
   "Interval": "間隔",
-  "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "パーツパレットの順で、一番上の行が最も大きくなります。描画順グループ内のメッシュはそのままです。"
+  "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "パーツパレットの順で、一番上の行が最も大きくなります。描画順グループ内のメッシュはそのままです。",
+  "Deform Path works at edit level 2 or 3": "変形パスは編集レベル2か3で使えます"
 }

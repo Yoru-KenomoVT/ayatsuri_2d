@@ -818,6 +818,10 @@ pub struct EditorUi {
     /// Deform paths per (mesh, edit level 2 or 3), as in Cubism.
     deform_paths: std::collections::HashMap<(usize, u8), Vec<PathPin>>,
     path_grab: Option<PathGrab>,
+    /// Where a press away from the path's points went down: a pen tap
+    /// wanders a few pixels and reads as a drag, so a short one still
+    /// places a point there.
+    path_press: Option<Pos2>,
     art_draft: Option<ayatsuri_format::model::ArtPath>,
     art_grab: Option<ArtGrab>,
     art_edit: Option<(usize, ayatsuri_format::model::ArtPath)>,
@@ -1836,6 +1840,7 @@ impl Default for EditorUi {
             mesh_snapshot: None,
             deform_paths: std::collections::HashMap::new(),
             path_grab: None,
+            path_press: None,
             art_draft: None,
             art_grab: None,
             art_edit: None,
@@ -14072,9 +14077,19 @@ impl EditorUi {
                         pins.iter().filter_map(|p| pin_pos(*p, &pts, &idx)).collect();
                     let probe = if inp.drag_started { inp.origin.or(inp.ptr) } else { inp.ptr };
                     let near = probe.and_then(|p| nearest_within(&path_s, p, 8.0));
-                    if inp.clicked
-                        && let Some(at) = inp.press.or(inp.ptr)
+                    if inp.drag_started {
+                        self.path_press = if near.is_none() { probe } else { None };
+                    }
+                    let tap = if inp.clicked {
+                        inp.press.or(inp.ptr)
+                    } else if inp.drag_stopped
+                        && let Some(at) = self.path_press.take()
                     {
+                        inp.ptr.filter(|p| p.distance(at) <= 10.0).map(|_| at)
+                    } else {
+                        None
+                    };
+                    if let Some(at) = tap {
                         match near {
                             Some(i) if inp.alt => {
                                 if let Some(list) = self.deform_paths.get_mut(&key)
@@ -14156,7 +14171,21 @@ impl EditorUi {
                     }
                     path_s.clear();
                 }
-                (Some(_), _) => {}
+                (Some(_), _) => {
+                    // level 1 shows no paths, as in Cubism, so say so rather
+                    // than ignore the clicks
+                    if resp.hovered()
+                        && let Some(p) = inp.ptr
+                    {
+                        vp.text(
+                            p + vec2(14.0, 14.0),
+                            Align2::LEFT_TOP,
+                            crate::i18n::tr("Deform Path works at edit level 2 or 3"),
+                            FontId::proportional(12.0),
+                            theme::pal().text,
+                        );
+                    }
+                }
                 (None, _) => {
                     // no mesh yet: a click picks one
                     if inp.clicked
