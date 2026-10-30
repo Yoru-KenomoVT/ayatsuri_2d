@@ -11,6 +11,9 @@
 
 ### Fixed
 
+- **The launcher starts the editor when its splash can't open** (#49): on
+  desktops that refuse the splash's transparent window, such as Linux Mint,
+  nothing started at all. The editor now starts without the splash.
 - **Edit Mesh no longer shifts the art after many edits**: a moved or
   added point took its texture spot from the mesh as edited so far, so on
   a mesh under a warp (or posed off its rest) each edit's small error fed

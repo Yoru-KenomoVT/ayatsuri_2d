@@ -108,7 +108,12 @@ fn init_log() {
     }
 }
 
+/// Set once the editor has been asked to start, so a splash window that
+/// fails to open still leaves one way in.
+static EDITOR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn start_editor(open_arg: Option<String>, ready_file: Option<&PathBuf>) -> Result<(), String> {
+    EDITOR_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
     // prefer the sibling binary, fall back to PATH
     let sibling = std::env::current_exe()
         .ok()
@@ -524,9 +529,22 @@ fn main() -> eframe::Result {
             log::warn!("update check: could not start: {e}");
         }
     }
-    eframe::run_native(
+    let fallback_arg = open_arg.clone();
+    let shown = eframe::run_native(
         "ayatsuri2d-launcher",
         options,
         Box::new(move |cc| Ok(Box::new(Launcher::new(&cc.egui_ctx, open_arg, &prefs)))),
-    )
+    );
+    // some desktops (transparent windows on Mint's Cinnamon among them)
+    // can't open the splash at all; the editor starts without it
+    if let Err(e) = &shown {
+        log::warn!("splash could not open: {e}");
+        if !EDITOR_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Err(e) = start_editor(fallback_arg, None) {
+                log::error!("could not start ayatsuri: {e}");
+            }
+            return Ok(());
+        }
+    }
+    shown
 }
