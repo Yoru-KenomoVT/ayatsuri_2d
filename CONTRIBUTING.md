@@ -7,7 +7,8 @@ the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Reporting a bug
 
-[Open an issue](https://github.com/Yoru-KenomoVT/ayatsuri_2d/issues) with:
+[Open an issue](https://github.com/Yoru-KenomoVT/ayatsuri_2d/issues), or
+email [support@ayatsuri-2d.org](mailto:support@ayatsuri-2d.org), with:
 
 - what you did, what you expected, and what happened instead;
 - your OS and the version in Help > About;
@@ -21,8 +22,11 @@ Crashes and models that will not open are the most important reports we
 get. Please do not hold back because you are not sure it is a bug.
 
 **Security problems** (a file that crashes the app or makes it misbehave on
-purpose) should not go in a public issue. Tell a maintainer privately on
-Discord or on GitHub, and we will fix it before it is talked about.
+purpose) should not go in a public issue. Email
+[support@ayatsuri-2d.org](mailto:support@ayatsuri-2d.org), and we will fix
+it before it is talked about.
+
+If you are expecting a reply to an email, check your spam folder.
 
 ## Asking for a feature
 
