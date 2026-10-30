@@ -15050,7 +15050,21 @@ impl EditorUi {
                                 .then(|| mesh_weights(&model_pts, g.indices, p))
                                 .flatten()
                                 .or_else(|| basis_weights(&model_pts, p))
-                                .map(|(c, w)| ayatsuri_core::edit::PastedPoint::At(c, w)),
+                                .map(|(c, w)| ayatsuri_core::edit::PastedPoint::At(c, w))
+                                // a cleared mesh has too few points to place
+                                // on: place it on the art as Mesh Edit began,
+                                // as a click does
+                                .or_else(|| {
+                                    let a = self.mesh_art.as_ref().filter(|a| a.mesh == mi)?;
+                                    let (rp, _) = a.positions.as_chunks::<2>();
+                                    let rp: Vec<Pos2> =
+                                        rp.iter().map(|q| pos2(q[0], q[1])).collect();
+                                    (!a.indices.is_empty())
+                                        .then(|| mesh_weights(&rp, &a.indices, p))
+                                        .flatten()
+                                        .or_else(|| basis_weights(&rp, p))
+                                        .map(|(c, w)| ayatsuri_core::edit::PastedPoint::OnRef(c, w))
+                                }),
                         };
                         match point {
                             Some(pp) => placed.push(pp),
@@ -15520,9 +15534,20 @@ impl EditorUi {
                     done
                 }
                 MeshOp::Paste(mi, points, faces) => {
+                    let reference = self
+                        .mesh_art
+                        .as_ref()
+                        .filter(|a| a.mesh == mi)
+                        .map(|a| a.reference.clone());
                     let mut got = None;
                     let done = s.edit(|m| {
-                        got = ayatsuri_core::edit::paste_points(m, mi, &points, &faces);
+                        got = ayatsuri_core::edit::paste_points(
+                            m,
+                            mi,
+                            &points,
+                            &faces,
+                            reference.as_ref(),
+                        );
                         got.is_some()
                     });
                     if let Some(verts) = got {

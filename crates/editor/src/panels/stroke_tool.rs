@@ -413,7 +413,8 @@ fn draw(
 
 /// Where a point of the art's display lands on the texture: barycentric in
 /// the triangle of the mesh as shown that holds it, else carried on from
-/// the nearest one.
+/// the nearest one. With no faces at all, any three of its points not in a
+/// line carry it, as a click in Mesh Edit places a point.
 fn uv_at(positions: &[f32], uvs: &[f32], indices: &[u16], p: P) -> Option<[f32; 2]> {
     let get = |v: &[f32], i: u16| -> Option<P> {
         let i = i as usize * 2;
@@ -442,7 +443,10 @@ fn uv_at(positions: &[f32], uvs: &[f32], indices: &[u16], p: P) -> Option<[f32; 
             break;
         }
     }
-    let (w, ix, _) = best?;
+    let (w, ix) = match best {
+        Some((w, ix, _)) => (w, ix),
+        None => three_points(positions, p)?,
+    };
     let mut uv = [0.0f32; 2];
     for (k, i) in w.iter().zip(ix) {
         let q = get(uvs, i)?;
@@ -450,6 +454,29 @@ fn uv_at(positions: &[f32], uvs: &[f32], indices: &[u16], p: P) -> Option<[f32; 
         uv[1] += k * q[1];
     }
     Some([uv[0].clamp(0.0, 1.0), uv[1].clamp(0.0, 1.0)])
+}
+
+/// The three points nearest `p` that are not in a line, and `p`'s weights
+/// on them.
+fn three_points(positions: &[f32], p: P) -> Option<([f32; 3], [u16; 3])> {
+    let (pts, _) = positions.as_chunks::<2>();
+    let d = |q: &[f32; 2]| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2);
+    let mut order: Vec<usize> = (0..pts.len().min(u16::MAX as usize)).collect();
+    order.sort_by(|&a, &b| {
+        let (Some(qa), Some(qb)) = (pts.get(a), pts.get(b)) else { return a.cmp(&b) };
+        d(qa).total_cmp(&d(qb))
+    });
+    let (&a, &b) = (order.first()?, order.get(1)?);
+    order.iter().skip(2).find_map(|&c| {
+        let (pa, pb, pc) = (pts.get(a)?, pts.get(b)?, pts.get(c)?);
+        let den = (pb[1] - pc[1]) * (pa[0] - pc[0]) + (pc[0] - pb[0]) * (pa[1] - pc[1]);
+        if den.abs() < 1e-9 {
+            return None;
+        }
+        let w0 = ((pb[1] - pc[1]) * (p[0] - pc[0]) + (pc[0] - pb[0]) * (p[1] - pc[1])) / den;
+        let w1 = ((pc[1] - pa[1]) * (p[0] - pc[0]) + (pa[0] - pc[0]) * (p[1] - pc[1])) / den;
+        Some(([w0, w1, 1.0 - w0 - w1], [a as u16, b as u16, c as u16]))
+    })
 }
 
 impl EditorUi {
@@ -480,7 +507,8 @@ impl EditorUi {
         for &p in &new_pts {
             let Some(uv) = uv_at(&art.positions, &art.uvs, &art.indices, to_model(p)) else {
                 log::warn!(
-                    "stroke mesh: the mesh had no faces on entering Mesh Edit to place it on"
+                    "stroke mesh: the mesh had fewer than three points (not in a line) on \
+                     entering Mesh Edit to place it on"
                 );
                 return;
             };
@@ -538,6 +566,18 @@ mod tests {
     use super::*;
     use crate::session::Session;
     use ayatsuri_format::Model;
+
+    #[test]
+    fn a_mesh_with_no_faces_still_places_the_stroke() {
+        // three points of a square, no faces: uv follows them anyway
+        let positions = [0.0, 0.0, 10.0, 0.0, 0.0, 10.0];
+        let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let uv = uv_at(&positions, &uvs, &[], [5.0, 2.0]).unwrap();
+        assert!((uv[0] - 0.5).abs() < 1e-5 && (uv[1] - 0.2).abs() < 1e-5, "{uv:?}");
+        // fewer than three points, or all in a line: nothing to go by
+        assert!(uv_at(&positions[..4], &uvs[..4], &[], [5.0, 2.0]).is_none());
+        assert!(uv_at(&[0.0, 0.0, 1.0, 0.0, 2.0, 0.0], &uvs, &[], [5.0, 2.0]).is_none());
+    }
     use ayatsuri_format::model::ArtMesh;
 
     /// A unit square of two faces whose texture maps one to one.

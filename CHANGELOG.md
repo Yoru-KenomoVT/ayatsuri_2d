@@ -123,6 +123,11 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Points paste into a cleared mesh, and strokes draw on a mesh with no
+  faces**: both placed new points only from the mesh's own faces, so after
+  Clear a paste did nothing until a triangle was made, and a stroke failed
+  the same way. They now place the points on the art as it was when Mesh
+  Edit began, as a click does, or on any three points not in a line.
 - **Deform paths bend the art smoothly, as in Cubism**: the path is one
   smooth curve through its points (it was straight lines between them, so
   the mesh creased at every point), and the whole mesh follows it. Deform
