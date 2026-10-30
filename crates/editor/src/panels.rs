@@ -19166,6 +19166,28 @@ mod key_cmd_tests {
         ed
     }
 
+    #[test]
+    fn replicate_makes_one_copy_of_each_picked_parameter() {
+        let mut ed = editor();
+        let s = ed.session.as_mut().unwrap();
+        let made = s.edit(|m| {
+            ayatsuri_core::edit::create_parameter(m, "Q".into(), 0.0, 0.0, 1.0).is_some()
+        });
+        assert!(made);
+        s.param_names.resize(2, String::new());
+        s.param_names[0] = "Hair".into();
+        s.param_names[1] = "Hair".into();
+        s.param_picked = vec![0, 1];
+        ed.run_param_cmd(param_menu::ParamCmd::Replicate(0));
+        let s = ed.session.as_ref().unwrap();
+        let ids: Vec<&str> = s.puppet.model().parameters.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["P", "Q", "P2", "Q3"]);
+        // two parameters both called Hair still get copies with their own names
+        assert_eq!(s.param_names, ["Hair", "Hair", "Hair 2", "Hair 3"]);
+        assert_eq!(s.param_colors.len(), 4);
+        assert_eq!(s.param_picked, [2, 3]);
+    }
+
     fn mesh(ed: &EditorUi) -> ArtMesh {
         ed.session.as_ref().unwrap().puppet.model().art_meshes[0].clone()
     }
