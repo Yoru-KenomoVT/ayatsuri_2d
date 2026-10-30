@@ -1348,7 +1348,7 @@
   "Clip groups": "クリップグループ",
   "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "インスペクターでマスクのセットに名前を付けると、複数のメッシュがそれでまとめてクリッピングされ、一緒に変更されます",
   "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "頂点の追加：クリックごとに直前の点から線を引きます。Ctrl+クリックで単独の点、Shift+クリックで線の始点を保持、Escで線を終了、Alt+クリックで点や線を削除",
-  "Delete edge (line): click a line, or its two points": "辺（線）を削除：線をクリック、またはその両端の点をクリック",
+  "Delete edge (line): click a line or its two points, or drag across lines": "辺（線）を削除：線をクリック、またはその両端の点をクリック、または線をなぞってドラッグ",
   "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "線で描いた外周の内側だけに面を作ります。線がない場合は空のテクスチャ上に面を作らず、髪やまつ毛がつながらないようにします",
   "Cubism's Automatic Mesh generator, applied to every selected mesh. Intervals are the gaps between points on the outline and inside. Margins are pixels on a 1024px texture and grow with larger textures: outside is how far the outline stands off the art, inside how far in the inner ring runs.": "Cubism の自動メッシュ生成と同じで、選択中のすべてのメッシュに適用されます。点の間隔は外周と内側の点どうしの間隔です。余白は 1024px テクスチャでのピクセル数で、テクスチャが大きいほど広がります。外側は外周が絵からどれだけ離れるか、内側は内側のリングが縁からどれだけ内に入るかです。",
   "Vertices interval (outside)": "頂点の間隔（外側）",

@@ -452,7 +452,11 @@ impl EditorUi {
                 ),
                 (2, ph::MINUS_CIRCLE, "Delete vertex"),
                 (3, ph::LINE_SEGMENT, "Connect two points with an edge"),
-                (4, ph::SCISSORS, "Delete edge (line): click a line, or its two points"),
+                (
+                    4,
+                    ph::SCISSORS,
+                    "Delete edge (line): click a line or its two points, or drag across lines",
+                ),
             ] {
                 if icon(ui, self.mesh_mode == mode, true, glyph, tip).clicked() {
                     self.mesh_mode = mode;

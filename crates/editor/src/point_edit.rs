@@ -687,6 +687,19 @@ pub fn follow_path(
     out
 }
 
+/// Whether segments a-b and c-d cross (touching ends do not count).
+pub fn segments_cross(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {
+    let o = |p: Pos2, q: Pos2, r: Pos2| (q - p).x * (r - p).y - (q - p).y * (r - p).x;
+    o(a, b, c) * o(a, b, d) < 0.0 && o(c, d, a) * o(c, d, b) < 0.0
+}
+
+/// How far `p` is from the segment a-b.
+pub fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let k = ((p - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+    p.distance(a + ab * k)
+}
+
 /// Even-odd test: is `p` inside the closed outline `poly`?
 pub fn point_in_polygon(p: Pos2, poly: &[Pos2]) -> bool {
     let mut inside = false;
@@ -958,5 +971,14 @@ mod tests {
         };
         // wide: the piece moves whole, 10 apart as it was
         assert!((gap(40.0) - 10.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_sweep_crosses_the_segments_it_cuts() {
+        let (a, b) = (pos2(0.0, 0.0), pos2(10.0, 0.0));
+        assert!(segments_cross(pos2(5.0, -3.0), pos2(5.0, 3.0), a, b));
+        assert!(!segments_cross(pos2(5.0, 1.0), pos2(5.0, 3.0), a, b));
+        assert!((segment_distance(pos2(5.0, 2.0), a, b) - 2.0).abs() < 1e-6);
+        assert!((segment_distance(pos2(13.0, 4.0), a, b) - 5.0).abs() < 1e-6);
     }
 }

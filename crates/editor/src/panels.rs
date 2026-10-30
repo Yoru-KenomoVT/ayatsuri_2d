@@ -781,6 +781,10 @@ pub struct EditorUi {
     mesh_mode: u8,
     /// Points the erase brush has swept over during the current stroke.
     erase_marked: std::collections::BTreeSet<usize>,
+    /// The cut tool's drag: where the pointer was last frame, and the
+    /// edges and lines it has crossed so far (removed on release).
+    cut_sweep: Option<Pos2>,
+    cut_marked: std::collections::BTreeSet<(u16, u16)>,
     /// Mesh Edit's picked points (Select points mode), on `mesh_picked_on`.
     mesh_picked: std::collections::BTreeSet<usize>,
     mesh_picked_on: Option<usize>,
@@ -1870,6 +1874,8 @@ impl Default for EditorUi {
             mesh_clip_cmd: None,
             mesh_autoconnect: true,
             erase_marked: std::collections::BTreeSet::new(),
+            cut_sweep: None,
+            cut_marked: std::collections::BTreeSet::new(),
             pick_radius: 8.0,
             connect_rebuild: true,
             connect_protect: true,
@@ -14582,6 +14588,8 @@ impl EditorUi {
             AddRef(usize, [usize; 3], [f32; 3], Option<(u16, u16)>, Vec<u16>, bool),
             Connect(usize, u16, u16),
             Cut(usize, u16, u16),
+            /// The cut tool's sweep: every edge and line it crossed.
+            CutMany(usize, Vec<(u16, u16)>),
             EraseMany(usize, Vec<usize>),
             Del(usize, usize),
             Paste(usize, Vec<ayatsuri_core::edit::PastedPoint>, Vec<[usize; 3]>),
@@ -14714,6 +14722,54 @@ impl EditorUi {
                     && let Some((a, b)) = edge_at(ptr)
                 {
                     mesh_op = Some(MeshOp::Cut(mi, a, b));
+                }
+                // a drag with the cut tool that starts off a point sweeps:
+                // every edge or line it crosses goes, in one undo step
+                if !space && self.mesh_mode == 4 && !alt {
+                    if resp.drag_started() && near.is_none() {
+                        self.cut_sweep = resp.interact_pointer_pos();
+                        self.cut_marked.clear();
+                    }
+                    if let (Some(from), Some(to)) = (self.cut_sweep, ptr)
+                        && resp.dragged()
+                    {
+                        let (tris, _) = g.indices.as_chunks::<3>();
+                        let lines = self.pending_edges.get(&mi).map(Vec::as_slice).unwrap_or(&[]);
+                        for (a, b) in tris
+                            .iter()
+                            .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+                            .chain(lines.iter().copied())
+                        {
+                            let (Some(&pa), Some(&pb)) =
+                                (screen_pts.get(a as usize), screen_pts.get(b as usize))
+                            else {
+                                continue;
+                            };
+                            if point_edit::segments_cross(from, to, pa, pb)
+                                || point_edit::segment_distance(to, pa, pb) < 6.0
+                            {
+                                self.cut_marked.insert((a.min(b), a.max(b)));
+                            }
+                        }
+                        self.cut_sweep = Some(to);
+                    }
+                    for &(a, b) in &self.cut_marked {
+                        if let (Some(&pa), Some(&pb)) =
+                            (screen_pts.get(a as usize), screen_pts.get(b as usize))
+                        {
+                            vp.line_segment([pa, pb], Stroke::new(3.0, theme::pal().rotation_red));
+                        }
+                    }
+                    if resp.drag_stopped() && self.cut_sweep.take().is_some() {
+                        let edges: Vec<(u16, u16)> =
+                            std::mem::take(&mut self.cut_marked).into_iter().collect();
+                        if !edges.is_empty() {
+                            mesh_op = Some(MeshOp::CutMany(mi, edges));
+                        }
+                    }
+                } else {
+                    self.cut_sweep = None;
+                    self.cut_marked.clear();
                 }
                 // Add vertex on an existing point: the chain moves to it,
                 // drawing a line from the chain's end first
@@ -15609,6 +15665,50 @@ impl EditorUi {
                         log::debug!("mesh {mi}: {a} and {b} were not connected");
                         true
                     }
+                }
+                MeshOp::CutMany(mi, edges) => {
+                    let pending = self.pending_edges.entry(mi).or_default();
+                    let before = pending.len();
+                    pending.retain(|e| !edges.contains(e));
+                    let lines = before - pending.len();
+                    // the faces on the cut edges go; their other sides that
+                    // are not cut themselves stay as lines, as one cut does
+                    let tris: Vec<[u16; 3]> = s
+                        .puppet
+                        .model()
+                        .art_meshes
+                        .get(mi)
+                        .map(|m| m.indices.as_chunks::<3>().0.to_vec())
+                        .unwrap_or_default();
+                    let mut sides: Vec<(u16, u16)> = Vec::new();
+                    let mut faces = false;
+                    for &[x, y, z] in &tris {
+                        let tri_edges = [(x, y), (y, z), (z, x)].map(|(p, q)| (p.min(q), p.max(q)));
+                        if tri_edges.iter().any(|e| edges.contains(e)) {
+                            faces = true;
+                            sides.extend(tri_edges.iter().filter(|e| !edges.contains(e)));
+                        }
+                    }
+                    let ok = !faces
+                        || s.edit(|m| {
+                            let mut any = false;
+                            for &(a, b) in &edges {
+                                any |= ayatsuri_core::edit::remove_edge(m, mi, a, b);
+                            }
+                            any
+                        });
+                    if faces && ok {
+                        let model = s.puppet.model();
+                        for (x, y) in sides {
+                            if !ayatsuri_core::edit::has_edge(model, mi, x, y)
+                                && !pending.contains(&(x, y))
+                            {
+                                pending.push((x, y));
+                            }
+                        }
+                    }
+                    log::debug!("mesh {mi}: cut sweep removed {} edge(s) and line(s)", edges.len());
+                    ok && (faces || lines > 0)
                 }
                 MeshOp::EraseMany(mi, marked) => {
                     self.pending_edges.remove(&mi);
