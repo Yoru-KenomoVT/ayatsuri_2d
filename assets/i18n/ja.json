@@ -1552,5 +1552,11 @@
   "Remove this shortcut": "このショートカットを外す",
   "Output parameters": "出力パラメータ",
   "used by {group}": "{group} で使用中",
-  "Another group already drives a picked parameter; the two will fight over it.": "選んだパラメータの中に、他のグループがすでに動かしているものがあります。2つのグループが競合します。"
+  "Another group already drives a picked parameter; the two will fight over it.": "選んだパラメータの中に、他のグループがすでに動かしているものがあります。2つのグループが競合します。",
+  "Breath": "呼吸",
+  "Idle breathing in the preview; right-click to choose the parameters": "プレビューで待機中の呼吸を再生します。右クリックでパラメータを選択",
+  "Offset": "オフセット",
+  "Peak": "ピーク",
+  "Cycle (s)": "周期（秒）",
+  "Greyed parameters are not in this model and are skipped.": "グレーのパラメータはこのモデルにないため、スキップされます。"
 }

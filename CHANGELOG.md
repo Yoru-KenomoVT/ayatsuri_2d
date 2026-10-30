@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Breath** (#50): the Breath button beside Follow makes the model idle in
+  the preview, as the Cubism SDK's breath does: each listed parameter moves
+  by (offset + peak * sin(2 pi t / cycle)) * weight, and physics reacts to
+  it. Right-click the button to choose the parameters and their numbers;
+  the SDK sample's set (angles, body angle and ParamBreath) is the default.
+  Only the preview moves: keyforms and exports are untouched.
 - **Delete edges by dragging** (#46): in Mesh Edit, a drag with the Delete
   edge tool that starts off a point removes every edge and line it crosses,
   marked red as it goes, in one undo step. The faces on those edges go and

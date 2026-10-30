@@ -1552,5 +1552,11 @@
   "Remove this shortcut": "移除此快捷键",
   "Output parameters": "输出参数",
   "used by {group}": "已被 {group} 使用",
-  "Another group already drives a picked parameter; the two will fight over it.": "所选参数中有已被其他组驱动的参数，两个组会互相冲突。"
+  "Another group already drives a picked parameter; the two will fight over it.": "所选参数中有已被其他组驱动的参数，两个组会互相冲突。",
+  "Breath": "呼吸",
+  "Idle breathing in the preview; right-click to choose the parameters": "在预览中播放待机呼吸；右键选择参数",
+  "Offset": "偏移",
+  "Peak": "峰值",
+  "Cycle (s)": "周期（秒）",
+  "Greyed parameters are not in this model and are skipped.": "灰色的参数不在此模型中，将被跳过。"
 }

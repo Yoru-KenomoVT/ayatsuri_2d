@@ -235,6 +235,8 @@ pub struct Prefs {
     pub api_port: u16,
     pub api_remote: bool,
     pub api_clients: Vec<crate::api::protocol::Client>,
+    /// Breath's parameters; None is the Cubism SDK sample's set.
+    pub breath: Option<Vec<crate::breath::BreathRow>>,
 }
 
 /// The arrow tool's display settings, RGBA.

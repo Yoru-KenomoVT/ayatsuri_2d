@@ -1552,5 +1552,11 @@
   "Remove this shortcut": "Verwyder hierdie kortpad",
   "Output parameters": "Uitsetparameters",
   "used by {group}": "gebruik deur {group}",
-  "Another group already drives a picked parameter; the two will fight over it.": "'n Ander groep dryf reeds 'n gekose parameter; die twee sal met mekaar bots."
+  "Another group already drives a picked parameter; the two will fight over it.": "'n Ander groep dryf reeds 'n gekose parameter; die twee sal met mekaar bots.",
+  "Breath": "Asemhaling",
+  "Idle breathing in the preview; right-click to choose the parameters": "Rustige asemhaling in die voorskou; regsklik om die parameters te kies",
+  "Offset": "Verskuiwing",
+  "Peak": "Piek",
+  "Cycle (s)": "Siklus (s)",
+  "Greyed parameters are not in this model and are skipped.": "Grys parameters is nie in hierdie model nie en word oorgeslaan."
 }
