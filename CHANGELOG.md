@@ -123,6 +123,10 @@ meshes and the Parts palette, and the requests from Discord testing.
 
 ### Fixed
 
+- **Security updates: zip 9.0.5 and rustls 0.23.46.** zip fixes a critical
+  advisory in how ZIP archives are read (used by the importer and the
+  updater); rustls fixes five advisories in the TLS library the update
+  check connects with.
 - **Points paste into a cleared mesh, and strokes draw on a mesh with no
   faces**: both placed new points only from the mesh's own faces, so after
   Clear a paste did nothing until a triangle was made, and a stroke failed
