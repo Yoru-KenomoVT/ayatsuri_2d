@@ -784,6 +784,13 @@ pub struct EditorUi {
     mesh_mode: u8,
     /// Points the erase brush has swept over during the current stroke.
     erase_marked: std::collections::BTreeSet<usize>,
+    /// The other meshes in this Mesh Edit session (several were selected on
+    /// entering): a click on one makes it the mesh edited, Auto Mesh runs
+    /// on all of them.
+    mesh_edit_also: Vec<usize>,
+    /// The solo that was on before an Edit Mesh (Solo) session, restored
+    /// when it ends.
+    mesh_edit_solo: Option<Option<std::collections::HashSet<String>>>,
     /// The cut tool's drag: where the pointer was last frame, and the
     /// edges and lines it has crossed so far (removed on release).
     cut_sweep: Option<Pos2>,
@@ -1879,6 +1886,8 @@ impl Default for EditorUi {
             mesh_clip_cmd: None,
             mesh_autoconnect: true,
             erase_marked: std::collections::BTreeSet::new(),
+            mesh_edit_also: Vec::new(),
+            mesh_edit_solo: None,
             cut_sweep: None,
             cut_marked: std::collections::BTreeSet::new(),
             pick_radius: 8.0,
@@ -3678,10 +3687,22 @@ impl EditorUi {
                         {
                             ui.close();
                             if let Some(Sel::Mesh(mi)) = self.selected {
-                                self.mesh_edit = Some(mi);
-                                self.mesh_drag = None;
-                                self.mesh_snapshot =
-                                    self.session.as_ref().map(|s| s.puppet.model().clone());
+                                self.enter_mesh_edit(mi, false);
+                            }
+                        }
+                        if ui
+                            .add_enabled(
+                                mesh_sel,
+                                egui::Button::new(crate::i18n::tr("Edit Mesh (Solo)")),
+                            )
+                            .on_hover_text(crate::i18n::tr(
+                                "Edit the selected meshes with everything else hidden",
+                            ))
+                            .clicked()
+                        {
+                            ui.close();
+                            if let Some(Sel::Mesh(mi)) = self.selected {
+                                self.enter_mesh_edit(mi, true);
                             }
                         }
                         if ui
@@ -4793,7 +4814,16 @@ impl EditorUi {
     }
 
     fn mesh_edit_window(&mut self, ui: &mut Ui) {
-        let Some(mi) = self.mesh_edit else { return };
+        let Some(mi) = self.mesh_edit else {
+            // however the session ended, its extras end with it
+            self.mesh_edit_also.clear();
+            if let Some(before) = self.mesh_edit_solo.take()
+                && let Some(s) = &mut self.session
+            {
+                s.solo = before;
+            }
+            return;
+        };
         let (verts, tris, id) =
             match self.session.as_ref().and_then(|s| s.puppet.model().art_meshes.get(mi)) {
                 Some(am) => (am.vertex_count as usize, am.indices.len() / 3, am.id.clone()),
@@ -4808,6 +4838,12 @@ impl EditorUi {
             .at(ui.ctx().content_rect().right_top() + vec2(-200.0, 220.0))
             .show(ui.ctx(), |ui| {
                 ui.label(truncate(&id, 28));
+                if !self.mesh_edit_also.is_empty() {
+                    ui.weak(crate::i18n::trf(
+                        "{count} meshes: click one to edit it",
+                        &[("count", &(self.mesh_edit_also.len() + 1))],
+                    ));
+                }
                 ui.weak(crate::i18n::trf(
                     "{verts} vertices · {tris} triangles",
                     &[("verts", &verts), ("tris", &tris)],
@@ -4855,6 +4891,12 @@ impl EditorUi {
         }
         if done {
             self.mesh_edit = None;
+            self.mesh_edit_also.clear();
+            if let Some(before) = self.mesh_edit_solo.take()
+                && let Some(s) = &mut self.session
+            {
+                s.solo = before;
+            }
             self.mesh_drag = None;
             self.mesh_snapshot = None;
             self.mesh_mode = 0;
@@ -6190,6 +6232,31 @@ impl EditorUi {
     /// Cubism's auto mesh presets do. Spacing and margin are texture pixels.
     /// The meshes a mesh action works on: the one being edited, else the
     /// selection.
+    /// Start Mesh Edit on `mi`, with the rest of the mesh pick along when
+    /// `mi` is in it; `solo` hides everything else until it ends.
+    fn enter_mesh_edit(&mut self, mi: usize, solo: bool) {
+        self.mesh_edit = Some(mi);
+        self.mesh_edit_also = mesh_pick_others(&self.multi_sel, mi);
+        self.mesh_drag = None;
+        let Some(s) = &mut self.session else { return };
+        self.mesh_snapshot = Some(s.puppet.model().clone());
+        if solo {
+            let ids: std::collections::HashSet<String> = std::iter::once(mi)
+                .chain(self.mesh_edit_also.iter().copied())
+                .filter_map(|m| s.puppet.model().art_meshes.get(m).map(|a| a.id.clone()))
+                .collect();
+            self.mesh_edit_solo = Some(s.solo.replace(ids));
+        }
+        if !self.mesh_edit_also.is_empty() {
+            log::info!("Mesh Edit on {} meshes", self.mesh_edit_also.len() + 1);
+        }
+    }
+
+    /// Every mesh in the Mesh Edit session, the one edited first.
+    fn mesh_edit_set(&self) -> Vec<usize> {
+        self.mesh_edit.into_iter().chain(self.mesh_edit_also.iter().copied()).collect()
+    }
+
     fn action_targets(&self) -> Vec<usize> {
         match self.mesh_edit {
             Some(mi) => vec![mi],
@@ -6200,6 +6267,10 @@ impl EditorUi {
     fn run_mesh_action(&mut self, action: MeshAction) {
         let targets = self.action_targets();
         match action {
+            // Auto Mesh covers every mesh in a Mesh Edit session
+            MeshAction::AutoMesh if self.mesh_edit.is_some() => {
+                self.auto_mesh_many(&self.mesh_edit_set())
+            }
             MeshAction::AutoMesh => self.auto_mesh_many(&targets),
             MeshAction::Reset => {
                 let Some(s) = &mut self.session else { return };
@@ -7297,8 +7368,7 @@ impl EditorUi {
                     self.mesh_edit = None;
                     self.mesh_drag = None;
                 } else if let Some(Sel::Mesh(mi)) = self.selected {
-                    self.mesh_edit = Some(mi);
-                    self.mesh_snapshot = self.session.as_ref().map(|s| s.puppet.model().clone());
+                    self.enter_mesh_edit(mi, false);
                 }
             }
             "auto-mesh" if have => self.run_mesh_action(MeshAction::AutoMesh),
@@ -12133,6 +12203,7 @@ impl EditorUi {
                 {
                     self.selected = Some(Sel::Mesh(mi));
                     self.mesh_edit = Some(mi);
+                    self.mesh_edit_also = mesh_pick_others(&self.multi_sel, mi);
                     self.mesh_drag = None;
                     self.mesh_snapshot = Some(s.puppet.model().clone());
                 }
@@ -12227,6 +12298,7 @@ impl EditorUi {
             if let Some(mi) = cur.or(hits.first().copied()) {
                 self.selected = Some(Sel::Mesh(mi));
                 self.mesh_edit = Some(mi);
+                self.mesh_edit_also = mesh_pick_others(&self.multi_sel, mi);
                 self.mesh_drag = None;
                 self.mesh_snapshot = Some(s.puppet.model().clone());
             } else {
@@ -14684,6 +14756,8 @@ impl EditorUi {
             Paste(usize, Vec<ayatsuri_core::edit::PastedPoint>, Vec<[usize; 3]>),
         }
         let mut mesh_op: Option<MeshOp> = None;
+        // a click that moved the editing to another mesh does nothing else
+        let mut mesh_switched = false;
         if self.mesh_edit.is_none() {
             self.mesh_art = None;
             self.stroke_edit = None;
@@ -14691,6 +14765,67 @@ impl EditorUi {
         if let Some(mi) = self.mesh_edit {
             vp.rect_filled(view, 0.0, Color32::from_black_alpha(150));
             let ptr = ui.ctx().input(|i| i.pointer.latest_pos());
+            // the session's other meshes: their lines faint, and a click on
+            // one (off the mesh being edited) moves the editing to it
+            let mut switch_to = None;
+            let screen_tris = |m: usize| -> Vec<[Pos2; 3]> {
+                let Some(g) = s.puppet.mesh_geometry(m) else { return Vec::new() };
+                let (pairs, _) = g.positions.as_chunks::<2>();
+                let pts: Vec<Pos2> = pairs.iter().map(|q| to_screen(q[0], q[1])).collect();
+                g.indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .filter_map(|t| {
+                        Some([
+                            *pts.get(t[0] as usize)?,
+                            *pts.get(t[1] as usize)?,
+                            *pts.get(t[2] as usize)?,
+                        ])
+                    })
+                    .collect()
+            };
+            let inside = |tris: &[[Pos2; 3]], p: Pos2| {
+                tris.iter().any(|t| point_edit::point_in_polygon(p, t))
+            };
+            let pick = resp.clicked() && self.mesh_mode == 0;
+            let here = pick.then(|| resp.interact_pointer_pos()).flatten();
+            let on_current = here.is_some_and(|p| inside(&screen_tris(mi), p));
+            for &other in &self.mesh_edit_also {
+                let tris = screen_tris(other);
+                let faint = theme::pal().text_faint.gamma_multiply(0.5);
+                for t in &tris {
+                    vp.add(egui::Shape::closed_line(t.to_vec(), Stroke::new(0.6, faint)));
+                }
+                if switch_to.is_none()
+                    && !on_current
+                    && let Some(p) = here
+                    && inside(&tris, p)
+                {
+                    switch_to = Some(other);
+                }
+            }
+            if let Some(other) = switch_to {
+                let unfinished =
+                    s.puppet.model().art_meshes.get(mi).and_then(|m| {
+                        mesh_unfinished(m.vertex_count as usize, m.indices.len() / 3)
+                    });
+                if let Some(why) = unfinished {
+                    set_notice(&mut self.notice, crate::i18n::tr(why));
+                } else {
+                    self.mesh_edit_also.retain(|&m| m != other);
+                    self.mesh_edit_also.push(mi);
+                    self.mesh_edit = Some(other);
+                    self.selected = Some(Sel::Mesh(other));
+                    self.mesh_drag = None;
+                    self.edge_first = None;
+                    self.mesh_picked.clear();
+                    self.cut_sweep = None;
+                    self.cut_marked.clear();
+                    mesh_switched = true;
+                    ui.ctx().request_repaint();
+                }
+            }
             let mesh_id = Some(s.mesh_name(mi));
             let parent = s.puppet.model().art_meshes.get(mi).and_then(|m| m.parent_deformer);
             let tex_slot =
@@ -15611,7 +15746,7 @@ impl EditorUi {
                 }
             }
         }
-        if let Some(op) = mesh_op {
+        if let Some(op) = mesh_op.filter(|_| !mesh_switched) {
             // the points this op moves or adds, whose texture spot is read
             // again where they end up drawn
             let settle: Option<(usize, Vec<usize>)> = {
@@ -18360,6 +18495,20 @@ fn set_notice(slot: &mut Option<(String, Option<f64>)>, text: &str) {
 
 /// Why a mesh being edited cannot be finished yet: it needs three points and
 /// a triangle to be drawn at all. Cancel still puts it back.
+/// The rest of the mesh pick, when `mi` is in it: the other meshes a Mesh
+/// Edit session on `mi` takes along.
+fn mesh_pick_others(pick: &[usize], mi: usize) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    if pick.contains(&mi) {
+        for &m in pick {
+            if m != mi && !out.contains(&m) {
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
 fn mesh_unfinished(verts: usize, tris: usize) -> Option<&'static str> {
     if verts < 3 {
         Some("A mesh needs at least three points. Add points, or Cancel to undo the edit.")
@@ -19440,6 +19589,19 @@ mod key_cmd_tests {
         ed.session = Some(s);
         ed.selected = Some(Sel::Mesh(0));
         ed
+    }
+
+    #[test]
+    fn mesh_edit_takes_the_rest_of_the_pick_and_solo_ends_with_it() {
+        assert_eq!(mesh_pick_others(&[3, 1, 3, 2], 1), [3, 2]);
+        assert!(mesh_pick_others(&[3, 2], 1).is_empty());
+        let mut ed = editor();
+        ed.multi_sel = vec![0];
+        ed.enter_mesh_edit(0, true);
+        assert_eq!(ed.mesh_edit_set(), [0]);
+        let solo = ed.session.as_ref().unwrap().solo.clone().unwrap();
+        assert!(solo.contains("ArtMesh0"));
+        assert_eq!(ed.mesh_edit_solo, Some(None));
     }
 
     #[test]

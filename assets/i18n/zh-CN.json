@@ -1558,5 +1558,8 @@
   "Offset": "偏移",
   "Peak": "峰值",
   "Cycle (s)": "周期（秒）",
-  "Greyed parameters are not in this model and are skipped.": "灰色的参数不在此模型中，将被跳过。"
+  "Greyed parameters are not in this model and are skipped.": "灰色的参数不在此模型中，将被跳过。",
+  "Edit Mesh (Solo)": "编辑网格（单独显示）",
+  "Edit the selected meshes with everything else hidden": "隐藏其他所有内容，编辑所选网格",
+  "{count} meshes: click one to edit it": "{count} 个网格：点击其中一个进行编辑"
 }

@@ -1558,5 +1558,8 @@
   "Offset": "Verschuiving",
   "Peak": "Piek",
   "Cycle (s)": "Periode (s)",
-  "Greyed parameters are not in this model and are skipped.": "Grijze parameters zitten niet in dit model en worden overgeslagen."
+  "Greyed parameters are not in this model and are skipped.": "Grijze parameters zitten niet in dit model en worden overgeslagen.",
+  "Edit Mesh (Solo)": "Mesh bewerken (solo)",
+  "Edit the selected meshes with everything else hidden": "Bewerk de gekozen meshes met al het andere verborgen",
+  "{count} meshes: click one to edit it": "{count} meshes: klik er een aan om die te bewerken"
 }
