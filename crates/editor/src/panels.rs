@@ -566,6 +566,9 @@ pub struct EditorUi {
     pub(crate) physics_on: bool,
     /// Drive the standard face/body/eye parameters from the cursor.
     follow_cursor: bool,
+    /// Breath in the preview: idle sine motion on a few parameters.
+    breath_on: bool,
+    breath: crate::breath::Breath,
     follow: Vec2,
     /// Cubism's edit level: 1 meshes, 2 deformers, 3 structure.
     edit_level: u8,
@@ -1751,6 +1754,8 @@ impl Default for EditorUi {
 
             physics_on: true,
             follow_cursor: false,
+            breath_on: false,
+            breath: Default::default(),
             follow: Vec2::ZERO,
             edit_level: 2,
             rebind: None,
@@ -2312,7 +2317,7 @@ impl EditorUi {
     /// frame. One comparison a frame and a line only on a change, so the
     /// log says what the user did without a line per frame.
     fn log_state_changes(&mut self) {
-        let states: [(&str, bool); 28] = [
+        let states: [(&str, bool); 29] = [
             ("Settings", self.show_settings),
             ("API window", self.show_api_window),
             ("Model Statistics", self.show_stats),
@@ -2338,6 +2343,7 @@ impl EditorUi {
             ("Mesh Edit", self.mesh_edit.is_some()),
             ("Physics", self.physics_on),
             ("Follow", self.follow_cursor),
+            ("Breath", self.breath_on),
             ("Temporary Deform Tool", self.tdeform.is_some()),
             ("Playlist playback", self.phys_page.pl_playing),
             ("Mirror Edit", self.mirror_edit),
@@ -4158,6 +4164,22 @@ impl EditorUi {
                     self.follow_cursor = !self.follow_cursor;
                     log::debug!("follow cursor {}", if self.follow_cursor { "on" } else { "off" });
                 }
+                let breath_btn = ui
+                    .selectable_label(self.breath_on, crate::i18n::tr("Breath"))
+                    .on_hover_text(crate::i18n::tr(
+                        "Idle breathing in the preview; right-click to choose the parameters",
+                    ));
+                if breath_btn.clicked() {
+                    self.breath_on = !self.breath_on;
+                    log::debug!("breath {}", if self.breath_on { "on" } else { "off" });
+                    if !self.breath_on
+                        && let Some(s) = &mut self.session
+                    {
+                        self.breath.stop(&mut s.puppet);
+                        s.dirty = true;
+                    }
+                }
+                breath_btn.context_menu(|ui| self.breath_settings(ui));
                 ui.separator();
                 if let Some(s) = &self.session {
                     ui.weak(&s.name);
@@ -4573,9 +4595,17 @@ impl EditorUi {
                     }
                 }
             }
+            // breath goes ahead of physics, which reacts to it
+            let breathing = self.breath_on && {
+                let rows = self.prefs.breath.clone().unwrap_or_else(crate::breath::sdk_rows);
+                self.breath.step(&mut s.puppet, &rows, dt)
+            };
+            if breathing {
+                s.dirty = true;
+            }
             let physics_moved =
                 self.physics_on && s.puppet.has_physics() && s.puppet.step_physics(dt);
-            let animating = following || physics_moved;
+            let animating = following || physics_moved || breathing;
             if physics_moved {
                 s.dirty = true;
             }
@@ -6754,6 +6784,65 @@ impl EditorUi {
             }
         } else if !open {
             self.new_param = None;
+        }
+    }
+
+    /// Breath's parameters, from the Breath button's right-click menu: each
+    /// row adds (offset + peak * sin(2 pi t / cycle)) * weight.
+    fn breath_settings(&mut self, ui: &mut Ui) {
+        let mut rows = self.prefs.breath.clone().unwrap_or_else(crate::breath::sdk_rows);
+        let ids: Vec<String> = self
+            .session
+            .as_ref()
+            .map(|s| s.puppet.model().parameters.iter().map(|p| p.id.clone()).collect())
+            .unwrap_or_default();
+        let before = rows.clone();
+        let mut remove = None;
+        egui::Grid::new("breath-rows").num_columns(6).spacing([6.0, 4.0]).show(ui, |ui| {
+            for h in ["Parameter", "Offset", "Peak", "Cycle (s)", "Weight"] {
+                ui.weak(crate::i18n::tr(h));
+            }
+            ui.end_row();
+            for (i, r) in rows.iter_mut().enumerate() {
+                let missing = !ids.contains(&r.param);
+                egui::ComboBox::from_id_salt(("breath-param", i))
+                    .width(130.0)
+                    .selected_text(if missing {
+                        egui::RichText::new(&r.param).color(theme::pal().text_faint)
+                    } else {
+                        egui::RichText::new(&r.param)
+                    })
+                    .show_ui(ui, |ui| {
+                        for id in &ids {
+                            ui.selectable_value(&mut r.param, id.clone(), id);
+                        }
+                    });
+                ui.add(egui::DragValue::new(&mut r.offset).speed(0.05));
+                ui.add(egui::DragValue::new(&mut r.peak).speed(0.05));
+                ui.add(egui::DragValue::new(&mut r.cycle).speed(0.05).range(0.1..=120.0));
+                ui.add(egui::DragValue::new(&mut r.weight).speed(0.01).range(0.0..=1.0));
+                if ui.small_button(egui_phosphor::regular::X).clicked() {
+                    remove = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+        if let Some(i) = remove {
+            rows.remove(i);
+        }
+        ui.horizontal(|ui| {
+            if ui.button(crate::i18n::tr("Add")).clicked() {
+                let param = ids.first().cloned().unwrap_or_default();
+                rows.push(crate::breath::BreathRow { param, ..Default::default() });
+            }
+            if ui.button(crate::i18n::tr("Reset")).clicked() {
+                rows = crate::breath::sdk_rows();
+            }
+        });
+        ui.weak(crate::i18n::tr("Greyed parameters are not in this model and are skipped."));
+        if rows != before {
+            self.prefs.breath = (rows != crate::breath::sdk_rows()).then_some(rows);
+            self.prefs.save();
         }
     }
 

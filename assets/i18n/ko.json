@@ -1552,5 +1552,11 @@
   "Remove this shortcut": "이 단축키 해제",
   "Output parameters": "출력 파라미터",
   "used by {group}": "{group}에서 사용 중",
-  "Another group already drives a picked parameter; the two will fight over it.": "선택한 파라미터 중 다른 그룹이 이미 움직이는 것이 있습니다. 두 그룹이 서로 충돌합니다."
+  "Another group already drives a picked parameter; the two will fight over it.": "선택한 파라미터 중 다른 그룹이 이미 움직이는 것이 있습니다. 두 그룹이 서로 충돌합니다.",
+  "Breath": "호흡",
+  "Idle breathing in the preview; right-click to choose the parameters": "미리보기에서 대기 호흡을 재생합니다. 우클릭으로 파라미터 선택",
+  "Offset": "오프셋",
+  "Peak": "피크",
+  "Cycle (s)": "주기(초)",
+  "Greyed parameters are not in this model and are skipped.": "회색 파라미터는 이 모델에 없으므로 건너뜁니다."
 }
