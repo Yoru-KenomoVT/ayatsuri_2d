@@ -1549,5 +1549,8 @@
   "Interval": "間隔",
   "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "パーツパレットの順で、一番上の行が最も大きくなります。描画順グループ内のメッシュはそのままです。",
   "Deform Path works at edit level 2 or 3": "変形パスは編集レベル2か3で使えます",
-  "Remove this shortcut": "このショートカットを外す"
+  "Remove this shortcut": "このショートカットを外す",
+  "Output parameters": "出力パラメータ",
+  "used by {group}": "{group} で使用中",
+  "Another group already drives a picked parameter; the two will fight over it.": "選んだパラメータの中に、他のグループがすでに動かしているものがあります。2つのグループが競合します。"
 }
