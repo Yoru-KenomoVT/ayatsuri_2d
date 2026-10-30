@@ -19,7 +19,9 @@ enum Placement {
 
 pub(super) struct DeformerDialog {
     warp: bool,
+    /// The name shown in the palettes; empty shows the ID.
     name: String,
+    id: String,
     part: Option<u32>,
     placement: Placement,
     /// Set Parent Manually's choice; None is the root.
@@ -41,17 +43,12 @@ impl EditorUi {
             Some(Sel::Deformer(d)) => model.deformers.get(d).and_then(|x| x.parent_part),
             _ => meshes.first().and_then(|&m| model.art_meshes.get(m)).and_then(|m| m.parent_part),
         };
-        let kind = if warp { "Warp" } else { "Rotation" };
-        let mut n = model.deformers.len();
-        let mut name = format!("{kind}{n}");
-        while model.deformers.iter().any(|d| d.id == name) {
-            n += 1;
-            name = format!("{kind}{n}");
-        }
+        let id = self.next_def_id(warp);
         let has_selection = !meshes.is_empty() || matches!(self.selected, Some(Sel::Deformer(_)));
         self.deformer_dialog = Some(DeformerDialog {
             warp,
-            name,
+            name: String::new(),
+            id,
             part,
             placement: if has_selection { Placement::ParentOfSelection } else { Placement::Manual },
             manual_parent: None,
@@ -59,6 +56,20 @@ impl EditorUi {
             rows: self.tool_opts.warp_rows,
             click,
         });
+    }
+
+    /// The ID a new deformer starts with: the last one made, counted on,
+    /// else Warp or Rotation and the first free number.
+    fn next_def_id(&self, warp: bool) -> String {
+        let Some(s) = &self.session else { return String::new() };
+        let taken = |id: &str| s.puppet.model().deformers.iter().any(|d| d.id == id);
+        match &self.last_def_id {
+            Some(last) => next_id(last, taken),
+            None => {
+                let kind = if warp { "Warp" } else { "Rotation" };
+                next_id(&format!("{kind}{}", s.puppet.model().deformers.len().max(1) - 1), taken)
+            }
+        }
     }
 
     pub(super) fn deformer_dialog_window(&mut self, ui: &mut Ui) {
@@ -115,7 +126,16 @@ impl EditorUi {
                     });
                 ui.end_row();
                 ui.label(crate::i18n::tr("Name"));
-                ui.add(egui::TextEdit::singleline(&mut dlg.name).desired_width(200.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut dlg.name)
+                        .desired_width(200.0)
+                        .hint_text(dlg.id.clone()),
+                );
+                ui.end_row();
+                ui.label(crate::i18n::tr("ID"));
+                if ui.add(egui::TextEdit::singleline(&mut dlg.id).desired_width(200.0)).changed() {
+                    id_text(&mut dlg.id);
+                }
                 ui.end_row();
                 if dlg.warp {
                     ui.label(crate::i18n::tr("Conversion divisions"));
@@ -200,18 +220,12 @@ impl EditorUi {
         if create {
             self.create_from_dialog();
             if keep_open {
-                // next name, same settings
+                // next ID, same settings
                 let warp = self.deformer_dialog.as_ref().is_some_and(|d| d.warp);
-                if let Some(s) = &self.session
-                    && let Some(d) = &mut self.deformer_dialog
-                {
-                    let kind = if warp { "Warp" } else { "Rotation" };
-                    let mut n = s.puppet.model().deformers.len();
-                    d.name = format!("{kind}{n}");
-                    while s.puppet.model().deformers.iter().any(|x| x.id == d.name) {
-                        n += 1;
-                        d.name = format!("{kind}{n}");
-                    }
+                let id = self.next_def_id(warp);
+                if let Some(d) = &mut self.deformer_dialog {
+                    d.id = id;
+                    d.name.clear();
                 }
             } else {
                 self.deformer_dialog = None;
@@ -231,18 +245,13 @@ impl EditorUi {
 
     fn create_from_dialog(&mut self) {
         let Some(dlg) = &self.deformer_dialog else { return };
-        let (warp, name, part, placement, manual_parent, cols, rows, click) = (
-            dlg.warp,
-            dlg.name.trim().to_string(),
-            dlg.part,
-            dlg.placement,
-            dlg.manual_parent,
-            dlg.cols,
-            dlg.rows,
-            dlg.click,
-        );
+        let mut name = dlg.id.trim().to_string();
+        id_text(&mut name);
+        let label = dlg.name.trim().to_string();
+        let (warp, part, placement, manual_parent, cols, rows, click) =
+            (dlg.warp, dlg.part, dlg.placement, dlg.manual_parent, dlg.cols, dlg.rows, dlg.click);
         if name.is_empty() {
-            log::warn!("give the deformer a name");
+            log::warn!("give the deformer an ID");
             return;
         }
         self.tool_opts.warp_cols = cols;
@@ -431,6 +440,15 @@ impl EditorUi {
                     if warp { "warp" } else { "rotation" },
                     children.len()
                 );
+                if !label.is_empty() && label != name {
+                    if s.deformer_names.len() <= di {
+                        s.deformer_names.resize(di + 1, String::new());
+                    }
+                    if let Some(slot) = s.deformer_names.get_mut(di) {
+                        *slot = label;
+                    }
+                }
+                self.last_def_id = Some(name.clone());
                 self.selected = Some(Sel::Deformer(di));
                 self.multi_sel.clear();
                 self.def_pick.clear();
@@ -440,6 +458,28 @@ impl EditorUi {
                 "could not create {name}: the selected objects must share one parent deformer"
             ),
         }
+    }
+}
+
+/// An ID as typed: IDs hold no spaces, so each becomes `_`.
+pub(super) fn id_text(id: &mut String) {
+    if id.contains(char::is_whitespace) {
+        *id = id.chars().map(|c| if c.is_whitespace() { '_' } else { c }).collect();
+    }
+}
+
+/// The next ID after `last`: its trailing number counted on to the first
+/// one free, so Head_Rotation gives Head_Rotation2 and Hair_L3 Hair_L4.
+pub(super) fn next_id(last: &str, taken: impl Fn(&str) -> bool) -> String {
+    let base = last.trim_end_matches(|c: char| c.is_ascii_digit());
+    let mut n: u32 =
+        last.get(base.len()..).and_then(|d| d.parse().ok()).map_or(2, |n: u32| n.saturating_add(1));
+    loop {
+        let id = format!("{base}{n}");
+        if !taken(&id) || n == u32::MAX {
+            return id;
+        }
+        n += 1;
     }
 }
 
@@ -475,7 +515,7 @@ mod tests {
         ed.def_pick = vec![0, 1, 2];
         ed.open_deformer_dialog(true, None);
         if let Some(d) = &mut ed.deformer_dialog {
-            d.name = "Eyes".into();
+            d.id = "Eyes".into();
         }
         ed.create_from_dialog();
         let model = ed.session.as_ref().unwrap().puppet.model();
@@ -485,5 +525,34 @@ mod tests {
             assert_eq!(d.parent_deformer, Some(parent), "{id} goes under the new warp");
         }
         assert!(ed.def_pick.is_empty());
+    }
+
+    #[test]
+    fn the_next_id_counts_on_from_the_last() {
+        let taken = |id: &str| ["Head_Rotation2", "Hair_L4"].contains(&id);
+        assert_eq!(next_id("Head_Rotation", taken), "Head_Rotation3");
+        assert_eq!(next_id("Hair_L3", taken), "Hair_L5");
+        assert_eq!(next_id("Warp9", |_| false), "Warp10");
+        let mut id = "Head Rotation L".to_string();
+        id_text(&mut id);
+        assert_eq!(id, "Head_Rotation_L");
+    }
+
+    #[test]
+    fn a_new_deformer_takes_its_id_and_name_and_the_next_starts_from_it() {
+        let ctx = egui::Context::default();
+        let mut ed = EditorUi::new();
+        ed.session = Some(Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap());
+        ed.open_deformer_dialog(true, None);
+        if let Some(d) = &mut ed.deformer_dialog {
+            d.id = "Head Rotation".into();
+            d.name = "Head".into();
+        }
+        ed.create_from_dialog();
+        let s = ed.session.as_ref().unwrap();
+        let di = s.puppet.model().deformers.iter().position(|d| d.id == "Head_Rotation").unwrap();
+        assert_eq!(s.deformer_names[di], "Head");
+        ed.open_deformer_dialog(true, None);
+        assert_eq!(ed.deformer_dialog.as_ref().unwrap().id, "Head_Rotation2");
     }
 }

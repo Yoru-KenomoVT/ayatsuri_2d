@@ -538,7 +538,7 @@ impl EditorUi {
                     self.session.as_ref().map(|s| s.groups.len().saturating_sub(1)).unwrap_or(0);
                 self.new_param = Some(ParamNew {
                     name: String::new(),
-                    id: String::new(),
+                    id: self.next_param_id(),
                     min: 0.0,
                     default: 0.0,
                     max: 1.0,

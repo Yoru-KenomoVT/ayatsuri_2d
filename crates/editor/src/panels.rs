@@ -746,6 +746,10 @@ pub struct EditorUi {
     clip_also: Vec<usize>,
     /// A deformer creation requested from inside a borrow (canvas, tool pane).
     pending_create: Option<(bool, Option<(f32, f32)>)>,
+    /// The IDs of the parameter and the deformer made last: the next create
+    /// dialog starts from them, so a run of similar IDs needs one edit each.
+    last_param_id: Option<String>,
+    last_def_id: Option<String>,
     /// A guide line asked for from a menu, placed once the canvas is known.
     pending_guide: Option<GuideCmd>,
     /// Where the canvas was last right-clicked, for "add a guide here".
@@ -1842,6 +1846,8 @@ impl Default for EditorUi {
             clip_pick: None,
             clip_also: Vec::new(),
             pending_create: None,
+            last_param_id: None,
+            last_def_id: None,
             pending_guide: None,
             ctx_click: None,
             ctx_layers: Vec::new(),
@@ -6659,7 +6665,9 @@ impl EditorUi {
                     ui.text_edit_singleline(&mut new.name);
                     ui.end_row();
                     ui.label(crate::i18n::tr("ID"));
-                    ui.text_edit_singleline(&mut new.id);
+                    if ui.text_edit_singleline(&mut new.id).changed() {
+                        deformer_dialog::id_text(&mut new.id);
+                    }
                     ui.end_row();
                     ui.label(crate::i18n::tr("Minimum"));
                     ui.add(egui::DragValue::new(&mut new.min).speed(0.1));
@@ -6703,7 +6711,8 @@ impl EditorUi {
                 let Some(n) = n else { return };
                 (n.name, n.id, n.min, n.default, n.max, n.group, n.blend_shape)
             };
-            let id = if id.is_empty() { name.replace(' ', "") } else { id };
+            let mut id = if id.trim().is_empty() { name.trim().to_string() } else { id };
+            deformer_dialog::id_text(&mut id);
             if let Some(s) = &mut self.session {
                 if s.edit(|m| {
                     let made =
@@ -6732,12 +6741,23 @@ impl EditorUi {
                     }
                     self.sel_param = Some(pi);
                     log::info!("parameter {id} created");
+                    self.last_param_id = Some(id);
                 } else {
                     log::warn!("a parameter with id {id} already exists");
                 }
             }
         } else if !open {
             self.new_param = None;
+        }
+    }
+
+    /// The ID a new parameter starts with: the last one made, counted on.
+    pub(super) fn next_param_id(&self) -> String {
+        match (&self.last_param_id, &self.session) {
+            (Some(last), Some(s)) => deformer_dialog::next_id(last, |id| {
+                s.puppet.model().parameters.iter().any(|p| p.id == id)
+            }),
+            _ => String::new(),
         }
     }
 
@@ -8375,7 +8395,7 @@ impl EditorUi {
             {
                 self.new_param = Some(ParamNew {
                     name: String::new(),
-                    id: String::new(),
+                    id: self.next_param_id(),
                     min: 0.0,
                     default: 0.0,
                     max: 1.0,

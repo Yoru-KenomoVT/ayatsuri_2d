@@ -4,6 +4,10 @@
 
 ### Added
 
+- **IDs when creating deformers and parameters** (#48): the New Deformer
+  dialog has an ID field beside the name, and both dialogs start from the
+  last ID made, counted on (Head_Rotation gives Head_Rotation2), so a run
+  of similar IDs needs one edit each. Spaces typed into an ID become `_`.
 - **Remove a shortcut**: the × beside a shortcut in Settings > Keyboard
   leaves that action with no key, its default included, so a default such
   as Ctrl+R for Auto connect edges no longer fires by accident. Reset
