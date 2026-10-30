@@ -1348,7 +1348,7 @@
   "Clip groups": "剪贴组",
   "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "在检查器中为一组遮罩命名，多个网格即可一起用它剪贴并一起更改",
   "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "添加顶点：每次点击都会从上一个点画线。Ctrl+点击添加单独的点，Shift+点击保持线的起点，Esc 结束画线，Alt+点击删除点或线",
-  "Delete edge (line): click a line, or its two points": "删除边（线）：点击线，或点击它的两个端点",
+  "Delete edge (line): click a line or its two points, or drag across lines": "删除边（线）：点击线，或点击它的两个端点，或拖动划过多条线",
   "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "只在用线画出的外轮廓内生成面；没有画线时，不在空白纹理上生成面，避免头发和睫毛被连在一起",
   "Cubism's Automatic Mesh generator, applied to every selected mesh. Intervals are the gaps between points on the outline and inside. Margins are pixels on a 1024px texture and grow with larger textures: outside is how far the outline stands off the art, inside how far in the inner ring runs.": "与 Cubism 的自动网格生成相同，应用于所有选中的网格。点间隔是外轮廓上和内部点之间的距离。边距以 1024px 纹理的像素计，纹理越大边距越大：外侧是外轮廓离图案的距离，内侧是内圈离边缘向内的距离。",
   "Vertices interval (outside)": "顶点间隔（外侧）",

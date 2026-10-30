@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Delete edges by dragging** (#46): in Mesh Edit, a drag with the Delete
+  edge tool that starts off a point removes every edge and line it crosses,
+  marked red as it goes, in one undo step. The faces on those edges go and
+  the points stay.
 - **Pick a physics group's outputs as it is made**: Add group asks for a
   name and the parameters the group drives, and marks any parameter another
   group already drives, so two groups no longer fight over one output and

@@ -1348,7 +1348,7 @@
   "Clip groups": "클립 그룹",
   "Name a set of masks in the Inspector so several meshes clip by it together, and change together": "인스펙터에서 마스크 묶음에 이름을 붙이면 여러 메시가 함께 그것으로 클리핑되고 함께 바뀝니다",
   "Add vertex: each click draws a line from the last point. Ctrl+click adds a single point, Shift+click keeps the line's start, Esc ends the line, Alt+click deletes a point or line": "정점 추가: 클릭할 때마다 직전 점에서 선을 긋습니다. Ctrl+클릭은 단독 점, Shift+클릭은 선의 시작점 유지, Esc는 선 종료, Alt+클릭은 점이나 선 삭제",
-  "Delete edge (line): click a line, or its two points": "변(선) 삭제: 선을 클릭하거나 양 끝 점을 클릭",
+  "Delete edge (line): click a line or its two points, or drag across lines": "변(선) 삭제: 선을 클릭하거나 양 끝 점을 클릭, 또는 선을 가로질러 드래그",
   "Keep faces inside the outline you drew with lines; with none drawn, no faces over empty texture, so hair and lashes don't get bridged": "선으로 그린 외곽 안쪽에만 면을 만듭니다. 선이 없으면 빈 텍스처 위에 면을 만들지 않아 머리카락과 속눈썹이 이어지지 않습니다",
   "Cubism's Automatic Mesh generator, applied to every selected mesh. Intervals are the gaps between points on the outline and inside. Margins are pixels on a 1024px texture and grow with larger textures: outside is how far the outline stands off the art, inside how far in the inner ring runs.": "Cubism의 자동 메시 생성과 같으며, 선택한 모든 메시에 적용됩니다. 점 간격은 외곽과 안쪽 점 사이의 간격입니다. 여백은 1024px 텍스처 기준 픽셀이며 텍스처가 클수록 커집니다. 바깥쪽은 외곽이 그림에서 떨어진 거리, 안쪽은 안쪽 고리가 가장자리에서 들어온 거리입니다.",
   "Vertices interval (outside)": "정점 간격(바깥쪽)",
