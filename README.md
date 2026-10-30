@@ -340,6 +340,10 @@ For ideas, questions and showing off what you rig, come talk on
 [Discord](https://discord.gg/WyzDsXzdnh). Bugs still go to
 [Issues](https://github.com/Yoru-KenomoVT/ayatsuri_2d/issues), with your log attached.
 
+Bug reports, security problems and anything else can also be emailed to
+[support@ayatsuri-2d.org](mailto:support@ayatsuri-2d.org). If you are
+expecting a reply, check your spam folder.
+
 ## Support the project
 
 Ayatsuri2D is free and always will be. If it saves you time or money, you can
