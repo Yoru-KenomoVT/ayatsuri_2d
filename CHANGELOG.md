@@ -21,6 +21,10 @@
   with the same name came out with the same name too. It now copies each
   picked parameter once, every copy's ID and name are new, and the copy
   keeps its parameter's colour.
+- **Shortcuts no longer fire while typing**: in a text field such as
+  Rename only Save still works, since a capital letter is Shift+key and
+  Ctrl+Z or Ctrl+C belong to the field. While a dialog is open, keys
+  without Ctrl or Alt (the tool picks) stay quiet.
 
 ## 0.6.0 (2026-10-29)
 
