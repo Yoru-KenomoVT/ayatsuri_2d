@@ -26,6 +26,8 @@ pub(super) struct PhysPage {
     out_clip: Vec<PhysicsOutput>,
     /// Group editing dialog: (name, id).
     group_edit: Option<(String, String)>,
+    /// Add group dialog: the name, and the parameters picked as outputs.
+    new_group: Option<(String, Vec<String>)>,
     /// Preview rotation in degrees (Cubism's 45 degree turns).
     pub(super) prev_rot: f32,
     /// Heights of the settings panels; the preview takes the rest.
@@ -56,6 +58,7 @@ impl Default for PhysPage {
             node_sel: None,
             out_clip: Vec::new(),
             group_edit: None,
+            new_group: None,
             prev_rot: 0.0,
             split: None,
             h_tabs: 300.0,
@@ -70,6 +73,17 @@ impl Default for PhysPage {
             pl_time: 0.0,
         }
     }
+}
+
+/// Each parameter some group drives, with the first group driving it.
+fn output_users(rig: &PhysicsRig) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for g in &rig.groups {
+        for o in &g.outputs {
+            out.entry(o.param.clone()).or_insert_with(|| group_label(g));
+        }
+    }
+    out
 }
 
 fn group_label(g: &PhysicsGroup) -> String {
@@ -466,6 +480,7 @@ impl EditorUi {
         self.multi_sel = saved.2;
         self.mesh_edit = saved.3;
         self.physics_group_dialog(ui);
+        self.physics_new_group_dialog(ui);
     }
 
     fn new_playlist(&mut self) {
@@ -711,8 +726,7 @@ impl EditorUi {
             });
             if ui.button(crate::i18n::tr("Add group")).clicked() {
                 let n = rig.groups.len() + 1;
-                rig.groups.push(default_physics_group(n));
-                self.phys_sel = rig.groups.len() - 1;
+                self.phys_page.new_group = Some((format!("Group {n}"), Vec::new()));
                 ui.close();
             }
             if ui
@@ -873,8 +887,7 @@ impl EditorUi {
             }
             if ui.button(crate::i18n::tr("Add…")).clicked() {
                 let n = rig.groups.len() + 1;
-                rig.groups.push(default_physics_group(n));
-                self.phys_sel = rig.groups.len() - 1;
+                self.phys_page.new_group = Some((format!("Group {n}"), Vec::new()));
             }
             if ui
                 .add_enabled(
@@ -1501,6 +1514,103 @@ impl EditorUi {
         });
     }
 
+    /// Add group: pick the parameters it drives first. One already driven by
+    /// another group is marked, since two groups writing one parameter fight
+    /// and one of them seems to stop working.
+    fn physics_new_group_dialog(&mut self, ui: &mut Ui) {
+        if self.phys_page.new_group.is_none() {
+            return;
+        }
+        let rig = self.phys_edit.get_or_insert_with(|| {
+            self.session.as_ref().and_then(|s| s.puppet.model().physics.clone()).unwrap_or_default()
+        });
+        let Some(s) = &self.session else { return };
+        let params: Vec<(String, String)> = s
+            .puppet
+            .model()
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id.clone(), super::param_menu::label(s, i)))
+            .collect();
+        let users = output_users(rig);
+        let Some((name, picked)) = &mut self.phys_page.new_group else { return };
+        let mut open = true;
+        let mut create = false;
+        crate::windows::Dialog::new(crate::i18n::tr("Add group")).open(&mut open).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(320.0);
+                crate::windows::form(ui, "pg-new", |ui| {
+                    ui.label(crate::i18n::tr("Name"));
+                    ui.text_edit_singleline(name);
+                    ui.end_row();
+                });
+                ui.add_space(4.0);
+                ui.label(crate::i18n::tr("Output parameters"));
+                ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    for (id, label) in &params {
+                        let mut on = picked.contains(id);
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(&mut on, truncate(label, 28)).changed() {
+                                if on {
+                                    picked.push(id.clone());
+                                } else {
+                                    picked.retain(|p| p != id);
+                                }
+                            }
+                            if let Some(by) = users.get(id) {
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::trf(
+                                        "used by {group}",
+                                        &[("group", by)],
+                                    ))
+                                    .size(11.0)
+                                    .color(theme::pal().accent),
+                                );
+                            }
+                        });
+                    }
+                });
+                let clash = picked.iter().filter(|p| users.contains_key(*p)).count();
+                if clash > 0 {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            "Another group already drives a picked parameter; the two will fight over it.",
+                        ))
+                        .size(11.0)
+                        .color(theme::pal().accent),
+                    );
+                }
+                ui.add_space(6.0);
+                create = ui.button(crate::i18n::tr("Create")).clicked();
+            },
+        );
+        if create {
+            let Some((name, picked)) = self.phys_page.new_group.take() else { return };
+            let mut g = default_physics_group(rig.groups.len() + 1);
+            if !name.trim().is_empty() {
+                g.name = name.trim().to_string();
+            }
+            let tip = g.nodes.len().saturating_sub(1).max(1) as u32;
+            g.outputs = picked
+                .into_iter()
+                .map(|param| PhysicsOutput {
+                    param,
+                    vertex: tip,
+                    scale: 1.0,
+                    weight: 100.0,
+                    kind: PhysicsIo::Angle,
+                    reflect: false,
+                })
+                .collect();
+            rig.groups.push(g);
+            self.phys_sel = rig.groups.len() - 1;
+        } else if !open {
+            self.phys_page.new_group = None;
+        }
+    }
+
     /// Group editing: rename the group or change its id, or delete it.
     fn physics_group_dialog(&mut self, ui: &mut Ui) {
         let Some((name, id)) = &mut self.phys_page.group_edit else { return };
@@ -1546,5 +1656,31 @@ impl EditorUi {
         } else if !open {
             self.phys_page.group_edit = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_users_names_the_first_group_driving_each_parameter() {
+        let mut a = default_physics_group(1);
+        let mut b = default_physics_group(2);
+        let out = |param: &str| PhysicsOutput {
+            param: param.into(),
+            vertex: 1,
+            scale: 1.0,
+            weight: 100.0,
+            kind: PhysicsIo::Angle,
+            reflect: false,
+        };
+        a.outputs = vec![out("Hair1"), out("Hair2")];
+        b.outputs = vec![out("Hair2"), out("Skirt")];
+        let rig = PhysicsRig { groups: vec![a, b], ..Default::default() };
+        let users = output_users(&rig);
+        assert_eq!(users.get("Hair2").map(String::as_str), Some("Group 1"));
+        assert_eq!(users.get("Skirt").map(String::as_str), Some("Group 2"));
+        assert!(!users.contains_key("Body"));
     }
 }

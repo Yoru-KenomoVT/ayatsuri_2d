@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Pick a physics group's outputs as it is made**: Add group asks for a
+  name and the parameters the group drives, and marks any parameter another
+  group already drives, so two groups no longer fight over one output and
+  leave one seeming not to work.
 - **IDs when creating deformers and parameters** (#48): the New Deformer
   dialog has an ID field beside the name, and both dialogs start from the
   last ID made, counted on (Head_Rotation gives Head_Rotation2), so a run

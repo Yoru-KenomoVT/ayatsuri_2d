@@ -1549,5 +1549,8 @@
   "Interval": "Interval",
   "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "In de volgorde van het Parts-palet, de bovenste rij het hoogst. Meshes in een tekenvolgordegroep houden de hunne.",
   "Deform Path works at edit level 2 or 3": "Vervormingspad werkt op bewerkingsniveau 2 of 3",
-  "Remove this shortcut": "Deze sneltoets verwijderen"
+  "Remove this shortcut": "Deze sneltoets verwijderen",
+  "Output parameters": "Uitvoerparameters",
+  "used by {group}": "gebruikt door {group}",
+  "Another group already drives a picked parameter; the two will fight over it.": "Een andere groep stuurt een gekozen parameter al aan; de twee zitten elkaar dan in de weg."
 }
