@@ -53,7 +53,9 @@
 - **Shortcuts no longer fire while typing**: in a text field such as
   Rename only Save still works, since a capital letter is Shift+key and
   Ctrl+Z or Ctrl+C belong to the field. While a dialog is open, keys
-  without Ctrl or Alt (the tool picks) stay quiet.
+  without Ctrl or Alt (the tool picks) stay quiet. The Edit Mesh panel is
+  not a dialog in this sense, so S (Solo) and the tool keys work in Mesh
+  Edit, and Solo there shows every mesh being edited.
 
 ## 0.6.0 (2026-10-29)
 

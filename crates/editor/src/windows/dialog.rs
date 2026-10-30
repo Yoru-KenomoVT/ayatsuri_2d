@@ -31,11 +31,14 @@ pub(crate) struct Dialog<'a> {
     at: Option<Pos2>,
     /// Default and smallest size, for a dialog the user can resize.
     resize: Option<(Vec2, Vec2)>,
+    /// A tool panel shown beside work in progress (Edit Mesh): it does not
+    /// count as an open dialog, so single-key shortcuts keep working.
+    panel: bool,
 }
 
 impl<'a> Dialog<'a> {
     pub(crate) fn new(title: impl Into<String>) -> Self {
-        Self { title: title.into(), open: None, width: 340.0, at: None, resize: None }
+        Self { title: title.into(), open: None, width: 340.0, at: None, resize: None, panel: false }
     }
 
     /// Shows the close button and Esc, both clearing the flag.
@@ -57,6 +60,12 @@ impl<'a> Dialog<'a> {
         self
     }
 
+    /// Shown as a tool panel: single-key shortcuts stay live while it is up.
+    pub(crate) fn panel(mut self) -> Self {
+        self.panel = true;
+        self
+    }
+
     /// Where the dialog's centre starts, instead of the window centre.
     pub(crate) fn at(mut self, centre: Pos2) -> Self {
         self.at = Some(centre);
@@ -64,11 +73,13 @@ impl<'a> Dialog<'a> {
     }
 
     pub(crate) fn show<R>(self, ctx: &egui::Context, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-        let Dialog { title, open, width, at, resize } = self;
+        let Dialog { title, open, width, at, resize, panel } = self;
         if open.as_deref() == Some(&false) {
             return None;
         }
-        mark_shown(ctx);
+        if !panel {
+            mark_shown(ctx);
+        }
         let id = Id::new(("dialog", title.as_str()));
         let pos_id = id.with("pos");
         let start = at.unwrap_or(ctx.content_rect().center());

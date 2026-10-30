@@ -4833,6 +4833,7 @@ impl EditorUi {
         let mut cancel = false;
         let mut dialog_action: Option<MeshAction> = None;
         crate::windows::Dialog::new(crate::i18n::tr("Edit Mesh"))
+            .panel()
             .width(290.0)
             // beside the canvas, not over the mesh being edited
             .at(ui.ctx().content_rect().right_top() + vec2(-200.0, 220.0))
