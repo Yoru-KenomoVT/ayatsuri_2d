@@ -1558,5 +1558,8 @@
   "Offset": "Verskuiwing",
   "Peak": "Piek",
   "Cycle (s)": "Siklus (s)",
-  "Greyed parameters are not in this model and are skipped.": "Grys parameters is nie in hierdie model nie en word oorgeslaan."
+  "Greyed parameters are not in this model and are skipped.": "Grys parameters is nie in hierdie model nie en word oorgeslaan.",
+  "Edit Mesh (Solo)": "Wysig maas (solo)",
+  "Edit the selected meshes with everything else hidden": "Wysig die gekose mase met alles anders versteek",
+  "{count} meshes: click one to edit it": "{count} mase: klik op een om dit te wysig"
 }
