@@ -1548,5 +1548,6 @@
   "Manual setup": "手动设置",
   "Interval": "间隔",
   "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "按部件面板的顺序，最上面一行最大。绘制顺序组中的网格保持不变。",
-  "Deform Path works at edit level 2 or 3": "变形路径需在编辑等级 2 或 3 下使用"
+  "Deform Path works at edit level 2 or 3": "变形路径需在编辑等级 2 或 3 下使用",
+  "Remove this shortcut": "移除此快捷键"
 }

@@ -1548,5 +1548,6 @@
   "Manual setup": "Handmatige opstelling",
   "Interval": "Interval",
   "In Parts palette order, the top row highest. Meshes in a draw order group keep theirs.": "In die volgorde van die Parts-palet, die boonste ry die hoogste. Meshes in 'n tekenvolgordegroep behou hulle s'n.",
-  "Deform Path works at edit level 2 or 3": "Vervormpad werk op wysigvlak 2 of 3"
+  "Deform Path works at edit level 2 or 3": "Vervormpad werk op wysigvlak 2 of 3",
+  "Remove this shortcut": "Verwyder hierdie kortpad"
 }

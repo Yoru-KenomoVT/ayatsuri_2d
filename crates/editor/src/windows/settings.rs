@@ -1250,6 +1250,19 @@ impl EditorUi {
                     self.prefs.keybinds.retain(|(a, _)| a != action);
                     self.prefs.save();
                 }
+                // leave the action with no key at all, its default included
+                if !text.is_empty()
+                    && ui
+                        .small_button("×")
+                        .on_hover_text(crate::i18n::tr("Remove this shortcut"))
+                        .clicked()
+                {
+                    self.prefs.keybinds.retain(|(a, _)| a != action);
+                    self.prefs
+                        .keybinds
+                        .push((action.to_string(), crate::panels::UNSET_KEY.to_string()));
+                    self.prefs.save();
+                }
                 let shown = if armed {
                     // the modifiers held so far, so a combination shows as
                     // it is built
