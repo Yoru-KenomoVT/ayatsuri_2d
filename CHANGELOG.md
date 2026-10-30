@@ -16,6 +16,11 @@
   a mesh under a warp (or posed off its rest) each edit's small error fed
   the next and the art drifted further the more was edited. The spot now
   comes from the art as Mesh Edit shows it.
+- **Replicate parameters copies the whole pick**: with several parameters
+  picked it copied only the one right-clicked, and copies of parameters
+  with the same name came out with the same name too. It now copies each
+  picked parameter once, every copy's ID and name are new, and the copy
+  keeps its parameter's colour.
 
 ## 0.6.0 (2026-10-29)
 

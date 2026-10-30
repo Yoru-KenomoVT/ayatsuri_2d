@@ -447,6 +447,19 @@ fn bound_on(s: &Session, p: usize) -> Vec<Target> {
     out
 }
 
+/// The ID and name for a copy of `id` / `name`: the first number from 2 up
+/// that neither the IDs nor the names use yet, so copies never share one.
+fn copy_names(id: &str, name: &str, ids: &[&str], names: &[String]) -> (String, String) {
+    let mut n = 2;
+    loop {
+        let (i, m) = (format!("{id}{n}"), format!("{name} {n}"));
+        if !ids.contains(&i.as_str()) && !names.contains(&m) {
+            return (i, m);
+        }
+        n += 1;
+    }
+}
+
 pub(super) fn label(s: &Session, p: usize) -> String {
     s.param_names
         .get(p)
@@ -548,7 +561,16 @@ impl EditorUi {
             }
             ParamCmd::Delete(pi) => self.delete_parameter(pi),
             ParamCmd::Replicate(pi) => {
-                self.replicate_parameter(pi, true);
+                // a right-click on a picked row copies the whole pick, once
+                // each, as Cubism does
+                let set = self.picked_with(pi);
+                let copies: Vec<usize> =
+                    set.iter().filter_map(|&p| self.replicate_parameter(p, true)).collect();
+                if let Some(s) = &mut self.session
+                    && copies.len() > 1
+                {
+                    s.param_picked = copies;
+                }
             }
             ParamCmd::MoveSubject(pi) => {
                 self.pmenu.subject_set = self.picked_with(pi);
@@ -819,12 +841,13 @@ impl EditorUi {
     fn replicate_parameter(&mut self, pi: usize, place: bool) -> Option<usize> {
         let s = self.session.as_mut()?;
         let meta = s.puppet.model().parameters.get(pi).cloned()?;
-        let mut n = 2;
-        let mut id = format!("{}{n}", meta.id);
-        while s.puppet.model().parameters.iter().any(|p| p.id == id) {
-            n += 1;
-            id = format!("{}{n}", meta.id);
-        }
+        let base = label(s, pi);
+        let (id, name) = {
+            let params = &s.puppet.model().parameters;
+            let ids: Vec<&str> = params.iter().map(|p| p.id.as_str()).collect();
+            let names: Vec<String> = (0..params.len()).map(|p| label(s, p)).collect();
+            copy_names(&meta.id, &base, &ids, &names)
+        };
         let ok = s.edit(|m| {
             ayatsuri_core::edit::create_parameter(m, id.clone(), meta.min, meta.default, meta.max)
                 .is_some()
@@ -833,10 +856,15 @@ impl EditorUi {
             return None;
         }
         let new = s.puppet.model().parameters.len().checked_sub(1)?;
-        let name = format!("{} {n}", label(s, pi));
+        // the rebuild already grew the colours to fit, so set the new one
+        // in place rather than push past the end
+        s.param_names.resize(new, String::new());
         s.param_names.push(name);
         let color = s.param_colors.get(pi).copied().flatten();
-        s.param_colors.push(color);
+        s.param_colors.resize(new + 1, None);
+        if let Some(c) = s.param_colors.get_mut(new) {
+            *c = color;
+        }
         if place && let Some(g) = s.groups.iter_mut().find(|g| g.params.contains(&pi)) {
             let at = g.params.iter().position(|&p| p == pi).map_or(g.params.len(), |a| a + 1);
             g.params.insert(at, new);
@@ -1631,4 +1659,20 @@ pub(super) fn up_and_down(model: &ayatsuri_format::model::Model, param: usize) -
         let id = p.id.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
         id.ends_with('Y') && id.len() > 1
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_names;
+
+    #[test]
+    fn copies_never_share_an_id_or_a_name() {
+        let ids = ["ParamHair", "ParamHair2"];
+        let names = ["Hair".to_string(), "Hair 2".to_string(), "Hair 3".to_string()];
+        // ParamHair3 is free but the name Hair 3 is taken, so both skip to 4
+        assert_eq!(
+            copy_names("ParamHair", "Hair", &ids, &names),
+            ("ParamHair4".to_string(), "Hair 4".to_string())
+        );
+    }
 }
