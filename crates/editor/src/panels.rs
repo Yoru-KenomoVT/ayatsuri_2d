@@ -2879,10 +2879,14 @@ impl EditorUi {
         crate::pen::apply_click_options(ui.ctx(), self.prefs.pen_mode);
         // shortcuts: the more modifiers a binding has, the earlier it gets a
         // look, so Ctrl+Shift+Z is taken before Ctrl+Z and Ctrl+1 before 1.
-        // Plain-key bindings stay quiet while a text field has the keyboard,
-        // and everything waits while Settings is capturing a new binding.
+        // While a text field has the keyboard only Save gets through: a
+        // capital letter is Shift+key and Ctrl+Z or Ctrl+C belong to the
+        // field, so any other binding would fire while typing a name. With
+        // a dialog open, keys with no Ctrl or Alt (tool picks) stay quiet.
+        // Everything waits while Settings is capturing a new binding.
         if self.rebind.is_none() {
             let typing = ui.ctx().egui_wants_keyboard_input();
+            let dialog = crate::windows::dialog_shown_lately(ui.ctx());
             let weight = |m: egui::Modifiers| {
                 usize::from(m.command || m.ctrl) + usize::from(m.shift) + usize::from(m.alt)
             };
@@ -2896,7 +2900,10 @@ impl EditorUi {
                 (std::cmp::Reverse(weight(sc.modifiers)), !(anim_first && id.starts_with("anim-")))
             });
             for (id, sc) in bound {
-                if typing && weight(sc.modifiers) == 0 {
+                if typing && !shortcut_while_typing(id) {
+                    continue;
+                }
+                if dialog && !(sc.modifiers.command || sc.modifiers.ctrl || sc.modifiers.alt) {
                     continue;
                 }
                 // S keys the parameter in Animation; Solo is a modeling view
@@ -16517,6 +16524,11 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
 
 /// What Settings stores for an action whose default key was removed.
 pub(crate) const UNSET_KEY: &str = "none";
+
+/// The actions whose keys still work while a text field is being typed in.
+fn shortcut_while_typing(id: &str) -> bool {
+    matches!(id, "save" | "save-as")
+}
 
 pub(crate) fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
     // F35 stands for an action with no key yet
