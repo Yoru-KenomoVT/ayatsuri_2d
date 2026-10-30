@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Repo tasks: cargo xtask layers | credits | ci | capi | soak"
+description = "Repo tasks: cargo xtask layers | credits | ci | capi | sdk | soak"
 version.workspace = true
 authors.workspace = true
 repository.workspace = true

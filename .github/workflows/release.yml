@@ -77,9 +77,48 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  sdk:
+    name: SDK ${{ matrix.label }}
+    # the C library for each platform: header, libraries, example, licences
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: linux-x64, os: ubuntu-22.04, args: "" }
+          - { label: linux-arm64, os: ubuntu-22.04-arm, args: "" }
+          # MSVC, what Unity, Unreal and Visual Studio projects link against
+          - { label: windows-x64, os: windows-latest, args: "" }
+          - { label: macos-universal, os: macos-latest, args: "--target aarch64-apple-darwin --target x86_64-apple-darwin" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.label == 'macos-universal' && 'aarch64-apple-darwin, x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and pack
+        shell: bash
+        run: cargo xtask sdk ${{ matrix.args }} --label ${{ matrix.label }}
+      - name: Archive
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          cd target/sdk
+          NAME=$(ls)
+          if [ "${{ runner.os }}" = Windows ]; then
+            tar -a -c -f "../../dist/release/$NAME.zip" "$NAME"
+          else
+            tar -czf "../../dist/release/$NAME.tar.gz" "$NAME"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-${{ matrix.label }}
+          path: dist/release/*
+          if-no-files-found: error
+
   release:
     name: Draft pre-release
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, sdk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

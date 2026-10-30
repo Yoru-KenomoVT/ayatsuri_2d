@@ -3,7 +3,8 @@
 //! `layers` enforces the dependency rules in docs/architecture.md as a build
 //! failure rather than a convention. `credits` regenerates the open-source
 //! list the About window shows. `capi` builds the C library and writes its
-//! header off the Rust source. `ci` runs every gate.
+//! header off the Rust source; `sdk` packs it for one platform, as releases
+//! ship it. `ci` runs every gate.
 
 use std::error::Error;
 use std::path::Path;
@@ -84,20 +85,27 @@ const CREDITS: &str = "assets/credits.tsv";
 /// on any platform (dev and build-only crates never reach a user).
 const SHIPPED: &[&str] = &["ayatsuri", "ayatsuri-launcher"];
 
-/// One line per third-party crate: name, version, licence, homepage.
-fn credits_table() -> Result<String> {
+/// `cargo metadata` for the whole workspace, as JSON.
+fn metadata() -> Result<serde_json::Value> {
     let out =
         Command::new("cargo").args(["metadata", "--format-version", "1", "--locked"]).output()?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned().into());
     }
-    let meta: serde_json::Value = serde_json::from_slice(&out.stdout)?;
-    let empty = Vec::new();
-    let packages = meta["packages"].as_array().unwrap_or(&empty);
-    let nodes = meta["resolve"]["nodes"].as_array().unwrap_or(&empty);
+    Ok(serde_json::from_slice(&out.stdout)?)
+}
+
+/// The third-party packages `roots` pull in as normal dependencies, on any
+/// platform (dev and build-only crates never reach a user): workspace
+/// crates left out.
+fn third_party<'a>(meta: &'a serde_json::Value, roots: &[&str]) -> Vec<&'a serde_json::Value> {
+    static NONE: Vec<serde_json::Value> = Vec::new();
+    let empty = &NONE;
+    let packages = meta["packages"].as_array().unwrap_or(empty);
+    let nodes = meta["resolve"]["nodes"].as_array().unwrap_or(empty);
     let members: std::collections::HashSet<&str> = meta["workspace_members"]
         .as_array()
-        .unwrap_or(&empty)
+        .unwrap_or(empty)
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
@@ -105,11 +113,9 @@ fn credits_table() -> Result<String> {
         packages.iter().filter_map(|p| Some((p["id"].as_str()?, p))).collect();
     let node_of: std::collections::HashMap<&str, &serde_json::Value> =
         nodes.iter().filter_map(|n| Some((n["id"].as_str()?, n))).collect();
-
-    // walk the normal-dependency graph out from the shipped binaries
     let mut stack: Vec<&str> = packages
         .iter()
-        .filter(|p| p["name"].as_str().is_some_and(|n| SHIPPED.contains(&n)))
+        .filter(|p| p["name"].as_str().is_some_and(|n| roots.contains(&n)))
         .filter_map(|p| p["id"].as_str())
         .collect();
     let mut seen = std::collections::HashSet::new();
@@ -118,19 +124,33 @@ fn credits_table() -> Result<String> {
             continue;
         }
         let Some(node) = node_of.get(id) else { continue };
-        for dep in node["deps"].as_array().unwrap_or(&empty) {
+        for dep in node["deps"].as_array().unwrap_or(empty) {
             let normal =
-                dep["dep_kinds"].as_array().unwrap_or(&empty).iter().any(|k| k["kind"].is_null());
+                dep["dep_kinds"].as_array().unwrap_or(empty).iter().any(|k| k["kind"].is_null());
             if normal && let Some(d) = dep["pkg"].as_str() {
                 stack.push(d);
             }
         }
     }
-
-    let mut rows: Vec<String> = seen
+    let mut out: Vec<&serde_json::Value> = seen
         .iter()
         .filter(|id| !members.contains(*id))
-        .filter_map(|id| by_id.get(*id))
+        .filter_map(|id| by_id.get(*id).copied())
+        .collect();
+    out.sort_by_key(|p| {
+        (
+            p["name"].as_str().unwrap_or("").to_lowercase(),
+            p["version"].as_str().unwrap_or("").to_string(),
+        )
+    });
+    out
+}
+
+/// One line per third-party crate: name, version, licence, homepage.
+fn credits_table() -> Result<String> {
+    let meta = metadata()?;
+    let mut rows: Vec<String> = third_party(&meta, SHIPPED)
+        .into_iter()
         .map(|p| {
             let field =
                 |k: &str| p[k].as_str().unwrap_or("").replace(['\t', '\n'], " ").trim().to_string();
@@ -306,6 +326,191 @@ fn host_check(out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The workspace version, from the root Cargo.toml.
+fn version() -> Result<String> {
+    let root: toml::Table = std::fs::read_to_string("Cargo.toml")?.parse()?;
+    root.get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "no [workspace.package] version in Cargo.toml".into())
+}
+
+/// A platform's name in the download, from its target triple.
+fn label_of(triple: &str) -> String {
+    let arch = if triple.starts_with("aarch64") { "arm64" } else { "x64" };
+    let os = if triple.contains("windows") {
+        "windows"
+    } else if triple.contains("apple") {
+        "macos"
+    } else {
+        "linux"
+    };
+    format!("{os}-{arch}")
+}
+
+/// Every third-party licence the library carries: it links its Rust
+/// dependencies in, so their notices travel with it. Each crate's own
+/// licence files, word for word; its licence name and link when it ships
+/// none.
+fn third_party_notices() -> Result<String> {
+    let meta = metadata()?;
+    let mut text = String::from(
+        "# Third-party software in the Ayatsuri2D library\n\n\
+         The library links the Rust crates below. Each one's licence follows,\n\
+         as its authors ship it.\n",
+    );
+    for p in third_party(&meta, &["ayatsuri-capi"]) {
+        let field = |k: &str| p[k].as_str().unwrap_or("").trim().to_string();
+        text.push_str(&format!(
+            "\n## {} {}\n\nLicence: {}  \nSource: {}\n",
+            field("name"),
+            field("version"),
+            field("license"),
+            Some(field("repository"))
+                .filter(|r| !r.is_empty())
+                .unwrap_or_else(|| field("homepage"))
+        ));
+        let dir =
+            Path::new(p["manifest_path"].as_str().unwrap_or("")).parent().map(Path::to_path_buf);
+        let mut files: Vec<std::path::PathBuf> = dir
+            .and_then(|d| std::fs::read_dir(d).ok())
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|f| {
+                let n = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_uppercase();
+                f.is_file()
+                    && (n.starts_with("LICENSE")
+                        || n.starts_with("LICENCE")
+                        || n.starts_with("COPYING")
+                        || n.starts_with("NOTICE"))
+            })
+            .collect();
+        files.sort();
+        for f in files {
+            let body = std::fs::read_to_string(&f).unwrap_or_default();
+            let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            text.push_str(&format!("\n### {name}\n\n```text\n{}\n```\n", body.trim_end()));
+        }
+    }
+    Ok(text)
+}
+
+/// `cargo xtask sdk [--target <triple>]... [--label <name>]`: the C library
+/// packed for one platform, as a release ships it, under `target/sdk/`.
+/// With no target it builds for this machine and runs the C host check
+/// first; two Apple targets are joined into one universal library.
+fn sdk(args: &[String]) -> Result<()> {
+    let mut targets: Vec<String> = Vec::new();
+    let mut label: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--target" => targets.push(it.next().ok_or("--target needs a triple")?.clone()),
+            "--label" => label = Some(it.next().ok_or("--label needs a name")?.clone()),
+            other => return Err(format!("sdk: unknown argument {other}").into()),
+        }
+    }
+    let host = String::from_utf8(Command::new("rustc").args(["-vV"]).output()?.stdout)?
+        .lines()
+        .find_map(|l| l.strip_prefix("host: ").map(str::to_string))
+        .unwrap_or_default();
+    let label = label.unwrap_or_else(|| {
+        if targets.len() > 1 && targets.iter().all(|t| t.contains("apple")) {
+            "macos-universal".into()
+        } else {
+            label_of(targets.first().unwrap_or(&host))
+        }
+    });
+
+    // the header and, for this machine, the library with its host check
+    if targets.is_empty() {
+        capi(&[])?;
+    } else {
+        capi(&["--header".to_string()])?;
+        for t in &targets {
+            run(
+                "cargo",
+                &[
+                    "build",
+                    "--locked",
+                    "--profile",
+                    "capi-release",
+                    "-p",
+                    "ayatsuri-capi",
+                    "--target",
+                    t,
+                ],
+            )?;
+        }
+    }
+    let dirs: Vec<std::path::PathBuf> = if targets.is_empty() {
+        vec!["target/capi-release".into()]
+    } else {
+        targets.iter().map(|t| Path::new("target").join(t).join("capi-release")).collect()
+    };
+    let libs_in = |dir: &Path| -> Result<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            let ours = name.starts_with("libayatsuri_capi") || name.starts_with("ayatsuri_capi");
+            let lib = [".so", ".a", ".dylib", ".dll", ".lib"].iter().any(|e| name.ends_with(e));
+            if ours && lib {
+                names.push(name);
+            }
+        }
+        names.sort();
+        Ok(names)
+    };
+
+    let version = version()?;
+    let name = format!("ayatsuri2d-sdk-{version}-{label}");
+    let stage = Path::new("target/sdk").join(&name);
+    if stage.exists() {
+        std::fs::remove_dir_all(&stage)?;
+    }
+    for sub in ["include", "lib", "examples"] {
+        std::fs::create_dir_all(stage.join(sub))?;
+    }
+    let first = dirs.first().ok_or("no build")?;
+    let names = libs_in(first)?;
+    if names.is_empty() {
+        return Err(format!("no library in {}", first.display()).into());
+    }
+    for n in &names {
+        let to = stage.join("lib").join(n);
+        if dirs.len() > 1 {
+            // one universal library out of each target's
+            let mut args = vec![
+                "-create".to_string(),
+                "-output".to_string(),
+                to.to_string_lossy().into_owned(),
+            ];
+            args.extend(dirs.iter().map(|d| d.join(n).to_string_lossy().into_owned()));
+            run("lipo", &args.iter().map(String::as_str).collect::<Vec<_>>())?;
+        } else {
+            std::fs::copy(first.join(n), to)?;
+        }
+    }
+    std::fs::copy(HEADER, stage.join("include/ayatsuri.h"))?;
+    std::fs::copy("crates/capi/examples/host.c", stage.join("examples/host.c"))?;
+    std::fs::copy("crates/capi/LICENSE", stage.join("LICENSE"))?;
+    std::fs::copy("crates/core/LICENSE", stage.join("LICENSE-MIT"))?;
+    std::fs::write(stage.join("THIRD-PARTY.md"), third_party_notices()?)?;
+    let readme = std::fs::read_to_string("crates/capi/sdk-readme.md")?
+        .replace("{version}", &version)
+        .replace("{label}", &label)
+        .replace(
+            "{libs}",
+            &names.iter().map(|n| format!("- `lib/{n}`")).collect::<Vec<_>>().join("\n"),
+        );
+    std::fs::write(stage.join("README.md"), readme)?;
+    println!("{}: {} file(s) in lib/", stage.display(), names.len());
+    Ok(())
+}
+
 fn main() {
     let task = std::env::args().nth(1).unwrap_or_default();
     let result =
@@ -315,7 +520,8 @@ fn main() {
             "ci" => ci(),
             "soak" => soak(&std::env::args().skip(2).collect::<Vec<_>>()),
             "capi" => capi(&std::env::args().skip(2).collect::<Vec<_>>()),
-            _ => Err("usage: cargo xtask <layers|credits [--check]|ci|capi [--header|--check]|soak <model.aom> [seconds]>"
+            "sdk" => sdk(&std::env::args().skip(2).collect::<Vec<_>>()),
+            _ => Err("usage: cargo xtask <layers|credits [--check]|ci|capi [--header|--check]|sdk [--target T]... [--label L]|soak <model.aom> [seconds]>"
                 .into()),
         };
     if let Err(e) = result {
