@@ -1677,6 +1677,18 @@ impl Session {
         true
     }
 
+    /// A follow-up to the edit just made, folded into its undo step, so one
+    /// undo takes both back.
+    pub fn amend(&mut self, f: impl FnOnce(&mut Model) -> bool) -> bool {
+        let mut after = self.puppet.model().clone();
+        if !f(&mut after) {
+            return false;
+        }
+        self.rebuild_from(after);
+        self.modified = true;
+        true
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

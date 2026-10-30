@@ -1023,6 +1023,28 @@ fn art_uv(pts: &[Pos2], indices: &[u16], uvs: &[f32], p: Pos2) -> Option<(f32, f
         .and_then(|(t, w)| mix_uv(uvs, t, w))
 }
 
+/// The texture spot of each of `verts`, read from Mesh Edit's art where the
+/// point now draws (`drawn`, model units). A moved or added point's position
+/// goes through the parent deformer, so under a bent warp it lands a little
+/// off the pointer; its spot read at the pointer then showed the art from
+/// there, and the art shifted when Mesh Edit ended.
+fn art_spots_where_drawn(
+    art: &MeshArt,
+    drawn: &[f32],
+    verts: &[usize],
+) -> Vec<(usize, (f32, f32))> {
+    let pts: Vec<Pos2> =
+        art.positions.as_chunks::<2>().0.iter().map(|q| pos2(q[0], q[1])).collect();
+    verts
+        .iter()
+        .filter_map(|&v| {
+            let p = pos2(*drawn.get(v * 2)?, *drawn.get(v * 2 + 1)?);
+            Some((v, art_uv(&pts, &art.indices, &art.uvs, p)?))
+        })
+        .filter(|(_, (u, t))| u.is_finite() && t.is_finite())
+        .collect()
+}
+
 /// Blend a vertex pool's (u, v) pairs with triangle weights.
 fn mix_uv(uvs: &[f32], t: [usize; 3], w: [f32; 3]) -> Option<(f32, f32)> {
     let mut out = (0.0, 0.0);
@@ -15425,6 +15447,23 @@ impl EditorUi {
             }
         }
         if let Some(op) = mesh_op {
+            // the points this op moves or adds, whose texture spot is read
+            // again where they end up drawn
+            let settle: Option<(usize, Vec<usize>)> = {
+                let count = |mi: usize| {
+                    s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count as usize)
+                };
+                match &op {
+                    MeshOp::Slide(mi, vi, ..) => Some((*mi, vec![*vi])),
+                    MeshOp::SlideMany(mi, moves) => {
+                        Some((*mi, moves.iter().filter(|m| m.3.is_some()).map(|m| m.0).collect()))
+                    }
+                    MeshOp::Add(mi, ..) | MeshOp::AddRef(mi, ..) | MeshOp::AddFree(mi, ..) => {
+                        Some((*mi, vec![count(*mi)]))
+                    }
+                    _ => None,
+                }
+            };
             let applied = match op {
                 MeshOp::Move(mi, vi, dx, dy) => {
                     s.edit(|m| ayatsuri_core::edit::move_vertex(m, mi, vi, dx, dy))
@@ -15617,6 +15656,22 @@ impl EditorUi {
             };
             if !applied {
                 log::warn!("mesh edit had nothing to do");
+            } else if let Some((mi, verts)) = settle
+                && let Some(art) = self.mesh_art.as_ref().filter(|a| a.mesh == mi)
+                && let Some(g) = s.puppet.mesh_geometry(mi)
+            {
+                let spots = art_spots_where_drawn(art, g.positions, &verts);
+                if !spots.is_empty() {
+                    s.amend(|m| {
+                        let Some(am) = m.art_meshes.get_mut(mi) else { return false };
+                        for &(v, (u, t)) in &spots {
+                            if let Some(pair) = am.uvs.get_mut(v * 2..v * 2 + 2) {
+                                pair.copy_from_slice(&[u, t]);
+                            }
+                        }
+                        true
+                    });
+                }
             }
         }
 
@@ -19385,6 +19440,47 @@ mod key_cmd_tests {
 #[cfg(test)]
 mod point_paste_tests {
     use super::*;
+
+    #[test]
+    fn a_point_shows_the_art_where_it_draws_not_where_it_was_dropped() {
+        // one triangle of art, uv = position / 10
+        let art = MeshArt {
+            mesh: 0,
+            positions: vec![0.0, 0.0, 10.0, 0.0, 0.0, 10.0],
+            uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            indices: vec![0, 1, 2],
+            reference: ayatsuri_format::model::ArtMesh {
+                id: "A".into(),
+                parent_part: None,
+                parent_deformer: None,
+                visible: true,
+                enabled: true,
+                texture: 0,
+                flags: 0,
+                blend: Default::default(),
+                vertex_count: 3,
+                uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                indices: vec![0, 1, 2],
+                masks: vec![],
+                binding: Default::default(),
+                opacities: vec![1.0],
+                draw_orders: vec![500.0],
+                positions: vec![0.0, 0.0, 10.0, 0.0, 0.0, 10.0],
+                blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
+            },
+        };
+        // dropped at (4, 4) but the warp drew it at (5, 3)
+        let drawn = [0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 5.0, 3.0];
+        let spots = art_spots_where_drawn(&art, &drawn, &[3]);
+        assert_eq!(spots.len(), 1);
+        let (v, (u, t)) = spots[0];
+        assert_eq!(v, 3);
+        assert!((u - 0.5).abs() < 1e-6 && (t - 0.3).abs() < 1e-6, "{u} {t}");
+    }
 
     #[test]
     fn mesh_edit_reads_the_texture_spot_from_the_art_as_shown() {

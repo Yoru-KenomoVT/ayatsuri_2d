@@ -15,7 +15,10 @@
   added point took its texture spot from the mesh as edited so far, so on
   a mesh under a warp (or posed off its rest) each edit's small error fed
   the next and the art drifted further the more was edited. The spot now
-  comes from the art as Mesh Edit shows it.
+  comes from the art as Mesh Edit shows it, read where the point is
+  actually drawn: under a bent warp a moved or added point lands a little
+  off the pointer, and reading the art at the pointer still shifted it a
+  pixel or two when Mesh Edit ended.
 - **Replicate parameters copies the whole pick**: with several parameters
   picked it copied only the one right-clicked, and copies of parameters
   with the same name came out with the same name too. It now copies each
