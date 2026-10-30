@@ -9,6 +9,14 @@
   as Ctrl+R for Auto connect edges no longer fires by accident. Reset
   brings the default back.
 
+### Fixed
+
+- **Edit Mesh no longer shifts the art after many edits**: a moved or
+  added point took its texture spot from the mesh as edited so far, so on
+  a mesh under a warp (or posed off its rest) each edit's small error fed
+  the next and the art drifted further the more was edited. The spot now
+  comes from the art as Mesh Edit shows it.
+
 ## 0.6.0 (2026-10-29)
 
 Blend shapes, the feature promised for the end of October: on every kind

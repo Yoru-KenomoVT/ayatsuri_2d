@@ -1007,6 +1007,22 @@ fn mesh_weights(pts: &[Pos2], indices: &[u16], p: Pos2) -> Option<([usize; 3], [
     best.map(|(_, t, w)| (t, w))
 }
 
+/// Mesh Edit's art as shown, on screen.
+fn art_screen(a: &MeshArt, to_screen: &impl Fn(f32, f32) -> Pos2) -> Vec<Pos2> {
+    a.positions.as_chunks::<2>().0.iter().map(|q| to_screen(q[0], q[1])).collect()
+}
+
+/// The texture coordinate of the art at screen point `p`: from the art's
+/// triangle there (carried on past its edge), or with no faces from any
+/// three of its points not in a line.
+fn art_uv(pts: &[Pos2], indices: &[u16], uvs: &[f32], p: Pos2) -> Option<(f32, f32)> {
+    (!indices.is_empty())
+        .then(|| mesh_weights(pts, indices, p))
+        .flatten()
+        .or_else(|| basis_weights(pts, p))
+        .and_then(|(t, w)| mix_uv(uvs, t, w))
+}
+
 /// Blend a vertex pool's (u, v) pairs with triangle weights.
 fn mix_uv(uvs: &[f32], t: [usize; 3], w: [f32; 3]) -> Option<(f32, f32)> {
     let mut out = (0.0, 0.0);
@@ -14508,7 +14524,7 @@ impl EditorUi {
             /// Several points moved in one undo step (a point and its
             /// mirror): each slides over the art when its uv is known.
             SlideMany(usize, Vec<PointMove>),
-            Add(usize, usize, [f32; 3]),
+            Add(usize, usize, [f32; 3], Option<(f32, f32)>),
             /// A point placed by weights on three others, optionally
             /// closing a face onto an edge, with lines to `links`; `follow`
             /// makes it the start of the next line.
@@ -14769,7 +14785,12 @@ impl EditorUi {
                         && self.mesh_autoconnect
                         && chain.is_none()
                     {
-                        mesh_op = Some(MeshOp::Add(mi, ti, w));
+                        // the texture spot from the art as shown, as a drag's
+                        let art_spot =
+                            self.mesh_art.as_ref().filter(|a| a.mesh == mi).and_then(|a| {
+                                art_uv(&art_screen(a, &to_screen), &a.indices, &a.uvs, ptr)
+                            });
+                        mesh_op = Some(MeshOp::Add(mi, ti, w, art_spot));
                     } else if let Some((c, w)) = on_art {
                         // outside the faces, auto connect closes a face onto
                         // the nearest open edge (unless drawing a line)
@@ -15154,10 +15175,21 @@ impl EditorUi {
                         && let Some(d) = self.mesh_drag.take()
                         && (d.dx != 0.0 || d.dy != 0.0)
                     {
-                        // the texture coordinate that was under the drop
-                        let uv = ptr
-                            .and_then(|p| mesh_weights(&d.start, &d.indices, p))
-                            .and_then(|(t, w)| mix_uv(&d.model_uvs, t, w));
+                        // the texture coordinate under the drop, read from
+                        // the art as shown (the mesh as Mesh Edit began):
+                        // read from the mesh as edited so far, each edit's
+                        // rounding fed the next and the art drifted
+                        let art = self
+                            .mesh_art
+                            .as_ref()
+                            .filter(|a| a.mesh == mi)
+                            .map(|a| (art_screen(a, &to_screen), a));
+                        let uv_at = |p: Pos2| match &art {
+                            Some((pts, a)) => art_uv(pts, &a.indices, &a.uvs, p),
+                            None => mesh_weights(&d.start, &d.indices, p)
+                                .and_then(|(t, w)| mix_uv(&d.model_uvs, t, w)),
+                        };
+                        let uv = ptr.and_then(uv_at);
                         mesh_op = Some(match (uv, d.partner) {
                             (uv, Some((j, pdx, pdy))) => {
                                 // the mirror's drop: its start, moved the
@@ -15165,9 +15197,7 @@ impl EditorUi {
                                 let drop = ptr.zip(d.start.get(d.vertex)).zip(d.start.get(j)).map(
                                     |((p, &a), &b)| pos2(b.x - (p.x - a.x), b.y + (p.y - a.y)),
                                 );
-                                let puv = drop
-                                    .and_then(|p| mesh_weights(&d.start, &d.indices, p))
-                                    .and_then(|(t, w)| mix_uv(&d.model_uvs, t, w));
+                                let puv = drop.and_then(uv_at);
                                 MeshOp::SlideMany(
                                     mi,
                                     vec![(d.vertex, d.dx, d.dy, uv), (j, pdx, pdy, puv)],
@@ -15410,9 +15440,20 @@ impl EditorUi {
                         any
                     })
                 }
-                MeshOp::Add(mi, ti, w) => {
+                MeshOp::Add(mi, ti, w, spot) => {
                     let n = s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count);
-                    let ok = s.edit(|m| ayatsuri_core::edit::add_vertex(m, mi, ti, w).is_some());
+                    let ok = s.edit(|m| {
+                        let Some(v) = ayatsuri_core::edit::add_vertex(m, mi, ti, w) else {
+                            return false;
+                        };
+                        if let Some((u, t)) = spot
+                            && let Some(am) = m.art_meshes.get_mut(mi)
+                            && let Some(pair) = am.uvs.get_mut(v * 2..v * 2 + 2)
+                        {
+                            pair.copy_from_slice(&[u, t]);
+                        }
+                        true
+                    });
                     if ok && self.mesh_mode == 1 {
                         self.edge_first = Some(n as usize);
                     }
@@ -19310,6 +19351,48 @@ mod key_cmd_tests {
 #[cfg(test)]
 mod point_paste_tests {
     use super::*;
+
+    #[test]
+    fn mesh_edit_reads_the_texture_spot_from_the_art_as_shown() {
+        // a 3x3 grid under a bending warp: on screen the art is bent, while
+        // its uv is the straight grid
+        let bend = |u: f32, v: f32| pos2(u + 0.3 * u * v, v + 0.25 * u * (1.0 - v));
+        let mut uvs = Vec::new();
+        let mut art = Vec::new();
+        for j in 0..3 {
+            for i in 0..3 {
+                let (u, v) = (i as f32 / 2.0, j as f32 / 2.0);
+                uvs.extend([u, v]);
+                art.push(bend(u, v));
+            }
+        }
+        let mut idx = Vec::new();
+        for j in 0..2u16 {
+            for i in 0..2u16 {
+                let a = j * 3 + i;
+                idx.extend([a, a + 1, a + 4, a, a + 4, a + 3]);
+            }
+        }
+        // sixty small drags of the middle point, each spot read two ways
+        let (mut pts, mut old_uvs) = (art.clone(), uvs.clone());
+        let mut new_uvs = uvs.clone();
+        for k in 0..60 {
+            let drop = art[4] + vec2(0.03 * (k as f32).cos(), 0.03 * (k as f32).sin());
+            let (t, w) = mesh_weights(&pts, &idx, drop).unwrap();
+            let old = mix_uv(&old_uvs, t, w).unwrap();
+            let new = art_uv(&art, &idx, &uvs, drop).unwrap();
+            (old_uvs[8], old_uvs[9]) = old;
+            (new_uvs[8], new_uvs[9]) = new;
+            pts[4] = drop;
+        }
+        // the last drop: read from the art as shown, the point takes the
+        // spot the user saw there; read from the mesh as edited, the edits'
+        // error has piled up into it
+        let shown = art_uv(&art, &idx, &uvs, pts[4]).unwrap();
+        assert!((new_uvs[8] - shown.0).abs() < 1e-6 && (new_uvs[9] - shown.1).abs() < 1e-6);
+        let drift = (old_uvs[8] - shown.0).abs() + (old_uvs[9] - shown.1).abs();
+        assert!(drift > 1e-3, "the old reading drifted only {drift}");
+    }
 
     #[test]
     fn basis_weights_skip_points_in_a_line() {
