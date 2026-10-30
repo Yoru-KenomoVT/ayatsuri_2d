@@ -2350,36 +2350,55 @@ pub enum PastedPoint {
     /// A new vertex placed from three of the mesh's points with these
     /// weights, on every keyform; its texture coordinate is read the same way.
     At([usize; 3], [f32; 3]),
+    /// A new vertex placed from three points of the reference mesh (the
+    /// mesh as Mesh Edit began), as `add_vertex_from` places it: how points
+    /// land on a mesh that has been cleared down to fewer than three.
+    OnRef([usize; 3], [f32; 3]),
 }
 
 /// Paste points into a mesh (Mesh Edit's Ctrl+V): new ones are placed as
-/// `add_free_vertex` places them, then `faces` (indices into `points`) are
-/// added between them, skipping any that collapse or already exist.
-/// Returns each point's vertex in the mesh, or None when a placement is
-/// out of range (nothing is changed then).
+/// `add_free_vertex` (or, on `reference`, `add_vertex_from`) places them,
+/// then `faces` (indices into `points`) are added between them, skipping
+/// any that collapse or already exist. Returns each point's vertex in the
+/// mesh, or None when a placement is out of range (nothing is changed
+/// then).
 pub fn paste_points(
     model: &mut Model,
     mesh: usize,
     points: &[PastedPoint],
     faces: &[[usize; 3]],
+    reference: Option<&ayatsuri_format::model::ArtMesh>,
 ) -> Option<Vec<usize>> {
+    let n = model.art_meshes.get(mesh)?.vertex_count as usize;
+    let rn = reference.map_or(0, |r| r.vertex_count as usize);
+    let valid = points.iter().all(|p| match *p {
+        PastedPoint::Existing(v) => v < n,
+        PastedPoint::At(c, _) => c.iter().all(|&x| x < n),
+        PastedPoint::OnRef(c, _) => c.iter().all(|&x| x < rn),
+    });
+    if !valid || n + points.len() >= u16::MAX as usize {
+        return None;
+    }
+    let mut out: Vec<Option<usize>> = vec![None; points.len()];
+    // points on the reference first: add_vertex_from grows the blend
+    // shapes itself, so it runs outside with_shapes; the vertices it adds
+    // come after the existing ones, so At's corners still hold
+    if let Some(r) = reference {
+        for (slot, p) in out.iter_mut().zip(points) {
+            if let PastedPoint::OnRef(c, w) = *p {
+                *slot = Some(add_vertex_from(model, mesh, r, c, w, None)?);
+            }
+        }
+    }
     with_shapes(model, |model| {
-        let n = model.art_meshes.get(mesh)?.vertex_count as usize;
-        let valid = points.iter().all(|p| match *p {
-            PastedPoint::Existing(v) => v < n,
-            PastedPoint::At(c, _) => c.iter().all(|&x| x < n),
-        });
-        if !valid || n + points.len() >= u16::MAX as usize {
-            return None;
+        for (slot, p) in out.iter_mut().zip(points) {
+            match *p {
+                PastedPoint::Existing(v) => *slot = Some(v),
+                PastedPoint::At(c, w) => *slot = Some(add_free_vertex(model, mesh, c, w, None)?),
+                PastedPoint::OnRef(..) => {}
+            }
         }
-        let mut out = Vec::with_capacity(points.len());
-        for p in points {
-            let v = match *p {
-                PastedPoint::Existing(v) => v,
-                PastedPoint::At(c, w) => add_free_vertex(model, mesh, c, w, None)?,
-            };
-            out.push(v);
-        }
+        let out: Vec<usize> = out.into_iter().collect::<Option<_>>()?;
         let m = model.art_meshes.get_mut(mesh)?;
         let mut have: std::collections::HashSet<[u16; 3]> = m
             .indices
@@ -5145,7 +5164,7 @@ mod tests {
         }
         let centre = PastedPoint::At([0, 1, 2], [0.5, 0.0, 0.5]);
         let pts = [PastedPoint::Existing(0), PastedPoint::Existing(1), centre];
-        let got = paste_points(&mut m, 0, &pts, &[[0, 1, 2], [0, 0, 1]]).unwrap();
+        let got = paste_points(&mut m, 0, &pts, &[[0, 1, 2], [0, 0, 1]], None).unwrap();
         assert_eq!(got, vec![0, 1, 4]);
         let am = &m.art_meshes[0];
         assert_eq!(am.vertex_count, 5);
@@ -5161,11 +5180,48 @@ mod tests {
             0,
             &[PastedPoint::Existing(0), PastedPoint::Existing(1), PastedPoint::Existing(4)],
             &[[0, 1, 2]],
+            None,
         )
         .unwrap();
         assert_eq!(again, vec![0, 1, 4]);
         assert_eq!(m.art_meshes[0].indices.len(), 9);
-        assert!(paste_points(&mut m, 0, &[PastedPoint::Existing(99)], &[]).is_none());
+        assert!(paste_points(&mut m, 0, &[PastedPoint::Existing(99)], &[], None).is_none());
+    }
+
+    #[test]
+    fn points_paste_into_a_cleared_mesh() {
+        let mut m = test_model();
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.vertex_count = 4;
+            am.uvs = vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
+            am.indices = vec![0, 1, 2, 0, 2, 3];
+            am.positions = vec![
+                0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 0.0, 2.0, 1.0, 1.0, 1.0,
+            ];
+        }
+        // Mesh Edit's reference, then Clear: no points, no faces
+        let reference = m.art_meshes[0].clone();
+        if let Some(am) = m.art_meshes.get_mut(0) {
+            am.vertex_count = 0;
+            am.uvs.clear();
+            am.indices.clear();
+            am.positions.clear();
+        }
+        let pts = [
+            PastedPoint::OnRef([0, 1, 2], [1.0, 0.0, 0.0]),
+            PastedPoint::OnRef([0, 1, 2], [0.0, 1.0, 0.0]),
+            PastedPoint::OnRef([0, 1, 2], [0.0, 0.0, 1.0]),
+        ];
+        // without the reference there is nothing to place them on
+        assert!(paste_points(&mut m.clone(), 0, &pts, &[[0, 1, 2]], None).is_none());
+        let got = paste_points(&mut m, 0, &pts, &[[0, 1, 2]], Some(&reference)).unwrap();
+        assert_eq!(got, vec![0, 1, 2]);
+        let am = &m.art_meshes[0];
+        assert_eq!(am.vertex_count, 3);
+        assert_eq!(am.indices, vec![0, 1, 2]);
+        assert_eq!(&am.uvs[2..4], &[1.0, 0.0]);
+        // placed on both keyforms, as the reference had them
+        assert_eq!(&am.positions[6..8], &[1.0, 0.0]);
     }
 
     #[test]
