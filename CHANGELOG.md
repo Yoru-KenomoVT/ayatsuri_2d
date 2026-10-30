@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Remove a shortcut**: the × beside a shortcut in Settings > Keyboard
+  leaves that action with no key, its default included, so a default such
+  as Ctrl+R for Auto connect edges no longer fires by accident. Reset
+  brings the default back.
+
 ## 0.6.0 (2026-10-29)
 
 Blend shapes, the feature promised for the end of October: on every kind

@@ -16474,6 +16474,9 @@ pub(crate) const KEY_ACTIONS: &[(&str, &str, &str, egui::Modifiers, egui::Key)] 
     ]
 };
 
+/// What Settings stores for an action whose default key was removed.
+pub(crate) const UNSET_KEY: &str = "none";
+
 pub(crate) fn format_shortcut(sc: &egui::KeyboardShortcut) -> String {
     // F35 stands for an action with no key yet
     if sc.logical_key == egui::Key::F35 && sc.modifiers.is_none() {
@@ -16539,6 +16542,10 @@ pub(crate) fn captured_key(
 }
 
 fn parse_shortcut(text: &str) -> Option<egui::KeyboardShortcut> {
+    // an action the user unassigned: no key, as F35 stands for
+    if text == UNSET_KEY {
+        return Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F35));
+    }
     let mut mods = egui::Modifiers::NONE;
     let mut key = None;
     for part in text.split('+') {
@@ -19452,6 +19459,15 @@ mod palette_pick_tests {
         assert!(near(l2, (mid2 - l.1, mid2 - l.0)), "{l:?} -> {l2:?}");
         assert!(near(r2, (mid2 - r.1, mid2 - r.0)), "{r:?} -> {r2:?}");
         assert!(l2.0 > r2.1, "they swapped sides");
+    }
+
+    #[test]
+    fn an_unassigned_shortcut_has_no_key() {
+        let sc = parse_shortcut(UNSET_KEY).unwrap();
+        assert_eq!(format_shortcut(&sc), "");
+        let mut ed = EditorUi::new();
+        ed.prefs.keybinds.push(("auto-connect".into(), UNSET_KEY.into()));
+        assert_eq!(format_shortcut(&ed.bound("auto-connect")), "");
     }
 
     #[test]
