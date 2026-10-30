@@ -1,5 +1,296 @@
 # Changelog
 
+## 0.6.0 (2026-10-29)
+
+Blend shapes, the feature promised for the end of October: on every kind
+of object, with weight limits, in moc3 from 4.2 on. Alongside them come
+multiply and screen colours, offscreen parts, a run of Cubism tools for
+meshes and the Parts palette, and the requests from Discord testing.
+
+### Added
+
+- **Blend shapes** (#23), as in Cubism 5.0: mark a parameter as a blend
+  shape and its keys add a difference on top of everything else, instead
+  of blending with the other parameters. They work on art meshes, warp and
+  rotation deformers and parts (glue keeps the ones it is imported with),
+  and change shape, opacity, multiply
+  and screen colour, angle, origin, scale and draw order. Add Keys, the
+  grid tools, the rotation handle and the opacity and colour rows edit the
+  key you sit on, and the Inspector says when a blend shape key is the one
+  being edited.
+- **Weight limits for blend shapes** (#24): Parameter palette menu > Limit
+  Settings for Blend Shape Weights. Another parameter scales a blend
+  shape's weight along a graph, from a preset or drawn by Edit Graph, on
+  meshes, deformers and parts.
+- **Multiply and screen colour per keyform** (#26), as in Cubism 4.2: tint
+  meshes and deformers per key in the Inspector. They go into moc3 4.2 and
+  later and into .cmo3, and come back from both.
+- **Offscreen drawing on parts** (#25), Cubism 5.3's way: a part draws its
+  children as one layer, with its own opacity, blend mode and clipping, so
+  overlapping children show no seams. PSD folders that blend as a whole
+  (not pass-through, not plain Normal at 100%) import as offscreen parts.
+  moc3 5.3 stores them, blend shapes on their opacity included; older
+  versions say what they drop.
+- **moc3 export of all of it**: blend shapes on meshes and warps from 4.2,
+  on rotations, parts and glue from 5.0, offscreen parts from 5.3. The
+  layout was checked against an open reference core, which reads the files
+  back and plays them as we do.
+- **Clip by in one row**: type part of a mesh's name or ID and pick it from
+  the list, paste IDs (`A, B, C`) and press Enter, or pick masks on the
+  canvas. The masks show as chips under the field. **Copy ID** on a mesh
+  (right-click, or the button beside its ID in the Inspector) and the copy
+  button by Clip by put IDs on the clipboard for another mesh, and a mesh
+  copied with Ctrl+C pastes into Clip by as its ID.
+- **Conversion division in Tool Details**: select a warp, type the new
+  columns and rows and press Apply. The Inspector shows it too, and a
+  warp's blend shapes now follow a division change.
+- **Model Template** (Modeling > Model Template): Live2D's Standard
+  Parameter List, 27 or all 40, filed into the standard groups with the
+  IDs face trackers and VTube Studio expect. Save your own model's
+  parameters, ranges and folders as a template for the next model.
+- **Parts palette as in Cubism**: drag parts and meshes to reorder and
+  regroup them, New Part, and Group into New Part on the context menu.
+- **Rename parts and art meshes and edit their IDs**, from the Parts and
+  Deformer palettes. F2 renames the selected part, deformer or art mesh,
+  or opens Edit Parameter on the selected parameter.
+- **Automatic mesh generator settings and presets** as in Cubism. Auto
+  mesh starts from the layer's art and runs a row of points down thin
+  strokes instead of boxing them in.
+- **Drawn lines guide Auto connect**, and Add vertex chains as in Cubism.
+- **View > Solo**, **Highlight Deformer's Child Elements** and **Highlight
+  Overlapping Polygons**, as in Cubism.
+- **Custom texture atlas page sizes**, up to what your GPU takes.
+- **Verify placement** in the Texture Atlas, as in Cubism: pieces that
+  overlap another or reach past the page show in red, with a count, and
+  the button selects them one by one.
+- **Texture Atlas View** (T, or View menu), as in Cubism: the canvas shows
+  every pixel each mesh covers on the atlas, as the export will, so a
+  mesh grown over its neighbour shows it.
+- **A shortcut for every menu action** in Settings > Keyboard: tools such
+  as the Deform Brush, Extended Interpolation and the other parameter
+  commands, the File, View, Window and Help items, and more. New keys:
+  F2 renames the selected object, Shift+F2 the selected deformer (or the
+  selected mesh's), D picks the Deform Brush, Ctrl+Shift+I opens Extended
+  Interpolation, Ctrl+Alt+C copies the selected meshes' IDs, Ctrl+, opens
+  Settings and Ctrl+Q exits; Ctrl+Shift+N (New Animation) and Ctrl+T
+  (Texture Atlas) are Cubism's. The rest have no key until you pick one;
+  menus and toolbar tips show the keys.
+- **Shift holds a Deform Brush stroke** to the X or Y axis, whichever it
+  moves along first.
+- **Experimental features** (Settings > General, at the bottom): one
+  switch for all of them and one per feature. In this release: clip
+  groups, inherited clipping (exported to moc3 as hidden helper masks) and
+  stroke mesh-mapping, whose 1, 2 and 3 vertices across lay the mesh out
+  as Cubism's do.
+- **Change the draw order of all ArtMeshes** (Modeling > ArtMesh), as in
+  Cubism: every mesh gets its own draw order in Parts palette order, the
+  top row highest, spaced evenly across 0 to 1000 (Auto setup) or by a
+  chosen interval. Models imported from PSD, Krita, Clip Studio and the
+  other paint formats come in at 500 all round, as Cubism's do; this
+  spreads them out without changing how they stack. Meshes in a draw
+  order group keep theirs.
+- **Delete parts** in the Parts palette, as in Cubism: Delete or
+  Backspace (or Delete in the right-click menu) removes the selected parts
+  with everything inside them. **Delete Part (Child objects will remain)**
+  removes only the parts and moves their contents up to the parent part.
+  Undo brings the parts back with their names.
+
+### Changed
+
+- **The runtime is MIT**: `ayatsuri-core`, `ayatsuri-format` and
+  `ayatsuri-import`, everything the C ABI links, move from GPL-3.0 to MIT,
+  so closed games and apps can embed Ayatsuri2D models through the
+  Apache-2.0 C ABI. The editor stays GPL-3.0. See LICENSING.md.
+- **The texture atlas waits for export**: leaving Mesh Edit no longer lays
+  the atlas out again by itself, so rigging and animating never rewrite
+  the textures. When a mesh has grown past its art, the moc3 export says
+  so and offers **Lay out the atlas**; Settings can turn the old automatic
+  layout back on.
+- **Opening a PSD, Krita or Clip Studio file no longer packs a texture
+  atlas**, as in Cubism: each layer keeps a texture of its own, saved in
+  the .aom, so the paint file isn't needed afterwards. Make the atlas in
+  Modeling > Texture Atlas when you're ready; until then the Texture
+  panel shows no pages, and it and the moc3 export offer to make it.
+- **Delete edge keeps the other lines**: cutting one side of a triangle
+  leaves its other two sides as lines instead of removing them too.
+- **Parameters drag like layers**, into and out of folders.
+- **Clicking another mesh inside the selected one's box** switches to it
+  instead of grabbing the box.
+- **Blend shape keys** draw as rectangles, with a border on the base key,
+  as in Cubism.
+- **Every dialog's close button** sits in its top right corner, however
+  wide the dialog comes out.
+
+### Fixed
+
+- **Points paste into a cleared mesh, and strokes draw on a mesh with no
+  faces**: both placed new points only from the mesh's own faces, so after
+  Clear a paste did nothing until a triangle was made, and a stroke failed
+  the same way. They now place the points on the art as it was when Mesh
+  Edit began, as a click does, or on any three points not in a line.
+- **Deform paths bend the art smoothly, as in Cubism**: the path is one
+  smooth curve through its points (it was straight lines between them, so
+  the mesh creased at every point), and the whole mesh follows it. Deform
+  Path width and hardness now work as Cubism's do: around the point being
+  dragged the mesh holds its shape and turns as one piece, instead of the
+  width marking how far the path reached.
+- **Temporary Path Deformation no longer folds the art over a few drags**:
+  after each drag the art was tied again to the bent path, so points on the
+  inside of a bend jumped to other parts of it. The ties made on the path
+  as laid are kept, and its curve no longer overshoots where points sit
+  unevenly.
+- **Deform Path places points with a pen**: a pen tap moves a few pixels
+  and was read as a drag, so no point went down. A short press now places
+  one, and at edit level 1, where paths are hidden, the tool says to switch
+  to level 2 or 3 instead of ignoring the clicks.
+- **Perspective corners no longer jump mid-drag**: a corner picked the
+  side it keeps to from the drag every frame, so a drag near the diagonal
+  flipped the taper from one side to the other. The side is now chosen
+  once the drag has gone 6 px and holds until release. A drag that would
+  fold the box over itself is not taken, so the art cannot turn inside out
+  (as in Krita).
+- **Blend shape keys on warps, rotation deformers and parts did not show**
+  on the Parameter palette's sliders: only art meshes' were counted, so a
+  key added to a deformer looked as if it had not been added. They show
+  now as squares, in the key's colour like any other key, and a blend
+  shape parameter's slider handle is a square too.
+- **Extended interpolation's keyframes show on the slider**: the keys its
+  Score adds between each pair of keys (where the moc3 export writes them)
+  are marked as small hollow dots.
+- **Pasted copies drew over everything**: a pasted mesh went to the end
+  of the stacking, so at a tied draw order (500 after an import) a copied
+  eye drew over the hair. Copies now go in as one block just above the
+  front-most of their originals.
+- **Pasted copies clip to each other**: copy an eye's white and iris
+  together and the pasted iris clips to the pasted white, not the old one.
+  Such a copy also leaves the original's clip group, so it can be clipped
+  by other meshes without changing the original. A pasted copy takes a new
+  `ArtMeshN` ID instead of `<id>_copy`.
+- **Clip by's list did not pick**: a click on a mesh in the list took the
+  focus off the field first, which read the typed text as an ID, warned
+  that no mesh had it and closed the list before the click landed. The
+  list now stays open for the click and adds the mesh clicked.
+- **Clip by took only mesh IDs**: a typed name (`eye`, or one with spaces
+  like `Highlight L T1`) now picks that mesh when the field is left, not
+  only when Enter is pressed.
+- **Dragging felt wrong with Pen mode on**, pen and mouse alike: it let a
+  press drift 14 px before a drag began, so every drag started late. In
+  Mesh Edit the point was then missed, or trailed the pointer and its
+  texture shifted. Pen mode no longer changes when a drag starts, and
+  Mesh Edit grabs the point where the press began, and shows a closed
+  hand while a point is held.
+- **Mesh Edit showed the edited mesh twice**: its frozen art above the
+  dark backdrop and the live mesh under it, which changed with every
+  edit. Only the frozen art shows now; meshes clipped to it still follow
+  its new shape.
+- **Shift+click in the Deformer palette** only reached rows of its own
+  kind: from a mesh to a deformer it picked just the deformer. It now
+  picks every row of the clicked kind between the two.
+- **Temporary Deform Tool**: Perspective has the side handles too, as in
+  Cubism, sliding that side along itself; handles are bigger squares,
+  grab where the press began, and show a hand cursor.
+- **Perspective and Distort move the art as Cubism's do**: evenly, with
+  the box's middle at the average of its corners, instead of toward a
+  vanishing point. A Perspective corner keeps to the side the drag mostly
+  goes along again, its partner mirroring it, and the anchor rides with
+  the box.
+- **The Solo chip's close mark** showed as an empty box.
+- **Undo ended the Temporary Deform Tool.** It stays on now, with a
+  fresh box around the art where the undo left it; changing parameters
+  still ends it.
+- **Mirror Edit did nothing in Mesh Edit.** Dragging a point now moves
+  its mirror across the axis the other way (live, one undo step), and
+  deleting a point deletes its mirror.
+- **Stroke mesh-mapping**: a new line that would redraw a stroke you have
+  not confirmed asks first (Replace, Keep both, or Discard the new line),
+  so a slip no longer throws it away. Grabbing a control point takes the
+  one where the press began. With Maintain current mesh off, the points
+  and lines that confirming removes are marked while you draw.
+- **Brush circles** (Mesh Edit's eraser, Deform Brush, weight painting)
+  could be hidden by the art under them; they now draw on top, with a
+  dark edge.
+- **Undo after making the texture atlas or re-importing art** put meshes
+  back on texture pages that were already gone, so they showed the wrong
+  art. Old pages now stay until the model is saved.
+- **Texture atlas**: a mesh could show a sliver of its neighbour's art at
+  its edge. Each piece is now masked to its own art, with wider gaps.
+- **Zooming at the limit** no longer flings the canvas away.
+- **Auto connect** keeps every face that holds art and peels slivers off
+  concave edges.
+- **PSD import**: layer names some programs end with a hidden character
+  come through clean, and sibling folders with the same name stay apart
+  instead of merging into one part.
+- **Inspector notes** wrap inside the panel instead of running past it.
+- **A rotation deformer made inside a warp** no longer blows up the art it
+  holds: what it holds is carried over through the canvas, so it stays
+  where it was, and a rotation deformer wrapped by a new deformer keeps
+  its turn.
+- **Grabbing a rotation deformer's centre or handle** works with Pen mode
+  on (for the mouse too): what a drag grabs is where the press began.
+- **After making a deformer** the canvas goes back to the Arrow, so the
+  next click edits it instead of opening New Deformer again.
+- **Timelapses recorded before 0.6.0 play and export again**: a field
+  added to the middle of the model shifted what older steps held, so they
+  could not be read ("step 0 could not be read"). They are put right as
+  they are read, and new steps are written in a way a later field can
+  never shift.
+- **After Undo** a selected object the undo took away is let go, so the
+  next action never works on one that is gone.
+- **Several deformers can be selected at once**, as in Cubism. In the
+  Deformer palette Shift+click picks the run between two clicks and
+  Ctrl+click adds or removes one; on the canvas Shift+Alt+click adds the
+  deformer of the mesh under the pointer. Only top-level ones join: a
+  deformer inside another picked one is left out, so a rigged child taken
+  in by mistake is never moved or keyed with the group. The pick moves,
+  scales and rotates in one box (the art follows live), takes keys
+  together, and deletes, locks, hides and re-parents as a group; a new
+  deformer made as their parent wraps all of them.
+- **The Deformer palette drags like the Parts palette**: drop on the top
+  or bottom edge of a row (a line shows) to move beside it, out of a
+  deformer and into its parent's level; drop on the middle of a deformer
+  (a box shows) to move into it.
+- **Rotation deformers take Cubism's keys**: dragging the centre moves the
+  deformer with its art (Ctrl+drag moves only the pivot), Ctrl+drag on the
+  handle turns the deformer while its art stays, Shift turns in 45 degree
+  steps, and Alt+drag makes only the handle longer. The round ring
+  around the centre is the scale handle: drag it to enlarge the deformer
+  with its art, Ctrl+drag to enlarge the deformer alone.
+- **Ctrl+drag moves a warp without what it holds**, as in Cubism: the box
+  or its points move, scale or rotate while the art and deformers inside
+  stay where they are, to fit a warp after it was made. Works on several
+  picked deformers too (a rotation's centre then moves as its pivot).
+- **Flip for deformers** (Modeling > Edit Form, or Flip on a deformer's
+  right-click menu): rotation deformers flip too, turning the other way and
+  mirroring through their Reflect flag, and rotation deformers nested inside
+  a flipped deformer stay a true mirror. Several picked objects flip
+  together across the middle of the pick; art meshes have the same Flip
+  on their right-click menu. Flip Warp Only mirrors a warp's
+  grid while what it holds stays put. All have shortcut entries.
+- **More on the canvas right-click menu**: on an art mesh, Edit Mesh,
+  Rename, Clip by, Copy ID, Create Warp or Rotation Deformer, Select Parent
+  Deformer, Flip, Hide, Lock and Delete; with a deformer selected, Rename,
+  Flip, Conversion Divisions and Delete; in Mesh Edit, Merge Vertices,
+  Delete Points, Auto Connect, Divide into 4, Reset Mesh, Flip and Finish.
+- **Merge Vertices** in Mesh Edit, as in Cubism: pick two or more points
+  (the ends of two strokes, say) and they become one, at their middle,
+  with their edges. Also on a shortcut entry.
+- **The canvas right-click menu shows the deformers above** the mesh under
+  the pointer as a tree to select from (Shift+click adds to the pick), as
+  in Cubism; Settings > Canvas can turn it off.
+- **Pen tablet support** (Settings > Appearance > Pen tablet): pen pressure
+  can size and weight the Deform Brush, Brush Selection, the glue weight
+  brush and the mesh eraser, through a pressure curve and a lightest-touch
+  floor, smoothed against jitter, with a meter to test the pen. Pen mode
+  gives a pen's double tap longer. Pressure works on Windows and Linux and
+  is in for macOS but untested there. On Wayland the pen comes through the
+  tablet protocol, as in Krita, so it clicks and drags even where the
+  compositor's own fallback drops a pen's clicks (Hyprland 0.56); on X11
+  the tablet is read directly (Settings explains access if needed).
+- **Boxes over several meshes** move the art live while dragged, like a
+  single mesh, instead of only on release.
+- **Clip by on several selected meshes** clips all of them, not only one,
+  from the canvas pick and the Inspector field alike, as one undo step.
+
 ## 0.5.8 (2026-10-24)
 
 The rest of @seoriboi's requests from #29, their round of testing on

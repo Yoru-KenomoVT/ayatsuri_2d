@@ -13,7 +13,7 @@
 //! view over those bytes. Validation happens at load; after that, lookups are
 //! arithmetic.
 //!
-//! ```ignore
+//! ```text
 //! let bytes = std::fs::read("model.moc3")?;
 //! let moc = Moc3::parse(&bytes)?;          // validates everything
 //! for name in moc.ids(slot::PART_IDS)? { ... }

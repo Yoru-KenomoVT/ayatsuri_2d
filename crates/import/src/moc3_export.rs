@@ -8,7 +8,9 @@
 
 use std::collections::HashMap;
 
-use ayatsuri_format::model::{Binding, Blend, DeformerKind, Model, flags};
+use ayatsuri_core::blendshape::Channel;
+use ayatsuri_core::edit::Target;
+use ayatsuri_format::model::{Binding, Blend, BlendShape, DeformerKind, Model, flags};
 
 use crate::ImportError;
 
@@ -118,6 +120,93 @@ pub fn export_warnings(model: &Model, version: ExportVersion) -> Vec<String> {
             ));
         }
     }
+    if version.max_slot() < 108 {
+        let tinted = model
+            .art_meshes
+            .iter()
+            .map(|m| (&m.multiply, &m.screen))
+            .chain(model.deformers.iter().map(|d| (&d.multiply, &d.screen)))
+            .filter(|(m, s)| m.iter().any(|&v| v != 1.0) || s.iter().any(|&v| v != 0.0))
+            .count();
+        if tinted > 0 {
+            out.push(format!(
+                "{tinted} object(s) use multiply or screen colours, which moc3 stores from 4.2 \
+                 on; this version draws them without"
+            ));
+        }
+    }
+    let offscreen = model.parts.iter().filter(|p| p.offscreen.is_some()).count();
+    if offscreen > 0 && version.max_slot() >= 152 && !model.draw_groups.is_empty() {
+        let grouped: std::collections::HashSet<u32> = model
+            .draw_groups
+            .iter()
+            .flat_map(|g| &g.items)
+            .filter(|it| it.part && it.child_group.is_some())
+            .map(|it| it.object)
+            .collect();
+        let loose = (0..model.parts.len() as u32)
+            .filter(|p| {
+                model.parts.get(*p as usize).is_some_and(|p| p.offscreen.is_some())
+                    && !grouped.contains(p)
+            })
+            .count();
+        if loose > 0 {
+            out.push(format!(
+                "{loose} offscreen part(s) are not draw order groups in this model's imported \
+                 draw order, so they export drawn directly"
+            ));
+        }
+    }
+    if offscreen > 0 && version.max_slot() < 152 {
+        out.push(format!(
+            "{offscreen} part(s) use offscreen drawing, which only moc3 5.3 stores; this version \
+             draws their contents directly, without the layer's opacity, clipping or blend mode"
+        ));
+    }
+    // inherited clips go out as hidden helper masks (the editor's export
+    // adds them); the ones that cannot say so
+    let stuck = (0..model.art_meshes.len())
+        .filter(|&mi| matches!(ayatsuri_core::clip::inherited_masks(model, mi), Some(Err(_))))
+        .count();
+    if stuck > 0 {
+        out.push(format!(
+            "{stuck} mesh(es) inherit a clip moc3 cannot carry (a level with more than one \
+             mask, an inverted clip, or a chain that stops); they export clipped by their own \
+             masks only"
+        ));
+    }
+    // blend shapes: meshes and warps from 4.2, parts, rotations, glue from 5.0
+    let is_warp = |d: &&ayatsuri_format::model::Deformer| matches!(d.kind, DeformerKind::Warp(_));
+    let early = model.art_meshes.iter().filter(|m| !m.blend_shapes.is_empty()).count()
+        + model.deformers.iter().filter(is_warp).filter(|d| !d.blend_shapes.is_empty()).count();
+    let late = model.deformers.iter().filter(|d| !is_warp(d) && !d.blend_shapes.is_empty()).count()
+        + model.parts.iter().filter(|p| !p.blend_shapes.is_empty()).count()
+        + model.glues.iter().filter(|g| !g.blend_shapes.is_empty()).count();
+    if early > 0 && version.max_slot() < 136 {
+        out.push(format!(
+            "{early} mesh(es) and warp(s) have blend shapes, which need moc3 4.2 or later; this \
+             version exports their normal keyforms only"
+        ));
+    }
+    if late > 0 && version.max_slot() < 151 {
+        out.push(format!(
+            "{late} rotation deformer(s), part(s) or glue have blend shapes, which need moc3 5.0 \
+             or later; this version exports their normal keyforms only"
+        ));
+    }
+    let offscreen_shaped = model
+        .parts
+        .iter()
+        .filter(|p| p.offscreen.is_some())
+        .flat_map(|p| &p.blend_shapes)
+        .filter(|s| !s.opacities.is_empty())
+        .count();
+    if offscreen_shaped > 0 && version.max_slot() < 152 {
+        out.push(format!(
+            "{offscreen_shaped} blend shape(s) change an offscreen layer's opacity, which only \
+             moc3 5.3 stores"
+        ));
+    }
     if version.max_slot() >= 152 {
         out.push(VTS_NOTE.into());
     } else {
@@ -178,6 +267,108 @@ fn ids(names: &[String]) -> Vec<u8> {
 
 /// The shared binding machinery: parameter bindings grouped per parameter,
 /// keyform bindings deduped across objects, all four pools at once.
+/// A blend shape parameter's key table: its index and keys.
+fn table_of(tables: &[(u32, Vec<f32>)], param: u32) -> Option<(usize, &[f32])> {
+    let t = tables.iter().position(|(p, _)| *p == param)?;
+    tables.get(t).map(|(_, k)| (t, k.as_slice()))
+}
+
+/// What a shape adds to one channel at each key of a table: per key, the
+/// sum of `weight * (form - base)`, `base.len()` floats. A channel the
+/// shape leaves out adds nothing.
+fn shape_deltas(shape: &BlendShape, channel: Channel, base: &[f32], keys: &[f32]) -> Vec<Vec<f32>> {
+    let n = base.len();
+    let pool = channel.of(shape);
+    keys.iter()
+        .map(|&key| {
+            let mut d = vec![0.0f32; n];
+            if !pool.is_empty() {
+                for (k, w) in ayatsuri_core::blendshape::weights(key, &shape.keys) {
+                    let start = k.saturating_mul(n);
+                    if w > 0.0
+                        && let Some(form) = pool.get(start..start + n)
+                    {
+                        ayatsuri_core::blendshape::add(&mut d, form, base, w);
+                    }
+                }
+            }
+            d
+        })
+        .collect()
+}
+
+fn rgb(v: &[f32]) -> [f32; 3] {
+    let at = |i: usize| v.get(i).copied().unwrap_or(0.0);
+    [at(0), at(1), at(2)]
+}
+
+/// Every object's blend shape bindings (key table, first keyform, count)
+/// and their weight limits (131-136): per binding a run of constraint
+/// indices, one constraint per limit (its parameter and graph), none
+/// shared; weights are written 0 to 1, as the model holds them (no Cubism
+/// file with limits has been measured yet).
+#[derive(Default)]
+struct ShapeTables {
+    bindings: Vec<(i32, i32, i32)>,
+    limit_runs: Vec<(i32, i32)>,
+    lim: Limits,
+}
+
+impl ShapeTables {
+    fn bind(
+        &mut self,
+        shape: &BlendShape,
+        table: usize,
+        first_keyform: i32,
+        keys: usize,
+        n_params: usize,
+        what: &str,
+    ) -> Result<(), ImportError> {
+        self.bindings.push((table as i32, first_keyform, keys as i32));
+        self.limit_runs.push((self.lim.index.len() as i32, shape.limits.len() as i32));
+        for l in &shape.limits {
+            if l.parameter as usize >= n_params || l.keys.len() != l.weights.len() {
+                return Err(err(format!("{what}: a blend shape weight limit is broken")));
+            }
+            self.lim.index.push(self.lim.param.len() as i32);
+            self.lim.param.push(l.parameter as i32);
+            self.lim.begin.push(self.lim.keys.len() as i32);
+            self.lim.count.push(l.keys.len() as i32);
+            self.lim.keys.extend_from_slice(&l.keys);
+            self.lim.weights.extend_from_slice(&l.weights);
+        }
+        Ok(())
+    }
+}
+
+/// One keyform's multiply and screen colour, rgb.
+type KeyColor = ([f32; 3], [f32; 3]);
+
+/// An object's `n` keyforms' colours from its pools (three floats per
+/// keyform; empty or short is neutral).
+fn key_colors<'a>(
+    multiply: &'a [f32],
+    screen: &'a [f32],
+    n: usize,
+) -> impl Iterator<Item = KeyColor> + 'a {
+    let rgb = |pool: &[f32], k: usize, neutral: f32| -> [f32; 3] {
+        let at = |c: usize| pool.get(k * 3 + c).copied().unwrap_or(neutral);
+        [at(0), at(1), at(2)]
+    };
+    (0..n).map(move |k| (rgb(multiply, k, 1.0), rgb(screen, k, 0.0)))
+}
+
+/// The blend shape weight limit pools (slots 131-136).
+#[derive(Default)]
+struct Limits {
+    index: Vec<i32>,
+    param: Vec<i32>,
+    begin: Vec<i32>,
+    count: Vec<i32>,
+    keys: Vec<f32>,
+    weights: Vec<f32>,
+}
+
 #[derive(Default)]
 struct Bindings {
     keys: Vec<f32>,
@@ -313,8 +504,56 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     sect.insert(56, i32s(&bind.pb_begin.clone()));
     sect.insert(57, i32s(&bind.pb_count.clone()));
 
+    // ---- blend shapes: the key tables come first (4.2+), as every kind's
+    // shape keyforms below are laid out over them. One table per blend
+    // shape parameter: every key any object's shapes have, plus the base
+    // key 0.0, which a table keeps where it sits (Cubism files measured) ----
+    let shapes_on = version.max_slot() >= 136;
+    // parts, rotation deformers and glue carry blend shapes from 5.0 on
+    let more_shapes_on = version.max_slot() >= 151;
+    let mut bs_tables: Vec<(u32, Vec<f32>)> = Vec::new();
+    if shapes_on {
+        let is_warp =
+            |d: &&ayatsuri_format::model::Deformer| matches!(d.kind, DeformerKind::Warp(_));
+        let warps = model.deformers.iter().filter(is_warp).flat_map(|d| &d.blend_shapes);
+        let later = model
+            .deformers
+            .iter()
+            .filter(|d| !is_warp(d))
+            .flat_map(|d| &d.blend_shapes)
+            .chain(model.parts.iter().flat_map(|p| &p.blend_shapes))
+            .chain(model.glues.iter().flat_map(|g| &g.blend_shapes))
+            .filter(|_| more_shapes_on);
+        for shape in model.art_meshes.iter().flat_map(|m| &m.blend_shapes).chain(warps).chain(later)
+        {
+            let at = match bs_tables.iter().position(|(p, _)| *p == shape.parameter) {
+                Some(at) => at,
+                None => {
+                    bs_tables.push((shape.parameter, vec![0.0]));
+                    bs_tables.len() - 1
+                }
+            };
+            if let Some((_, keys)) = bs_tables.get_mut(at) {
+                keys.extend_from_slice(&shape.keys);
+            }
+        }
+        for (_, keys) in &mut bs_tables {
+            keys.sort_by(f32::total_cmp);
+            keys.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        }
+    }
+    // every kind's shape bindings and their weight limits, in one list
+    let mut st = ShapeTables::default();
+    let base_of = |target: Target, channel: Channel, what: &str| {
+        ayatsuri_core::shapes::base(model, target, channel).ok_or_else(|| {
+            err(format!("{what}: its blend shapes need keys at every parameter's default"))
+        })
+    };
+
     // ---- parts (2-9, 58) ----
     let part_keyforms;
+    let mut part_shape_keyforms = 0usize;
+    let mut bs_parts: Vec<(i32, i32, i32)> = Vec::new();
     {
         let mut kb = Vec::new();
         let mut kf_begin = Vec::new();
@@ -332,6 +571,26 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
             kf_begin.push(pool58.len() as i32);
             kf_count.push(p.draw_orders.len() as i32);
             pool58.extend_from_slice(&p.draw_orders);
+        }
+        // part blend shapes (5.0) on draw order; their keyforms point at no
+        // offscreen keyform (an offscreen's opacity has shapes of its own)
+        for (i, p) in model.parts.iter().enumerate().filter(|_| more_shapes_on) {
+            if p.blend_shapes.is_empty() {
+                continue;
+            }
+            let what = format!("part {i}");
+            let base = base_of(Target::Part(i), Channel::DrawOrder, &what)?;
+            let first = st.bindings.len() as i32;
+            for shape in &p.blend_shapes {
+                let Some((t, keys)) = table_of(&bs_tables, shape.parameter) else { continue };
+                let off = pool58.len() as i32;
+                for d in shape_deltas(shape, Channel::DrawOrder, &base, keys) {
+                    pool58.push(d.first().copied().unwrap_or(0.0));
+                    part_shape_keyforms += 1;
+                }
+                st.bind(shape, t, off, keys.len(), n_params, &what)?;
+            }
+            bs_parts.push((i as i32, first, p.blend_shapes.len() as i32));
         }
         sect.insert(2, vec![0u8; n_parts * 8]);
         sect.insert(3, ids(&model.parts.iter().map(|p| p.id.clone()).collect::<Vec<_>>()));
@@ -366,6 +625,10 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let mut w_cols = Vec::new();
     let mut w_quad = Vec::new();
     let mut w_opac: Vec<f32> = Vec::new();
+    // each keyform's multiply and screen colour, in the order of the
+    // opacities beside them: the colour pool is warps, rotations, meshes
+    let mut w_col: Vec<KeyColor> = Vec::new();
+    let mut r_col: Vec<KeyColor> = Vec::new();
     let mut w_pos_begin = Vec::new();
     let mut r_kb = Vec::new();
     let mut r_kf_begin = Vec::new();
@@ -405,6 +668,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                 w_cols.push(w.cols as i32);
                 w_quad.push(w.quad);
                 w_opac.extend_from_slice(&w.opacities);
+                w_col.extend(key_colors(&d.multiply, &d.screen, expected));
                 // one begin per keyform even when the grid is empty
                 for k in 0..expected {
                     w_pos_begin.push(coords.len() as i32);
@@ -429,6 +693,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                 r_kf_count.push(expected as i32);
                 r_base.push(r.base_angle);
                 r_opac.extend_from_slice(&r.opacities);
+                r_col.extend(key_colors(&d.multiply, &d.screen, expected));
                 r_angles.extend_from_slice(&r.angles);
                 r_ox.extend_from_slice(&r.origins_x);
                 r_oy.extend_from_slice(&r.origins_y);
@@ -439,6 +704,75 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                 r_ry.resize(r_opac.len(), false);
             }
         }
+    }
+    // warp (4.2) and rotation (5.0) blend shapes: their keyforms follow
+    // every normal keyform of their kind, each holding what the shape adds
+    let mut bs_warps: Vec<(i32, i32, i32)> = Vec::new();
+    let mut bs_rots: Vec<(i32, i32, i32)> = Vec::new();
+    let (mut warp_at, mut rot_at) = (0i32, 0i32);
+    for (di, d) in model.deformers.iter().enumerate() {
+        let is_warp = matches!(d.kind, DeformerKind::Warp(_));
+        let index = if is_warp { warp_at } else { rot_at };
+        if is_warp {
+            warp_at += 1;
+        } else {
+            rot_at += 1;
+        }
+        if d.blend_shapes.is_empty() || !shapes_on || (!is_warp && !more_shapes_on) {
+            continue;
+        }
+        let target = Target::Deformer(di);
+        let what = format!("deformer {di}");
+        let first = st.bindings.len() as i32;
+        for shape in &d.blend_shapes {
+            let Some((t, keys)) = table_of(&bs_tables, shape.parameter) else { continue };
+            let deltas = |c: Channel| -> Result<Vec<Vec<f32>>, ImportError> {
+                Ok(shape_deltas(shape, c, &base_of(target, c, &what)?, keys))
+            };
+            let colors = deltas(Channel::Multiply)?.into_iter().zip(deltas(Channel::Screen)?);
+            let colors: Vec<KeyColor> = colors.map(|(m, s)| (rgb(&m), rgb(&s))).collect();
+            let one = |v: &Vec<f32>| v.first().copied().unwrap_or(0.0);
+            let off;
+            match &d.kind {
+                DeformerKind::Warp(_) => {
+                    off = w_opac.len() as i32;
+                    for ((g, o), c) in deltas(Channel::Positions)?
+                        .iter()
+                        .zip(deltas(Channel::Opacity)?.iter())
+                        .zip(colors)
+                    {
+                        w_opac.push(one(o));
+                        w_pos_begin.push(coords.len() as i32);
+                        coords.extend_from_slice(g);
+                        w_col.push(c);
+                    }
+                }
+                DeformerKind::Rotation(_) => {
+                    off = r_opac.len() as i32;
+                    let (an, ox, oy, sc, op) = (
+                        deltas(Channel::Angle)?,
+                        deltas(Channel::OriginX)?,
+                        deltas(Channel::OriginY)?,
+                        deltas(Channel::Scale)?,
+                        deltas(Channel::Opacity)?,
+                    );
+                    for (i, c) in colors.into_iter().enumerate() {
+                        let at = |v: &[Vec<f32>]| v.get(i).map_or(0.0, one);
+                        r_opac.push(at(&op));
+                        r_angles.push(at(&an));
+                        r_ox.push(at(&ox));
+                        r_oy.push(at(&oy));
+                        r_scales.push(at(&sc));
+                        r_rx.push(false);
+                        r_ry.push(false);
+                        r_col.push(c);
+                    }
+                }
+            }
+            st.bind(shape, t, off, keys.len(), n_params, &what)?;
+        }
+        let row = (index, first, d.blend_shapes.len() as i32);
+        if is_warp { bs_warps.push(row) } else { bs_rots.push(row) }
     }
     let n_warps = w_rows.len();
     let n_rots = r_kf_begin.len();
@@ -502,6 +836,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let mut m_mask_begin = Vec::new();
     let mut m_mask_count = Vec::new();
     let mut m_opac: Vec<f32> = Vec::new();
+    let mut m_col: Vec<KeyColor> = Vec::new();
     let mut m_orders: Vec<f32> = Vec::new();
     let mut m_pos_begin = Vec::new();
     let mut uv_pool: Vec<f32> = Vec::new();
@@ -534,6 +869,7 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         m_kf_begin.push(m_opac.len() as i32);
         m_kf_count.push(expected as i32);
         m_opac.extend_from_slice(&m.opacities);
+        m_col.extend(key_colors(&m.multiply, &m.screen, expected));
         m_orders.extend_from_slice(&m.draw_orders);
         for k in 0..expected {
             m_pos_begin.push(coords.len() as i32);
@@ -541,6 +877,41 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
                 coords.extend_from_slice(form);
             }
         }
+    }
+    // the shapes' keyforms follow every normal mesh keyform: per shape one
+    // binding with a keyform for each key of its table, base included, each
+    // holding what the shape adds there (runtimes add it: points, opacity
+    // and colour; draw order adds nothing)
+    let mut bs_meshes: Vec<(i32, i32, i32)> = Vec::new();
+    for (mi, m) in model.art_meshes.iter().enumerate().filter(|_| shapes_on) {
+        if m.blend_shapes.is_empty() {
+            continue;
+        }
+        let target = Target::ArtMesh(mi);
+        let what = format!("art mesh {mi}");
+        let len = (m.vertex_count as usize) * 2;
+        let first = st.bindings.len() as i32;
+        for shape in &m.blend_shapes {
+            if shape.positions.len() != shape.keys.len().saturating_mul(len) {
+                return Err(err(format!("{what}: blend shape points disagree with its vertices")));
+            }
+            let Some((t, keys)) = table_of(&bs_tables, shape.parameter) else { continue };
+            let deltas = |c: Channel| -> Result<Vec<Vec<f32>>, ImportError> {
+                Ok(shape_deltas(shape, c, &base_of(target, c, &what)?, keys))
+            };
+            let (pos, op) = (deltas(Channel::Positions)?, deltas(Channel::Opacity)?);
+            let colors = deltas(Channel::Multiply)?.into_iter().zip(deltas(Channel::Screen)?);
+            let off = m_opac.len() as i32;
+            for ((p, o), (mul, scr)) in pos.iter().zip(&op).zip(colors) {
+                m_opac.push(o.first().copied().unwrap_or(0.0));
+                m_col.push((rgb(&mul), rgb(&scr)));
+                m_orders.push(0.0);
+                m_pos_begin.push(coords.len() as i32);
+                coords.extend_from_slice(p);
+            }
+            st.bind(shape, t, off, keys.len(), n_params, &what)?;
+        }
+        bs_meshes.push((mi as i32, first, m.blend_shapes.len() as i32));
     }
     for slot in 29..=32usize {
         sect.insert(slot, vec![0u8; n_meshes * 8]);
@@ -597,6 +968,91 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     sect.insert(70, i32s(&m_pos_begin));
     sect.insert(78, f32s(&uv_pool));
     sect.insert(79, i16s(&tri_pool));
+    // the draw order groups to write: the model's own, or for a model built
+    // from scratch the ones its offscreen parts call for (runtimes want at
+    // least the root group, and an offscreen part must be a part item with
+    // a group of its own)
+    let synthesized;
+    let groups: &[ayatsuri_format::model::DrawGroup] = if model.draw_groups.is_empty() {
+        synthesized = ayatsuri_core::draworder::synthesize(model);
+        &synthesized
+    } else {
+        &model.draw_groups
+    };
+    let grouped: std::collections::HashSet<u32> = groups
+        .iter()
+        .flat_map(|g| &g.items)
+        .filter(|it| it.part && it.child_group.is_some())
+        .map(|it| it.object)
+        .collect();
+
+    // ---- offscreen parts (5.3): one offscreen per part that has it on,
+    // its masks joining the drawable mask pool after the meshes' and one
+    // offscreen keyform per part keyform ----
+    let mut part_off = vec![-1i32; n_parts];
+    let mut part_kf_off: Vec<i32> = Vec::new();
+    let (mut off_owner, mut off_flags, mut off_blend) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut off_mask_begin, mut off_mask_count) = (Vec::new(), Vec::new());
+    let mut off_opac: Vec<f32> = Vec::new();
+    // offscreen blend shapes (5.3, 164-166): their keyforms follow the
+    // normal ones, opacity as a difference from the base
+    let mut off_normal = 0usize;
+    let mut bs_off: Vec<(i32, i32, i32)> = Vec::new();
+    if version.max_slot() >= 152 {
+        for (i, p) in model.parts.iter().enumerate() {
+            // a part the draw order groups don't hold as a group draws directly
+            let Some(o) = p.offscreen.as_ref().filter(|_| grouped.contains(&(i as u32))) else {
+                part_kf_off.extend(std::iter::repeat_n(-1, p.draw_orders.len()));
+                continue;
+            };
+            if o.opacities.len() != p.draw_orders.len() {
+                return Err(err(format!(
+                    "part {i}: {} offscreen opacities for {} keyforms",
+                    o.opacities.len(),
+                    p.draw_orders.len()
+                )));
+            }
+            if let Some(slot) = part_off.get_mut(i) {
+                *slot = off_owner.len() as i32;
+            }
+            off_owner.push(i as i32);
+            // the flags byte is read as a drawable's: only the mask bit
+            off_flags.push(if o.inverted { flags::INVERTED_MASK } else { 0 });
+            off_blend.push(o.blend.to_moc3());
+            off_mask_begin.push(mask_pool.len() as i32);
+            off_mask_count.push(o.masks.len() as i32);
+            mask_pool.extend(o.masks.iter().map(|&s| s as i32));
+            for &a in &o.opacities {
+                part_kf_off.push(off_opac.len() as i32);
+                off_opac.push(a);
+            }
+        }
+        part_kf_off.extend(std::iter::repeat_n(-1, part_shape_keyforms));
+        off_normal = off_opac.len();
+        for (i, p) in model.parts.iter().enumerate() {
+            let Some(&oi) = part_off.get(i).filter(|&&o| o >= 0) else { continue };
+            let shaped: Vec<_> = p
+                .blend_shapes
+                .iter()
+                .filter(|s| !s.opacities.is_empty())
+                .filter_map(|s| Some((s, table_of(&bs_tables, s.parameter)?)))
+                .collect();
+            if shaped.is_empty() {
+                continue;
+            }
+            let what = format!("part {i}'s offscreen");
+            let base = base_of(Target::Part(i), Channel::Opacity, &what)?;
+            let first = st.bindings.len() as i32;
+            for (shape, (t, keys)) in &shaped {
+                let off = off_opac.len() as i32;
+                for d in shape_deltas(shape, Channel::Opacity, &base, keys) {
+                    off_opac.push(d.first().copied().unwrap_or(0.0));
+                }
+                st.bind(shape, *t, off, keys.len(), n_params, &what)?;
+            }
+            bs_off.push((oi, first, shaped.len() as i32));
+        }
+    }
     sect.insert(80, i32s(&mask_pool));
 
     // ---- glue (89-100) ----
@@ -622,6 +1078,28 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         g_weights.extend_from_slice(&g.weights);
         g_pos.extend(g.indices.iter().map(|&v| v as i16));
     }
+    // glue blend shapes (5.0) on intensity
+    let mut bs_glue: Vec<(i32, i32, i32)> = Vec::new();
+    for (gi, g) in model.glues.iter().enumerate().filter(|_| more_shapes_on) {
+        if g.blend_shapes.is_empty() {
+            continue;
+        }
+        let what = format!("glue {gi}");
+        let base = ayatsuri_core::shapes::default_blend(model, &g.binding, &g.intensities, 1)
+            .ok_or_else(|| {
+                err(format!("{what}: its blend shapes need keys at every parameter's default"))
+            })?;
+        let first = st.bindings.len() as i32;
+        for shape in &g.blend_shapes {
+            let Some((t, keys)) = table_of(&bs_tables, shape.parameter) else { continue };
+            let off = g_intens.len() as i32;
+            for d in shape_deltas(shape, Channel::Intensity, &base, keys) {
+                g_intens.push(d.first().copied().unwrap_or(0.0));
+            }
+            st.bind(shape, t, off, keys.len(), n_params, &what)?;
+        }
+        bs_glue.push((gi as i32, first, g.blend_shapes.len() as i32));
+    }
     sect.insert(89, vec![0u8; n_glue * 8]);
     sect.insert(90, ids(&model.glues.iter().map(|g| g.id.clone()).collect::<Vec<_>>()));
     sect.insert(91, i32s(&g_kb));
@@ -644,36 +1122,15 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     let mut do_types = Vec::new();
     let mut do_idx = Vec::new();
     let mut do_self = Vec::new();
-    // a model built from scratch has no draw groups; runtimes expect at
-    // least the root one, so synthesize it with every mesh in index order
-    let synthesized;
-    let groups: &[ayatsuri_format::model::DrawGroup] =
-        if model.draw_groups.is_empty() && n_meshes > 0 {
-            let orders: Vec<i32> = model
-                .art_meshes
-                .iter()
-                .map(|m| m.draw_orders.first().copied().unwrap_or(500.0).round() as i32)
-                .collect();
-            synthesized = [ayatsuri_format::model::DrawGroup {
-                total: n_meshes as u32,
-                min_order: orders.iter().copied().min().unwrap_or(500),
-                max_order: orders.iter().copied().max().unwrap_or(500),
-                items: (0..n_meshes)
-                    .map(|i| ayatsuri_format::model::DrawItem {
-                        part: false,
-                        object: i as u32,
-                        child_group: None,
-                    })
-                    .collect(),
-            }];
-            &synthesized
-        } else {
-            &model.draw_groups
-        };
-    for g in groups {
+    // totals counted the runtime's way: an offscreen written here takes a
+    // layer slot, one dropped (or a version before 5.3) does not
+    let totals = ayatsuri_core::draworder::totals(groups, |p| {
+        part_off.get(p as usize).is_some_and(|&o| o >= 0)
+    });
+    for (g, &total) in groups.iter().zip(&totals) {
         dg_begin.push(do_types.len() as i32);
         dg_count.push(g.items.len() as i32);
-        dg_total.push(g.total as i32);
+        dg_total.push(total as i32);
         dg_max.push(g.max_order);
         dg_min.push(g.min_order);
         for it in &g.items {
@@ -726,6 +1183,9 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
             for x in &model.glues {
                 see(&x.binding);
             }
+            if let Some((_, keys)) = bs_tables.iter().find(|(q, _)| *q as usize == p) {
+                all.extend_from_slice(keys);
+            }
             if all.is_empty() {
                 all.push(meta.min);
                 all.push(meta.max);
@@ -744,27 +1204,113 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         // the per-object begins pointing at their keyform runs
         let w_total = w_opac.len() as i32;
         let r_total = r_opac.len() as i32;
-        let color_total = w_opac.len() + r_opac.len() + m_opac.len();
+        // offscreen keyforms take neutral colours after the meshes'
+        let color_total = w_opac.len() + r_opac.len() + m_opac.len() + off_opac.len();
         sect.insert(105, i32s(&w_kf_begin.clone()));
         sect.insert(106, i32s(&r_kf_begin.iter().map(|b| b + w_total).collect::<Vec<_>>()));
         sect.insert(
             107,
             i32s(&m_kf_begin.iter().map(|b| b + w_total + r_total).collect::<Vec<_>>()),
         );
-        // neutral means multiply by white (108-110 RGB = 1) and screen
-        // with black (111-113 RGB = 0); a white screen colour lifts every
-        // pixel to white and the model renders as a silhouette
-        for slot in 108..=110usize {
-            sect.insert(slot, f32s(&vec![1.0f32; color_total]));
+        // each keyform's own multiply (108-110 RGB) and screen (111-113);
+        // neutral is a white multiply and a black screen (a white screen
+        // lifts every pixel to white: a silhouette). A blend shape's
+        // keyforms hold zeros, as their colours are added. Offscreen
+        // keyforms take neutral colours after the meshes'.
+        let neutral: KeyColor = ([1.0; 3], [0.0; 3]);
+        let pool: Vec<KeyColor> = w_col
+            .iter()
+            .chain(&r_col)
+            .chain(&m_col)
+            .copied()
+            .chain(core::iter::repeat_n(neutral, off_normal))
+            .chain(core::iter::repeat_n(([0.0; 3], [0.0; 3]), off_opac.len() - off_normal))
+            .collect();
+        if pool.len() != color_total {
+            return Err(err("keyform colours disagree with the keyforms"));
         }
-        for slot in 111..=113usize {
-            sect.insert(slot, f32s(&vec![0.0f32; color_total]));
+        for (c, slot) in (108..=110usize).enumerate() {
+            sect.insert(
+                slot,
+                f32s(&pool.iter().map(|k| k.0.get(c).copied().unwrap_or(1.0)).collect::<Vec<_>>()),
+            );
         }
-        sect.insert(114, vec![0u8; n_params * 4]);
-        sect.insert(115, i32s(&vec![-1i32; n_params]));
-        sect.insert(116, vec![0u8; n_params * 4]);
+        for (c, slot) in (111..=113usize).enumerate() {
+            sect.insert(
+                slot,
+                f32s(&pool.iter().map(|k| k.1.get(c).copied().unwrap_or(0.0)).collect::<Vec<_>>()),
+            );
+        }
+        // blend shape parameters: type 1 and their key table
+        let table_of = |p: usize| bs_tables.iter().position(|(q, _)| *q as usize == p);
+        sect.insert(
+            114,
+            i32s(&(0..n_params).map(|p| table_of(p).map_or(0, |_| 1)).collect::<Vec<_>>()),
+        );
+        sect.insert(
+            115,
+            i32s(&(0..n_params).map(|p| table_of(p).map_or(-1, |t| t as i32)).collect::<Vec<_>>()),
+        );
+        sect.insert(
+            116,
+            i32s(&(0..n_params).map(|p| table_of(p).map_or(0, |_| 1)).collect::<Vec<_>>()),
+        );
+        if !bs_tables.is_empty() {
+            let (mut kb, mut kn, mut base) = (Vec::new(), Vec::new(), Vec::new());
+            for (_, keys) in &bs_tables {
+                kb.push(bind.keys.len() as i32);
+                kn.push(keys.len() as i32);
+                base.push(keys.iter().position(|k| k.abs() < 1e-6).unwrap_or(0) as i32);
+                bind.keys.extend_from_slice(keys);
+            }
+            sect.insert(117, i32s(&kb));
+            sect.insert(118, i32s(&kn));
+            sect.insert(119, i32s(&base));
+            sect.insert(120, i32s(&st.bindings.iter().map(|b| b.0).collect::<Vec<_>>()));
+            sect.insert(121, i32s(&st.bindings.iter().map(|b| b.1).collect::<Vec<_>>()));
+            sect.insert(122, i32s(&st.bindings.iter().map(|b| b.2).collect::<Vec<_>>()));
+            sect.insert(123, i32s(&st.limit_runs.iter().map(|r| r.0).collect::<Vec<_>>()));
+            sect.insert(124, i32s(&st.limit_runs.iter().map(|r| r.1).collect::<Vec<_>>()));
+            sect.insert(131, i32s(&st.lim.index));
+            sect.insert(132, i32s(&st.lim.param));
+            sect.insert(133, i32s(&st.lim.begin));
+            sect.insert(134, i32s(&st.lim.count));
+            sect.insert(135, f32s(&st.lim.keys));
+            sect.insert(136, f32s(&st.lim.weights));
+            for (slot, rows) in [(125usize, &bs_warps), (128, &bs_meshes)] {
+                for c in 0..3usize {
+                    let col: Vec<i32> = rows
+                        .iter()
+                        .map(|r| match c {
+                            0 => r.0,
+                            1 => r.1,
+                            _ => r.2,
+                        })
+                        .collect();
+                    sect.insert(slot + c, i32s(&col));
+                }
+            }
+        }
     }
     sect.insert(77, f32s(&bind.keys.clone()));
+
+    // ---- v5.0 blend shapes on parts (143-145), rotations (146-148) and
+    // glue (149-151) ----
+    if more_shapes_on {
+        for (slot, rows) in [(143usize, &bs_parts), (146, &bs_rots), (149, &bs_glue)] {
+            for c in 0..3usize {
+                let col: Vec<i32> = rows
+                    .iter()
+                    .map(|r| match c {
+                        0 => r.0,
+                        1 => r.1,
+                        _ => r.2,
+                    })
+                    .collect();
+                sect.insert(slot + c, i32s(&col));
+            }
+        }
+    }
 
     // ---- v5.0 extensions (137-151) ----
     // per-keyform colour links into the multiply / screen pools, which are
@@ -789,11 +1335,33 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
     // no offscreen keyform; each mesh's colour and alpha blend in one word
     // (colour in the low byte)
     if version.max_slot() >= 152 {
-        sect.insert(152, i32s(&vec![-1i32; n_parts]));
         let modes: Vec<i32> =
             model.art_meshes.iter().map(|m| Blend::of(m.blend, m.flags).to_moc3()).collect();
         sect.insert(153, i32s(&modes));
-        sect.insert(160, i32s(&vec![-1i32; part_keyforms]));
+        sect.insert(152, i32s(&part_off));
+        sect.insert(154, vec![0u8; off_owner.len() * 8]);
+        sect.insert(155, i32s(&off_owner));
+        sect.insert(156, off_flags.clone());
+        sect.insert(157, i32s(&off_blend));
+        sect.insert(158, i32s(&off_mask_begin));
+        sect.insert(159, i32s(&off_mask_count));
+        sect.insert(160, i32s(&part_kf_off));
+        sect.insert(161, f32s(&off_opac));
+        let first_color = (w_opac.len() + r_opac.len() + m_opac.len()) as i32;
+        let off_colors: Vec<i32> = (0..off_opac.len() as i32).map(|k| first_color + k).collect();
+        sect.insert(162, i32s(&off_colors));
+        sect.insert(163, i32s(&off_colors));
+        for c in 0..3usize {
+            let col: Vec<i32> = bs_off
+                .iter()
+                .map(|r| match c {
+                    0 => r.0,
+                    1 => r.1,
+                    _ => r.2,
+                })
+                .collect();
+            sect.insert(164 + c, i32s(&col));
+        }
     }
 
     // ---- counts table (slot 0), field order is the on-disk order ----
@@ -822,27 +1390,33 @@ pub fn to_moc3(model: &Model, version: ExportVersion) -> Result<Vec<u8>, ImportE
         g_weights.len() as i32,
         g_intens.len() as i32,
         if version.max_slot() >= 102 {
-            (w_opac.len() + r_opac.len() + m_opac.len()) as i32
+            (w_opac.len() + r_opac.len() + m_opac.len() + off_opac.len()) as i32
         } else {
             0
         },
         if version.max_slot() >= 102 {
-            (w_opac.len() + r_opac.len() + m_opac.len()) as i32
+            (w_opac.len() + r_opac.len() + m_opac.len() + off_opac.len()) as i32
         } else {
             0
         },
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
+        bs_tables.len() as i32,
+        st.bindings.len() as i32,
+        bs_warps.len() as i32,
+        bs_meshes.len() as i32,
+        st.lim.index.len() as i32,
+        st.lim.param.len() as i32,
+        st.lim.keys.len() as i32,
     ];
-    // 5.0 doubled the table; the fields past 4.2's (blend shapes, offscreens)
-    // stay zero because this writer emits none
+    // 5.0 doubled the table: its blend shapes on parts, rotations and glue
+    // (32-34), then 5.3's offscreens, their keyforms and shapes (35-37)
     let mut count_bytes = vec![0u8; version.count_ints() * 4];
-    for (i, c) in counts.iter().enumerate() {
+    let five =
+        [(32usize, bs_parts.len() as i32), (33, bs_rots.len() as i32), (34, bs_glue.len() as i32)];
+    let five = five.into_iter().filter(|_| more_shapes_on);
+    let extra =
+        [(35usize, off_owner.len() as i32), (36, off_opac.len() as i32), (37, bs_off.len() as i32)];
+    let extra = five.chain(extra.into_iter().filter(|_| version.max_slot() >= 152));
+    for (i, c) in counts.iter().copied().enumerate().chain(extra) {
         let at = i * 4;
         if let Some(slice) = count_bytes.get_mut(at..at + 4) {
             slice.copy_from_slice(&c.to_le_bytes());
@@ -978,6 +1552,11 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         for v in ExportVersion::ALL.into_iter().filter(|v| v.max_slot() >= 113) {
             let file = to_moc3(&model, v).unwrap();
@@ -989,6 +1568,259 @@ mod tests {
                 assert!(floats(&file, slot, 1).iter().all(|&c| c == 0.0), "{} screen", v.label());
             }
         }
+    }
+
+    #[test]
+    fn blend_shapes_on_every_kind_round_trip_and_draw_the_same() {
+        use ayatsuri_format::model::{
+            ArtMesh, BlendShape, Deformer, DeformerKind, Glue, Parameter, Part, RotationData,
+            WarpData,
+        };
+        let param = |id: &str, blend_shape: bool| Parameter {
+            id: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape,
+        };
+        let mut model = Model::new();
+        model.parameters = vec![param("ParamX", false), param("ParamS", true)];
+        let shape = |f: &dyn Fn(&mut BlendShape)| {
+            let mut b = BlendShape { parameter: 1, keys: vec![1.0], ..Default::default() };
+            f(&mut b);
+            b
+        };
+        model.parts.push(Part {
+            id: "P".into(),
+            parent_part: None,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            draw_orders: vec![500.0],
+            offscreen: None,
+            blend_shapes: vec![shape(&|b| b.draw_orders = vec![700.0])],
+        });
+        let grid = vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 2.0, 2.0];
+        let moved: Vec<f32> = grid.iter().map(|v| v + 0.5).collect();
+        let deformer = |id: &str, kind, shapes| Deformer {
+            id: id.into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            kind,
+            multiply: Vec::new(),
+            screen: Vec::new(),
+            blend_shapes: shapes,
+        };
+        model.deformers.push(deformer(
+            "W",
+            DeformerKind::Warp(WarpData {
+                rows: 1,
+                cols: 1,
+                quad: false,
+                opacities: vec![1.0],
+                positions: grid,
+            }),
+            vec![shape(&|b| {
+                b.positions = moved.clone();
+                b.opacities = vec![0.6];
+            })],
+        ));
+        model.deformers.push(deformer(
+            "R",
+            DeformerKind::Rotation(RotationData {
+                base_angle: 0.0,
+                opacities: vec![1.0],
+                angles: vec![0.0],
+                origins_x: vec![0.0],
+                origins_y: vec![0.0],
+                scales: vec![1.0],
+                reflect_x: vec![false],
+                reflect_y: vec![false],
+            }),
+            vec![shape(&|b| {
+                b.angles = vec![40.0];
+                b.origins_x = vec![0.0];
+                b.origins_y = vec![0.0];
+                b.scales = vec![1.0];
+            })],
+        ));
+        let mesh = |id: &str, parent: u32, positions: Vec<f32>, shapes| ArtMesh {
+            id: id.into(),
+            parent_part: Some(0),
+            parent_deformer: Some(parent),
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            clip_group: None,
+            clip_inherit: false,
+            binding: Binding::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions,
+            blend_shapes: shapes,
+            multiply: Vec::new(),
+            screen: Vec::new(),
+        };
+        model.art_meshes.push(mesh(
+            "A",
+            0,
+            vec![0.2, 0.2, 0.8, 0.2, 0.2, 0.8],
+            vec![shape(&|b| {
+                b.positions = vec![0.2, 0.2, 0.8, 0.2, 0.2, 0.8];
+                b.opacities = vec![0.5];
+                b.multiply = vec![1.0, 0.5, 0.5];
+                b.screen = vec![0.0, 0.0, 0.4];
+            })],
+        ));
+        model.art_meshes.push(mesh("B", 1, vec![0.0, -1.0, 1.0, -1.0, 0.0, -2.0], Vec::new()));
+        model.glues.push(Glue {
+            id: "G".into(),
+            art_mesh_a: 0,
+            art_mesh_b: 1,
+            binding: Binding::default(),
+            intensities: vec![0.0],
+            weights: vec![0.5, 0.5],
+            indices: vec![0, 0],
+            blend_shapes: vec![shape(&|b| b.intensities = vec![0.25])],
+        });
+
+        let look = |m: &Model, s: f32| {
+            let mut p = ayatsuri_core::Puppet::new(m.clone());
+            p.set_value(1, s);
+            p.update();
+            let mut out: Vec<f32> = Vec::new();
+            for d in p.drawables() {
+                out.extend(d.positions);
+                out.push(d.opacity);
+                out.extend(d.color.multiply);
+                out.extend(d.color.screen);
+            }
+            out
+        };
+        for v in [ExportVersion::V5_00, ExportVersion::V5_03] {
+            let back = crate::moc3::from_moc3(&to_moc3(&model, v).unwrap()).unwrap();
+            assert_eq!(
+                back.deformers[0].blend_shapes[0].positions,
+                model.deformers[0].blend_shapes[0].positions,
+                "{v:?}"
+            );
+            assert_eq!(back.deformers[1].blend_shapes[0].angles, vec![40.0], "{v:?}");
+            assert_eq!(back.parts[0].blend_shapes[0].draw_orders, vec![700.0], "{v:?}");
+            assert_eq!(back.glues[0].blend_shapes[0].intensities, vec![0.25], "{v:?}");
+            let a = &back.art_meshes[0].blend_shapes[0];
+            assert_eq!(
+                (a.opacities.clone(), a.screen.clone()),
+                (vec![0.5], vec![0.0, 0.0, 0.4]),
+                "{v:?}"
+            );
+            for s in [0.0, 0.5, 1.0] {
+                let (want, got) = (look(&model, s), look(&back, s));
+                assert_eq!(want.len(), got.len());
+                for (x, y) in want.iter().zip(&got) {
+                    assert!((x - y).abs() < 1e-4, "{v:?} at s {s}: {want:?} vs {got:?}");
+                }
+            }
+        }
+        // 4.2 carries mesh and warp shapes only
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V4_02).unwrap()).unwrap();
+        assert!(!back.deformers[0].blend_shapes.is_empty());
+        assert!(back.deformers[1].blend_shapes.is_empty() && back.parts[0].blend_shapes.is_empty());
+    }
+
+    #[test]
+    fn keyform_colours_round_trip_and_pass_down() {
+        use ayatsuri_format::model::{
+            ArtMesh, BindingAxis, Deformer, DeformerKind, Parameter, WarpData,
+        };
+        let mut model = Model::new();
+        model.parameters.push(Parameter {
+            id: "ParamX".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: false,
+        });
+        let on_x = || Binding {
+            axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }],
+            curves: Vec::new(),
+        };
+        // a warp that darkens to half at x = 1, and a mesh in it that
+        // screens in blue at x = 1
+        let grid = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        model.deformers.push(Deformer {
+            id: "W".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: on_x(),
+            kind: DeformerKind::Warp(WarpData {
+                rows: 1,
+                cols: 1,
+                quad: false,
+                opacities: vec![1.0, 1.0],
+                positions: [grid.clone(), grid].concat(),
+            }),
+            multiply: vec![1.0, 1.0, 1.0, 0.5, 0.5, 0.5],
+            screen: Vec::new(),
+            blend_shapes: Vec::new(),
+        });
+        let tri = vec![0.1, 0.1, 0.9, 0.1, 0.1, 0.9];
+        model.art_meshes.push(ArtMesh {
+            id: "M".into(),
+            parent_part: None,
+            parent_deformer: Some(0),
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: on_x(),
+            opacities: vec![1.0, 1.0],
+            draw_orders: vec![500.0, 500.0],
+            positions: [tri.clone(), tri].concat(),
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        });
+        let color = |m: &Model, x: f32| {
+            let mut p = ayatsuri_core::Puppet::new(m.clone());
+            p.set_value(0, x);
+            p.update();
+            p.drawables().next().map(|d| d.color).unwrap_or_default()
+        };
+        let mid = color(&model, 0.5);
+        assert_eq!(mid.multiply, [0.75; 3], "the warp's multiply passes down");
+        assert_eq!(mid.screen, [0.0, 0.0, 0.5]);
+        for v in [ExportVersion::V4_02, ExportVersion::V5_00, ExportVersion::V5_03] {
+            let back = crate::moc3::from_moc3(&to_moc3(&model, v).unwrap()).unwrap();
+            assert_eq!(back.deformers[0].multiply, model.deformers[0].multiply, "{v:?}");
+            assert!(back.deformers[0].screen.is_empty(), "{v:?}: neutral stays empty");
+            assert_eq!(back.art_meshes[0].screen, model.art_meshes[0].screen, "{v:?}");
+            assert_eq!(color(&back, 0.5), mid, "{v:?}");
+        }
+        let w = export_warnings(&model, ExportVersion::V4_00).join(" ");
+        assert!(w.contains("2 object(s) use multiply or screen colours"), "{w}");
+        assert!(export_warnings(&model, ExportVersion::V4_02).join(" ").find("colours").is_none());
     }
 
     #[test]
@@ -1011,6 +1843,11 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         };
         let mut model = Model::new();
         model.art_meshes.push(mesh("Overlay", ColorBlend::Overlay));
@@ -1028,6 +1865,208 @@ mod tests {
         assert_eq!(Blend::of(m[1].blend, m[1].flags).color, ColorBlend::AddCompatible);
         let warnings = export_warnings(&model, ExportVersion::V5_00).join(" ");
         assert!(warnings.contains("2 mesh(es) use a blend mode"), "{warnings}");
+    }
+
+    #[test]
+    fn blend_shapes_round_trip_and_draw_the_same() {
+        use ayatsuri_format::model::{ArtMesh, BindingAxis, BlendShape, Parameter};
+        let param = |id: &str, min: f32, blend_shape: bool| Parameter {
+            id: id.into(),
+            min,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape,
+        };
+        let mut model = Model::new();
+        model.parameters = vec![param("ParamX", 0.0, false), param("ParamSmile", -1.0, true)];
+        // a triangle moving right along ParamX; Smile lifts vertex 0 at +1
+        // and pushes vertex 1 left at -1, the base key in the middle
+        model.art_meshes.push(ArtMesh {
+            id: "Mouth".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            clip_group: None,
+            clip_inherit: false,
+            binding: Binding {
+                axes: vec![BindingAxis { parameter: 0, keys: vec![0.0, 1.0] }],
+                curves: Vec::new(),
+            },
+            opacities: vec![1.0, 1.0],
+            draw_orders: vec![500.0, 500.0],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 3.0, 0.0, 2.0, 1.0],
+            blend_shapes: vec![BlendShape {
+                parameter: 1,
+                keys: vec![-1.0, 1.0],
+                positions: vec![0.0, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0],
+                // ParamX past the middle fades the smile out
+                limits: vec![ayatsuri_format::model::WeightLimit {
+                    parameter: 0,
+                    keys: vec![0.0, 0.5, 1.0],
+                    weights: vec![1.0, 1.0, 0.0],
+                }],
+                angles: Vec::new(),
+                draw_orders: Vec::new(),
+                intensities: Vec::new(),
+                multiply: Vec::new(),
+                opacities: Vec::new(),
+                origins_x: Vec::new(),
+                origins_y: Vec::new(),
+                scales: Vec::new(),
+                screen: Vec::new(),
+            }],
+            multiply: Vec::new(),
+            screen: Vec::new(),
+        });
+        let drawn = |m: &Model, x: f32, smile: f32| {
+            let mut p = ayatsuri_core::Puppet::new(m.clone());
+            p.set_value(0, x);
+            p.set_value(1, smile);
+            p.update();
+            p.drawables().next().map(|d| d.positions.to_vec()).unwrap_or_default()
+        };
+        for v in [ExportVersion::V4_02, ExportVersion::V5_00, ExportVersion::V5_03] {
+            let back = crate::moc3::from_moc3(&to_moc3(&model, v).unwrap()).unwrap();
+            assert!(back.parameters[1].blend_shape && !back.parameters[0].blend_shape, "{v:?}");
+            let shape = &back.art_meshes[0].blend_shapes[0];
+            assert_eq!(shape.keys, vec![-1.0, 1.0], "{v:?}");
+            assert_eq!(shape.limits, model.art_meshes[0].blend_shapes[0].limits, "{v:?}");
+            for (x, smile) in [
+                (0.0, 0.0),
+                (0.0, 1.0),
+                (0.5, 0.5),
+                (1.0, -1.0),
+                (0.3, -0.25),
+                (1.0, 1.0),
+                (0.75, 1.0),
+            ] {
+                let (want, got) = (drawn(&model, x, smile), drawn(&back, x, smile));
+                assert_eq!(want.len(), got.len());
+                for (a, b) in want.iter().zip(&got) {
+                    assert!(
+                        (a - b).abs() < 1e-5,
+                        "{v:?} at x {x} smile {smile}: {want:?} vs {got:?}"
+                    );
+                }
+            }
+            assert!(
+                !export_warnings(&model, v).iter().any(|w| w.contains("blend shapes")),
+                "{v:?}"
+            );
+        }
+        // 4.0 has no blend shapes: the shape goes, and the export says so
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V4_00).unwrap()).unwrap();
+        assert!(back.art_meshes[0].blend_shapes.is_empty());
+        let warnings = export_warnings(&model, ExportVersion::V4_00).join(" ");
+        assert!(warnings.contains("need moc3 4.2"), "{warnings}");
+    }
+
+    #[test]
+    fn offscreen_parts_round_trip_through_5_3() {
+        use ayatsuri_format::model::{AlphaBlend, ArtMesh, Blend, ColorBlend, Offscreen, Part};
+        let mut model = Model::new();
+        model.parts.push(Part {
+            id: "Hair".into(),
+            parent_part: None,
+            visible: true,
+            enabled: true,
+            binding: Default::default(),
+            draw_orders: vec![500.0],
+            offscreen: Some(Offscreen {
+                masks: vec![1],
+                inverted: true,
+                blend: Blend { color: ColorBlend::Multiply, alpha: AlphaBlend::Over },
+                opacities: vec![0.4],
+            }),
+            blend_shapes: Vec::new(),
+        });
+        let mesh = |id: &str, part: Option<u32>| ArtMesh {
+            id: id.into(),
+            parent_part: part,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0; 6],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: Default::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
+        };
+        model.art_meshes.push(mesh("Strand", Some(0)));
+        model.art_meshes.push(mesh("Head", None));
+
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_03).unwrap()).unwrap();
+        assert_eq!(back.parts[0].offscreen, model.parts[0].offscreen);
+        // the part is a part item with a group of its own, and the root's
+        // total counts both meshes and the layer's slot, as runtimes walk it
+        let root = &back.draw_groups[0];
+        assert!(root.items.iter().any(|it| it.part && it.object == 0 && it.child_group.is_some()));
+        assert_eq!(root.total, 3);
+        // read back, every mesh still finds its place in the render order
+        let mut puppet = ayatsuri_core::Puppet::new(back.clone());
+        puppet.update();
+        assert_eq!(puppet.drawables().count(), 2);
+        assert_eq!(puppet.layers_of(0), &[0]);
+        // the meshes' own masks are untouched by the layer's
+        assert!(back.art_meshes.iter().all(|m| m.masks.is_empty()));
+
+        // a blend shape on the layer's opacity (164-166) comes back on the
+        // part's shape for that parameter
+        let fade = model.parameters.len() as u32;
+        model.parameters.push(ayatsuri_format::model::Parameter {
+            id: "ParamFade".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: true,
+        });
+        model.parts[0].blend_shapes.push(ayatsuri_format::model::BlendShape {
+            parameter: fade,
+            keys: vec![1.0],
+            draw_orders: vec![500.0],
+            opacities: vec![0.1],
+            ..Default::default()
+        });
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_03).unwrap()).unwrap();
+        let shape = &back.parts[0].blend_shapes[0];
+        assert_eq!((shape.parameter, shape.keys.as_slice()), (fade, &[1.0][..]));
+        assert!((shape.opacities[0] - 0.1).abs() < 1e-6, "{:?}", shape.opacities);
+        assert_eq!(shape.draw_orders, vec![500.0]);
+        assert!(
+            export_warnings(&model, ExportVersion::V5_03).iter().all(|w| !w.contains("opacity"))
+        );
+
+        // before 5.3 the layer goes, and the export says so
+        let back = crate::moc3::from_moc3(&to_moc3(&model, ExportVersion::V5_00).unwrap()).unwrap();
+        assert!(back.parts[0].offscreen.is_none());
+        // no layer slots before 5.3: the root counts the two meshes only
+        assert_eq!(back.draw_groups[0].total, 2);
+        let warnings = export_warnings(&model, ExportVersion::V5_00).join(" ");
+        assert!(warnings.contains("1 part(s) use offscreen drawing"), "{warnings}");
+        assert!(warnings.contains("only moc3 5.3 stores"), "{warnings}");
     }
 
     #[test]
@@ -1063,6 +2102,11 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions,
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         model.draw_groups.push(DrawGroup {
             total: 1,

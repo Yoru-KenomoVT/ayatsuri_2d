@@ -1,0 +1,39 @@
+[package]
+name = "ayatsuri-pen"
+description = "Pen tablet pressure the window layer does not pass on: read from the tablet on Linux, from the system's events on macOS"
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The second crate allowed unsafe, in two modules only: attaching to the
+# window's Wayland connection (Linux) and adding an event monitor (macOS)
+# have no safe form. The tablet reader is safe Rust; Windows needs nothing
+# here (the window layer passes pressure on). The crate denies unsafe
+# everywhere else.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[dependencies]
+log = { workspace = true }
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13"
+# the same libwayland-backed client winit uses, so its connection can be shared
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+rustix = { version = "1", features = ["event"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSEvent"] }
+block2 = "0.6"

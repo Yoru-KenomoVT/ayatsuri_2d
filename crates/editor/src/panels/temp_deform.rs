@@ -12,6 +12,7 @@
 use egui::{Align2, Color32, FontId, Pos2, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
 
 use super::{EditorUi, LiveDrag, LiveTarget, Sel, Tool, parent_delta};
+use crate::bend_path::{Curve, SPAN, Tie};
 use crate::i18n::tr;
 use crate::session::Session;
 use crate::theme;
@@ -74,17 +75,7 @@ enum Frame {
     /// place in the grid (cell units).
     Grid { cols: usize, rows: usize, now: Vec<V>, uv: Vec<V> },
     /// Control points as bound and now, and each bound point's place.
-    Path { rest: Vec<V>, now: Vec<V>, bind: Vec<PathBind> },
-}
-
-/// A point held by a path: the sample span, how far along it, and its
-/// offset in the path's local frame there.
-#[derive(Clone, Copy, Debug)]
-struct PathBind {
-    k: usize,
-    t: f32,
-    a: f32,
-    b: f32,
+    Path { rest: Vec<V>, now: Vec<V>, bind: Vec<Tie> },
 }
 
 /// Which control a drag holds.
@@ -112,6 +103,10 @@ struct Drag {
     /// Bound positions when the drag began.
     start: Vec<V>,
     live: Vec<Option<LiveDrag>>,
+    /// Perspective: the side a corner keeps to (true along the top and
+    /// bottom), chosen once the drag has gone a few pixels and kept until
+    /// release, so the taper cannot flip sides mid-drag.
+    side: Option<bool>,
 }
 
 pub(super) struct TempDeform {
@@ -159,69 +154,9 @@ impl ViewXf {
 
 // ---- the maths -------------------------------------------------------
 
-type M3 = [[f64; 3]; 3];
-
-/// The projective map taking the unit square's corners (0,0) (1,0) (1,1)
-/// (0,1) to `q`'s.
-fn square_to_quad(q: &[V; 4]) -> M3 {
-    let [(x0, y0), (x1, y1), (x2, y2), (x3, y3)] = q.map(|p| (f64::from(p.x), f64::from(p.y)));
-    let (sx, sy) = (x0 - x1 + x2 - x3, y0 - y1 + y2 - y3);
-    if sx.abs() < 1e-12 && sy.abs() < 1e-12 {
-        return [[x1 - x0, x2 - x1, x0], [y1 - y0, y2 - y1, y0], [0.0, 0.0, 1.0]];
-    }
-    let (dx1, dx2, dy1, dy2) = (x1 - x2, x3 - x2, y1 - y2, y3 - y2);
-    let den = dx1 * dy2 - dx2 * dy1;
-    let g = (sx * dy2 - dx2 * sy) / den;
-    let h = (dx1 * sy - sx * dy1) / den;
-    [
-        [x1 - x0 + g * x1, x3 - x0 + h * x3, x0],
-        [y1 - y0 + g * y1, y3 - y0 + h * y3, y0],
-        [g, h, 1.0],
-    ]
-}
-
-fn mul(a: &M3, b: &M3) -> M3 {
-    let [b0, b1, b2] = *b;
-    a.map(|[x, y, z]| {
-        let mut row = [0.0; 3];
-        for (o, ((p, q), r)) in row.iter_mut().zip(b0.iter().zip(b1).zip(b2)) {
-            *o = x * p + y * q + z * r;
-        }
-        row
-    })
-}
-
-fn invert(m: &M3) -> Option<M3> {
-    let [[a, b, c], [d, e, f], [g, h, i]] = *m;
-    let (ca, cb, cc) = (e * i - f * h, f * g - d * i, d * h - e * g);
-    let det = a * ca + b * cb + c * cc;
-    if det.abs() < 1e-18 || !det.is_finite() {
-        return None;
-    }
-    Some([
-        [ca / det, (c * h - b * i) / det, (b * f - c * e) / det],
-        [cb / det, (a * i - c * g) / det, (c * d - a * f) / det],
-        [cc / det, (b * g - a * h) / det, (a * e - b * d) / det],
-    ])
-}
-
-/// The map taking quad `from` onto quad `to`.
-fn quad_map(from: &[V; 4], to: &[V; 4]) -> Option<M3> {
-    Some(mul(&square_to_quad(to), &invert(&square_to_quad(from))?))
-}
-
-fn apply(m: &M3, p: V) -> V {
-    let (x, y) = (f64::from(p.x), f64::from(p.y));
-    let w = m[2][0] * x + m[2][1] * y + m[2][2];
-    if w.abs() < 1e-9 {
-        return p;
-    }
-    let q = vec2(
-        ((m[0][0] * x + m[0][1] * y + m[0][2]) / w) as f32,
-        ((m[1][0] * x + m[1][1] * y + m[1][2]) / w) as f32,
-    );
-    if q.x.is_finite() && q.y.is_finite() { q } else { p }
-}
+/// How far (screen pixels) a Perspective corner drag goes before its side
+/// is chosen for good.
+const SIDE_PX: f32 = 6.0;
 
 /// A grid point at `uv` (cell units); outside the grid the edge cells
 /// carry on.
@@ -232,6 +167,16 @@ fn grid_eval(now: &[V], cols: usize, rows: usize, uv: V) -> V {
     let at = |c: usize, r: usize| now.get(r * (cols + 1) + c).copied().unwrap_or(V::ZERO);
     let (p00, p10, p01, p11) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
     p00 * (1.0 - fu) * (1.0 - fv) + p10 * fu * (1.0 - fv) + p01 * (1.0 - fu) * fv + p11 * fu * fv
+}
+
+/// A point bound in box `rest` carried to box `now` (corners clockwise
+/// from the top left), bilinearly, as Cubism's Perspective and Distort
+/// move the art: rows and columns stay evenly spaced, and the box's
+/// middle goes to the average of its corners.
+fn quad_carry(rest: &[V; 4], now: &[V; 4], p: V) -> V {
+    let grid = |q: &[V; 4]| [q[0], q[1], q[3], q[2]];
+    let uv = grid_find(&grid(rest), 1, 1, p, vec2(0.5, 0.5));
+    grid_eval(&grid(now), 1, 1, uv)
 }
 
 /// The grid place of world point `p`, by Newton from `guess`.
@@ -256,86 +201,10 @@ fn grid_find(now: &[V], cols: usize, rows: usize, p: V, guess: V) -> V {
     uv
 }
 
-/// The path through its control points as a smooth curve (Catmull-Rom),
-/// sampled the same way for any points so rest and now line up.
-const SPAN: usize = 12;
-
+/// The path through its control points as a smooth curve, sampled the
+/// same way for any points so rest and now line up.
 fn path_samples(pts: &[V]) -> Vec<V> {
-    if pts.len() < 2 {
-        return pts.to_vec();
-    }
-    let n = pts.len();
-    let pick = |i: isize| at(pts, i.clamp(0, n as isize - 1) as usize);
-    let mut out = Vec::with_capacity((n - 1) * SPAN + 1);
-    for i in 0..n - 1 {
-        let (p0, p1, p2, p3) =
-            (pick(i as isize - 1), pick(i as isize), pick(i as isize + 1), pick(i as isize + 2));
-        for s in 0..SPAN {
-            let t = s as f32 / SPAN as f32;
-            let (t2, t3) = (t * t, t * t * t);
-            out.push(
-                ((p1 * 2.0)
-                    + (p2 - p0) * t
-                    + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2
-                    + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * t3)
-                    * 0.5,
-            );
-        }
-    }
-    out.push(at(pts, n - 1));
-    out
-}
-
-/// Unit tangents at each sample.
-fn tangents(s: &[V]) -> Vec<V> {
-    let n = s.len();
-    (0..n)
-        .map(|i| {
-            let d = at(s, (i + 1).min(n - 1)) - at(s, i.saturating_sub(1));
-            d.normalized()
-        })
-        .collect()
-}
-
-/// The point and frame at span `k`, fraction `t`.
-fn path_frame(s: &[V], tg: &[V], k: usize, t: f32) -> (V, V, V) {
-    let p = at(s, k) + (at(s, k + 1) - at(s, k)) * t;
-    let tan = (at(tg, k) * (1.0 - t) + at(tg, k + 1) * t).normalized();
-    (p, tan, vec2(-tan.y, tan.x))
-}
-
-fn path_bind(rest: &[V], p: V) -> PathBind {
-    let s = path_samples(rest);
-    if s.len() < 2 {
-        let d = s.first().map_or(V::ZERO, |&o| p - o);
-        return PathBind { k: 0, t: 0.0, a: d.x, b: d.y };
-    }
-    let mut best = (f32::MAX, 0, 0.0);
-    for k in 0..s.len() - 1 {
-        let (a, b) = (at(&s, k), at(&s, k + 1));
-        let ab = b - a;
-        let t = if ab.length_sq() > 0.0 {
-            ((p - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let d = (a + ab * t - p).length_sq();
-        if d < best.0 {
-            best = (d, k, t);
-        }
-    }
-    let tg = tangents(&s);
-    let (o, tan, nor) = path_frame(&s, &tg, best.1, best.2);
-    PathBind { k: best.1, t: best.2, a: (p - o).dot(tan), b: (p - o).dot(nor) }
-}
-
-fn path_eval(s: &[V], tg: &[V], b: &PathBind) -> V {
-    if s.len() < 2 {
-        return s.first().map_or(V::ZERO, |&o| o + vec2(b.a, b.b));
-    }
-    let k = b.k.min(s.len() - 2);
-    let (o, tan, nor) = path_frame(s, tg, k, b.t);
-    o + tan * b.a + nor * b.b
+    Curve::new(pts).pts
 }
 
 impl Frame {
@@ -384,10 +253,9 @@ impl Frame {
     /// Where the bound points are now.
     fn map(&self, base: &[V]) -> Vec<V> {
         match self {
-            Frame::Quad { rest, now, .. } => match quad_map(rest, now) {
-                Some(m) => base.iter().map(|&p| apply(&m, p)).collect(),
-                None => base.to_vec(),
-            },
+            Frame::Quad { rest, now, .. } => {
+                base.iter().map(|&p| quad_carry(rest, now, p)).collect()
+            }
             Frame::Grid { cols, rows, now, uv } => {
                 uv.iter().map(|&q| grid_eval(now, *cols, *rows, q)).collect()
             }
@@ -395,9 +263,8 @@ impl Frame {
                 if rest.is_empty() {
                     return base.to_vec();
                 }
-                let s = path_samples(now);
-                let tg = if s.len() >= 2 { tangents(&s) } else { Vec::new() };
-                bind.iter().map(|b| path_eval(&s, &tg, b)).collect()
+                let c = Curve::new(now);
+                bind.iter().map(|b| c.place(b)).collect()
             }
         }
     }
@@ -417,16 +284,40 @@ impl Frame {
                 *bind = if rest.is_empty() {
                     Vec::new()
                 } else {
-                    held.iter().map(|&p| path_bind(rest, p)).collect()
+                    let c = Curve::new(rest);
+                    held.iter().map(|&p| c.tie(p)).collect()
                 };
             }
         }
     }
 }
 
+/// Whether a Perspective corner drag of `d` goes mostly along the top and
+/// bottom of box `q0` (else along its sides).
+fn along_top(q0: &[V; 4], d: V) -> bool {
+    let h = (q0[1] - q0[0]).normalized();
+    let v = (q0[3] - q0[0]).normalized();
+    d.dot(h).abs() >= d.dot(v).abs()
+}
+
+/// Whether the box's corners turn the same way all round: a box folded
+/// over itself (or flat) cannot carry art, as Krita refuses it too.
+fn convex(q: &[V; 4]) -> bool {
+    let turn = |i: usize| {
+        let (a, b, c) = (at(q, i), at(q, (i + 1) % 4), at(q, (i + 2) % 4));
+        let (u, w) = (b - a, c - b);
+        u.x * w.y - u.y * w.x
+    };
+    let t: Vec<f32> = (0..4).map(turn).collect();
+    let scale = q.iter().map(|p| (*p - q[0]).length_sq()).fold(0.0, f32::max);
+    let eps = 1e-6 * scale.max(1e-12);
+    t.iter().all(|&x| x > eps) || t.iter().all(|&x| x < -eps)
+}
+
 #[allow(clippy::too_many_arguments)]
-/// The box after dragging `grab` from `from` to `to` (world units).
-fn quad_drag(
+/// The box after dragging `grab` from `from` to `to` (world units), a
+/// Perspective corner kept to `side` when it is set (see `Drag::side`).
+fn quad_drag_side(
     method: Method,
     q0: &[V; 4],
     a0: V,
@@ -435,6 +326,7 @@ fn quad_drag(
     from: V,
     to: V,
     snap: bool,
+    side: Option<bool>,
 ) -> ([V; 4], V) {
     let d = to - from;
     let mut q = *q0;
@@ -491,13 +383,16 @@ fn quad_drag(
                 let h = (q0[1] - q0[0]).normalized();
                 let v = (q0[3] - q0[0]).normalized();
                 let (dh, dv) = (d.dot(h), d.dot(v));
-                // the corner follows the pointer on both axes; its partner
-                // across the top or bottom edge mirrors the sideways part
-                // and its partner down the side mirrors the up and down
-                // part, so a diagonal drag tilts both ways at once
-                bump(&mut q, i, h * dh + v * dv);
-                bump(&mut q, i ^ 1, -(h * dh));
-                bump(&mut q, 3 - i, -(v * dv));
+                // as Cubism's: the corner keeps to one of its sides, the
+                // way the drag mostly goes, and the corner across that side
+                // mirrors it, so the box tapers on that side only
+                if side.unwrap_or(dh.abs() >= dv.abs()) {
+                    bump(&mut q, i, h * dh);
+                    bump(&mut q, i ^ 1, -(h * dh));
+                } else {
+                    bump(&mut q, i, v * dv);
+                    bump(&mut q, 3 - i, -(v * dv));
+                }
             }
             _ => bump(&mut q, i, d),
         },
@@ -509,6 +404,14 @@ fn quad_drag(
                     let s = (to - a0).dot(u) / u.length_sq();
                     q = q0.map(|p| p + u * ((s - 1.0) * (p - a0).dot(u) / u.length_sq()));
                 }
+            }
+            Method::Perspective => {
+                // as Cubism's: the side slides along itself, a shear, and
+                // the opposite side stays
+                let e = (at(q0, (i + 1) % 4) - at(q0, i)).normalized();
+                let along = e * d.dot(e);
+                bump(&mut q, i, along);
+                bump(&mut q, (i + 1) % 4, along);
             }
             _ => {
                 bump(&mut q, i, d);
@@ -524,7 +427,6 @@ fn handles(method: Method) -> (bool, bool) {
     // (edge handles, rotation stalk)
     match method {
         Method::Rotation => (false, true),
-        Method::Perspective => (false, false),
         _ => (true, false),
     }
 }
@@ -595,7 +497,7 @@ impl TempDeform {
     }
 
     fn hit(&self, ptr: Pos2, xf: &ViewXf) -> Option<Grab> {
-        let near = |p: V| xf.screen(p).distance(ptr) <= 7.0;
+        let near = |p: V| xf.screen(p).distance(ptr) <= 10.0;
         match &self.frame {
             Frame::Quad { now, anchor, .. } => {
                 let (edges, stalk_on) = handles(self.method);
@@ -622,7 +524,17 @@ impl TempDeform {
         }
     }
 
-    fn drag_to(&mut self, to: V, shift: bool) {
+    fn drag_to(&mut self, to: V, shift: bool, px: f32) {
+        if let Some(d) = &mut self.drag
+            && d.side.is_none()
+            && self.method == Method::Perspective
+            && d.mode == Mode::Deform
+            && matches!(d.grab, Grab::Corner(_))
+            && let Frame::Quad { now: q0, .. } = &d.frame
+            && (to - d.from).length() * px >= SIDE_PX
+        {
+            d.side = Some(along_top(q0, to - d.from));
+        }
         let Some(d) = &self.drag else { return };
         // Shift: turning snaps the angle, anything else moves straight
         let turning = matches!(d.grab, Grab::Stalk)
@@ -633,7 +545,20 @@ impl TempDeform {
         let delta = to - d.from;
         match (&mut self.frame, &d.frame) {
             (Frame::Quad { now, anchor, rest }, Frame::Quad { now: q0, anchor: a0, .. }) => {
-                let (q, a) = quad_drag(self.method, q0, *a0, d.grab, d.mode, d.from, to, snap);
+                let (q, mut a) =
+                    quad_drag_side(self.method, q0, *a0, d.grab, d.mode, d.from, to, snap, d.side);
+                // a drag that would fold the box over is not taken
+                if convex(q0) && !convex(&q) {
+                    return;
+                }
+                // the anchor rides with the box as Cubism's does, except
+                // where it is the pivot (Rotation, Enlarge/Reduce)
+                if d.mode == Mode::Deform
+                    && d.grab != Grab::Anchor
+                    && matches!(self.method, Method::Free | Method::Perspective | Method::Distort)
+                {
+                    a = quad_carry(q0, &q, *a0);
+                }
                 *now = q;
                 *anchor = a;
                 if d.mode == Mode::Control || d.grab == Grab::Anchor {
@@ -877,10 +802,24 @@ impl EditorUi {
             let tol = 0.75 / xf.px();
             let moved = now.len() != mapped.len()
                 || now.iter().zip(&mapped).any(|(a, b)| (*a - *b).length() > tol);
-            if values != td.values || moved {
-                log::info!("Temporary Deform Tool released: the parameters or the model changed");
+            if values != td.values {
+                log::info!("Temporary Deform Tool released: the parameters changed");
                 self.end_temp_deform();
                 return;
+            }
+            if moved {
+                // undo or redo moved the art on this key: stay, with a
+                // fresh box around where it is now
+                let before = td.targets.len();
+                td.rebuild(s);
+                if td.targets.len() != before || td.current(s).len() != td.base.len() {
+                    log::info!("Temporary Deform Tool released: the objects changed");
+                    self.end_temp_deform();
+                    return;
+                }
+                log::debug!(
+                    "Temporary Deform Tool: the art moved (undo or redo), box fitted again"
+                );
             }
         }
 
@@ -933,9 +872,13 @@ impl EditorUi {
             td.frame.rebind(&held);
         }
 
+        // a drag only starts once the pointer has gone past the click
+        // distance, so the handle is the one where the press began, and
+        // the drag counts from there
+        let press = ui.ctx().input(|i| i.pointer.press_origin());
         if !space
             && resp.drag_started()
-            && let Some(p) = resp.interact_pointer_pos()
+            && let Some(p) = press.or_else(|| resp.interact_pointer_pos())
             && let Some(grab) = td.hit(p, &xf)
             && !(mods.alt && matches!(td.frame, Frame::Path { .. }))
         {
@@ -947,15 +890,22 @@ impl EditorUi {
             } else {
                 Vec::new()
             };
-            td.drag =
-                Some(Drag { grab, mode, from: xf.world(p), frame: td.frame.clone(), start, live });
+            td.drag = Some(Drag {
+                grab,
+                mode,
+                from: xf.world(p),
+                frame: td.frame.clone(),
+                start,
+                live,
+                side: None,
+            });
         }
 
         if td.drag.is_some()
             && resp.dragged()
             && let Some(p) = ptr
         {
-            td.drag_to(xf.world(p), mods.shift);
+            td.drag_to(xf.world(p), mods.shift, xf.px());
             let now = td.frame.map(&td.base);
             if let Some(d) = &td.drag
                 && !d.live.is_empty()
@@ -1021,7 +971,12 @@ impl EditorUi {
                 s.puppet.update();
                 let landed = td.current(s);
                 td.base = landed.clone();
-                td.frame.rebind(&landed);
+                // a path keeps the ties made on the path as laid: tied again
+                // to the bent path, points on the inside of a bend would
+                // jump to other spans, and each drag would fold the art more
+                if !matches!(td.frame, Frame::Path { .. }) {
+                    td.frame.rebind(&landed);
+                }
                 if let Frame::Quad { rest, now, .. } = &mut td.frame {
                     *rest = *now;
                 }
@@ -1034,15 +989,32 @@ impl EditorUi {
         let line = Stroke::new(1.2, theme::pal().accent);
         let red = Color32::from_rgb(0xE8, 0x3A, 0x3A);
         let hover = ptr.filter(|p| view.contains(*p)).and_then(|p| td.hit(p, &xf));
+        // the box's handles are squares, as Cubism draws them; grid and
+        // path points stay round
         let dot = |p: V, g: Grab| {
-            let r = if hover == Some(g) || td.drag.as_ref().is_some_and(|d| d.grab == g) {
-                5.0
+            let hot = hover == Some(g) || td.drag.as_ref().is_some_and(|d| d.grab == g);
+            let at = xf.screen(p);
+            if matches!(g, Grab::Corner(_) | Grab::Edge(_) | Grab::Stalk) {
+                let r = if hot { 6.0 } else { 4.5 };
+                let sq = Rect::from_center_size(at, vec2(r * 2.0, r * 2.0));
+                vp.rect_filled(sq, 0.0, red);
+                vp.rect_stroke(
+                    sq,
+                    0.0,
+                    Stroke::new(1.0, Color32::from_black_alpha(200)),
+                    egui::StrokeKind::Outside,
+                );
             } else {
-                3.6
-            };
-            vp.circle_filled(xf.screen(p), r, red);
-            vp.circle_stroke(xf.screen(p), r, Stroke::new(1.0, Color32::WHITE));
+                let r = if hot { 5.0 } else { 3.6 };
+                vp.circle_filled(at, r, red);
+                vp.circle_stroke(at, r, Stroke::new(1.0, Color32::WHITE));
+            }
         };
+        if td.drag.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if hover.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         match &td.frame {
             Frame::Quad { now, anchor, .. } => {
                 for i in 0..4 {
@@ -1154,6 +1126,20 @@ impl EditorUi {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
+    fn quad_drag(
+        method: Method,
+        q0: &[V; 4],
+        a0: V,
+        grab: Grab,
+        mode: Mode,
+        from: V,
+        to: V,
+        snap: bool,
+    ) -> ([V; 4], V) {
+        quad_drag_side(method, q0, a0, grab, mode, from, to, snap, None)
+    }
+
     fn close(a: V, b: V) -> bool {
         (a - b).length() < 1e-3
     }
@@ -1166,25 +1152,6 @@ mod tests {
         assert!(close(straight(vec2(1.0, -9.0)), vec2(0.0, -9.0)));
         let d = straight(vec2(5.0, 4.6));
         assert!((d.x - d.y).abs() < 1e-4 && d.x > 4.0);
-    }
-
-    #[test]
-    fn quad_map_is_identity_on_the_same_box() {
-        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
-        let m = quad_map(&q, &q).unwrap();
-        for p in [vec2(1.0, 1.0), vec2(-3.0, 7.0), vec2(4.0, 2.0)] {
-            assert!(close(apply(&m, p), p));
-        }
-    }
-
-    #[test]
-    fn quad_map_takes_corners_to_corners() {
-        let from = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
-        let to = [vec2(1.0, 1.0), vec2(6.0, 0.0), vec2(5.0, 4.0), vec2(0.5, 3.0)];
-        let m = quad_map(&from, &to).unwrap();
-        for i in 0..4 {
-            assert!(close(apply(&m, from[i]), to[i]), "corner {i}");
-        }
     }
 
     #[test]
@@ -1242,24 +1209,101 @@ mod tests {
     }
 
     #[test]
-    fn perspective_follows_a_diagonal_drag_on_both_axes() {
+    fn perspective_side_handle_slides_that_side_along_itself() {
         let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
         let (n, _) = quad_drag(
             Method::Perspective,
             &q,
             vec2(2.0, 1.0),
-            Grab::Corner(0),
+            Grab::Edge(0),
             Mode::Deform,
-            vec2(0.0, 0.0),
-            vec2(1.0, 0.5),
+            vec2(2.0, 0.0),
+            vec2(3.0, 0.7),
             false,
         );
-        // the corner goes where the pointer went; the top partner mirrors
-        // the sideways part, the side partner the downward part
-        assert!(close(n[0], vec2(1.0, 0.5)));
-        assert!(close(n[1], vec2(3.0, 0.0)));
-        assert!(close(n[3], vec2(0.0, 1.5)));
-        assert!(close(n[2], q[2]));
+        // the top slides right; the drag's downward part does nothing
+        assert!(close(n[0], vec2(1.0, 0.0)));
+        assert!(close(n[1], vec2(5.0, 0.0)));
+        assert!(close(n[2], q[2]) && close(n[3], q[3]));
+    }
+
+    #[test]
+    fn perspective_corner_keeps_to_the_side_the_drag_mostly_goes() {
+        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        let drag = |to: V| {
+            quad_drag(
+                Method::Perspective,
+                &q,
+                vec2(2.0, 1.0),
+                Grab::Corner(0),
+                Mode::Deform,
+                vec2(0.0, 0.0),
+                to,
+                false,
+            )
+            .0
+        };
+        // mostly sideways: along the top, the top partner mirrors
+        let n = drag(vec2(1.0, 0.4));
+        assert!(close(n[0], vec2(1.0, 0.0)) && close(n[1], vec2(3.0, 0.0)));
+        assert!(close(n[2], q[2]) && close(n[3], q[3]));
+        // mostly down: along the side, the side partner mirrors
+        let n = drag(vec2(0.2, 0.5));
+        assert!(close(n[0], vec2(0.0, 0.5)) && close(n[3], vec2(0.0, 1.5)));
+        assert!(close(n[1], q[1]) && close(n[2], q[2]));
+    }
+
+    #[test]
+    fn a_locked_perspective_side_holds_across_the_diagonal() {
+        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        let drag = |to: V, side| {
+            quad_drag_side(
+                Method::Perspective,
+                &q,
+                vec2(2.0, 1.0),
+                Grab::Corner(0),
+                Mode::Deform,
+                vec2(0.0, 0.0),
+                to,
+                false,
+                side,
+            )
+            .0
+        };
+        // begun sideways, the drag turns mostly down: still along the top
+        assert!(along_top(&q, vec2(1.0, 0.4)));
+        let n = drag(vec2(0.3, 0.6), Some(true));
+        assert!(close(n[0], vec2(0.3, 0.0)) && close(n[1], vec2(3.7, 0.0)));
+        assert!(close(n[3], q[3]));
+    }
+
+    #[test]
+    fn a_folded_box_is_not_convex() {
+        let q = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        assert!(convex(&q));
+        // the top left corner dragged past the top right: the box folds
+        let folded = [vec2(5.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        assert!(!convex(&folded));
+        // a flat box carries nothing either
+        let flat = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 0.0), vec2(0.0, 0.0)];
+        assert!(!convex(&flat));
+    }
+
+    #[test]
+    fn the_box_carries_art_bilinearly() {
+        let rest = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        // the top narrowed to a quarter of its width
+        let now = [vec2(1.5, 0.0), vec2(2.5, 0.0), vec2(4.0, 2.0), vec2(0.0, 2.0)];
+        // the middle goes to the corners' average, not a vanishing point
+        assert!(close(quad_carry(&rest, &now, vec2(2.0, 1.0)), vec2(2.0, 1.0)));
+        // halfway down the left side stays halfway down the new side
+        assert!(close(quad_carry(&rest, &now, vec2(0.0, 1.0)), vec2(0.75, 1.0)));
+        // corners go to corners
+        for i in 0..4 {
+            assert!(close(quad_carry(&rest, &now, rest[i]), now[i]), "corner {i}");
+        }
+        // an unchanged box leaves points where they are
+        assert!(close(quad_carry(&rest, &rest, vec2(3.1, 0.7)), vec2(3.1, 0.7)));
     }
 
     #[test]

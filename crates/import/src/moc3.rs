@@ -4,7 +4,7 @@
 
 use ayatsuri_format::model::{
     ArtMesh, Binding, BindingAxis, Canvas, Deformer, DeformerKind, DrawGroup, DrawItem, Glue,
-    Model, Parameter, Part, RotationData, WarpData,
+    Model, Parameter, Part, RotationData, WarpData, WeightLimit,
 };
 use openmoc3::{F32s, I32s, Moc3};
 
@@ -47,6 +47,76 @@ fn span(
 
 fn collect_f32(pool: &F32s<'_>, range: core::ops::Range<usize>) -> Vec<f32> {
     range.filter_map(|i| pool.get(i)).collect()
+}
+
+/// moc3 4.2+'s multiply and screen colours per keyform: pools of rgb
+/// (108-113), reached per keyform through 5.0's own indices (137-142) or,
+/// before that, each object's first entry (105-107) and its keyform number.
+struct KeyColors<'a> {
+    multiply: [Option<F32s<'a>>; 3],
+    screen: [Option<F32s<'a>>; 3],
+    /// Warps, rotations, meshes.
+    begin: [Option<I32s<'a>>; 3],
+    keyform_multiply: [Option<I32s<'a>>; 3],
+    keyform_screen: [Option<I32s<'a>>; 3],
+}
+
+#[derive(Clone, Copy)]
+enum ColorOwner {
+    Warp = 0,
+    Rotation = 1,
+    Mesh = 2,
+}
+
+impl<'a> KeyColors<'a> {
+    fn new(moc: &Moc3<'a>) -> Self {
+        let f = |s: usize| moc.f32s(s).ok();
+        let i = |s: usize| moc.i32s(s).ok();
+        KeyColors {
+            multiply: [f(108), f(109), f(110)],
+            screen: [f(111), f(112), f(113)],
+            begin: [i(105), i(106), i(107)],
+            keyform_multiply: [i(137), i(139), i(141)],
+            keyform_screen: [i(138), i(140), i(142)],
+        }
+    }
+
+    /// One object's keyforms' colours (`keyforms` are its global keyform
+    /// indices, `object` its index among its kind): three floats per
+    /// keyform, or empty when every one is neutral or the file has none.
+    fn of(
+        &self,
+        owner: ColorOwner,
+        object: usize,
+        keyforms: core::ops::Range<usize>,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let o = owner as usize;
+        let at = |per_keyform: &[Option<I32s<'a>>; 3], g: usize, k: usize| -> Option<usize> {
+            let idx = match per_keyform.get(o).and_then(Option::as_ref) {
+                Some(t) => t.get(g)?,
+                None => self.begin.get(o)?.as_ref()?.get(object)?.checked_add(k as i32)?,
+            };
+            usize::try_from(idx).ok()
+        };
+        let rgb = |pools: &[Option<F32s<'a>>; 3], i: Option<usize>, neutral: f32| -> [f32; 3] {
+            let c = |p: &Option<F32s<'a>>| {
+                i.and_then(|i| p.as_ref().and_then(|p| p.get(i))).unwrap_or(neutral)
+            };
+            [c(&pools[0]), c(&pools[1]), c(&pools[2])]
+        };
+        let (mut mul, mut scr) = (Vec::new(), Vec::new());
+        for (k, g) in keyforms.enumerate() {
+            mul.extend(rgb(&self.multiply, at(&self.keyform_multiply, g, k), 1.0));
+            scr.extend(rgb(&self.screen, at(&self.keyform_screen, g, k), 0.0));
+        }
+        if mul.iter().all(|&v| v == 1.0) {
+            mul.clear();
+        }
+        if scr.iter().all(|&v| v == 0.0) {
+            scr.clear();
+        }
+        (mul, scr)
+    }
 }
 
 /// The per-parameter axis tables, resolved once.
@@ -202,6 +272,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             default: defaults.get(i).unwrap_or(0.0),
             repeat: repeats.get(i).unwrap_or(0) != 0,
             decimals: decimals.get(i).unwrap_or(0),
+            blend_shape: false,
         })
         .collect();
 
@@ -235,8 +306,11 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             enabled: part_enabled.get(i).unwrap_or(1) != 0,
             binding,
             draw_orders: collect_f32(&part_draw_orders, kf),
+            offscreen: None,
+            blend_shapes: Vec::new(),
         });
     }
+    read_offscreens(&moc, &mut parts, &part_kf_begin);
 
     // ---- deformers (slots 10-28, 59-67, 101) ----
     let d_ids: Vec<&str> = moc.ids(openmoc3::slot::DEFORMER_IDS)?.collect();
@@ -258,6 +332,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         log::debug!("moc3: no quad transform section; every warp reads as not quad");
     }
     let w_opacities = moc.f32s(59)?;
+    let key_colors = KeyColors::new(&moc);
     let w_pos_begin = moc.i32s(60)?;
 
     let r_kf_begin = moc.i32s(26)?;
@@ -286,6 +361,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         }
         let binding = axes.binding("deformer binding", i, d_kb.get(i).unwrap_or(-1))?;
         let ty = d_types.get(i).unwrap_or(-1);
+        let colors;
         let kind = match ty {
             0 => {
                 let si =
@@ -307,6 +383,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
                     w_kf_count.get(si).unwrap_or(0),
                     w_opacities.len(),
                 )?;
+                colors = key_colors.of(ColorOwner::Warp, si, kf.clone());
                 let data = WarpData {
                     rows,
                     cols,
@@ -340,6 +417,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
                     r_kf_count.get(si).unwrap_or(0),
                     r_opacities.len(),
                 )?;
+                colors = key_colors.of(ColorOwner::Rotation, si, kf.clone());
                 let data = RotationData {
                     base_angle: r_base_angles.get(si).unwrap_or(0.0),
                     opacities: collect_f32(&r_opacities, kf.clone()),
@@ -367,6 +445,9 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             enabled: d_enabled.get(i).unwrap_or(1) != 0,
             binding,
             kind,
+            multiply: colors.0,
+            screen: colors.1,
+            blend_shapes: Vec::new(),
         });
     }
 
@@ -458,6 +539,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             m_kf_count.get(i).unwrap_or(0),
             m_opacities.len(),
         )?;
+        let (multiply, screen) = key_colors.of(ColorOwner::Mesh, i, kf.clone());
         art_meshes.push(ArtMesh {
             id: (*id).to_string(),
             parent_part: opt_idx(
@@ -496,6 +578,11 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
                 &coords,
                 vc * 2,
             )?,
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply,
+            screen,
         });
     }
 
@@ -562,6 +649,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
             intensities: collect_f32(&g_intensities, kf),
             weights,
             indices,
+            blend_shapes: Vec::new(),
         });
     }
 
@@ -608,7 +696,7 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         });
     }
 
-    Ok(Model {
+    let mut model = Model {
         canvas,
         parameters,
         parts,
@@ -620,5 +708,375 @@ pub fn from_moc3(bytes: &[u8]) -> Result<Model, ImportError> {
         art_paths: Vec::new(),
         art_path_colors: Vec::new(),
         art_path_page: None,
-    })
+        clip_groups: Vec::new(),
+    };
+    read_blend_shapes(&moc, &mut model, &coords, &m_pos_begin);
+    Ok(model)
+}
+
+/// moc3 4.2+'s blend shapes (slots 114-151): on art meshes and warps
+/// (4.2), parts, rotations and glue (5.0). Each binding's keyforms, one per
+/// key of its parameter's key table with the base key's among them, hold
+/// what the shape adds; the model keeps the shape's form at each non-base
+/// key (the object's base plus that) on every channel its kind has, and its
+/// weight limits (slots 123-124, 131-136). Offscreen blend shapes (5.3,
+/// 164-166) join the part's shape on the same parameter as its opacity.
+fn read_blend_shapes(moc: &Moc3<'_>, model: &mut Model, coords: &F32s<'_>, pos_begin: &I32s<'_>) {
+    use ayatsuri_core::blendshape::Channel;
+    use ayatsuri_core::edit::Target;
+    let c = *moc.counts();
+    if c.blend_shape_keyform_bindings <= 0 {
+        return;
+    }
+    let (Ok(ptype), Ok(table_begin), Ok(table_count)) =
+        (moc.i32s(114), moc.i32s(115), moc.i32s(116))
+    else {
+        return;
+    };
+    for (p, meta) in model.parameters.iter_mut().enumerate() {
+        meta.blend_shape = ptype.get(p) == Some(1) && table_count.get(p).unwrap_or(0) > 0;
+    }
+    let (Ok(keys_begin), Ok(keys_count), Ok(base_key), Ok(pool)) =
+        (moc.i32s(117), moc.i32s(118), moc.i32s(119), moc.f32s(77))
+    else {
+        return;
+    };
+    // which parameter each key table belongs to
+    let mut table_param = vec![None; c.blend_shape_parameter_bindings.max(0) as usize];
+    for p in 0..model.parameters.len() {
+        let (b, n) = (table_begin.get(p).unwrap_or(-1), table_count.get(p).unwrap_or(0));
+        for t in b.max(0)..b.max(0) + n.max(0) {
+            if let Some(slot) = table_param.get_mut(t as usize) {
+                *slot = Some(p as u32);
+            }
+        }
+    }
+    let (Ok(b_table), Ok(b_off), Ok(b_len)) = (moc.i32s(120), moc.i32s(121), moc.i32s(122)) else {
+        return;
+    };
+    let f = |slot: usize| moc.f32s(slot).ok();
+    let i = |slot: usize| moc.i32s(slot).ok();
+    // deformer index of each warp and rotation, by the file's own tables
+    let (types, specific) = (i(17), i(18));
+    let n_deformers = model.deformers.len();
+    let deformer_of = |kind: i32, index: usize| -> Option<usize> {
+        let (t, sp) = (types.as_ref()?, specific.as_ref()?);
+        (0..n_deformers).find(|&d| t.get(d) == Some(kind) && sp.get(d) == Some(index as i32))
+    };
+    // a keyform's colour: 5.0's own indices, or 4.2's first entry of the
+    // object plus how far the keyform is past the object's first keyform
+    let (mul, scr) = ([f(108), f(109), f(110)], [f(111), f(112), f(113)]);
+    let color_at =
+        |own: [usize; 2], begin: usize, object: usize, kf_begin: i32, g: usize, screen: bool| {
+            let own_slot = if screen { own[1] } else { own[0] };
+            let idx = match i(own_slot) {
+                Some(t) => t.get(g),
+                None => i(begin).and_then(|b| b.get(object)).map(|b| b + (g as i32 - kf_begin)),
+            };
+            let pools = if screen { &scr } else { &mul };
+            let neutral = if screen { 0.0 } else { 1.0 };
+            let at = |p: &Option<F32s<'_>>| {
+                idx.and_then(|x| usize::try_from(x).ok())
+                    .and_then(|x| p.as_ref().and_then(|p| p.get(x)))
+                    .unwrap_or(neutral)
+            };
+            [at(&pools[0]), at(&pools[1]), at(&pools[2])]
+        };
+    // per kind: entries (target, binding begin, binding count) and how to
+    // read one keyform's delta on a channel
+    let kinds: [(usize, i32); 5] = [
+        (128, c.blend_shapes_art_meshes),
+        (125, c.blend_shapes_warp_deformers),
+        (143, c.blend_shapes_parts),
+        (146, c.blend_shapes_rotation_deformers),
+        (149, c.blend_shapes_glue),
+    ];
+    let (w_pos, w_opac, w_kf) = (i(60), f(59), i(20));
+    let (r_opac, r_ang, r_ox, r_oy, r_sc, r_kf) = (f(61), f(62), f(63), f(64), f(65), i(26));
+    let (m_opac, m_kf, part_orders, glue_int) = (f(68), i(35), f(58), f(100));
+    for (slot, count) in kinds {
+        let (Some(target), Some(bind_begin), Some(bind_count)) =
+            (i(slot), i(slot + 1), i(slot + 2))
+        else {
+            continue;
+        };
+        for e in 0..count.max(0) as usize {
+            let Some(index) = target.get(e).and_then(|t| usize::try_from(t).ok()) else { continue };
+            // the object, and its channels: name, floats a key, reader
+            let obj: Option<Target> = match slot {
+                128 => Some(Target::ArtMesh(index)),
+                125 => deformer_of(0, index).map(Target::Deformer),
+                143 => Some(Target::Part(index)),
+                146 => deformer_of(1, index).map(Target::Deformer),
+                _ => None,
+            };
+            let first = bind_begin.get(e).unwrap_or(0).max(0);
+            let mut shapes = Vec::new();
+            for b in first..first + bind_count.get(e).unwrap_or(0).max(0) {
+                let b = b as usize;
+                let Some(t) = b_table.get(b).and_then(|t| usize::try_from(t).ok()) else {
+                    continue;
+                };
+                let Some(parameter) = table_param.get(t).copied().flatten() else { continue };
+                let (kb, kn) =
+                    (keys_begin.get(t).unwrap_or(0).max(0), keys_count.get(t).unwrap_or(0).max(0));
+                let base_at = base_key.get(t).unwrap_or(-1);
+                let (off, n) = (b_off.get(b).unwrap_or(0), b_len.get(b).unwrap_or(0));
+                let mut shape = ayatsuri_format::model::BlendShape {
+                    parameter,
+                    limits: read_limits(moc, b, model.parameters.len()),
+                    ..Default::default()
+                };
+                for k in 0..kn.min(n) {
+                    if k == base_at {
+                        continue;
+                    }
+                    let Some(key) = pool.get((kb + k) as usize) else { continue };
+                    shape.keys.push(key);
+                    let g = (off + k).max(0) as usize;
+                    let get =
+                        |p: &Option<F32s<'_>>| p.as_ref().and_then(|p| p.get(g)).unwrap_or(0.0);
+                    let block = |begin: Option<i32>, len: usize| -> Vec<f32> {
+                        let start = begin.unwrap_or(-1).max(0) as usize;
+                        (0..len).map(|x| coords.get(start + x).unwrap_or(0.0)).collect()
+                    };
+                    match obj {
+                        Some(Target::ArtMesh(mi)) => {
+                            let len =
+                                model.art_meshes.get(mi).map_or(0, |m| m.vertex_count as usize * 2);
+                            let kf0 = m_kf.as_ref().and_then(|x| x.get(mi)).unwrap_or(0);
+                            shape.positions.extend(block(pos_begin.get(g), len));
+                            shape.opacities.push(get(&m_opac));
+                            shape.multiply.extend(color_at([141, 142], 107, mi, kf0, g, false));
+                            shape.screen.extend(color_at([141, 142], 107, mi, kf0, g, true));
+                        }
+                        Some(Target::Deformer(di)) if slot == 125 => {
+                            let len = match model.deformers.get(di).map(|d| &d.kind) {
+                                Some(DeformerKind::Warp(w)) => w.grid_points() * 2,
+                                _ => 0,
+                            };
+                            let kf0 = w_kf.as_ref().and_then(|x| x.get(index)).unwrap_or(0);
+                            shape
+                                .positions
+                                .extend(block(w_pos.as_ref().and_then(|x| x.get(g)), len));
+                            shape.opacities.push(get(&w_opac));
+                            shape.multiply.extend(color_at([137, 138], 105, index, kf0, g, false));
+                            shape.screen.extend(color_at([137, 138], 105, index, kf0, g, true));
+                        }
+                        Some(Target::Deformer(_)) => {
+                            let kf0 = r_kf.as_ref().and_then(|x| x.get(index)).unwrap_or(0);
+                            shape.opacities.push(get(&r_opac));
+                            shape.angles.push(get(&r_ang));
+                            shape.origins_x.push(get(&r_ox));
+                            shape.origins_y.push(get(&r_oy));
+                            shape.scales.push(get(&r_sc));
+                            shape.multiply.extend(color_at([139, 140], 106, index, kf0, g, false));
+                            shape.screen.extend(color_at([139, 140], 106, index, kf0, g, true));
+                        }
+                        Some(Target::Part(_)) => shape.draw_orders.push(get(&part_orders)),
+                        None => shape.intensities.push(get(&glue_int)),
+                    }
+                }
+                if shape.keys.is_empty() {
+                    continue;
+                }
+                // what the file holds is what each key adds: the model keeps
+                // the form there, the object's base plus that
+                for channel in [
+                    Channel::Positions,
+                    Channel::Opacity,
+                    Channel::Multiply,
+                    Channel::Screen,
+                    Channel::Angle,
+                    Channel::OriginX,
+                    Channel::OriginY,
+                    Channel::Scale,
+                    Channel::DrawOrder,
+                    Channel::Intensity,
+                ] {
+                    if channel.of(&shape).is_empty() {
+                        continue;
+                    }
+                    let base = match obj {
+                        Some(t) => ayatsuri_core::shapes::base(model, t, channel),
+                        None => model.glues.get(index).and_then(|gl| {
+                            ayatsuri_core::shapes::default_blend(
+                                model,
+                                &gl.binding,
+                                &gl.intensities,
+                                1,
+                            )
+                        }),
+                    };
+                    let Some(base) = base.filter(|b| !b.is_empty()) else {
+                        channel.of_mut(&mut shape).clear();
+                        continue;
+                    };
+                    let pool = channel.of_mut(&mut shape);
+                    for (v, b) in pool.iter_mut().zip(base.iter().cycle()) {
+                        *v += b;
+                    }
+                    // a colour or opacity the shape never changes stays out
+                    if matches!(channel, Channel::Multiply | Channel::Screen | Channel::Opacity)
+                        && pool
+                            .chunks(base.len())
+                            .all(|form| form.iter().zip(&base).all(|(a, b)| (a - b).abs() < 1e-6))
+                    {
+                        pool.clear();
+                    }
+                }
+                shapes.push(shape);
+            }
+            let list = match obj {
+                Some(t) => ayatsuri_core::shapes::shapes_mut(model, t),
+                None => model.glues.get_mut(index).map(|g| &mut g.blend_shapes),
+            };
+            match list {
+                Some(l) => *l = shapes,
+                None => {
+                    log::warn!("moc3: blend shapes for an object that is not in the file; dropped")
+                }
+            }
+        }
+    }
+
+    // 5.3's offscreen shapes change a part's offscreen opacity: their
+    // keyforms (161) follow the normal ones, each a difference from the base
+    let (Some(target), Some(bind_begin), Some(bind_count), Some(owner)) =
+        (i(164), i(165), i(166), i(155))
+    else {
+        return;
+    };
+    let off_opac = f(161);
+    let n_params = model.parameters.len();
+    for e in 0..c.blend_shapes_offscreens.max(0) as usize {
+        let part = target
+            .get(e)
+            .and_then(|o| owner.get(usize::try_from(o).ok()?))
+            .and_then(|p| usize::try_from(p).ok());
+        let Some(part) = part else { continue };
+        let obj = Target::Part(part);
+        let Some(base) = ayatsuri_core::shapes::base(model, obj, Channel::Opacity)
+            .and_then(|b| b.first().copied())
+        else {
+            log::warn!("moc3: offscreen blend shapes on part {part}, which has no offscreen");
+            continue;
+        };
+        let order_base = ayatsuri_core::shapes::base(model, obj, Channel::DrawOrder);
+        let first = bind_begin.get(e).unwrap_or(0).max(0);
+        for b in first..first + bind_count.get(e).unwrap_or(0).max(0) {
+            let b = b as usize;
+            let Some(t) = b_table.get(b).and_then(|t| usize::try_from(t).ok()) else { continue };
+            let Some(parameter) = table_param.get(t).copied().flatten() else { continue };
+            let (kb, kn) =
+                (keys_begin.get(t).unwrap_or(0).max(0), keys_count.get(t).unwrap_or(0).max(0));
+            let base_at = base_key.get(t).unwrap_or(-1);
+            let (off, n) = (b_off.get(b).unwrap_or(0), b_len.get(b).unwrap_or(0));
+            let (mut keys, mut opacities) = (Vec::new(), Vec::new());
+            for k in (0..kn.min(n)).filter(|&k| k != base_at) {
+                let Some(key) = pool.get((kb + k) as usize) else { continue };
+                let g = (off + k).max(0) as usize;
+                keys.push(key);
+                opacities.push(base + off_opac.as_ref().and_then(|p| p.get(g)).unwrap_or(0.0));
+            }
+            if keys.is_empty() || opacities.iter().all(|a| (a - base).abs() < 1e-6) {
+                continue;
+            }
+            let limits = read_limits(moc, b, n_params);
+            let Some(list) = ayatsuri_core::shapes::shapes_mut(model, obj) else { continue };
+            match list.iter_mut().find(|s| s.parameter == parameter) {
+                Some(s) if s.keys == keys => s.opacities = opacities,
+                Some(_) => log::warn!(
+                    "moc3: part {part}'s offscreen shape keys differ from its draw order's; dropped"
+                ),
+                None => {
+                    let draw_orders = order_base.as_deref().map_or_else(Vec::new, |o| {
+                        std::iter::repeat_n(o, keys.len()).flatten().copied().collect()
+                    });
+                    list.push(ayatsuri_format::model::BlendShape {
+                        parameter,
+                        keys,
+                        opacities,
+                        draw_orders,
+                        limits,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Binding `b`'s weight limits: its run of constraint indices (123, 124)
+/// into the constraints (132-134) and their graphs (135, 136). A limit
+/// that points outside the file, or whose graph is empty, is skipped.
+fn read_limits(moc: &Moc3<'_>, b: usize, n_params: usize) -> Vec<WeightLimit> {
+    let (Ok(run_begin), Ok(run_count), Ok(index)) = (moc.i32s(123), moc.i32s(124), moc.i32s(131))
+    else {
+        return Vec::new();
+    };
+    let (Ok(param), Ok(v_begin), Ok(v_count), Ok(keys), Ok(weights)) =
+        (moc.i32s(132), moc.i32s(133), moc.i32s(134), moc.f32s(135), moc.f32s(136))
+    else {
+        return Vec::new();
+    };
+    let first = run_begin.get(b).unwrap_or(0).max(0);
+    let mut out = Vec::new();
+    for r in first..first + run_count.get(b).unwrap_or(0).max(0) {
+        let Some(c) = index.get(r as usize).and_then(|c| usize::try_from(c).ok()) else { continue };
+        let Some(p) = param.get(c).and_then(|p| usize::try_from(p).ok()).filter(|p| *p < n_params)
+        else {
+            continue;
+        };
+        let (vb, vn) = (v_begin.get(c).unwrap_or(0).max(0), v_count.get(c).unwrap_or(0).max(0));
+        let ks: Vec<f32> = (vb..vb + vn).filter_map(|i| keys.get(i as usize)).collect();
+        let ws: Vec<f32> = (vb..vb + vn).filter_map(|i| weights.get(i as usize)).collect();
+        if ks.is_empty() || ks.len() != ws.len() {
+            log::warn!("moc3: a blend shape weight limit has no usable graph; dropped");
+            continue;
+        }
+        out.push(WeightLimit { parameter: p as u32, keys: ks, weights: ws });
+    }
+    out
+}
+
+/// moc3 5.3's offscreen parts (slots 152-161): each part's offscreen, its
+/// masks in the drawable mask pool and one opacity per part keyform. Files
+/// before 5.3 have none; a malformed entry leaves that part drawn directly.
+fn read_offscreens(moc: &Moc3<'_>, parts: &mut [Part], part_kf_begin: &I32s<'_>) {
+    let (Ok(index), Ok(owner), Ok(flag), Ok(blend), Ok(mask_begin), Ok(mask_count)) =
+        (moc.i32s(152), moc.i32s(155), moc.u8s(156), moc.i32s(157), moc.i32s(158), moc.i32s(159))
+    else {
+        return;
+    };
+    let (Ok(kf_off), Ok(opacity), Ok(pool)) = (moc.i32s(160), moc.f32s(161), moc.i32s(80)) else {
+        return;
+    };
+    for (i, p) in parts.iter_mut().enumerate() {
+        let Ok(o) = usize::try_from(index.get(i).unwrap_or(-1)) else { continue };
+        if owner.get(o) != Some(i as i32) {
+            log::warn!("moc3: offscreen {o} does not belong to part {i}; drawn directly");
+            continue;
+        }
+        let begin = mask_begin.get(o).unwrap_or(0).max(0) as usize;
+        let count = mask_count.get(o).unwrap_or(0).max(0) as usize;
+        let masks = (begin..begin.saturating_add(count))
+            .filter_map(|k| u32::try_from(pool.get(k)?).ok())
+            .collect();
+        let kf = part_kf_begin.get(i).unwrap_or(0).max(0) as usize;
+        let opacities = (0..p.draw_orders.len())
+            .map(|k| {
+                let at = kf_off.get(kf + k).unwrap_or(-1);
+                usize::try_from(at).ok().and_then(|a| opacity.get(a)).unwrap_or(1.0)
+            })
+            .collect();
+        p.offscreen = Some(ayatsuri_format::model::Offscreen {
+            masks,
+            inverted: flag
+                .get(o)
+                .is_some_and(|f| f & ayatsuri_format::model::flags::INVERTED_MASK != 0),
+            blend: ayatsuri_format::model::Blend::from_moc3(blend.get(o).unwrap_or(0)),
+            opacities,
+        });
+    }
 }

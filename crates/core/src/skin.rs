@@ -427,6 +427,11 @@ mod tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions,
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
         m.draw_groups.push(DrawGroup {
             total: 1,
@@ -531,6 +536,9 @@ mod tests {
                     reflect_x: vec![false],
                     reflect_y: vec![false],
                 }),
+                multiply: Vec::new(),
+                screen: Vec::new(),
+                blend_shapes: Vec::new(),
             });
         }
         m

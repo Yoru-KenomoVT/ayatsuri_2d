@@ -80,6 +80,10 @@ pub struct Parameter {
     /// Displayed decimal places; also sets the key-snap epsilon the runtime
     /// uses (10^-decimals, the behaviour PurismCore verified).
     pub decimals: i32,
+    /// Drives blend shapes (see [`BlendShape`]) instead of keyforms: its
+    /// base key at 0.0 holds no keyform and the others add on top.
+    #[serde(default)]
+    pub blend_shape: bool,
 }
 
 /// One interpolation axis of a binding: a parameter and the key values at
@@ -153,6 +157,31 @@ pub struct Part {
     pub binding: Binding,
     /// Per keyform.
     pub draw_orders: Vec<f32>,
+    /// Drawn offscreen (Cubism 5.3): its children paint into a layer of
+    /// their own first, which lands on the canvas as one image.
+    // always written: a field after it must not shift in the timelapse's
+    // positional arrays (see `ArtMesh::clip_group`)
+    #[serde(default)]
+    pub offscreen: Option<Offscreen>,
+    /// Blend shapes on its draw order and offscreen opacity (Cubism 5.0).
+    #[serde(default)]
+    pub blend_shapes: Vec<BlendShape>,
+}
+
+/// How an offscreen part's layer lands on the canvas. Its children keep
+/// together in the draw order while it is on, as a draw order group does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Offscreen {
+    /// Art meshes whose alpha clips the layer.
+    #[serde(default)]
+    pub masks: Vec<u32>,
+    /// Show the layer outside the masks instead of inside.
+    #[serde(default)]
+    pub inverted: bool,
+    #[serde(default)]
+    pub blend: Blend,
+    /// Per part keyform.
+    pub opacities: Vec<f32>,
 }
 
 /// Free-form deformation lattice. The grid's control points live in the
@@ -212,6 +241,16 @@ pub struct Deformer {
     pub enabled: bool,
     pub binding: Binding,
     pub kind: DeformerKind,
+    /// Multiply and screen colour per keyform, as on art meshes: passed
+    /// down to everything under the deformer.
+    #[serde(default, with = "f32_bin")]
+    pub multiply: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub screen: Vec<f32>,
+    /// Blend shapes on its grid or rotation, opacity and colour (warps
+    /// Cubism 4.2, rotations 5.0).
+    #[serde(default)]
+    pub blend_shapes: Vec<BlendShape>,
 }
 
 /// Drawable flag bits, matching moc3 slot 42.
@@ -395,6 +434,16 @@ pub struct ArtMesh {
     pub indices: Vec<u16>,
     /// Art meshes whose alpha clips this one.
     pub masks: Vec<u32>,
+    /// A clip group (index into `Model::clip_groups`) whose masks clip this
+    /// mesh too.
+    // always written: the timelapse stores models as positional arrays, where
+    // a skipped field in the middle would shift every later one
+    #[serde(default)]
+    pub clip_group: Option<u32>,
+    /// Also clipped by whatever its masks are clipped by: a highlight
+    /// clipped by the iris stays inside the eye white the iris is clipped by.
+    #[serde(default)]
+    pub clip_inherit: bool,
     pub binding: Binding,
     /// All per keyform.
     pub opacities: Vec<f32>,
@@ -402,6 +451,79 @@ pub struct ArtMesh {
     /// Keyform-major vertex positions: `keyforms * vertex_count * 2`.
     #[serde(with = "f32_bin")]
     pub positions: Vec<f32>,
+    /// Shapes added on top of the blended keyform, in no particular order.
+    // always written: a field after it must not shift in the timelapse's
+    // positional arrays (see `clip_group`)
+    #[serde(default)]
+    pub blend_shapes: Vec<BlendShape>,
+    /// Multiply colour per keyform, rgb (`keyforms * 3`), 0 to 1; empty is
+    /// white, which leaves the art as it is (Cubism 4.2).
+    #[serde(default, with = "f32_bin")]
+    pub multiply: Vec<f32>,
+    /// Screen colour per keyform, rgb; empty is black, which leaves the art
+    /// as it is.
+    #[serde(default, with = "f32_bin")]
+    pub screen: Vec<f32>,
+}
+
+/// Keyforms added on top of an object's normal blend instead of multiplied
+/// into it (Cubism 5.0). What lands on the object is `weight * (key form -
+/// base form)`, the base form being its blend at every parameter's default.
+/// The parameter's base key, 0.0, is implied and holds no keyform.
+///
+/// Every object kind uses this one type; each channel holds one block per
+/// key, in key order, and an empty channel is not shaped (it stays as the
+/// base). Which channels an object has follows its kind: meshes positions,
+/// opacity and colour; warps their grid as positions, opacity and colour;
+/// rotations angle, origin, scale, opacity and colour; parts draw order and
+/// offscreen opacity; glue intensity.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BlendShape {
+    /// Index into `Model::parameters`; that parameter has `blend_shape` set.
+    pub parameter: u32,
+    /// The keys that hold a keyform: strictly increasing, never 0.0.
+    pub keys: Vec<f32>,
+    /// Points: a mesh's `vertex_count * 2`, or a warp's grid, per key.
+    #[serde(with = "f32_bin")]
+    pub positions: Vec<f32>,
+    /// Limit settings for the shape's weight (Cubism 4.2): its weight is
+    /// multiplied by the smallest of these limits at the current values.
+    #[serde(default)]
+    pub limits: Vec<WeightLimit>,
+    /// One per key: opacity (meshes, deformers; a part's offscreen layer).
+    #[serde(default, with = "f32_bin")]
+    pub opacities: Vec<f32>,
+    /// Three per key: multiply and screen colour.
+    #[serde(default, with = "f32_bin")]
+    pub multiply: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub screen: Vec<f32>,
+    /// One per key, rotation deformers.
+    #[serde(default, with = "f32_bin")]
+    pub angles: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub origins_x: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub origins_y: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub scales: Vec<f32>,
+    /// One per key: a part's draw order, a glue's intensity.
+    #[serde(default, with = "f32_bin")]
+    pub draw_orders: Vec<f32>,
+    #[serde(default, with = "f32_bin")]
+    pub intensities: Vec<f32>,
+}
+
+/// One limit on a blend shape's weight: a line graph over another
+/// parameter's value. Past the ends the graph holds the end's weight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeightLimit {
+    /// Index into `Model::parameters`: the parameter the graph reads.
+    pub parameter: u32,
+    /// The graph's parameter values, strictly increasing (2 to 5 of them).
+    pub keys: Vec<f32>,
+    /// The limit at each key, 0.0 to 1.0.
+    pub weights: Vec<f32>,
 }
 
 /// Stitches two meshes' edges together: paired vertices pull toward each
@@ -421,6 +543,9 @@ pub struct Glue {
     /// Vertex index in the owning mesh, parallel to `weights`.
     #[serde(with = "u16_bin")]
     pub indices: Vec<u16>,
+    /// Blend shapes on its intensity (Cubism 5.0).
+    #[serde(default)]
+    pub blend_shapes: Vec<BlendShape>,
 }
 
 /// One entry in a draw-order group: an art mesh, or a part whose own group
@@ -443,6 +568,14 @@ pub struct DrawGroup {
     pub items: Vec<DrawItem>,
 }
 
+/// A named set of masks any number of meshes can clip by together.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClipGroup {
+    pub name: String,
+    /// Art mesh indices.
+    pub masks: Vec<u32>,
+}
+
 /// A whole puppet.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Model {
@@ -453,6 +586,8 @@ pub struct Model {
     pub art_meshes: Vec<ArtMesh>,
     pub glues: Vec<Glue>,
     pub draw_groups: Vec<DrawGroup>,
+    #[serde(default)]
+    pub clip_groups: Vec<ClipGroup>,
     /// Pendulum physics, when the model has any. Older .aom files simply
     /// have none.
     #[serde(default)]

@@ -28,6 +28,84 @@ pub struct RenderPrefs {
     pub audio_kbps: u32,
 }
 
+/// One Automatic mesh generator preset, Cubism's settings by name. The
+/// margins are pixels on a 1024px texture, scaled with the texture's size.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct MeshPreset {
+    pub name: String,
+    pub interval_outside: f32,
+    pub interval_inside: f32,
+    pub margin_outside: f32,
+    pub margin_inside: f32,
+    pub min_margin: f32,
+    pub min_points: u32,
+    /// Alpha value determined as transparent.
+    pub alpha: u8,
+    /// Ayatsuri's face layout instead of Cubism's.
+    pub face: bool,
+}
+
+impl Default for MeshPreset {
+    /// Cubism's Standard.
+    fn default() -> Self {
+        Self {
+            name: "Standard".into(),
+            interval_outside: 50.0,
+            interval_inside: 50.0,
+            margin_outside: 14.0,
+            margin_inside: 14.0,
+            min_margin: 5.0,
+            min_points: 10,
+            alpha: 0,
+            face: false,
+        }
+    }
+}
+
+impl MeshPreset {
+    /// The presets that come with the app: Cubism's three, then the face.
+    pub fn built_in() -> Vec<MeshPreset> {
+        let standard = MeshPreset::default();
+        vec![
+            standard.clone(),
+            MeshPreset {
+                name: "Deformation (small)".into(),
+                interval_outside: 80.0,
+                interval_inside: 80.0,
+                min_points: 15,
+                ..standard.clone()
+            },
+            MeshPreset {
+                name: "Deformation (large)".into(),
+                interval_outside: 25.0,
+                interval_inside: 25.0,
+                margin_outside: 3.0,
+                margin_inside: 2.0,
+                min_margin: 2.0,
+                min_points: 5,
+                ..standard.clone()
+            },
+            MeshPreset {
+                name: "Face standard".into(),
+                interval_outside: 36.0,
+                interval_inside: 72.0,
+                margin_outside: 6.0,
+                margin_inside: 0.0,
+                min_margin: 0.0,
+                face: true,
+                ..standard
+            },
+        ]
+    }
+
+    /// The same settings, whatever the name.
+    pub fn same_values(&self, o: &MeshPreset) -> bool {
+        MeshPreset { name: String::new(), ..self.clone() }
+            == MeshPreset { name: String::new(), ..o.clone() }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -96,13 +174,49 @@ pub struct Prefs {
     pub ffmpeg_prompt_off: bool,
     /// Hide the canvas rulers (guides still show).
     pub rulers_off: bool,
+    /// Leave the deformer tree off the top of the canvas right-click menu
+    /// (Cubism's Show parent-child hierarchy of deformers, cleared).
+    pub def_tree_off: bool,
     pub guide_snap_off: bool,
     /// Smooth movement while dragging points and objects, and how much
     /// (1 to 100; 0 is the default, 40).
     pub smooth_drag: bool,
     pub smooth_drag_amount: u32,
+    /// Pen tablet: a double tap may take longer.
+    pub pen_mode: bool,
+    /// Ignore pen pressure altogether.
+    pub pen_pressure_off: bool,
+    /// Pressure sets brush size (off by default) and strength (on).
+    pub pen_size: bool,
+    pub pen_strength_off: bool,
+    /// The pressure curve, 0.3 to 3 (0 is the default, 1: linear).
+    pub pen_curve: f32,
+    /// What the lightest touch still gives, 1 to 100 percent (0 is the
+    /// default, 10).
+    pub pen_min: u32,
     /// Don't record the timelapse beside each model.
     pub timelapse_off: bool,
+    /// Lay the atlas out again by itself on leaving Mesh Edit when a mesh
+    /// has grown past its own art. Off by default: the atlas is an export
+    /// step, and the moc3 export offers the layout when it is needed.
+    pub atlas_repack_auto: bool,
+    /// Experimental features (Settings > Experimental): the master switch,
+    /// then one per feature; a feature is on only with both.
+    pub experimental: bool,
+    /// Named clip groups in the Inspector's clipping.
+    pub experimental_clip_groups: bool,
+    /// Inherited clipping: a mesh also clipped by what its masks are
+    /// clipped by.
+    pub experimental_inherit_clip: bool,
+    /// Stroke mesh-mapping in Mesh Edit: a mesh built along a dragged stroke.
+    #[serde(default)]
+    pub experimental_stroke_mesh: bool,
+    /// Solo's inactive color, rgba; None for the default.
+    pub solo_tint: Option<[u8; 4]>,
+    /// Highlight overlapping polygons' color, rgba; None for the default.
+    pub overlap_color: Option<[u8; 4]>,
+    /// Automatic mesh generator presets the user added (Cubism's Add).
+    pub mesh_presets: Vec<MeshPreset>,
     /// The Render window as it was last used: folder, format and settings.
     pub render: RenderPrefs,
     /// Where the last moc3 or image export went.
@@ -152,6 +266,14 @@ impl Prefs {
     }
 
     /// Smooth movement's amount, 1 to 100.
+    pub fn pen_curve(&self) -> f32 {
+        if self.pen_curve <= 0.0 { 1.0 } else { self.pen_curve.clamp(0.3, 3.0) }
+    }
+
+    pub fn pen_min(&self) -> f32 {
+        if self.pen_min == 0 { 0.1 } else { self.pen_min.min(100) as f32 / 100.0 }
+    }
+
     pub fn smooth_drag_amount(&self) -> u32 {
         if self.smooth_drag_amount == 0 { 40 } else { self.smooth_drag_amount.min(100) }
     }
@@ -160,6 +282,18 @@ impl Prefs {
     /// seconds; 0 when smooth movement is off. 100 is a fifth of a second.
     pub fn smooth_drag_seconds(&self) -> f32 {
         if self.smooth_drag { self.smooth_drag_amount() as f32 / 500.0 } else { 0.0 }
+    }
+
+    pub fn clip_groups_on(&self) -> bool {
+        self.experimental && self.experimental_clip_groups
+    }
+
+    pub fn inherit_clip_on(&self) -> bool {
+        self.experimental && self.experimental_inherit_clip
+    }
+
+    pub fn stroke_mesh_on(&self) -> bool {
+        self.experimental && self.experimental_stroke_mesh
     }
 
     /// The saved colour of the canvas page, if one was picked.

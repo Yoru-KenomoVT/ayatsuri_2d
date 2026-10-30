@@ -1,8 +1,10 @@
 // Layered paint documents (PSD, Krita) into a fresh model, the way Cubism's
 // PSD import works: every group becomes a part, every visible pixel layer
-// an art mesh, and the layer pixels get trimmed and packed into texture
-// atlases. Meshes start as a two-triangle quad over the trimmed bounds;
-// riggers re-mesh them with the auto mesher.
+// an art mesh, and the layer pixels get trimmed. Each trimmed layer keeps a
+// texture of its own until the rigger makes the texture atlas (`build`);
+// `build_atlas` packs them onto atlas pages straight away. Meshes start as
+// a two-triangle quad over the trimmed bounds; riggers re-mesh them with
+// the auto mesher.
 
 use ayatsuri_format::model::{ArtMesh, Binding, Canvas, Model, Part};
 
@@ -66,6 +68,26 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
     pub layers: Vec<Layer>,
+    /// The folders that composite as one image (not pass-through), by
+    /// their path: these become offscreen parts.
+    pub folders: Vec<Folder>,
+}
+
+/// A folder that blends as a whole, Photoshop's non-pass-through groups.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Folder {
+    /// Its own name last, enclosing names before it.
+    pub path: Vec<String>,
+    pub blend: Blend,
+    pub opacity: f32,
+}
+
+impl Folder {
+    /// Whether it looks any different from its layers drawn directly: a
+    /// Normal folder at full opacity does not, and costs nothing as a part.
+    pub fn needs_layer(&self) -> bool {
+        self.blend != Blend::NORMAL || self.opacity < 0.999
+    }
 }
 
 /// What an import hands back: the model plus its encoded texture pages.
@@ -90,7 +112,9 @@ type Spot = (usize, u32, u32);
 /// The atlas page side; 4096 keeps big illustrations to few pages and is
 /// what every GPU the editor runs on accepts.
 pub(crate) const PAGE: u32 = 4096;
-const GAP: u32 = 2;
+/// Room between layers on a page, so mip levels down to the one the canvas
+/// stops at never mix in a neighbour (see the renderer's sampler).
+const GAP: u32 = 16;
 
 /// Model-safe ids: ASCII letters, digits and underscores.
 fn id_of(prefix: &str, n: usize) -> String {
@@ -160,7 +184,19 @@ fn pack(sizes: &[(u32, u32)]) -> Result<(Vec<Spot>, usize), ImportError> {
     Ok((out, page + 1))
 }
 
+/// Every layer on a texture of its own, the layer's trimmed pixels with
+/// `GAP` of clear space around them, as Cubism keeps the PSD's layers until
+/// its texture atlas is made.
 pub fn build(doc: &Document) -> Result<Imported, ImportError> {
+    build_with(doc, false)
+}
+
+/// The layers packed onto atlas pages of `PAGE` pixels.
+pub fn build_atlas(doc: &Document) -> Result<Imported, ImportError> {
+    build_with(doc, true)
+}
+
+fn build_with(doc: &Document, atlas: bool) -> Result<Imported, ImportError> {
     if doc.width == 0 || doc.height == 0 {
         return Err(ImportError::Export("document has no size".into()));
     }
@@ -185,6 +221,18 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
                         enabled: true,
                         binding: Binding::default(),
                         draw_orders: vec![500.0],
+                        // a folder that blends as a whole draws offscreen
+                        offscreen: doc
+                            .folders
+                            .iter()
+                            .find(|f| f.path == sub && f.needs_layer())
+                            .map(|f| ayatsuri_format::model::Offscreen {
+                                masks: Vec::new(),
+                                inverted: false,
+                                blend: f.blend,
+                                opacities: vec![f.opacity],
+                            }),
+                        blend_shapes: Vec::new(),
                     });
                     part_names.push(sub.last().cloned().unwrap_or_default());
                     parts.len() - 1
@@ -232,7 +280,7 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
                 );
             }
         }
-        let limit = PAGE - GAP;
+        let limit = PAGE - 2 * GAP;
         if *tw > limit || *th > limit {
             let k = (limit as f32 / *tw as f32).min(limit as f32 / *th as f32);
             let (nw, nh) = (((*tw as f32 * k) as u32).max(1), ((*th as f32 * k) as u32).max(1));
@@ -242,10 +290,16 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
         tiles.push(img);
     }
     let sizes: Vec<(u32, u32)> = tiles.iter().map(|t| (t.width(), t.height())).collect();
-    let (spots, pages) = pack(&sizes)?;
-
-    let mut atlases: Vec<image::RgbaImage> =
-        (0..pages).map(|_| image::RgbaImage::new(PAGE, PAGE)).collect();
+    let (spots, mut atlases): (Vec<Spot>, Vec<image::RgbaImage>) = if atlas {
+        let (spots, pages) = pack(&sizes)?;
+        (spots, (0..pages).map(|_| image::RgbaImage::new(PAGE, PAGE)).collect())
+    } else {
+        // clear space all round, so filtering past the art's edge (and the
+        // page edge the sampler clamps to) only ever finds nothing
+        let spots = (0..sizes.len()).map(|i| (i, GAP, GAP)).collect();
+        let pages = sizes.iter().map(|&(w, h)| image::RgbaImage::new(w + 2 * GAP, h + 2 * GAP));
+        (spots, pages.collect())
+    };
 
     // model units: one unit per canvas height, origin at the canvas centre
     let ppu = doc.height as f32;
@@ -268,9 +322,13 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             clip_base = Some(n as u32);
             Vec::new()
         };
-        if let Some(atlas) = atlases.get_mut(*page) {
-            image::imageops::replace(atlas, tile, *ax as i64, *ay as i64);
-        }
+        let (pw, ph) = match atlases.get_mut(*page) {
+            Some(img) => {
+                image::imageops::replace(img, tile, *ax as i64, *ay as i64);
+                (img.width() as f32, img.height() as f32)
+            }
+            None => (PAGE as f32, PAGE as f32),
+        };
         // the quad, in canvas pixels then model units
         let left = (layer.x + *tx as i32) as f32;
         let top = (layer.y + *ty as i32) as f32;
@@ -283,9 +341,8 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             to_unit(right, bottom),
             to_unit(left, bottom),
         ];
-        let p = PAGE as f32;
-        let (u0, v0) = (*ax as f32 / p, *ay as f32 / p);
-        let (u1, v1) = ((*ax + tile.width()) as f32 / p, (*ay + tile.height()) as f32 / p);
+        let (u0, v0) = (*ax as f32 / pw, *ay as f32 / ph);
+        let (u1, v1) = ((*ax + tile.width()) as f32 / pw, (*ay + tile.height()) as f32 / ph);
         meshes.push(ArtMesh {
             id: id_of("ArtMesh", n),
             parent_part: part_for(&layer.groups, &mut parts),
@@ -304,6 +361,11 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
             // bottom layers first: later meshes draw over earlier ones
             draw_orders: vec![500.0],
             positions: corners.iter().flat_map(|&(x, y)| [x, y]).collect(),
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         });
     }
 
@@ -322,4 +384,49 @@ pub fn build(doc: &Document) -> Result<Imported, ImportError> {
     model.parts = parts;
     model.art_meshes = meshes;
     Ok(Imported { model, textures, part_names, mesh_names, skipped, scaled })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer(name: &str, folder: &str, x: i32) -> Layer {
+        Layer {
+            name: name.into(),
+            groups: vec![folder.into()],
+            x,
+            y: 0,
+            width: 8,
+            height: 8,
+            rgba: vec![255; 8 * 8 * 4],
+            visible: true,
+            opacity: 1.0,
+            clip_to_below: false,
+            blend: Blend::NORMAL,
+        }
+    }
+
+    #[test]
+    fn a_blending_folder_becomes_an_offscreen_part() {
+        let screen = Blend { color: ColorBlend::Screen, alpha: AlphaBlend::Over };
+        let doc = Document {
+            width: 64,
+            height: 16,
+            layers: vec![layer("a", "Glow", 0), layer("b", "Plain", 20), layer("c", "Faded", 40)],
+            folders: vec![
+                Folder { path: vec!["Glow".into()], blend: screen, opacity: 1.0 },
+                Folder { path: vec!["Plain".into()], blend: Blend::NORMAL, opacity: 1.0 },
+                Folder { path: vec!["Faded".into()], blend: Blend::NORMAL, opacity: 0.5 },
+            ],
+        };
+        let built = build(&doc).unwrap();
+        let part = |name: &str| {
+            let i = built.part_names.iter().position(|n| n == name).unwrap();
+            built.model.parts[i].offscreen.clone()
+        };
+        let glow = part("Glow").expect("a Screen folder draws offscreen");
+        assert_eq!((glow.blend, glow.opacities), (screen, vec![1.0]));
+        assert!(part("Plain").is_none(), "a Normal folder at full opacity looks the same direct");
+        assert_eq!(part("Faded").map(|o| o.opacities), Some(vec![0.5]));
+    }
 }

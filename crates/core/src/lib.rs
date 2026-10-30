@@ -13,15 +13,23 @@ pub mod artpath;
 pub mod automesh;
 pub mod bezier;
 pub mod blend;
+pub mod blendshape;
+pub mod clip;
+pub mod color;
 pub mod comp;
 pub mod compose;
 pub mod deform;
+pub mod draworder;
 pub mod edit;
 pub mod keyform;
+pub mod overlap;
+pub mod palette;
 pub mod physics;
+pub mod shapes;
 pub mod skin;
+pub mod stroke_mesh;
 
-use ayatsuri_format::model::{Blend, DeformerKind, Model};
+use ayatsuri_format::model::{ArtMesh, Blend, BlendShape, DeformerKind, Model, Parameter};
 use deform::{Rotation, Vec2, rotation_transform, signed_angle, v2, warp_transform};
 
 /// A loaded puppet: the model plus every buffer the frame loop needs,
@@ -37,10 +45,31 @@ pub struct Puppet {
     part_opacity: Vec<f32>,
     part_enabled: Vec<bool>,
     part_draw_order: Vec<f32>,
+    /// Per part: an offscreen part's layer opacity this frame (1.0 for the
+    /// rest).
+    layer_opacity: Vec<f32>,
+    /// Per mesh: the offscreen parts it draws inside, outermost first.
+    mesh_layers: Vec<Vec<u32>>,
+    /// Per mesh: the mask sets it inherits past its own masks (see `clip`).
+    mesh_clip_and: Vec<Vec<Vec<u32>>>,
+    /// The deepest offscreen nesting any mesh has (0: no layers at all).
+    layer_depth: usize,
+    /// Per part: its lowest mesh, the tie order of an offscreen part's item.
+    part_tie: Vec<u32>,
+    /// Per draw order group: its total, counted the runtime's way (see
+    /// `draworder`), offscreen layer slots included.
+    group_total: Vec<u32>,
+    // grouped walk workspace, sized at load: the render slots (meshes and
+    // offscreen layers) and which meshes found one
+    slot_buf: Vec<u32>,
+    mesh_seen: Vec<bool>,
     /// Per deformer: chain state.
     def_enabled: Vec<bool>,
     def_user_visible: Vec<bool>,
     def_opacity: Vec<f32>,
+    /// Per deformer: its multiply and screen colour this frame, its
+    /// parents' folded in.
+    def_color: Vec<color::Tint>,
     def_scale: Vec<f32>,
     /// Which warp/rotation each deformer is, locally.
     def_local: Vec<u32>,
@@ -54,6 +83,9 @@ pub struct Puppet {
     mesh_pos: Vec<f32>,
     mesh_pos_off: Vec<usize>,
     mesh_opacity: Vec<f32>,
+    /// Per mesh: its multiply and screen colour this frame, its parent
+    /// deformer's folded in.
+    mesh_color: Vec<color::Tint>,
     mesh_draw_order: Vec<f32>,
     mesh_visible: Vec<bool>,
     mesh_user_visible: Vec<bool>,
@@ -70,6 +102,12 @@ pub struct Puppet {
     /// Scratch, reused every frame.
     corners: Vec<blend::Corner>,
     scratch: Vec<f32>,
+    /// A shaped object's blend at every parameter's default (the base its
+    /// blend shapes add to), as big as `scratch`.
+    base_scratch: Vec<f32>,
+    /// A mesh's keyform weights at the default pose, for its blend shapes'
+    /// base form.
+    shape_corners: Vec<blend::Corner>,
     /// The pendulum rig's live state, when the model carries one.
     physics: Option<physics::Physics>,
     /// Work skipped when nothing changed. Each deformer and mesh remembers
@@ -81,11 +119,64 @@ pub struct Puppet {
     cache: Cache,
 }
 
+fn shape_value(values: &[f32], shape: &BlendShape) -> f32 {
+    values.get(shape.parameter as usize).copied().unwrap_or(0.0)
+}
+
+/// Every value a mesh's blend shapes read: each shape's own parameter and
+/// the parameters its weight limits follow.
+fn shape_inputs<'a>(values: &'a [f32], shapes: &'a [BlendShape]) -> impl Iterator<Item = f32> + 'a {
+    shapes.iter().flat_map(move |s| {
+        core::iter::once(shape_value(values, s)).chain(
+            s.limits.iter().map(move |l| values.get(l.parameter as usize).copied().unwrap_or(0.0)),
+        )
+    })
+}
+
+/// Whether `seen` holds exactly the values `shapes` read now.
+fn shapes_seen(seen: &[f32], shapes: &[BlendShape], values: &[f32]) -> bool {
+    let mut now = shape_inputs(values, shapes);
+    seen.iter().all(|v| now.next().is_some_and(|n| n.to_bits() == v.to_bits()))
+        && now.next().is_none()
+}
+
 impl Cache {
-    fn remember_mesh(&mut self, mi: usize, corners: &[blend::Corner]) {
+    /// The deformer was last made at these blend shape values, bit for bit.
+    fn def_shapes_same(&self, di: usize, shapes: &[BlendShape], values: &[f32]) -> bool {
+        shapes.is_empty()
+            || self.def_shapes.get(di).is_some_and(|seen| shapes_seen(seen, shapes, values))
+    }
+
+    fn remember_def_shapes(&mut self, di: usize, shapes: &[BlendShape], values: &[f32]) {
+        if let Some(seen) = self.def_shapes.get_mut(di) {
+            seen.clear();
+            seen.extend(shape_inputs(values, shapes));
+        }
+    }
+
+    /// The mesh was last made at these blend shape values, bit for bit.
+    fn mesh_shapes_same(&self, mi: usize, shapes: &[BlendShape], values: &[f32]) -> bool {
+        self.mesh_shapes.get(mi).is_some_and(|seen| {
+            let mut now = shape_inputs(values, shapes);
+            seen.iter().all(|v| now.next().is_some_and(|n| n.to_bits() == v.to_bits()))
+                && now.next().is_none()
+        })
+    }
+
+    fn remember_mesh(
+        &mut self,
+        mi: usize,
+        corners: &[blend::Corner],
+        shapes: &[BlendShape],
+        values: &[f32],
+    ) {
         if let Some(c) = self.mesh_corners.get_mut(mi) {
             c.clear();
             c.extend_from_slice(corners);
+        }
+        if let Some(seen) = self.mesh_shapes.get_mut(mi) {
+            seen.clear();
+            seen.extend(shape_inputs(values, shapes));
         }
         if let Some(m) = self.mesh_made.get_mut(mi) {
             *m = true;
@@ -103,6 +194,10 @@ struct Cache {
     /// Changed this frame: children redo theirs.
     def_moved: Vec<bool>,
     mesh_corners: Vec<Vec<blend::Corner>>,
+    /// The blend shape parameter values each mesh was made at.
+    mesh_shapes: Vec<Vec<f32>>,
+    /// The same for each deformer.
+    def_shapes: Vec<Vec<f32>>,
     mesh_made: Vec<bool>,
     /// Held by glue: always redone.
     mesh_glued: Vec<bool>,
@@ -153,14 +248,43 @@ impl Puppet {
             mesh_pos_off.push(pos_total);
             pos_total = pos_total.saturating_add((m.vertex_count as usize).saturating_mul(2));
         }
+        let mesh_clip_and: Vec<Vec<Vec<u32>>> = (0..n_meshes)
+            .map(|mi| clip::chain_of(&model, mi).0.into_iter().skip(1).collect())
+            .collect();
         let mut mask_source = vec![false; n_meshes];
-        for m in &model.art_meshes {
-            for &src in &m.masks {
-                if let Some(f) = mask_source.get_mut(src as usize) {
-                    *f = true;
-                }
+        for &src in mesh_clip_and.iter().flatten().flatten() {
+            if let Some(f) = mask_source.get_mut(src as usize) {
+                *f = true;
             }
         }
+        let layer_masks =
+            model.parts.iter().filter_map(|p| p.offscreen.as_ref()).flat_map(|o| &o.masks);
+        for &src in model.art_meshes.iter().flat_map(|m| &m.masks).chain(layer_masks) {
+            if let Some(f) = mask_source.get_mut(src as usize) {
+                *f = true;
+            }
+        }
+        // each mesh's offscreen parts, walking up (bounded, so a parent loop
+        // in a broken file cannot spin)
+        let mesh_layers: Vec<Vec<u32>> = model
+            .art_meshes
+            .iter()
+            .map(|m| {
+                let mut chain = Vec::new();
+                let mut at = m.parent_part;
+                for _ in 0..n_parts {
+                    let Some(pi) = at else { break };
+                    let Some(p) = model.parts.get(pi as usize) else { break };
+                    if p.offscreen.is_some() {
+                        chain.push(pi);
+                    }
+                    at = p.parent_part;
+                }
+                chain.reverse();
+                chain
+            })
+            .collect();
+        let layer_depth = mesh_layers.iter().map(Vec::len).max().unwrap_or(0);
 
         let max_corners = model
             .parts
@@ -191,6 +315,17 @@ impl Puppet {
             part_opacity: vec![1.0; n_parts],
             part_enabled: vec![true; n_parts],
             part_draw_order: vec![500.0; n_parts],
+            layer_opacity: vec![1.0; n_parts],
+            mesh_layers,
+            mesh_clip_and,
+            layer_depth,
+            part_tie: draworder::part_first_mesh(&model),
+            group_total: draworder::group_totals(&model),
+            slot_buf: vec![
+                u32::MAX;
+                n_meshes + model.parts.iter().filter(|p| p.offscreen.is_some()).count()
+            ],
+            mesh_seen: vec![false; n_meshes],
             dog_first: vec![-1; max_level],
             dog_last: vec![-1; max_level],
             dog_next: vec![-1; max_items],
@@ -202,6 +337,16 @@ impl Puppet {
                 def_made: vec![false; n_defs],
                 def_moved: vec![true; n_defs],
                 mesh_corners: vec![Vec::new(); n_meshes],
+                mesh_shapes: model
+                    .art_meshes
+                    .iter()
+                    .map(|m| Vec::with_capacity(m.blend_shapes.len()))
+                    .collect(),
+                def_shapes: model
+                    .deformers
+                    .iter()
+                    .map(|d| Vec::with_capacity(d.blend_shapes.len() * 2))
+                    .collect(),
                 mesh_made: vec![false; n_meshes],
                 mesh_glued: {
                     let mut g = vec![false; n_meshes];
@@ -218,6 +363,7 @@ impl Puppet {
             def_enabled: vec![true; n_defs],
             def_user_visible: vec![true; n_defs],
             def_opacity: vec![1.0; n_defs],
+            def_color: vec![color::Tint::NEUTRAL; n_defs],
             def_scale: vec![1.0; n_defs],
             def_local,
             warp_grid: vec![0.0; grid_total],
@@ -227,6 +373,7 @@ impl Puppet {
             mesh_pos: vec![0.0; pos_total],
             mesh_pos_off,
             mesh_opacity: vec![0.0; n_meshes],
+            mesh_color: vec![color::Tint::NEUTRAL; n_meshes],
             mesh_draw_order: vec![500.0; n_meshes],
             mesh_visible: vec![false; n_meshes],
             mesh_user_visible: vec![true; n_meshes],
@@ -234,6 +381,8 @@ impl Puppet {
             mask_source,
             corners: Vec::with_capacity(max_corners),
             scratch: vec![0.0; max_grid.max(max_mesh)],
+            base_scratch: vec![0.0; max_grid.max(max_mesh).max(3)],
+            shape_corners: Vec::with_capacity(max_corners),
             physics: physics::Physics::new(&model),
             model,
         }
@@ -329,16 +478,34 @@ impl Puppet {
     /// next `update` shows it. Callers restore and commit through an edit.
     pub fn mesh_keyform_mut(&mut self, mesh: usize, keyform: usize) -> Option<&mut [f32]> {
         self.cache.valid = false;
-        let m = self.model.art_meshes.get_mut(mesh)?;
-        let stride = (m.vertex_count as usize).checked_mul(2)?;
-        let start = keyform.checked_mul(stride)?;
-        m.positions.get_mut(start..start.checked_add(stride)?)
+        keyform::mesh_form_mut(self.model.art_meshes.get_mut(mesh)?, keyform)
+    }
+
+    /// An art mesh's or deformer's whole colour pool of `kind`, editable in
+    /// place for a live colour picker preview (see `edit::set_color`, which
+    /// the caller commits through after putting it back).
+    pub fn color_pool_mut(
+        &mut self,
+        target: edit::Target,
+        kind: edit::ColorKind,
+    ) -> Option<(&mut Vec<f32>, usize)> {
+        self.cache.valid = false;
+        edit::color_pool_mut(&mut self.model, target, kind)
     }
 
     /// One keyform's opacity of an art mesh or deformer, editable in place
     /// for a live slider preview, the same way.
     pub fn opacity_mut(&mut self, target: edit::Target, keyform: usize) -> Option<&mut f32> {
         self.cache.valid = false;
+        if keyform >= shapes::normal_count(&self.model, target) {
+            return shapes::channel_mut(
+                &mut self.model,
+                target,
+                keyform,
+                blendshape::Channel::Opacity,
+            )?
+            .first_mut();
+        }
         match target {
             edit::Target::ArtMesh(i) => {
                 self.model.art_meshes.get_mut(i)?.opacities.get_mut(keyform)
@@ -347,7 +514,9 @@ impl Puppet {
                 DeformerKind::Warp(w) => w.opacities.get_mut(keyform),
                 DeformerKind::Rotation(r) => r.opacities.get_mut(keyform),
             },
-            edit::Target::Part(_) => None,
+            edit::Target::Part(i) => {
+                self.model.parts.get_mut(i)?.offscreen.as_mut()?.opacities.get_mut(keyform)
+            }
         }
     }
 
@@ -360,9 +529,40 @@ impl Puppet {
         Some(r.angles.as_mut_slice())
     }
 
+    /// A rotation deformer's keyform scales, editable in place for a live
+    /// scale handle preview, the same way.
+    pub fn rotation_scales_mut(&mut self, deformer: usize) -> Option<&mut [f32]> {
+        self.cache.valid = false;
+        let d = self.model.deformers.get_mut(deformer)?;
+        let DeformerKind::Rotation(r) = &mut d.kind else { return None };
+        Some(r.scales.as_mut_slice())
+    }
+
+    /// One keyform's rotation deformer origin (parent space), editable in
+    /// place the same way.
+    pub fn rotation_origin_mut(
+        &mut self,
+        deformer: usize,
+        keyform: usize,
+    ) -> Option<(&mut f32, &mut f32)> {
+        self.cache.valid = false;
+        let d = self.model.deformers.get_mut(deformer)?;
+        let DeformerKind::Rotation(r) = &mut d.kind else { return None };
+        Some((r.origins_x.get_mut(keyform)?, r.origins_y.get_mut(keyform)?))
+    }
+
     /// One keyform's warp grid, editable in place the same way.
     pub fn warp_keyform_mut(&mut self, deformer: usize, keyform: usize) -> Option<&mut [f32]> {
         self.cache.valid = false;
+        let target = edit::Target::Deformer(deformer);
+        if keyform >= shapes::normal_count(&self.model, target) {
+            return shapes::channel_mut(
+                &mut self.model,
+                target,
+                keyform,
+                blendshape::Channel::Positions,
+            );
+        }
         let d = self.model.deformers.get_mut(deformer)?;
         let DeformerKind::Warp(w) = &mut d.kind else { return None };
         let points = (w.rows as usize + 1).checked_mul(w.cols as usize + 1)?;
@@ -454,13 +654,52 @@ impl Puppet {
                 |p| eps.get(p).copied().unwrap_or((0.001, 0.0015)),
                 &mut corners,
             );
-            let order =
-                if in_range { Self::blend_scalar(&corners, &part.draw_orders) } else { 500.0 };
+            let mut order =
+                [if in_range { Self::blend_scalar(&corners, &part.draw_orders) } else { 500.0 }];
+            Self::add_shapes(
+                &self.model.parameters,
+                &self.eps,
+                &self.values,
+                &part.binding,
+                &part.blend_shapes,
+                blendshape::Channel::DrawOrder,
+                &part.draw_orders,
+                &mut self.shape_corners,
+                &mut self.base_scratch,
+                &mut order,
+            );
+            let order = order[0];
             if let Some(d) = self.part_draw_order.get_mut(i) {
                 *d = order;
             }
             let mut enabled = part.visible && part.enabled;
-            let mut opacity = self.part_user_opacity.get(i).copied().unwrap_or(1.0);
+            let own = self.part_user_opacity.get(i).copied().unwrap_or(1.0);
+            // an offscreen part's opacity applies to its layer as a whole,
+            // so overlapping children show no seams; its children only get
+            // what it inherits
+            let (mut opacity, layer) = match &part.offscreen {
+                Some(o) => {
+                    let mut keyed =
+                        [if in_range { Self::blend_scalar(&corners, &o.opacities) } else { 1.0 }];
+                    Self::add_shapes(
+                        &self.model.parameters,
+                        &self.eps,
+                        &self.values,
+                        &part.binding,
+                        &part.blend_shapes,
+                        blendshape::Channel::Opacity,
+                        &o.opacities,
+                        &mut self.shape_corners,
+                        &mut self.base_scratch,
+                        &mut keyed,
+                    );
+                    (1.0, own * keyed[0].clamp(0.0, 1.0))
+                }
+                None => (own, 1.0),
+            };
+            if let Some(l) = self.layer_opacity.get_mut(i) {
+                *l = layer;
+            }
             if let Some(parent) = part.parent_part {
                 enabled =
                     enabled && self.part_enabled.get(parent as usize).copied().unwrap_or(true);
@@ -493,6 +732,138 @@ impl Puppet {
                 *o += s * w;
             }
         }
+    }
+
+    /// Add a mesh's blend shapes onto `out`, its blend at the current
+    /// values: each shape's weighted difference from the base form, the
+    /// mesh's blend at every parameter's default, made in `base`. A mesh
+    /// whose binding does not cover the defaults has no base form and so no
+    /// blend shapes (Cubism requires the defaults keyed).
+    fn add_blend_shapes(
+        params: &[Parameter],
+        m: &ArtMesh,
+        values: &[f32],
+        eps: &[(f32, f32)],
+        corners: &mut Vec<blend::Corner>,
+        base: &mut [f32],
+        out: &mut [f32],
+    ) {
+        if m.blend_shapes.is_empty() {
+            return;
+        }
+        let len = out.len();
+        let Some(base) = base.get_mut(..len) else { return };
+        let at_default = blend::corners(
+            &m.binding,
+            |p| params.get(p).map_or(0.0, |q| q.default),
+            |p| eps.get(p).copied().unwrap_or((0.001, 0.0015)),
+            corners,
+        );
+        if !at_default {
+            return;
+        }
+        Self::blend_positions(corners, &m.positions, len, base);
+        for shape in &m.blend_shapes {
+            let limit = blendshape::limit(params, &shape.limits, values);
+            for (k, w) in blendshape::weights(shape_value(values, shape), &shape.keys) {
+                let w = w * limit;
+                if w == 0.0 {
+                    continue;
+                }
+                let start = k.saturating_mul(len);
+                let Some(form) = shape.positions.get(start..start.saturating_add(len)) else {
+                    continue;
+                };
+                blendshape::add(out, form, base, w);
+            }
+        }
+    }
+
+    /// Add what `shapes` put on one channel onto `out` (the object's
+    /// blend of that channel now): their weighted differences from the
+    /// object's blend at every parameter's default, made in `base`. An
+    /// object whose binding does not cover the defaults has no base and so
+    /// no blend shapes, as for meshes.
+    #[allow(clippy::too_many_arguments)]
+    fn add_shapes(
+        params: &[Parameter],
+        eps: &[(f32, f32)],
+        values: &[f32],
+        binding: &ayatsuri_format::model::Binding,
+        shapes: &[BlendShape],
+        channel: blendshape::Channel,
+        pool: &[f32],
+        corners: &mut Vec<blend::Corner>,
+        base: &mut [f32],
+        out: &mut [f32],
+    ) {
+        if !blendshape::shapes_any(shapes, channel) {
+            return;
+        }
+        let len = out.len();
+        let Some(base) = base.get_mut(..len) else { return };
+        let at_default = blend::corners(
+            binding,
+            |p| params.get(p).map_or(0.0, |q| q.default),
+            |p| eps.get(p).copied().unwrap_or((0.001, 0.0015)),
+            corners,
+        );
+        if !at_default {
+            return;
+        }
+        Self::blend_positions(corners, pool, len, base);
+        blendshape::add_channel(out, base, shapes, channel, params, values);
+    }
+
+    /// An object's own multiply and screen colour now, its blend shapes'
+    /// included (colours a pool leaves out are neutral, at the base too).
+    #[allow(clippy::too_many_arguments)]
+    fn shaped_tint(
+        params: &[Parameter],
+        eps: &[(f32, f32)],
+        values: &[f32],
+        corners: &[blend::Corner],
+        binding: &ayatsuri_format::model::Binding,
+        multiply: &[f32],
+        screen: &[f32],
+        shapes: &[BlendShape],
+        shape_corners: &mut Vec<blend::Corner>,
+    ) -> color::Tint {
+        let mut t = color::Tint::blend(corners, multiply, screen);
+        let mul_shaped = blendshape::shapes_any(shapes, blendshape::Channel::Multiply);
+        let scr_shaped = blendshape::shapes_any(shapes, blendshape::Channel::Screen);
+        if !mul_shaped && !scr_shaped {
+            return t;
+        }
+        let at_default = blend::corners(
+            binding,
+            |p| params.get(p).map_or(0.0, |q| q.default),
+            |p| eps.get(p).copied().unwrap_or((0.001, 0.0015)),
+            shape_corners,
+        );
+        if !at_default {
+            return t;
+        }
+        let base = color::Tint::blend(shape_corners, multiply, screen);
+        blendshape::add_channel(
+            &mut t.multiply,
+            &base.multiply,
+            shapes,
+            blendshape::Channel::Multiply,
+            params,
+            values,
+        );
+        blendshape::add_channel(
+            &mut t.screen,
+            &base.screen,
+            shapes,
+            blendshape::Channel::Screen,
+            params,
+            values,
+        );
+        t.multiply = t.multiply.map(|v| v.clamp(0.0, 1.0));
+        t.screen = t.screen.map(|v| v.clamp(0.0, 1.0));
+        t
     }
 
     /// Map points through a deformer's CURRENT state (ancestors already
@@ -570,11 +941,13 @@ impl Puppet {
             let same = self.cache.valid
                 && !parent_moved
                 && self.cache.def_made.get(di).copied().unwrap_or(false)
-                && self.cache.def_corners.get(di).is_some_and(|c| *c == corners);
+                && self.cache.def_corners.get(di).is_some_and(|c| *c == corners)
+                && self.cache.def_shapes_same(di, &d.blend_shapes, &self.values);
             if let Some(m) = self.cache.def_moved.get_mut(di) {
                 *m = !same;
             }
             if !same {
+                self.cache.remember_def_shapes(di, &d.blend_shapes, &self.values);
                 if let Some(c) = self.cache.def_corners.get_mut(di) {
                     c.clone_from(&corners);
                 }
@@ -588,6 +961,20 @@ impl Puppet {
                     if !same {
                         let len = self.warp_grid_len.get(local).copied().unwrap_or(0);
                         Self::blend_positions(&corners, &w.positions, len, &mut scratch);
+                        if let Some(grid) = scratch.get_mut(..len) {
+                            Self::add_shapes(
+                                &self.model.parameters,
+                                &self.eps,
+                                &self.values,
+                                &d.binding,
+                                &d.blend_shapes,
+                                blendshape::Channel::Positions,
+                                &w.positions,
+                                &mut self.shape_corners,
+                                &mut self.base_scratch,
+                                grid,
+                            );
+                        }
                         if let Some(p) = parent
                             && let Some(io) = scratch.get_mut(..len)
                         {
@@ -641,6 +1028,27 @@ impl Puppet {
                             .copied()
                             .unwrap_or(false),
                     };
+                    for (channel, pool, slot) in [
+                        (blendshape::Channel::Angle, &r.angles, &mut rot.angle),
+                        (blendshape::Channel::OriginX, &r.origins_x, &mut rot.origin.x),
+                        (blendshape::Channel::OriginY, &r.origins_y, &mut rot.origin.y),
+                        (blendshape::Channel::Scale, &r.scales, &mut rot.scale),
+                    ] {
+                        let mut one = [*slot];
+                        Self::add_shapes(
+                            &self.model.parameters,
+                            &self.eps,
+                            &self.values,
+                            &d.binding,
+                            &d.blend_shapes,
+                            channel,
+                            pool,
+                            &mut self.shape_corners,
+                            &mut self.base_scratch,
+                            &mut one,
+                        );
+                        *slot = one[0];
+                    }
                     let opacity = Self::blend_scalar(&corners, &r.opacities);
                     if let Some(p) = parent {
                         // The parent may bend space, so the child's angle has
@@ -692,6 +1100,47 @@ impl Puppet {
                     }
                 }
             }
+            // blend shapes on opacity land on the deformer's own, under its parent's
+            let own_opacity = match &d.kind {
+                DeformerKind::Warp(w) => &w.opacities,
+                DeformerKind::Rotation(r) => &r.opacities,
+            };
+            if blendshape::shapes_any(&d.blend_shapes, blendshape::Channel::Opacity) {
+                let mut delta = [0.0f32];
+                // the shapes add to zero here: only their difference is wanted
+                Self::add_shapes(
+                    &self.model.parameters,
+                    &self.eps,
+                    &self.values,
+                    &d.binding,
+                    &d.blend_shapes,
+                    blendshape::Channel::Opacity,
+                    own_opacity,
+                    &mut self.shape_corners,
+                    &mut self.base_scratch,
+                    &mut delta,
+                );
+                if let Some(o) = self.def_opacity.get_mut(di) {
+                    *o = (*o + delta[0] * parent_opacity).clamp(0.0, 1.0);
+                }
+            }
+            let parent_color = parent.map_or(color::Tint::NEUTRAL, |p| {
+                self.def_color.get(p).copied().unwrap_or_default()
+            });
+            let own = Self::shaped_tint(
+                &self.model.parameters,
+                &self.eps,
+                &self.values,
+                &corners,
+                &d.binding,
+                &d.multiply,
+                &d.screen,
+                &d.blend_shapes,
+                &mut self.shape_corners,
+            );
+            if let Some(c) = self.def_color.get_mut(di) {
+                *c = own.under(parent_color);
+            }
         }
 
         self.corners = corners;
@@ -701,6 +1150,8 @@ impl Puppet {
     fn update_meshes(&mut self) {
         let mut corners = core::mem::take(&mut self.corners);
         let mut mesh_pos = core::mem::take(&mut self.mesh_pos);
+        let mut scratch = core::mem::take(&mut self.scratch);
+        let mut shape_corners = core::mem::take(&mut self.shape_corners);
 
         for mi in 0..self.model.art_meshes.len() {
             let Some(m) = self.model.art_meshes.get(mi) else { break };
@@ -734,7 +1185,8 @@ impl Puppet {
                 && !parent_moved
                 && !self.cache.mesh_glued.get(mi).copied().unwrap_or(true)
                 && self.cache.mesh_made.get(mi).copied().unwrap_or(false)
-                && self.cache.mesh_corners.get(mi).is_some_and(|c| *c == corners);
+                && self.cache.mesh_corners.get(mi).is_some_and(|c| *c == corners)
+                && self.cache.mesh_shapes_same(mi, &m.blend_shapes, &self.values);
             if !enabled {
                 if let Some(o) = self.mesh_opacity.get_mut(mi) {
                     *o = 0.0;
@@ -754,11 +1206,20 @@ impl Puppet {
                     let off = self.mesh_pos_off.get(mi).copied().unwrap_or(0);
                     if let Some(out) = mesh_pos.get_mut(off..off.saturating_add(len)) {
                         Self::blend_positions(&corners, &m.positions, len, out);
+                        Self::add_blend_shapes(
+                            &self.model.parameters,
+                            m,
+                            &self.values,
+                            &self.eps,
+                            &mut shape_corners,
+                            &mut scratch,
+                            out,
+                        );
                         if let Some(pd) = m.parent_deformer {
                             self.apply_deformer(pd as usize, out);
                         }
                     }
-                    self.cache.remember_mesh(mi, &corners);
+                    self.cache.remember_mesh(mi, &corners, &m.blend_shapes, &self.values);
                 }
                 continue;
             }
@@ -768,14 +1229,37 @@ impl Puppet {
                 let off = self.mesh_pos_off.get(mi).copied().unwrap_or(0);
                 if let Some(out) = mesh_pos.get_mut(off..off.saturating_add(len)) {
                     Self::blend_positions(&corners, &m.positions, len, out);
+                    Self::add_blend_shapes(
+                        &self.model.parameters,
+                        m,
+                        &self.values,
+                        &self.eps,
+                        &mut shape_corners,
+                        &mut scratch,
+                        out,
+                    );
                     if let Some(pd) = m.parent_deformer {
                         self.apply_deformer(pd as usize, out);
                     }
                 }
-                self.cache.remember_mesh(mi, &corners);
+                self.cache.remember_mesh(mi, &corners, &m.blend_shapes, &self.values);
             }
 
             let mut opacity = Self::blend_scalar(&corners, &m.opacities);
+            let mut own = [opacity];
+            Self::add_shapes(
+                &self.model.parameters,
+                &self.eps,
+                &self.values,
+                &m.binding,
+                &m.blend_shapes,
+                blendshape::Channel::Opacity,
+                &m.opacities,
+                &mut shape_corners,
+                &mut self.base_scratch,
+                &mut own,
+            );
+            opacity = own[0];
             if let Some(pd) = m.parent_deformer {
                 opacity *= self.def_opacity.get(pd as usize).copied().unwrap_or(1.0);
             }
@@ -785,6 +1269,23 @@ impl Puppet {
             if let Some(o) = self.mesh_opacity.get_mut(mi) {
                 *o = opacity.clamp(0.0, 1.0);
             }
+            let parent_color = m.parent_deformer.map_or(color::Tint::NEUTRAL, |pd| {
+                self.def_color.get(pd as usize).copied().unwrap_or_default()
+            });
+            let tint = Self::shaped_tint(
+                &self.model.parameters,
+                &self.eps,
+                &self.values,
+                &corners,
+                &m.binding,
+                &m.multiply,
+                &m.screen,
+                &m.blend_shapes,
+                &mut shape_corners,
+            );
+            if let Some(c) = self.mesh_color.get_mut(mi) {
+                *c = tint.under(parent_color);
+            }
             let draw_order = Self::blend_scalar(&corners, &m.draw_orders);
             if let Some(d) = self.mesh_draw_order.get_mut(mi) {
                 *d = draw_order;
@@ -793,6 +1294,8 @@ impl Puppet {
 
         self.corners = corners;
         self.mesh_pos = mesh_pos;
+        self.scratch = scratch;
+        self.shape_corners = shape_corners;
     }
 
     /// Stitch glued mesh pairs: each paired vertex pulls toward its partner
@@ -812,7 +1315,20 @@ impl Puppet {
             if !in_range {
                 continue;
             }
-            let intensity = Self::blend_scalar(&corners, &g.intensities);
+            let mut intensity = [Self::blend_scalar(&corners, &g.intensities)];
+            Self::add_shapes(
+                &self.model.parameters,
+                &self.eps,
+                &self.values,
+                &g.binding,
+                &g.blend_shapes,
+                blendshape::Channel::Intensity,
+                &g.intensities,
+                &mut self.shape_corners,
+                &mut self.base_scratch,
+                &mut intensity,
+            );
+            let intensity = intensity[0];
             if intensity == 0.0 {
                 continue;
             }
@@ -850,6 +1366,40 @@ impl Puppet {
     }
 
     fn sort_render_order(&mut self) {
+        self.sort_by_draw_order();
+        self.group_layers();
+    }
+
+    /// In a model without draw order groups of its own, an offscreen part
+    /// sorts as one item at its own draw order among its siblings, its
+    /// contents together inside it, as a draw order group does (and as the
+    /// groups a moc3 export writes for it, `draworder::synthesize`). Ties
+    /// keep mesh index order, a part by its lowest mesh.
+    fn group_layers(&mut self) {
+        if self.layer_depth == 0 || !self.model.draw_groups.is_empty() {
+            return;
+        }
+        let (layers, tie) = (&self.mesh_layers, &self.part_tie);
+        let (parts, meshes) = (&self.part_draw_order, &self.mesh_draw_order);
+        // a mesh's item at each nesting level: the offscreen part it sits in
+        // there, or past its own chain the mesh itself
+        let key = |mi: u32, level: usize| match layers.get(mi as usize).and_then(|c| c.get(level)) {
+            Some(&p) => (
+                parts.get(p as usize).copied().unwrap_or(500.0).round() as i64,
+                tie.get(p as usize).copied().unwrap_or(u32::MAX),
+            ),
+            None => (meshes.get(mi as usize).copied().unwrap_or(500.0).round() as i64, mi),
+        };
+        let depth = self.layer_depth;
+        self.render_order.sort_unstable_by(|&a, &b| {
+            (0..=depth)
+                .map(|level| key(a, level).cmp(&key(b, level)))
+                .find(|o| o.is_ne())
+                .unwrap_or(core::cmp::Ordering::Equal)
+        });
+    }
+
+    fn sort_by_draw_order(&mut self) {
         if self.model.draw_groups.is_empty() {
             // draw orders are whole numbers, as in the grouped walk below:
             // a blend that lands on 500.00003 must still tie with 500
@@ -867,6 +1417,7 @@ impl Puppet {
         for c in self.dog_cursor.iter_mut() {
             *c = 0;
         }
+        self.slot_buf.fill(u32::MAX);
         for gi in 0..self.model.draw_groups.len() {
             let Some(group) = self.model.draw_groups.get(gi) else { break };
             let n = group.items.len();
@@ -922,9 +1473,17 @@ impl Puppet {
                 while di >= 0 && (di as usize) < n {
                     let Some(item) = group.items.get(di as usize) else { break };
                     if item.part {
+                        // an offscreen part's layer takes a slot of its own
+                        if self
+                            .model
+                            .parts
+                            .get(item.object as usize)
+                            .is_some_and(|p| p.offscreen.is_some())
+                        {
+                            pos = pos.saturating_add(1);
+                        }
                         if let Some(cg) = item.child_group
-                            && let Some(child_total) =
-                                self.model.draw_groups.get(cg as usize).map(|g| g.total)
+                            && let Some(&child_total) = self.group_total.get(cg as usize)
                         {
                             if let Some(c) = self.dog_cursor.get_mut(cg as usize) {
                                 *c = pos;
@@ -932,7 +1491,7 @@ impl Puppet {
                             pos = pos.saturating_add(child_total);
                         }
                     } else {
-                        if let Some(slot) = self.render_order.get_mut(pos as usize) {
+                        if let Some(slot) = self.slot_buf.get_mut(pos as usize) {
                             *slot = item.object;
                         }
                         pos = pos.saturating_add(1);
@@ -943,6 +1502,29 @@ impl Puppet {
                     }
                     di = ni;
                 }
+            }
+        }
+        // the slots in order are the render order; layer slots hold no mesh.
+        // A mesh no group placed (a malformed file) draws last
+        self.mesh_seen.fill(false);
+        let mut n = 0;
+        for &mi in self.slot_buf.iter().filter(|&&mi| mi != u32::MAX) {
+            if let Some(seen) = self.mesh_seen.get_mut(mi as usize)
+                && !*seen
+            {
+                *seen = true;
+                if let Some(slot) = self.render_order.get_mut(n) {
+                    *slot = mi;
+                }
+                n += 1;
+            }
+        }
+        for mi in 0..self.mesh_seen.len() {
+            if !self.mesh_seen.get(mi).copied().unwrap_or(true)
+                && let Some(slot) = self.render_order.get_mut(n)
+            {
+                *slot = mi as u32;
+                n += 1;
             }
         }
     }
@@ -982,6 +1564,16 @@ impl Puppet {
         let len = (m.vertex_count as usize).saturating_mul(2);
         let mut out = vec![0.0; len];
         Self::blend_positions(&corners, &m.positions, len, &mut out);
+        let mut base = vec![0.0; len];
+        Self::add_blend_shapes(
+            &self.model.parameters,
+            m,
+            &self.values,
+            &self.eps,
+            &mut corners,
+            &mut base,
+            &mut out,
+        );
         Some(out)
     }
 
@@ -1063,6 +1655,25 @@ impl Puppet {
     /// The meshes to draw, back to front. Positions are model units in the
     /// canvas frame: screen position is origin + xy * pixels_per_unit, no
     /// axis flip. UVs address the texture top-down, also unflipped.
+    /// The offscreen parts a mesh draws inside, outermost first: a renderer
+    /// opens a layer for each on the way in and lands it on the way out.
+    pub fn layers_of(&self, mesh: usize) -> &[u32] {
+        self.mesh_layers.get(mesh).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// How an offscreen part's layer lands this frame; None for a part that
+    /// is not drawn offscreen.
+    pub fn layer(&self, part: usize) -> Option<Layer<'_>> {
+        let o = self.model.parts.get(part)?.offscreen.as_ref()?;
+        Some(Layer {
+            part,
+            blend: o.blend,
+            opacity: self.layer_opacity.get(part).copied().unwrap_or(1.0),
+            masks: &o.masks,
+            inverted: o.inverted,
+        })
+    }
+
     pub fn drawables(&self) -> impl Iterator<Item = Drawable<'_>> {
         self.render_order.iter().filter_map(move |&mi| {
             let mi = mi as usize;
@@ -1078,10 +1689,12 @@ impl Puppet {
                 flags: m.flags,
                 blend: Blend::of(m.blend, m.flags),
                 opacity: self.mesh_opacity.get(mi).copied().unwrap_or(0.0),
+                color: self.mesh_color.get(mi).copied().unwrap_or_default(),
                 positions: self.mesh_pos.get(off..off.saturating_add(len)).unwrap_or(&[]),
                 uvs: &m.uvs,
                 indices: &m.indices,
                 masks: &m.masks,
+                clip_and: self.mesh_clip_and.get(mi).map(Vec::as_slice).unwrap_or_default(),
             })
         })
     }
@@ -1094,6 +1707,18 @@ impl Vec2 {
 }
 
 /// One mesh, evaluated and ready to draw.
+/// An offscreen part's layer as it lands on what is beneath it.
+#[derive(Clone, Copy, Debug)]
+pub struct Layer<'a> {
+    pub part: usize,
+    pub blend: Blend,
+    pub opacity: f32,
+    /// Meshes whose texture alpha clips the layer.
+    pub masks: &'a [u32],
+    /// Shown outside the masks instead of inside.
+    pub inverted: bool,
+}
+
 pub struct Drawable<'a> {
     pub mesh: usize,
     pub texture: u32,
@@ -1101,12 +1726,17 @@ pub struct Drawable<'a> {
     /// Colour and alpha blend, from the mesh or its flag bits.
     pub blend: Blend,
     pub opacity: f32,
+    /// Multiply and screen colour, its deformers' folded in.
+    pub color: color::Tint,
     /// xy pairs, `vertex_count * 2`.
     pub positions: &'a [f32],
     pub uvs: &'a [f32],
     pub indices: &'a [u16],
     /// Meshes whose texture alpha clips this one.
     pub masks: &'a [u32],
+    /// Inherited clips: further mask sets it must also be inside, one per
+    /// level (a highlight inside the iris inside the eye white).
+    pub clip_and: &'a [Vec<u32>],
 }
 
 /// A mesh's current geometry, visible or not; mask rendering needs this.
@@ -1120,7 +1750,7 @@ pub struct MeshGeometry<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ayatsuri_format::model::{ArtMesh, Binding, BindingAxis, Canvas, Parameter};
+    use ayatsuri_format::model::{Binding, BindingAxis, Canvas};
 
     fn one_param_model() -> Model {
         // one parameter 0..1, one mesh with two keyforms: a unit-right
@@ -1134,6 +1764,7 @@ mod tests {
                 default: 0.0,
                 repeat: false,
                 decimals: 3,
+                blend_shape: false,
             }],
             parts: vec![],
             deformers: vec![],
@@ -1160,6 +1791,11 @@ mod tests {
                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, // keyform 0
                     1.0, 0.0, 2.0, 0.0, 1.0, 1.0, // keyform 1
                 ],
+                blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             }],
             glues: vec![],
             draw_groups: vec![],
@@ -1167,6 +1803,7 @@ mod tests {
             art_paths: Vec::new(),
             art_path_colors: Vec::new(),
             art_path_page: None,
+            clip_groups: Vec::new(),
         }
     }
 
@@ -1197,6 +1834,451 @@ mod tests {
         p.set_value(0, 7.0);
         p.update();
         assert_eq!(p.value(0), 1.0);
+    }
+
+    fn smile_model() -> Model {
+        // one_param_model plus a blend shape parameter whose key 1.0 lifts
+        // vertex 0 by 3 over the base form (keyform 0, ParamX's default)
+        let mut model = one_param_model();
+        model.parameters.push(Parameter {
+            id: "ParamSmile".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: true,
+        });
+        if let Some(m) = model.art_meshes.first_mut() {
+            m.blend_shapes.push(BlendShape {
+                parameter: 1,
+                keys: vec![1.0],
+                positions: vec![0.0, 3.0, 1.0, 0.0, 0.0, 1.0],
+                limits: Vec::new(),
+                angles: Vec::new(),
+                draw_orders: Vec::new(),
+                intensities: Vec::new(),
+                multiply: Vec::new(),
+                opacities: Vec::new(),
+                origins_x: Vec::new(),
+                origins_y: Vec::new(),
+                scales: Vec::new(),
+                screen: Vec::new(),
+            });
+        }
+        model
+    }
+
+    #[test]
+    fn blend_shapes_add_on_top_of_keyforms() {
+        let mut p = Puppet::new(smile_model());
+        p.set_value(0, 0.5);
+        p.update();
+        let d: Vec<_> = p.drawables().collect();
+        assert_eq!(&d[0].positions[..2], &[0.5, 0.0]);
+
+        // only the blend shape moves: the cache must not keep last frame's
+        p.set_value(1, 0.5);
+        p.update();
+        let d: Vec<_> = p.drawables().collect();
+        assert!((d[0].positions[0] - 0.5).abs() < 1e-6);
+        assert!((d[0].positions[1] - 1.5).abs() < 1e-6);
+        // the other vertices match the base form, so nothing lands on them
+        assert!((d[0].positions[2] - 1.5).abs() < 1e-6);
+        assert_eq!(d[0].positions[3], 0.0);
+
+        // the editor's local probe sees the same points
+        let local = p.mesh_local_positions(0).unwrap_or_default();
+        assert!((local[1] - 1.5).abs() < 1e-6);
+    }
+
+    /// A blend shape parameter S (0..1) beside the normal ones.
+    fn with_shape_param(model: &mut Model) -> u32 {
+        model.parameters.push(Parameter {
+            id: "ParamS".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: true,
+        });
+        (model.parameters.len() - 1) as u32
+    }
+
+    #[test]
+    fn deformers_meshes_and_glue_take_blend_shapes() {
+        use ayatsuri_format::model::{Deformer, RotationData, WarpData};
+        // a 1x1 warp over (0,0)-(2,2) holding one mesh, its grid unbound;
+        // a rotation at the origin holding a second mesh
+        let mut model = one_param_model();
+        let s = with_shape_param(&mut model);
+        let grid = vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 2.0, 2.0];
+        let shifted: Vec<f32> =
+            grid.iter().enumerate().map(|(i, v)| if i % 2 == 0 { v + 1.0 } else { *v }).collect();
+        let shape = |f: &dyn Fn(&mut BlendShape)| {
+            let mut b = BlendShape { parameter: s, keys: vec![1.0], ..Default::default() };
+            f(&mut b);
+            b
+        };
+        model.deformers.push(Deformer {
+            id: "W".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: Default::default(),
+            kind: DeformerKind::Warp(WarpData {
+                rows: 1,
+                cols: 1,
+                quad: false,
+                opacities: vec![1.0],
+                positions: grid,
+            }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
+            blend_shapes: vec![shape(&|b| {
+                b.positions = shifted.clone();
+                b.opacities = vec![0.5];
+            })],
+        });
+        model.deformers.push(Deformer {
+            id: "R".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: Default::default(),
+            kind: DeformerKind::Rotation(RotationData {
+                base_angle: 0.0,
+                opacities: vec![1.0],
+                angles: vec![0.0],
+                origins_x: vec![0.0],
+                origins_y: vec![0.0],
+                scales: vec![1.0],
+                reflect_x: vec![false],
+                reflect_y: vec![false],
+            }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
+            blend_shapes: vec![shape(&|b| b.angles = vec![90.0])],
+        });
+        let mut in_warp = model.art_meshes[0].clone();
+        in_warp.binding = Default::default();
+        in_warp.parent_deformer = Some(0);
+        in_warp.positions = vec![0.5, 0.5, 1.0, 0.5, 0.5, 1.0];
+        in_warp.opacities = vec![1.0];
+        in_warp.draw_orders = vec![500.0];
+        in_warp.blend_shapes = vec![shape(&|b| b.opacities = vec![0.0])];
+        let mut in_rot = in_warp.clone();
+        in_rot.id = "B".into();
+        in_rot.parent_deformer = Some(1);
+        in_rot.positions = vec![0.0, -1.0, 1.0, -1.0, 0.0, -2.0];
+        in_rot.blend_shapes = Vec::new();
+        model.art_meshes = vec![in_warp, in_rot];
+
+        let mut p = Puppet::new(model.clone());
+        p.update();
+        let at = |p: &Puppet, m: usize| {
+            p.drawables().find(|d| d.mesh == m).map(|d| (d.positions.to_vec(), d.opacity))
+        };
+        let (rest, op) = at(&p, 0).unwrap();
+        assert!((rest[0] - 1.0).abs() < 1e-4 && (op - 1.0).abs() < 1e-6);
+        let rot_rest = at(&p, 1).unwrap().0;
+        // halfway: the grid moves half its shift, the mesh fades by its own
+        // shape and its warp's, the rotation turns 45 degrees
+        p.set_value(s as usize, 0.5);
+        p.update();
+        let (half, op) = at(&p, 0).unwrap();
+        assert!((half[0] - 1.5).abs() < 1e-4, "{half:?}");
+        assert!((op - 0.5 * 0.75).abs() < 1e-4, "own 1 - 0.5, warp 1 - 0.25: {op}");
+        let turned = at(&p, 1).unwrap().0;
+        let ang = |v: &[f32]| v[1].atan2(v[0]);
+        let turn = (ang(&turned) - ang(&rot_rest)).to_degrees().abs();
+        assert!((turn - 45.0).abs() < 0.5, "turned {turn} degrees: {turned:?}");
+        // a limit on the warp's shape, following X: full X stops the shape
+        let (k, w) = blendshape::Preset::Straight3.graph(0.0, 1.0);
+        model.deformers[0].blend_shapes[0].limits =
+            vec![ayatsuri_format::model::WeightLimit { parameter: 0, keys: k, weights: w }];
+        let mut p = Puppet::new(model);
+        p.set_value(s as usize, 1.0);
+        p.set_value(0, 1.0);
+        p.update();
+        assert!((at(&p, 0).unwrap().0[0] - 1.0).abs() < 1e-4, "limited to nothing");
+        // and moving only X redraws it
+        p.set_value(0, 0.0);
+        p.update();
+        assert!((at(&p, 0).unwrap().0[0] - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn deformer_blend_shapes_are_keyed_and_edited_like_meshes() {
+        use ayatsuri_format::model::{Deformer, RotationData, WarpData};
+        use edit::Target;
+        let mut model = one_param_model();
+        let s = with_shape_param(&mut model) as usize;
+        let warp = |positions| Deformer {
+            id: "W".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            binding: Default::default(),
+            kind: DeformerKind::Warp(WarpData {
+                rows: 1,
+                cols: 1,
+                quad: false,
+                opacities: vec![1.0],
+                positions,
+            }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
+            blend_shapes: Vec::new(),
+        };
+        model.deformers.push(warp(vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 2.0, 2.0]));
+        model.deformers.push(Deformer {
+            id: "R".into(),
+            kind: DeformerKind::Rotation(RotationData {
+                base_angle: 0.0,
+                opacities: vec![1.0],
+                angles: vec![0.0],
+                origins_x: vec![0.0],
+                origins_y: vec![0.0],
+                scales: vec![1.0],
+                reflect_x: vec![false],
+                reflect_y: vec![false],
+            }),
+            ..warp(Vec::new())
+        });
+        let (w, r) = (Target::Deformer(0), Target::Deformer(1));
+        assert!(edit::add_keys(&mut model, w, s, &[1.0]));
+        assert!(edit::add_keys(&mut model, r, s, &[1.0]));
+        assert_eq!(keyform::keys_on(&model, w, s), Some(vec![0.0, 1.0]));
+        // on the key, edits land in the shape keyform (one past the normal one)
+        let values = [0.0, 1.0];
+        let k = keyform::keyform_at(&model, w, &values).unwrap();
+        assert_eq!(k, 1);
+        assert_eq!(keyform::editing_blend_shape(&model, w, &values), Some(s));
+        assert!(edit::move_warp_points(&mut model, 0, Some(k), &[(0, 1.0, 0.0)]));
+        assert!(edit::set_opacity(&mut model, w, k, 0.5));
+        let kr = keyform::keyform_at(&model, r, &values).unwrap();
+        assert!(edit::rotate_rotation_at(&mut model, 1, Some(kr), 30.0));
+        // the normal keyforms are untouched
+        let DeformerKind::Warp(wd) = &model.deformers[0].kind else { unreachable!() };
+        assert_eq!(wd.positions[0], 0.0);
+        let DeformerKind::Rotation(rd) = &model.deformers[1].kind else { unreachable!() };
+        assert_eq!(rd.angles, vec![0.0]);
+        let shape = &model.deformers[1].blend_shapes[0];
+        assert_eq!(shape.angles, vec![30.0]);
+        // the parameter is in use; unbinding takes the shapes with it
+        assert!(!edit::delete_parameter(&mut model.clone(), s));
+        assert_eq!(edit::param_users(&model, s).0, 2);
+        let mut gone = model.clone();
+        assert!(edit::unbind_parameter_everywhere(&mut gone, s));
+        assert!(gone.deformers.iter().all(|d| d.blend_shapes.is_empty()));
+        // deleting the last key removes the shape
+        assert!(edit::delete_key(&mut model, w, s, 1.0));
+        assert!(model.deformers[0].blend_shapes.is_empty());
+    }
+
+    #[test]
+    fn a_keyform_colour_fills_neutral_then_clears_when_neutral_again() {
+        use edit::{ColorKind, Target};
+        let mut model = one_param_model();
+        let t = Target::ArtMesh(0);
+        assert!(edit::set_color(&mut model, t, 1, ColorKind::Screen, [0.0, 0.0, 1.0]));
+        let m = &model.art_meshes[0];
+        assert_eq!(m.screen.len(), m.opacities.len() * 3);
+        assert_eq!(edit::color_at(&model, t, 1, ColorKind::Screen), [0.0, 0.0, 1.0]);
+        assert_eq!(edit::color_at(&model, t, 0, ColorKind::Screen), [0.0; 3]);
+        assert_eq!(edit::color_at(&model, t, 0, ColorKind::Multiply), [1.0; 3]);
+        // the screen shows on the drawable at that keyform's value
+        let mut p = Puppet::new(model.clone());
+        p.set_value(0, 1.0);
+        p.update();
+        assert_eq!(p.drawables().next().map(|d| d.color.screen), Some([0.0, 0.0, 1.0]));
+        assert!(edit::set_color(&mut model, t, 1, ColorKind::Screen, [0.0; 3]));
+        assert!(model.art_meshes[0].screen.is_empty(), "all neutral again: nothing stored");
+    }
+
+    #[test]
+    fn a_weight_limit_scales_the_shape_and_its_parameter_redraws() {
+        let mut model = smile_model();
+        model.parameters.push(Parameter {
+            id: "ParamOpen".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            repeat: false,
+            decimals: 3,
+            blend_shape: true,
+        });
+        let (keys, weights) = blendshape::Preset::Straight3.graph(0.0, 1.0);
+        assert_eq!(
+            edit::add_weight_limit(&mut model, edit::Target::ArtMesh(0), 1, 2, keys, weights),
+            Ok(())
+        );
+        let mut p = Puppet::new(model);
+        p.set_value(1, 1.0);
+        p.update();
+        assert!((p.drawables().next().unwrap().positions[1] - 3.0).abs() < 1e-6);
+        // only the limiting parameter moves: half the smile is left
+        p.set_value(2, 0.5);
+        p.update();
+        assert!((p.drawables().next().unwrap().positions[1] - 1.5).abs() < 1e-6);
+        // and there the smile's keyform cannot be edited
+        let values = [0.0, 1.0, 0.5];
+        assert_eq!(
+            keyform::editing_blend_shape(p.model(), edit::Target::ArtMesh(0), &values),
+            None
+        );
+        let values = [0.0, 1.0, 0.0];
+        assert_eq!(
+            keyform::editing_blend_shape(p.model(), edit::Target::ArtMesh(0), &values),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn an_offscreen_part_keeps_its_meshes_together_and_owns_its_opacity() {
+        use ayatsuri_format::model::{Offscreen, Part};
+        // three meshes drawn a, x, b; a and b sit in an offscreen part
+        let mut model = one_param_model();
+        let mesh = model.art_meshes[0].clone();
+        model.art_meshes.clear();
+        for (id, order, part) in [("a", 100.0, Some(0)), ("x", 200.0, None), ("b", 300.0, Some(0))]
+        {
+            let mut m = mesh.clone();
+            m.id = id.into();
+            m.parent_part = part;
+            m.draw_orders = vec![order, order];
+            model.art_meshes.push(m);
+        }
+        model.parts.push(Part {
+            id: "P".into(),
+            parent_part: None,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            draw_orders: vec![500.0],
+            offscreen: Some(Offscreen {
+                masks: vec![1],
+                inverted: true,
+                blend: Default::default(),
+                opacities: vec![0.5],
+            }),
+            blend_shapes: Vec::new(),
+        });
+        // the part sorts as one item at its own order (500): after x
+        let mut p = Puppet::new(model.clone());
+        p.update();
+        let order: Vec<usize> = p.drawables().map(|d| d.mesh).collect();
+        assert_eq!(order, vec![1, 0, 2]);
+        // switched on through the editor, it takes its lowest mesh's order
+        // (100) and stays where a was: a, b, then x
+        model.parts[0].offscreen = None;
+        assert!(edit::set_offscreen(&mut model, 0, true));
+        if let Some(o) = &mut model.parts[0].offscreen {
+            (o.masks, o.inverted, o.opacities) = (vec![1], true, vec![0.5]);
+        }
+        let mut p = Puppet::new(model);
+        p.set_part_opacity(0, 0.8);
+        p.update();
+        let order: Vec<usize> = p.drawables().map(|d| d.mesh).collect();
+        assert_eq!(order, vec![0, 2, 1]);
+        assert_eq!(p.layers_of(0), &[0]);
+        assert!(p.layers_of(1).is_empty());
+        let layer = p.layer(0).unwrap_or_else(|| unreachable!());
+        assert!((layer.opacity - 0.4).abs() < 1e-6);
+        assert_eq!((layer.masks, layer.inverted), (&[1u32][..], true));
+        // the layer carries the part's opacity, its meshes don't
+        assert!(p.drawables().all(|d| (d.opacity - 1.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn the_flat_rule_matches_the_groups_an_export_writes() {
+        use ayatsuri_format::model::{Offscreen, Part};
+        // meshes a, x, b, c at 100, 200, 300, 250: a and b inside offscreen
+        // P, c inside offscreen Q nested in P
+        let mut model = one_param_model();
+        let mesh = model.art_meshes[0].clone();
+        model.art_meshes.clear();
+        for (order, part) in [(100.0, Some(0)), (200.0, None), (300.0, Some(0)), (250.0, Some(1))] {
+            let mut m = mesh.clone();
+            m.parent_part = part;
+            m.draw_orders = vec![order, order];
+            model.art_meshes.push(m);
+        }
+        let part = |parent, order| Part {
+            id: String::new(),
+            parent_part: parent,
+            visible: true,
+            enabled: true,
+            binding: Binding::default(),
+            draw_orders: vec![order],
+            offscreen: Some(Offscreen {
+                masks: vec![],
+                inverted: false,
+                blend: Default::default(),
+                opacities: vec![1.0],
+            }),
+            blend_shapes: Vec::new(),
+        };
+        let order_of = |model: &Model| {
+            let mut p = Puppet::new(model.clone());
+            p.update();
+            p.drawables().map(|d| d.mesh).collect::<Vec<_>>()
+        };
+        for (p_order, q_order) in [(150.0, 400.0), (500.0, 100.0), (100.0, 300.0)] {
+            model.parts = vec![part(None, p_order), part(Some(0), q_order)];
+            model.draw_groups.clear();
+            let flat = order_of(&model);
+            model.draw_groups = draworder::synthesize(&model);
+            assert_eq!(order_of(&model), flat, "P at {p_order}, Q at {q_order}");
+        }
+    }
+
+    #[test]
+    fn a_blend_shape_is_made_edited_and_survives_mesh_edits() {
+        use edit::Target;
+        let mut model = smile_model();
+        if let Some(m) = model.art_meshes.first_mut() {
+            m.blend_shapes.clear();
+        }
+        // Add 2 Keyforms: the base key is implied, key 1.0 starts as the base
+        assert!(edit::add_keys(&mut model, Target::ArtMesh(0), 1, &[0.0, 1.0]));
+        let m = &model.art_meshes[0];
+        assert_eq!(m.blend_shapes[0].keys, vec![1.0]);
+        assert_eq!(m.blend_shapes[0].positions, m.positions[..6].to_vec());
+        assert_eq!(keyform::keys_on(&model, Target::ArtMesh(0), 1), Some(vec![0.0, 1.0]));
+
+        // on key 1.0 the blend keyform is the one edited, wherever ParamX is
+        let k = keyform::keyform_at(&model, Target::ArtMesh(0), &[0.3, 1.0]);
+        assert_eq!(k, Some(2));
+        assert!(edit::move_vertices_in(&mut model, 0, k, &[(0, 0.0, 3.0)]));
+        assert_eq!(model.art_meshes[0].blend_shapes[0].positions[1], 3.0);
+        // at the base key the normal keyforms are, between keys nothing is
+        assert_eq!(keyform::keyform_at(&model, Target::ArtMesh(0), &[1.0, 0.0]), Some(1));
+        assert_eq!(keyform::keyform_at(&model, Target::ArtMesh(0), &[1.0, 0.5]), None);
+
+        let mut p = Puppet::new(model.clone());
+        p.set_value(1, 0.5);
+        p.update();
+        assert!((p.drawables().next().map_or(0.0, |d| d.positions[1]) - 1.5).abs() < 1e-6);
+
+        // a new vertex lands in the blend form too, the forms stay aligned
+        assert!(edit::add_vertex(&mut model, 0, 0, [1.0 / 3.0; 3]).is_some());
+        let m = &model.art_meshes[0];
+        assert_eq!(m.positions.len(), 2 * 8);
+        assert_eq!(m.blend_shapes[0].positions.len(), 8);
+        assert!((m.blend_shapes[0].positions[1] - 3.0).abs() < 1e-6);
+        assert!((m.blend_shapes[0].positions[7] - 4.0 / 3.0).abs() < 1e-6);
+
+        // the parameter is in use until the blend shape goes
+        assert!(!edit::delete_parameter(&mut model, 1));
+        assert!(edit::delete_key(&mut model, Target::ArtMesh(0), 1, 1.0));
+        assert!(model.art_meshes[0].blend_shapes.is_empty());
+        assert!(edit::delete_parameter(&mut model, 1));
     }
 
     #[test]

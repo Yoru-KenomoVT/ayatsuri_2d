@@ -298,6 +298,18 @@ impl EditorUi {
             },
         );
 
+        section(ui, crate::i18n::tr("TEXTURE ATLAS"));
+        row(
+            ui,
+            crate::i18n::tr("Repack when a mesh outgrows its art"),
+            crate::i18n::tr(
+                "On leaving Mesh Edit, lay the atlas out again at once if a mesh now reaches past its own art. Off: the atlas waits for export, which offers the layout when a mesh needs it",
+            ),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.atlas_repack_auto, "").changed();
+            },
+        );
+
         section(ui, crate::i18n::tr("TIMELAPSE"));
         let mut rec = !self.prefs.timelapse_off;
         row(
@@ -431,6 +443,8 @@ impl EditorUi {
         if save {
             self.prefs.save();
         }
+        // last on the page, out of the way of everyday settings
+        self.settings_experimental(ui);
     }
 
     fn settings_appearance(&mut self, ui: &mut Ui) {
@@ -691,6 +705,37 @@ impl EditorUi {
         );
         row(
             ui,
+            crate::i18n::tr("Overlapping polygons"),
+            crate::i18n::tr("The color View > Highlight Overlapping Polygons marks them with"),
+            |ui| {
+                if ui.small_button(crate::i18n::tr("Reset")).clicked() {
+                    self.prefs.overlap_color = None;
+                    save = true;
+                }
+                let [r, g, b, a] = self.prefs.overlap_color.unwrap_or(crate::panels::OVERLAP_COLOR);
+                let mut pick = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                if ui.color_edit_button_srgba(&mut pick).changed() {
+                    self.prefs.overlap_color = Some(pick.to_srgba_unmultiplied());
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Show parent-child hierarchy of deformers"),
+            crate::i18n::tr(
+                "At the top of the canvas right-click menu: the deformers above the mesh under the pointer, to select from",
+            ),
+            |ui| {
+                let mut on = !self.prefs.def_tree_off;
+                if ui.checkbox(&mut on, "").changed() {
+                    self.prefs.def_tree_off = !on;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
             crate::i18n::tr("Smooth movement"),
             crate::i18n::tr(
                 "Points and objects follow the pointer softly while dragged; they land where you let go",
@@ -706,6 +751,107 @@ impl EditorUi {
                 }
             },
         );
+        section(ui, crate::i18n::tr("PEN TABLET"));
+        row(
+            ui,
+            crate::i18n::tr("Pen mode"),
+            crate::i18n::tr("A pen's double tap may take longer"),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.pen_mode, "").changed();
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Pressure"),
+            crate::i18n::tr(
+                "What pen pressure changes on the Deform Brush, Brush Selection, the glue weight brush and the mesh eraser",
+            ),
+            |ui| {
+                let mut on = !self.prefs.pen_pressure_off;
+                save |= ui.checkbox(&mut on, crate::i18n::tr("On")).changed();
+                self.prefs.pen_pressure_off = !on;
+                ui.add_enabled_ui(on, |ui| {
+                    save |=
+                        ui.checkbox(&mut self.prefs.pen_size, crate::i18n::tr("Size")).changed();
+                    let mut strength = !self.prefs.pen_strength_off;
+                    save |= ui.checkbox(&mut strength, crate::i18n::tr("Strength")).changed();
+                    self.prefs.pen_strength_off = !strength;
+                });
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Pressure curve"),
+            crate::i18n::tr("Left: a light touch already goes far. Right: it takes a firm press"),
+            |ui| {
+                let mut curve = self.prefs.pen_curve();
+                let slider = egui::Slider::new(&mut curve, 0.3..=3.0).logarithmic(true);
+                if ui.add_enabled(!self.prefs.pen_pressure_off, slider).changed() {
+                    self.prefs.pen_curve = curve;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Lightest touch"),
+            crate::i18n::tr("How much the lightest press still gives, in percent"),
+            |ui| {
+                let mut min = (self.prefs.pen_min() * 100.0).round() as u32;
+                let slider = egui::Slider::new(&mut min, 1..=100).suffix("%");
+                if ui.add_enabled(!self.prefs.pen_pressure_off, slider).changed() {
+                    self.prefs.pen_min = min;
+                    save = true;
+                }
+            },
+        );
+        row(
+            ui,
+            crate::i18n::tr("Test"),
+            crate::i18n::tr(
+                "Press on the canvas with the pen: the bar shows the pressure it reports",
+            ),
+            |ui| {
+                let shaped = self.pen.pressure(&self.prefs);
+                let raw = self.pen.last;
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(160.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 3.0, theme::pal().header);
+                let fill = shaped.or(raw).unwrap_or(0.0).clamp(0.0, 1.0);
+                let mut bar = rect;
+                bar.set_width(rect.width() * fill);
+                ui.painter().rect_filled(bar, 3.0, theme::pal().accent);
+                match raw {
+                    Some(p) => ui.weak(format!("{:.0}%", p * 100.0)),
+                    None => ui.weak(crate::i18n::tr("No pressure seen yet")),
+                };
+                if shaped.is_some() {
+                    ui.ctx().request_repaint();
+                }
+            },
+        );
+        // where the pressure comes from on this system
+        let source = match ayatsuri_pen::status() {
+            ayatsuri_pen::Status::Reading(names) => {
+                crate::i18n::trf("Reading {tablets}", &[("tablets", &names.join(", "))])
+            }
+            ayatsuri_pen::Status::NoAccess(names) => crate::i18n::trf(
+                "Found {tablets}, but this user may not read it: join the input group (sudo usermod -aG input $USER) and log in again",
+                &[("tablets", &names.join(", "))],
+            ),
+            ayatsuri_pen::Status::NoTablet => {
+                crate::i18n::tr("No pen tablet found; plug one in and it is picked up").to_string()
+            }
+            ayatsuri_pen::Status::NotNeeded => {
+                crate::i18n::tr("The system passes pen pressure on").to_string()
+            }
+            ayatsuri_pen::Status::NotStarted => String::new(),
+        };
+        if !source.is_empty() {
+            row(ui, crate::i18n::tr("Tablet"), "", |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(source).weak()).wrap());
+            });
+        }
         section(ui, crate::i18n::tr("OVERLAYS"));
         ui.label(
             RichText::new(crate::i18n::tr(
@@ -811,6 +957,61 @@ impl EditorUi {
             };
             ui.label(RichText::new(r).color(theme::pal().text_faint));
         });
+        if save {
+            self.prefs.save();
+        }
+    }
+
+    /// Features still being proven, at the bottom of General: off until
+    /// turned on here, and what a model already uses keeps working either way.
+    fn settings_experimental(&mut self, ui: &mut Ui) {
+        let mut save = false;
+        section(ui, crate::i18n::tr("EXPERIMENTAL"));
+        ui.label(
+            RichText::new(crate::i18n::tr(
+                "Features still being tested. They may change, and a model that uses one may look \
+                 different in other apps until it is finished.",
+            ))
+            .size(11.0)
+            .color(theme::pal().text_faint),
+        );
+        ui.add_space(4.0);
+        row(
+            ui,
+            crate::i18n::tr("Experimental features"),
+            crate::i18n::tr("Turns every feature below on or off at once"),
+            |ui| {
+                save |= ui.checkbox(&mut self.prefs.experimental, "").changed();
+            },
+        );
+        section(ui, crate::i18n::tr("FEATURES"));
+        let master = self.prefs.experimental;
+        let features: [(&str, &str, &mut bool); 3] = [
+            (
+                "Clip groups",
+                "Name a set of masks in the Inspector so several meshes clip by it together, \
+                 and change together",
+                &mut self.prefs.experimental_clip_groups,
+            ),
+            (
+                "Inherited clipping",
+                "Shows Inherit in the Inspector's clipping: a mesh is also clipped by what its \
+                 masks are clipped by. moc3 export carries it with hidden helper masks, so it \
+                 works in every version and VTube Studio",
+                &mut self.prefs.experimental_inherit_clip,
+            ),
+            (
+                "Stroke mesh-mapping",
+                "A pen in Mesh Edit's tool details: drag along a strand of hair or a line and \
+                 get a mesh built along it, with width handles to shape it",
+                &mut self.prefs.experimental_stroke_mesh,
+            ),
+        ];
+        for (name, hint, on) in features {
+            row(ui, crate::i18n::tr(name), crate::i18n::tr(hint), |ui| {
+                save |= ui.add_enabled(master, egui::Checkbox::without_text(on)).changed();
+            });
+        }
         if save {
             self.prefs.save();
         }

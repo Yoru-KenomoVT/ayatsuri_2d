@@ -104,6 +104,9 @@ impl eframe::App for App {
         // panic hook has already logged it with a backtrace, the editor
         // rescues the work and shows what happened
         let began = std::time::Instant::now();
+        // on Wayland the pen comes through the window's own connection
+        // (once; nothing elsewhere)
+        ayatsuri_pen::attach(eframe_frame);
         let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.editor.ui(ui);
         }));
@@ -116,10 +119,16 @@ impl eframe::App for App {
             t.frame(ui.ctx(), began, began.elapsed(), eframe_frame.info().cpu_usage);
         }
     }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.editor.pen_input(ctx, raw_input);
+    }
 }
 
 impl Drop for App {
     fn drop(&mut self) {
+        // the pen reader shares the window's connection: stop it first
+        ayatsuri_pen::stop();
         // dropped while unwinding means eframe itself panicked past the
         // per-frame guard: keep the work for the relaunch
         if std::thread::panicking() {

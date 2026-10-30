@@ -26,7 +26,7 @@ mod psd_doc;
 mod sqlite;
 
 #[cfg(feature = "documents")]
-pub use layers::{AlphaBlend, Blend, ColorBlend, Document, Imported, Layer};
+pub use layers::{AlphaBlend, Blend, ColorBlend, Document, Folder, Imported, Layer};
 
 /// A paint document's layers by file extension (`psd`, `kra` or `clip`),
 /// before they are turned into a model, with how many layers were skipped

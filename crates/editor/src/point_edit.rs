@@ -209,6 +209,10 @@ pub struct PointState {
     /// The pointer is over something this tool would take (a point or the
     /// box), so canvas clicks should not reselect objects underneath.
     pub hot: bool,
+    /// The pointer is on a handle only this tool takes (a point, a scale
+    /// dot, the rotate handle) or a drag is on: unlike the box body, a
+    /// click there must not pick another object.
+    pub on_handle: bool,
     /// A brush selection's per-point weights; empty when there is none.
     /// While present, every weighted point moves by its weight and the box
     /// wraps them.
@@ -257,23 +261,27 @@ pub struct PtOut {
 pub fn mirror_moves(moves: &mut Vec<(usize, Vec2)>, pts: &[Pos2], axis_x: f32, tol: f32) {
     let given: Vec<(usize, Vec2)> = moves.clone();
     for (i, d) in given {
-        let Some(p) = pts.get(i) else { continue };
-        if (p.x - axis_x).abs() <= tol {
-            continue;
-        }
-        let want = pos2(2.0 * axis_x - p.x, p.y);
-        let partner = pts
-            .iter()
-            .enumerate()
-            .filter(|(j, q)| *j != i && q.distance(want) <= tol)
-            .min_by(|a, b| a.1.distance(want).total_cmp(&b.1.distance(want)))
-            .map(|(j, _)| j);
-        if let Some(j) = partner
+        if let Some(j) = mirror_partner(pts, i, axis_x, tol)
             && !moves.iter().any(|(k, _)| *k == j)
         {
             moves.push((j, Vec2::new(-d.x, d.y)));
         }
     }
+}
+
+/// The point across the vertical axis at `axis_x` from point `i`, within
+/// `tol`; none for a point on the axis itself.
+pub fn mirror_partner(pts: &[Pos2], i: usize, axis_x: f32, tol: f32) -> Option<usize> {
+    let p = pts.get(i)?;
+    if (p.x - axis_x).abs() <= tol {
+        return None;
+    }
+    let want = pos2(2.0 * axis_x - p.x, p.y);
+    pts.iter()
+        .enumerate()
+        .filter(|(j, q)| *j != i && q.distance(want) <= tol)
+        .min_by(|a, b| a.1.distance(want).total_cmp(&b.1.distance(want)))
+        .map(|(j, _)| j)
 }
 
 impl PointState {
@@ -291,6 +299,7 @@ impl PointState {
         self.picked.clear();
         self.drag = None;
         self.hot = false;
+        self.on_handle = false;
         self.weights.clear();
     }
 
@@ -391,6 +400,8 @@ pub fn point_tool(st: &mut PointState, inp: &PtInput, pts: &mut [Pos2], o: &PtOp
         (g, None) => g,
     };
     st.hot = hover_grab.is_some() || st.drag.is_some();
+    st.on_handle = st.drag.is_some()
+        || matches!(hover_grab, Some(Grab::Point | Grab::Scale { .. } | Grab::Rotate));
 
     if inp.drag_started
         && let Some(start) = inp.origin.or(inp.press).or(ptr)
@@ -613,78 +624,65 @@ pub fn draw_overlay(
     }
 }
 
-/// Deform path follow: a vertex near the path keeps its place relative to
-/// the nearest segment, so moving a control point drags it along like a
-/// bone. Built once when the grab starts.
+/// Deform path follow, as Cubism's: every vertex rides the smooth path,
+/// keeping its place along and across it. Around the control point being
+/// dragged it also holds its shape, turning and moving as one piece with
+/// the point: fully inside `width * hardness`, fading out by `width`.
+/// Built once when the grab starts.
 pub struct PathBind {
-    /// vertex, segment, position along it (0..1), offset in the segment's
-    /// frame (along, across), weight.
-    pub ties: Vec<(usize, usize, f32, Vec2, f32)>,
+    /// vertex and its tie to the path as it was
+    pub ties: Vec<(usize, crate::bend_path::Tie)>,
     pub path: Vec<Pos2>,
+    width: f32,
+    hardness: f32,
 }
 
-/// Tie every vertex within `width` of the path to its nearest segment. The
-/// inner `hardness` share of the width follows fully; the rest fades out.
 pub fn bind_path(path: &[Pos2], verts: &[Pos2], width: f32, hardness: f32) -> PathBind {
-    let mut ties = Vec::new();
-    let inner = width * hardness.clamp(0.0, 1.0);
-    for (vi, &v) in verts.iter().enumerate() {
-        let mut best: Option<(usize, f32, f32)> = None;
-        if path.len() == 1
-            && let Some(&p0) = path.first()
-        {
-            best = Some((0, 0.0, p0.distance(v)));
-        }
-        for j in 0..path.len().saturating_sub(1) {
-            let (Some(&a), Some(&b)) = (path.get(j), path.get(j + 1)) else { continue };
-            let seg = b - a;
-            let t = ((v - a).dot(seg) / seg.length_sq().max(1e-6)).clamp(0.0, 1.0);
-            let dist = v.distance(a + seg * t);
-            if best.is_none_or(|(_, _, bd)| dist < bd) {
-                best = Some((j, t, dist));
-            }
-        }
-        let Some((j, t, dist)) = best else { continue };
-        if dist > width {
-            continue;
-        }
+    let ctrl: Vec<Vec2> = path.iter().map(|p| p.to_vec2()).collect();
+    let curve = crate::bend_path::Curve::new(&ctrl);
+    let ties = verts.iter().enumerate().map(|(vi, v)| (vi, curve.tie(v.to_vec2()))).collect();
+    PathBind { ties, path: path.to_vec(), width, hardness: hardness.clamp(0.0, 1.0) }
+}
+
+/// Where each vertex goes now that control point `grabbed` has moved and
+/// the path is `moved`. Returns (vertex, screen offset) pairs.
+pub fn follow_path(
+    bind: &PathBind,
+    verts: &[Pos2],
+    moved: &[Pos2],
+    grabbed: usize,
+) -> Vec<(usize, Vec2)> {
+    use crate::bend_path::Curve;
+    let rest = Curve::new(&bind.path.iter().map(|p| p.to_vec2()).collect::<Vec<_>>());
+    let now = Curve::new(&moved.iter().map(|p| p.to_vec2()).collect::<Vec<_>>());
+    let (Some(&c0), Some(&c1)) = (bind.path.get(grabbed), moved.get(grabbed)) else {
+        return Vec::new();
+    };
+    // the piece around the grabbed point turns as the path does there
+    let (t0, t1) = (rest.tangent_at(grabbed), now.tangent_at(grabbed));
+    let (cos, sin) = (t0.dot(t1), t0.x * t1.y - t0.y * t1.x);
+    let inner = bind.width * bind.hardness;
+    let mut out = Vec::with_capacity(bind.ties.len());
+    for (vi, tie) in &bind.ties {
+        let Some(&v) = verts.get(*vi) else { continue };
+        let follow = now.place(tie).to_pos2();
+        let dist = v.distance(c0);
         let w = if dist <= inner {
             1.0
+        } else if dist >= bind.width {
+            0.0
         } else {
-            let x = 1.0 - (dist - inner) / (width - inner).max(1e-3);
+            let x = 1.0 - (dist - inner) / (bind.width - inner).max(1e-3);
             x * x * (3.0 - 2.0 * x)
         };
-        let (a, b) = (path.get(j).copied().unwrap_or(v), path.get(j + 1).copied());
-        let (u, n) = frame(a, b);
-        let at = b.map_or(a, |b| a + (b - a) * t);
-        let off = v - at;
-        ties.push((vi, j, t, vec2(off.dot(u), off.dot(n)), w));
-    }
-    PathBind { ties, path: path.to_vec() }
-}
-
-fn frame(a: Pos2, b: Option<Pos2>) -> (Vec2, Vec2) {
-    let u = b.map(|b| b - a).filter(|d| d.length() > 1e-4).map_or(Vec2::X, |d| d.normalized());
-    (u, vec2(-u.y, u.x))
-}
-
-/// Where each tied vertex goes now that the path is `moved` (same length).
-/// Returns (vertex, screen offset) pairs.
-pub fn follow_path(bind: &PathBind, verts: &[Pos2], moved: &[Pos2]) -> Vec<(usize, Vec2)> {
-    let mut out = Vec::with_capacity(bind.ties.len());
-    for &(vi, j, t, off, w) in &bind.ties {
-        let Some(&v) = verts.get(vi) else { continue };
-        let (Some(&a), Some(&a0)) = (moved.get(j), bind.path.get(j)) else { continue };
-        let (b, b0) = (moved.get(j + 1).copied(), bind.path.get(j + 1).copied());
-        let (u, n) = frame(a, b);
-        // segments stretch: the along offset scales with the segment
-        let stretch = match (b, b0) {
-            (Some(b), Some(b0)) => (b - a).length() / (b0 - a0).length().max(1e-3),
-            _ => 1.0,
+        let target = if w > 0.0 {
+            let d = v - c0;
+            let held = c1 + vec2(d.x * cos - d.y * sin, d.x * sin + d.y * cos);
+            follow + (held - follow) * w
+        } else {
+            follow
         };
-        let at = b.map_or(a, |b| a + (b - a) * t);
-        let target = at + u * (off.x * stretch) + n * off.y;
-        out.push((vi, (target - v) * w));
+        out.push((*vi, target - v));
     }
     out
 }
@@ -750,6 +748,32 @@ mod tests {
     }
 
     #[test]
+    fn only_handles_keep_a_click_from_picking_another_mesh() {
+        let mut st = PointState::default();
+        let mut pts = [pos2(0.0, 0.0), pos2(100.0, 0.0), pos2(100.0, 100.0), pos2(0.0, 100.0)];
+        let opts = PtOpts { whole_box: true, marquee: true, lasso: false, reach: 8.0, pad: 0.0 };
+        let hover = |p: Pos2| PtInput {
+            ptr: Some(p),
+            press: None,
+            origin: None,
+            shift: false,
+            alt: false,
+            any_down: false,
+            drag_started: false,
+            drag_stopped: false,
+            clicked: false,
+            dt: 0.016,
+        };
+        // inside the box, away from points and dots: the box would take a
+        // drag, but a click there picks whatever mesh is under it
+        point_tool(&mut st, &hover(pos2(40.0, 60.0)), &mut pts, &opts);
+        assert!(st.hot && !st.on_handle);
+        // on a point
+        point_tool(&mut st, &hover(pos2(1.0, 1.0)), &mut pts, &opts);
+        assert!(st.hot && st.on_handle);
+    }
+
+    #[test]
     fn brush_weights_scale_the_move() {
         let mut st = PointState { weights: vec![1.0, 0.5, 0.0], ..PointState::default() };
         let mut pts = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(20.0, 0.0)];
@@ -775,6 +799,17 @@ mod tests {
         assert!((by(0) - 10.0).abs() < 1e-4);
         assert!((by(1) - 5.0).abs() < 1e-4);
         assert_eq!(by(2), 0.0);
+    }
+
+    #[test]
+    fn mirror_partner_is_the_point_across_the_axis() {
+        let pts = [pos2(40.0, 10.0), pos2(60.0, 10.5), pos2(50.0, 30.0), pos2(70.0, 10.0)];
+        // 40 mirrors to 60 across x = 50, within the tolerance
+        assert_eq!(mirror_partner(&pts, 0, 50.0, 2.0), Some(1));
+        assert_eq!(mirror_partner(&pts, 1, 50.0, 2.0), Some(0));
+        // a point on the axis has no partner, nor one with nothing across
+        assert_eq!(mirror_partner(&pts, 2, 50.0, 2.0), None);
+        assert_eq!(mirror_partner(&pts, 3, 50.0, 2.0), None);
     }
 
     #[test]
@@ -898,13 +933,30 @@ mod tests {
     #[test]
     fn path_carries_vertices() {
         let path = [pos2(0.0, 0.0), pos2(10.0, 0.0)];
-        let verts = [pos2(10.0, 2.0), pos2(100.0, 100.0)];
+        let verts = [pos2(10.0, 2.0), pos2(30.0, 3.0)];
         let bind = bind_path(&path, &verts, 5.0, 1.0);
-        assert_eq!(bind.ties.len(), 1);
-        // swing the end point down: the vertex near it swings with it
+        // every vertex rides the path, not only those inside the width
+        assert_eq!(bind.ties.len(), 2);
+        // swing the end point down: the vertex by it turns with it, and the
+        // one past the end carries on along the new direction
         let moved = [pos2(0.0, 0.0), pos2(0.0, 10.0)];
-        let off = follow_path(&bind, &verts, &moved);
-        let (vi, d) = off[0];
-        assert!((verts[vi] + d).distance(pos2(-2.0, 10.0)) < 1e-3);
+        let off = follow_path(&bind, &verts, &moved, 1);
+        let to = |i: usize| off.iter().find(|o| o.0 == i).map(|o| verts[i] + o.1).unwrap();
+        assert!(to(0).distance(pos2(-2.0, 10.0)) < 1e-2, "{:?}", to(0));
+        assert!(to(1).distance(pos2(-3.0, 30.0)) < 1e-2, "{:?}", to(1));
+    }
+
+    #[test]
+    fn a_wide_path_holds_the_shape_by_the_dragged_point() {
+        let path = [pos2(0.0, 0.0), pos2(50.0, 0.0), pos2(100.0, 0.0)];
+        // two vertices across the path by the middle point
+        let verts = [pos2(50.0, -5.0), pos2(50.0, 5.0)];
+        let moved = [pos2(0.0, 0.0), pos2(50.0, 30.0), pos2(100.0, 0.0)];
+        let gap = |w: f32| {
+            let off = follow_path(&bind_path(&path, &verts, w, 1.0), &verts, &moved, 1);
+            (verts[0] + off[0].1).distance(verts[1] + off[1].1)
+        };
+        // wide: the piece moves whole, 10 apart as it was
+        assert!((gap(40.0) - 10.0).abs() < 1e-3);
     }
 }

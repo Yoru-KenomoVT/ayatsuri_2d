@@ -27,22 +27,42 @@ pub struct AtlasWin {
     pan: Vec2,
     /// Dragging empty space or with the middle button moves the view.
     panning: bool,
+    /// A page size typed in rather than picked from the list.
+    custom: bool,
+    /// What Verify placement last said, when it found nothing.
+    verified: bool,
 }
 
 /// The sizes the page picker offers.
-const SIZES: [u32; 5] = [1024, 2048, 4096, 6144, 8192];
+const SIZES: [u32; 6] = [1024, 2048, 4096, 6144, 8192, 16384];
 
 impl AtlasWin {
     pub fn new(s: &crate::session::Session) -> Self {
         let sizes = s.page_sizes();
-        let pieces = crate::atlas::pieces(s.puppet.model(), &sizes);
+        let pieces = crate::atlas::pieces(s.puppet.model(), &sizes, &s.art_boxes());
         // the current state as the starting layout: pages at their largest size
-        let page_size =
-            sizes.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(4096).clamp(256, 16384);
-        let swatch = s.puppet.model().art_path_page.map(|p| p as usize);
-        let page_count = sizes.len().saturating_sub(usize::from(swatch.is_some())).max(1);
-        let places = pieces.iter().map(|p| Place { page: p.page, x: p.x, y: p.y }).collect();
-        AtlasWin {
+        let page_size = pieces
+            .iter()
+            .filter_map(|p| sizes.get(p.page))
+            .map(|&(w, h)| w.max(h))
+            .max()
+            .unwrap_or(4096)
+            .clamp(crate::atlas::MIN_PAGE, crate::atlas::MAX_PAGE);
+        // the pages meshes draw from now, in order (the old ones stay for
+        // undo, and the ArtPath swatch is not part of the atlas)
+        let mut used: Vec<usize> = pieces.iter().map(|p| p.page).collect();
+        used.sort_unstable();
+        used.dedup();
+        let page_count = used.len().max(1);
+        let places = pieces
+            .iter()
+            .map(|p| Place {
+                page: used.iter().position(|&u| u == p.page).unwrap_or(0),
+                x: p.x,
+                y: p.y,
+            })
+            .collect();
+        let mut win = AtlasWin {
             pieces,
             layout: Layout { page_size, pages: page_count, places },
             sizes,
@@ -54,7 +74,18 @@ impl AtlasWin {
             zoom: 1.0,
             pan: Vec2::ZERO,
             panning: false,
+            custom: false,
+            verified: false,
+        };
+        // the layers still on textures of their own: start from a packed
+        // layout to make the atlas from, at the size most models use
+        if s.atlas_pending() {
+            win.layout.page_size = crate::gpu_view::max_texture_side()
+                .unwrap_or(4096)
+                .clamp(crate::atlas::MIN_PAGE, 4096);
+            win.auto();
         }
+        win
     }
 
     fn auto(&mut self) {
@@ -90,25 +121,91 @@ impl EditorUi {
                 // controls across the top, wrapping when the window is narrow
                 ui.horizontal_wrapped(|ui| {
                     ui.label(tr("Page size"));
+                    // the GPU's own limit, or a safe guess before it has drawn
+                    let gpu_max = crate::gpu_view::max_texture_side()
+                        .unwrap_or(16384)
+                        .clamp(crate::atlas::MIN_PAGE, crate::atlas::MAX_PAGE);
+                    let custom = !SIZES.contains(&win.layout.page_size) || win.custom;
                     egui::ComboBox::from_id_salt("atlas-size")
-                        .selected_text(format!("{} px", win.layout.page_size))
+                        .selected_text(if custom {
+                            tr("Custom").to_string()
+                        } else {
+                            format!("{} px", win.layout.page_size)
+                        })
                         .show_ui(ui, |ui| {
-                            for sz in SIZES {
+                            for sz in SIZES.into_iter().filter(|&sz| sz <= gpu_max) {
                                 if ui
                                     .selectable_label(
-                                        win.layout.page_size == sz,
+                                        !custom && win.layout.page_size == sz,
                                         format!("{sz} px"),
                                     )
                                     .clicked()
                                 {
+                                    win.custom = false;
                                     win.layout.page_size = sz;
                                     win.auto();
                                 }
                             }
+                            if ui.selectable_label(custom, tr("Custom…")).clicked() {
+                                win.custom = true;
+                            }
                         });
+                    if custom {
+                        let r = ui.add(
+                            egui::DragValue::new(&mut win.layout.page_size)
+                                .range(crate::atlas::MIN_PAGE..=gpu_max)
+                                .speed(16.0)
+                                .suffix(" px"),
+                        );
+                        if r.drag_stopped() || r.lost_focus() {
+                            win.auto();
+                        }
+                    }
+                    let side = win.layout.page_size;
+                    if side > 8192 {
+                        // RGBA, plus about a third more for the mip levels
+                        let mb = (side as u64 * side as u64 * 4) * 4 / 3 / (1024 * 1024);
+                        ui.colored_label(
+                            crate::theme::pal().rotation_red,
+                            crate::i18n::trf(
+                                "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px",
+                                &[("mb", &mb)],
+                            ),
+                        );
+                    }
                     ui.checkbox(&mut win.fit, tr("Scale pieces that don't fit"));
                     if ui.button(tr("Auto layout")).clicked() {
                         win.auto();
+                    }
+                    // Cubism's Verify placement: select the next piece that
+                    // overlaps another or reaches past the page
+                    if ui
+                        .button(tr("Verify placement"))
+                        .on_hover_text(tr(
+                            "Select the pieces that overlap another or reach past the page, one at a time",
+                        ))
+                        .clicked()
+                    {
+                        let problems = crate::atlas::verify(&win.pieces, &win.layout);
+                        let mut flagged: Vec<usize> = problems
+                            .overlapping
+                            .iter()
+                            .chain(&problems.overhanging)
+                            .copied()
+                            .collect();
+                        flagged.sort_unstable();
+                        flagged.dedup();
+                        let next = match win.selected {
+                            Some(cur) => flagged.iter().find(|&&i| i > cur).or(flagged.first()),
+                            None => flagged.first(),
+                        };
+                        win.verified = next.is_none();
+                        if let Some(&i) = next {
+                            win.selected = Some(i);
+                            if let Some(pl) = win.layout.places.get(i) {
+                                win.page = pl.page;
+                            }
+                        }
                     }
                     ui.separator();
                     if ui.button(tr("New page")).clicked() {
@@ -351,6 +448,7 @@ impl EditorUi {
                     }
                     let pointer = resp.interact_pointer_pos();
                     let mut hit: Option<usize> = None;
+                    let problems = crate::atlas::verify(&win.pieces, &win.layout);
                     for (i, (p, pl)) in win.pieces.iter().zip(&win.layout.places).enumerate() {
                         if pl.page != win.page {
                             continue;
@@ -376,13 +474,17 @@ impl EditorUi {
                             painter.image(t.id(), r, uv, Color32::WHITE);
                         }
                         let on = win.selected == Some(i);
+                        // a piece overlapping another, or past the page, in red
+                        let bad = problems.contains(i);
                         painter.rect_stroke(
                             r,
                             0.0,
                             Stroke::new(
-                                if on { 2.0 } else { 1.0 },
+                                if on || bad { 2.0 } else { 1.0 },
                                 if on {
                                     crate::theme::pal().accent
+                                } else if bad {
+                                    crate::theme::pal().rotation_red
                                 } else {
                                     Color32::from_white_alpha(90)
                                 },
@@ -433,6 +535,27 @@ impl EditorUi {
                     ui.vertical(|ui| {
                         ui.set_min_width(200.0);
                         ui.strong(tr("Pieces on this page"));
+                        let found = crate::atlas::verify(&win.pieces, &win.layout);
+                        if !found.is_empty() {
+                            win.verified = false;
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} {}",
+                                    egui_phosphor::regular::WARNING,
+                                    trf(
+                                        "{overlap} overlapping, {over} past the page: they would show other pixels on the model",
+                                        &[
+                                            ("overlap", &found.overlapping.len()),
+                                            ("over", &found.overhanging.len()),
+                                        ],
+                                    )
+                                ))
+                                .size(11.0)
+                                .color(crate::theme::pal().rotation_red),
+                            );
+                        } else if win.verified {
+                            ui.weak(tr("Every piece has its own space"));
+                        }
                         egui::ScrollArea::vertical().max_height(side - 24.0).show(ui, |ui| {
                             for (i, (p, pl)) in
                                 win.pieces.iter().zip(&win.layout.places).enumerate()
@@ -441,10 +564,15 @@ impl EditorUi {
                                     continue;
                                 }
                                 let name = s.mesh_name(p.mesh);
+                                let mark = if found.contains(i) {
+                                    format!("{} ", egui_phosphor::regular::WARNING)
+                                } else {
+                                    String::new()
+                                };
                                 if ui
                                     .selectable_label(
                                         win.selected == Some(i),
-                                        format!("{name}  {}×{}", p.w, p.h),
+                                        format!("{mark}{name}  {}×{}", p.w, p.h),
                                     )
                                     .clicked()
                                 {

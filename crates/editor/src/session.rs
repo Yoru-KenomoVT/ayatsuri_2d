@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ayatsuri_core::Puppet;
-use ayatsuri_format::model::{Binding, flags};
+use ayatsuri_format::model::{ArtMesh, Binding, flags};
 use ayatsuri_format::{AomPayload, Meta, Model};
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use log::{debug, info, warn};
@@ -87,7 +87,7 @@ struct Cdi3Entry {
 }
 
 /// What is selected across the palettes.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sel {
     Part(usize),
     Deformer(usize),
@@ -189,12 +189,21 @@ pub struct Session {
     /// Every key value each parameter has anywhere in the model, sorted,
     /// for the key dots on the sliders.
     pub param_keys: Vec<Vec<f32>>,
+    /// Per parameter: the keyframes extended interpolation adds between
+    /// keys (its Score), as the moc3 export writes them; drawn on the slider.
+    pub param_curve_points: Vec<Vec<f32>>,
     /// Per-part and per-mesh show/hide from the Parts palette eye column.
     pub part_shown: Vec<bool>,
     pub mesh_shown: Vec<bool>,
+    /// Cubism's Solo: the meshes (by id, so moves and undo can't confuse
+    /// them) drawn in front at full strength and alone pickable; the rest
+    /// sit behind the inactive color. None when Solo is off.
+    pub solo: Option<std::collections::HashSet<String>>,
     /// Name, visibility and reset shape of meshes an edit removed, by id,
     /// so undoing the delete gets them back.
     departed: HashMap<String, MeshExtras>,
+    /// The same for parts: name and visibility.
+    parts_departed: HashMap<String, (String, bool)>,
     pub deformer_shown: Vec<bool>,
     /// Label colors on parameter rows, palette only, saved in .aom.
     pub param_colors: Vec<Option<[u8; 3]>>,
@@ -215,6 +224,15 @@ pub struct Session {
     pub timelapse_on: bool,
     /// The project's own Record timelapse setting; None follows Settings.
     pub timelapse_pref: Option<bool>,
+    /// Per texture page: it holds one paint layer, as it came in. Meshes
+    /// drawing from such pages wait for the texture atlas, which is made
+    /// when the rigger asks (Texture Atlas, or the export's button), as in
+    /// Cubism. Pages are never dropped while the model is open (undo may
+    /// point back at any of them); saving and exporting leave out the ones
+    /// no mesh uses.
+    pub layer_pages: Vec<bool>,
+    /// Reset shapes by (mesh ID, page), see `stash_art`.
+    art_by_page: HashMap<(String, u32), (Vec<f32>, Vec<u16>)>,
     pub bezier_nets: HashMap<(usize, usize), ayatsuri_core::bezier::Lattice>,
     undo: Vec<Model>,
     redo: Vec<Model>,
@@ -256,12 +274,24 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
     let (from, to) = (add.canvas, base.canvas);
     let part_offset = base.parts.len() as u32;
     let mesh_offset = base.art_meshes.len() as u32;
+    let group_offset = base.clip_groups.len() as u32;
+    for mut g in add.clip_groups {
+        for m in &mut g.masks {
+            *m += mesh_offset;
+        }
+        base.clip_groups.push(g);
+    }
 
     let mut part_ids: std::collections::HashSet<String> =
         base.parts.iter().map(|p| p.id.clone()).collect();
     for mut part in add.parts {
         part.id = free_id("Part", &mut part_ids);
         part.parent_part = part.parent_part.map(|p| p + part_offset);
+        if let Some(o) = &mut part.offscreen {
+            for m in &mut o.masks {
+                *m += mesh_offset;
+            }
+        }
         base.parts.push(part);
     }
     let mut mesh_ids: std::collections::HashSet<String> =
@@ -274,6 +304,7 @@ pub(crate) fn merge_paint(base: &mut Model, add: Model, tex_offset: u32) {
         for m in &mut mesh.masks {
             *m += mesh_offset;
         }
+        mesh.clip_group = mesh.clip_group.map(|g| g + group_offset);
         if !fresh {
             for [x, y] in mesh.positions.as_chunks_mut::<2>().0 {
                 let px = *x * from.pixels_per_unit + from.origin_x;
@@ -352,6 +383,17 @@ fn trim_history_to(steps: &mut Vec<Model>, max_steps: usize, budget: usize) {
 /// colour page while paths exist), renumbering the meshes' pages. Returns
 /// the pages kept and how many went.
 pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, usize) {
+    let flags = vec![false; pngs.len()];
+    let (kept, _, dropped) = prune_pages_with(model, pngs, flags);
+    (kept, dropped)
+}
+
+/// `prune_pages`, carrying a flag per page along with the pages kept.
+pub(crate) fn prune_pages_with<T>(
+    model: &mut Model,
+    pngs: Vec<Vec<u8>>,
+    flags: Vec<T>,
+) -> (Vec<Vec<u8>>, Vec<T>, usize) {
     let mut used = vec![false; pngs.len()];
     for m in &model.art_meshes {
         if let Some(u) = used.get_mut(m.texture as usize) {
@@ -365,7 +407,7 @@ pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>
     }
     let dropped = used.iter().filter(|u| !**u).count();
     if dropped == 0 || used.iter().all(|u| !*u) {
-        return (pngs, 0);
+        return (pngs, flags, 0);
     }
     let mut new_index = vec![0u32; used.len()];
     let mut next = 0u32;
@@ -382,8 +424,9 @@ pub(crate) fn prune_pages(model: &mut Model, pngs: Vec<Vec<u8>>) -> (Vec<Vec<u8>
         .art_path_page
         .filter(|p| used.get(*p as usize).copied().unwrap_or(false))
         .and_then(|p| new_index.get(p as usize).copied());
+    let flags = flags.into_iter().zip(&used).filter(|(_, u)| **u).map(|(f, _)| f).collect();
     let kept = pngs.into_iter().zip(used).filter(|(_, u)| *u).map(|(p, _)| p).collect();
-    (kept, dropped)
+    (kept, flags, dropped)
 }
 
 /// What a re-import did: meshes given new art, layers with no mesh to go
@@ -520,6 +563,7 @@ fn reimport_into(
         width: doc.width,
         height: doc.height,
         layers,
+        folders: doc.folders.clone(),
     })
     .map_err(|e| e.to_string())?;
     let nc = built.model.canvas;
@@ -564,18 +608,51 @@ fn reimport_into(
         }
         report.updated += 1;
     }
+    // the old art's pages stay while the model is open, for undo
     let mut pngs = s.texture_pngs.clone();
     pngs.extend(built.textures);
-    let (pngs, dropped) = prune_pages(&mut next, pngs);
-    if dropped > 0 {
-        info!("re-import: {dropped} page(s) of old art no longer used, removed");
-    }
+    let (old, all) = (s.texture_pngs.len(), pngs.len());
+    s.stash_art();
     s.swap_in(ctx, next, pngs)?;
     s.original_meshes = originals;
+    s.stash_art();
+    // the new layers each came in on a page of their own
+    s.layer_pages.truncate(old);
+    s.layer_pages.resize(all, true);
     Ok(report)
 }
 
 impl Session {
+    /// Each mesh's own art on its page, (u0, v0, u1, v1): the box its
+    /// points had when its art came in (import, or the last atlas layout).
+    /// A mesh grown past it shows nothing there, not a neighbour's art.
+    /// ArtPath meshes, drawn from the swatch page, are not clipped.
+    pub fn art_boxes(&self) -> Vec<[f32; 4]> {
+        let model = self.puppet.model();
+        model
+            .art_meshes
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                if model.art_path_page.is_some_and(|p| p == m.texture) {
+                    return ayatsuri_render::NO_CLIP;
+                }
+                let uvs = self.original_meshes.get(i).map_or(&m.uvs, |o| &o.0);
+                let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+                for uv in uvs.as_chunks::<2>().0 {
+                    b = [b[0].min(uv[0]), b[1].min(uv[1]), b[2].max(uv[0]), b[3].max(uv[1])];
+                }
+                // a hair over, so the art's own edge pixels stay whole
+                let e = 1e-4;
+                if b[0] <= b[2] && b[1] <= b[3] {
+                    [b[0] - e, b[1] - e, b[2] + e, b[3] + e]
+                } else {
+                    ayatsuri_render::NO_CLIP
+                }
+            })
+            .collect()
+    }
+
     /// A mesh's display name: its layer name, else its ID.
     pub fn mesh_name(&self, i: usize) -> String {
         self.mesh_names
@@ -617,7 +694,8 @@ impl Session {
     }
 
     /// A paint document becomes a brand new model: groups as parts, layers
-    /// as quad meshes, pixels packed into atlases. It starts unsaved, since
+    /// as quad meshes, each layer's pixels on a texture of its own until
+    /// the texture atlas is made. It starts unsaved, since
     /// the .psd, .kra or .clip is the source and not a model file.
     fn load_paint(ctx: &Context, path: &Path, ext: &str) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -649,6 +727,7 @@ impl Session {
         let mesh_names = imported.mesh_names.clone();
         let mut s =
             Self::from_parts(ctx, name, imported.model, imported.textures, tex_names, None, path)?;
+        s.layer_pages = vec![true; s.texture_pngs.len()];
         if part_names.len() == s.part_names.len() {
             s.part_names = part_names;
         }
@@ -826,9 +905,15 @@ impl Session {
         self.timelapse = old.timelapse;
         self.timelapse_on = old.timelapse_on;
         self.timelapse_pref = old.timelapse_pref;
+        // pages that came in with the new set hold atlas pages unless the
+        // caller says otherwise
+        self.layer_pages = old.layer_pages;
+        self.layer_pages.resize(self.texture_pngs.len(), false);
+        self.art_by_page = old.art_by_page;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
+        self.parts_departed = old.parts_departed;
         self.undo = old.undo;
         self.push_undo(before);
         self.redo.clear();
@@ -912,9 +997,15 @@ impl Session {
         self.timelapse = old.timelapse;
         self.timelapse_on = old.timelapse_on;
         self.timelapse_pref = old.timelapse_pref;
+        // the document's layers each came in on a page of their own
+        self.layer_pages = old.layer_pages;
+        self.layer_pages.resize(old.texture_pngs.len(), false);
+        self.layer_pages.resize(self.texture_pngs.len(), true);
+        self.art_by_page = old.art_by_page;
         self.bezier_nets = old.bezier_nets;
         self.deformer_shown = old.deformer_shown;
         self.departed = old.departed;
+        self.parts_departed = old.parts_departed;
         self.undo = old.undo;
         self.push_undo(before);
         self.redo.clear();
@@ -948,9 +1039,16 @@ impl Session {
         };
         let pngs: Vec<Vec<u8>> = payload.textures.into_iter().map(|b| b.into_vec()).collect();
         let mut model = payload.model;
-        let (pngs, dropped) = prune_pages(&mut model, pngs);
+        let mut layer_pages = vec![false; pngs.len()];
+        for &i in &payload.meta.layer_pages {
+            if let Some(l) = layer_pages.get_mut(i as usize) {
+                *l = true;
+            }
+        }
+        let (pngs, layer_pages, dropped) = prune_pages_with(&mut model, pngs, layer_pages);
         let tex_names = (0..pngs.len()).map(|i| format!("texture_{i:02}")).collect();
         let mut s = Self::from_parts(ctx, name, model, pngs, tex_names, None, path)?;
+        s.layer_pages = layer_pages;
         if dropped > 0 {
             info!("left out {dropped} texture page(s) no mesh uses; saving makes it stick");
             s.modified = true;
@@ -1264,6 +1362,7 @@ impl Session {
         }
 
         let param_keys = keys_of(&model);
+        let param_curve_points = curve_points_of(&model);
 
         let mut combined: Vec<(usize, usize)> = cdi
             .combined
@@ -1322,6 +1421,7 @@ impl Session {
 
             groups,
             param_keys,
+            param_curve_points,
             author: String::new(),
             modified: false,
             preview_tex,
@@ -1338,7 +1438,9 @@ impl Session {
             current_anim: None,
             part_shown: vec![true; n_parts],
             mesh_shown: vec![true; n_meshes],
+            solo: None,
             departed: HashMap::new(),
+            parts_departed: HashMap::new(),
             deformer_shown: vec![true; n_defs],
             param_colors: vec![None; n_params],
             key_colors: Vec::new(),
@@ -1349,6 +1451,8 @@ impl Session {
             timelapse: crate::timelapse::Recorder::default(),
             timelapse_on: true,
             timelapse_pref: None,
+            layer_pages: Vec::new(),
+            art_by_page: HashMap::new(),
             bezier_nets: HashMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1445,9 +1549,18 @@ impl Session {
             .collect()
     }
 
+    /// Some mesh still draws from a page holding one paint layer: the
+    /// texture atlas has not been made since that art came in.
+    pub fn atlas_pending(&self) -> bool {
+        let m = self.puppet.model();
+        m.art_meshes
+            .iter()
+            .any(|am| self.layer_pages.get(am.texture as usize).copied().unwrap_or(false))
+    }
+
     /// Lay the texture atlas out again: the pieces go where the layout says,
-    /// on fresh pages of its size, every mesh's uvs follow, and the ArtPath
-    /// swatch page (if any) rides along unchanged at the end. One undo step.
+    /// on fresh pages of its size after the old ones, and every mesh's uvs
+    /// follow. One undo step.
     pub fn apply_atlas(
         &mut self,
         ctx: &Context,
@@ -1465,7 +1578,10 @@ impl Session {
                 .map(|img| img.into_rgba8())
         };
         let pages = crate::atlas::build_pages(pieces, layout, decode);
-        let mut out: Vec<Vec<u8>> = Vec::with_capacity(pages.len() + 1);
+        // the new pages go after the old ones, which stay for undo (and the
+        // ArtPath swatch page keeps its place)
+        let first_new = self.texture_pngs.len() as u32;
+        let mut out = self.texture_pngs.clone();
         for img in pages {
             let mut png = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -1473,24 +1589,8 @@ impl Session {
             out.push(png);
         }
         let mut next = self.puppet.model().clone();
-        crate::atlas::apply_to_model(&mut next, pieces, layout, &sizes, 0);
-        // the swatch page keeps its pixels; it moves to the end
-        if let Some(sw) = next.art_path_page {
-            let new_index = out.len() as u32;
-            if let Some(png) = self.texture_pngs.get(sw as usize) {
-                out.push(png.clone());
-            }
-            for m in &mut next.art_meshes {
-                if m.texture == sw {
-                    m.texture = new_index;
-                }
-            }
-            next.art_path_page = Some(new_index);
-        }
-        let (out, dropped) = prune_pages(&mut next, out);
-        if dropped > 0 {
-            info!("atlas: {dropped} empty page(s) removed");
-        }
+        crate::atlas::apply_to_model(&mut next, pieces, layout, &sizes, first_new);
+        self.stash_art();
         self.swap_in(ctx, next, out)?;
         // the atlas is a fresh set of quads underneath every mesh
         self.original_meshes = self
@@ -1500,6 +1600,7 @@ impl Session {
             .iter()
             .map(|m| (m.uvs.clone(), m.indices.clone()))
             .collect();
+        self.stash_art();
         info!("atlas: {} page(s) of {} px", layout.pages, layout.page_size);
         Ok(())
     }
@@ -1605,11 +1706,41 @@ impl Session {
         }
     }
 
+    /// Note each mesh's reset shape (and so its art box) under the page it
+    /// draws from, so an undo that moves meshes back to older pages (atlas,
+    /// re-import) finds the art boxes those pages had.
+    fn stash_art(&mut self) {
+        let m = self.puppet.model();
+        for (am, orig) in m.art_meshes.iter().zip(&self.original_meshes) {
+            self.art_by_page.insert((am.id.clone(), am.texture), orig.clone());
+        }
+    }
+
+    /// After undo or redo: each mesh now on another page than `was` takes
+    /// the reset shape noted for that page.
+    fn unstash_art(&mut self, was: &HashMap<String, u32>) {
+        let m = self.puppet.model();
+        for (am, orig) in m.art_meshes.iter().zip(self.original_meshes.iter_mut()) {
+            if was.get(&am.id) == Some(&am.texture) {
+                continue;
+            }
+            if let Some(o) = self.art_by_page.get(&(am.id.clone(), am.texture)) {
+                *orig = o.clone();
+            }
+        }
+    }
+
+    fn pages_now(&self) -> HashMap<String, u32> {
+        self.puppet.model().art_meshes.iter().map(|m| (m.id.clone(), m.texture)).collect()
+    }
+
     pub fn undo(&mut self) {
         if let Some(previous) = self.undo.pop() {
             self.redo.push(self.puppet.model().clone());
             trim_history(&mut self.redo);
+            let was = self.pages_now();
             self.rebuild_from(previous);
+            self.unstash_art(&was);
             self.modified = true;
             log::info!("undo ({} left)", self.undo.len());
         }
@@ -1619,7 +1750,9 @@ impl Session {
         if let Some(next) = self.redo.pop() {
             self.undo.push(self.puppet.model().clone());
             trim_history(&mut self.undo);
+            let was = self.pages_now();
             self.rebuild_from(next);
+            self.unstash_art(&was);
             self.modified = true;
             log::info!("redo");
         }
@@ -1630,8 +1763,15 @@ impl Session {
     /// over by mesh id so each stays with its own mesh.
     fn follow_mesh_ids(&mut self, next: &Model) {
         let now = &self.puppet.model().art_meshes;
+        // the same meshes in the same places, at most some given new IDs
+        // (Rename, and its undo): each stays where it is
+        let renamed = |a: &ArtMesh, b: &ArtMesh| {
+            a.id == b.id
+                || (!now.iter().any(|m| m.id == b.id)
+                    && !next.art_meshes.iter().any(|m| m.id == a.id))
+        };
         if now.len() == next.art_meshes.len()
-            && now.iter().zip(&next.art_meshes).all(|(a, b)| a.id == b.id)
+            && now.iter().zip(&next.art_meshes).all(|(a, b)| renamed(a, b))
         {
             return;
         }
@@ -1665,12 +1805,40 @@ impl Session {
         self.original_meshes = originals;
     }
 
+    /// Part names and eyes beside an edited model, as `follow_mesh_ids` does
+    /// for meshes: by index while the parts stay, else by id. Gives each
+    /// part the index it had before, when it had one.
+    fn follow_part_ids(&mut self, next: &Model) -> Vec<Option<usize>> {
+        let now = &self.puppet.model().parts;
+        if now.len() == next.parts.len() {
+            return (0..now.len()).map(Some).collect();
+        }
+        for (i, p) in now.iter().enumerate() {
+            let extras = (
+                self.part_names.get(i).cloned().unwrap_or_default(),
+                self.part_shown.get(i).copied().unwrap_or(true),
+            );
+            self.parts_departed.insert(p.id.clone(), extras);
+        }
+        let from = next.parts.iter().map(|p| now.iter().position(|q| q.id == p.id)).collect();
+        let (names, shown) = next
+            .parts
+            .iter()
+            .map(|p| self.parts_departed.remove(&p.id).unwrap_or((String::new(), true)))
+            .unzip();
+        self.part_names = names;
+        self.part_shown = shown;
+        from
+    }
+
     /// Swap in an edited model, carrying over values and visibility.
     fn rebuild_from(&mut self, model: Model) {
         let values: Vec<f32> =
             (0..self.puppet.model().parameters.len()).map(|i| self.puppet.value(i)).collect();
         self.param_keys = keys_of(&model);
+        self.param_curve_points = curve_points_of(&model);
         self.follow_mesh_ids(&model);
+        let part_from = self.follow_part_ids(&model);
         self.deformer_names =
             follow_deformer_names(&self.deformer_names, self.puppet.model(), &model);
         let mut puppet = Puppet::new(model);
@@ -1679,7 +1847,11 @@ impl Session {
         }
         // keep each part's view opacity (the eye sets 0 or 1, the slider anything)
         for (i, shown) in self.part_shown.iter().enumerate() {
-            let now = self.puppet.part_user_opacity(i);
+            let now = part_from
+                .get(i)
+                .copied()
+                .flatten()
+                .map_or(1.0, |o| self.puppet.part_user_opacity(o));
             puppet.set_part_opacity(i, if *shown { now.max(0.01) } else { 0.0 });
         }
         for (i, shown) in self.mesh_shown.iter().enumerate() {
@@ -1777,19 +1949,25 @@ impl Session {
 
     /// The model, textures, animations and display info as one payload.
     fn payload(&self) -> AomPayload {
+        // pages no mesh draws from any more stay behind
+        let mut model = self.puppet.model().clone();
+        let (pngs, layer_pages, _) =
+            prune_pages_with(&mut model, self.texture_pngs.clone(), self.layer_pages.clone());
         AomPayload {
             meta: Meta {
                 name: self.name.clone(),
                 author: self.author.clone(),
                 tool: format!("Ayatsuri2D {}", env!("CARGO_PKG_VERSION")),
                 timelapse: self.timelapse_pref,
+                layer_pages: layer_pages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| **l)
+                    .map(|(i, _)| i as u32)
+                    .collect(),
             },
-            model: self.puppet.model().clone(),
-            textures: self
-                .texture_pngs
-                .iter()
-                .map(|b| serde_bytes::ByteBuf::from(b.clone()))
-                .collect(),
+            model,
+            textures: pngs.into_iter().map(serde_bytes::ByteBuf::from).collect(),
             animations: self.animations.clone(),
             compositions: self.compositions.clone(),
             playlists: self.playlists.clone(),
@@ -2152,11 +2330,59 @@ fn keys_of(model: &Model) -> Vec<Vec<f32>> {
             add(&g.binding);
         }
     }
+    // blend shape keys, with the base key at 0.0 among them, on every kind
+    // of object that takes them
+    let shapes = model
+        .art_meshes
+        .iter()
+        .flat_map(|m| &m.blend_shapes)
+        .chain(model.deformers.iter().flat_map(|d| &d.blend_shapes))
+        .chain(model.parts.iter().flat_map(|p| &p.blend_shapes))
+        .chain(model.glues.iter().flat_map(|g| &g.blend_shapes));
+    for shape in shapes {
+        if let Some(keys) = param_keys.get_mut(shape.parameter as usize) {
+            keys.extend_from_slice(&shape.keys);
+            keys.push(0.0);
+        }
+    }
     for keys in &mut param_keys {
         keys.sort_by(f32::total_cmp);
         keys.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
     }
     param_keys
+}
+
+/// Per parameter, the values extended interpolation puts keyframes at
+/// between an object's keys: `points` of them, evenly spaced, between each
+/// pair, on an axis with three keys or more, where `bake_curves` puts them.
+fn curve_points_of(model: &Model) -> Vec<Vec<f32>> {
+    let mut out: Vec<Vec<f32>> = vec![Vec::new(); model.parameters.len()];
+    let bindings = model
+        .parts
+        .iter()
+        .map(|p| &p.binding)
+        .chain(model.deformers.iter().map(|d| &d.binding))
+        .chain(model.art_meshes.iter().map(|m| &m.binding));
+    for b in bindings {
+        for c in &b.curves {
+            let Some(axis) = b.axes.iter().find(|a| a.parameter == c.parameter) else { continue };
+            let Some(list) = out.get_mut(c.parameter as usize) else { continue };
+            if axis.keys.len() < 3 {
+                continue;
+            }
+            let steps = usize::from(c.kind.points().clamp(1, 20)) + 1;
+            for pair in axis.keys.windows(2) {
+                if let [lo, hi] = *pair {
+                    list.extend((1..steps).map(|i| lo + (hi - lo) * i as f32 / steps as f32));
+                }
+            }
+        }
+    }
+    for list in &mut out {
+        list.sort_by(f32::total_cmp);
+        list.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
+    }
+    out
 }
 
 // models load on a worker thread so the window keeps answering; that
@@ -2201,6 +2427,66 @@ mod send_check {
 }
 
 #[cfg(test)]
+mod slider_key_tests {
+    use super::*;
+    use ayatsuri_format::model::{AxisCurve, BindingAxis, BlendShape, CurveKind, Parameter, Part};
+
+    fn param(id: &str, blend: bool) -> Parameter {
+        Parameter {
+            id: id.into(),
+            min: if blend { 0.0 } else { -30.0 },
+            max: if blend { 1.0 } else { 30.0 },
+            default: 0.0,
+            repeat: false,
+            decimals: 1,
+            blend_shape: blend,
+        }
+    }
+
+    /// A part keyed on Angle X at -30, 0 and 30 with an SNS curve of two
+    /// points, and a blend shape on Smile with a key at 1.
+    fn model() -> Model {
+        let mut m = Model::new();
+        m.parameters = vec![param("ParamAngleX", false), param("Smile", true)];
+        let mut binding = Binding::default();
+        binding.axes.push(BindingAxis { parameter: 0, keys: vec![-30.0, 0.0, 30.0] });
+        binding.curves.push(AxisCurve { parameter: 0, kind: CurveKind::Sns { points: 2 } });
+        m.parts.push(Part {
+            id: "Head".into(),
+            parent_part: None,
+            visible: true,
+            enabled: true,
+            binding,
+            draw_orders: vec![500.0; 3],
+            offscreen: None,
+            blend_shapes: vec![BlendShape { parameter: 1, keys: vec![1.0], ..Default::default() }],
+        });
+        m
+    }
+
+    #[test]
+    fn a_blend_shape_off_a_mesh_shows_its_keys() {
+        let keys = keys_of(&model());
+        assert_eq!(keys[0], vec![-30.0, 0.0, 30.0]);
+        // the base key at 0 and the shape's own key, though the shape is on a part
+        assert_eq!(keys[1], vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn extended_interpolation_marks_its_keyframes_between_keys() {
+        let points = curve_points_of(&model());
+        assert_eq!(points[0], vec![-20.0, -10.0, 10.0, 20.0]);
+        assert!(points[1].is_empty());
+        // with two keys there is no curve, so nothing between them
+        let mut m = model();
+        if let Some(a) = m.parts[0].binding.axes.first_mut() {
+            a.keys = vec![-30.0, 30.0];
+        }
+        assert!(curve_points_of(&m)[0].is_empty());
+    }
+}
+
+#[cfg(test)]
 mod crash_tests {
     use super::*;
 
@@ -2217,6 +2503,7 @@ mod crash_tests {
                 default: 0.0,
                 repeat: false,
                 decimals: 3,
+                blend_shape: false,
             });
             true
         });
@@ -2273,6 +2560,7 @@ mod import_paint_tests {
                     blend: ayatsuri_import::Blend::NORMAL,
                 })
                 .collect(),
+            folders: Vec::new(),
         }
     }
 
@@ -2305,6 +2593,9 @@ mod import_paint_tests {
                 opacities: vec![1.0],
                 positions: grid,
             }),
+            multiply: Vec::new(),
+            screen: Vec::new(),
+            blend_shapes: Vec::new(),
         });
         let ctx = Context::default();
         let mut s = Session::create(&ctx, "t".into(), String::new(), m).unwrap();
@@ -2335,6 +2626,30 @@ mod import_paint_tests {
         // one undo step takes it back out
         s.undo();
         assert!(s.puppet.model().art_meshes.is_empty());
+    }
+
+    #[test]
+    fn a_new_mesh_id_keeps_its_name_visibility_and_undo_too() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        let art = ayatsuri_import::from_layers(&doc(
+            200,
+            100,
+            &[("Hair", "Head", 60, 20, 16), ("Bang", "Head", 5, 5, 8)],
+        ))
+        .unwrap();
+        s.add_imported(&ctx, art, Path::new("a.psd")).unwrap();
+        s.mesh_shown[1] = false;
+        assert!(s.edit(|m| ayatsuri_core::edit::rename_art_mesh(m, 1, "ArtMeshBang")));
+        assert_eq!(s.puppet.model().art_meshes[1].id, "ArtMeshBang");
+        assert_eq!((s.mesh_name(0), s.mesh_name(1)), ("Hair".into(), "Bang".into()));
+        assert_eq!(s.mesh_shown, vec![true, false]);
+        s.undo();
+        assert_eq!(s.puppet.model().art_meshes[1].id, "ArtMesh1");
+        assert_eq!(s.mesh_name(1), "Bang");
+        assert_eq!(s.mesh_shown, vec![true, false]);
+        // taken IDs are refused
+        assert!(!s.edit(|m| ayatsuri_core::edit::rename_art_mesh(m, 1, "ArtMesh0")));
     }
 
     #[test]
@@ -2395,6 +2710,11 @@ mod import_paint_tests {
                 opacities: vec![1.0],
                 draw_orders: vec![500.0],
                 positions: vec![0.0; 25_000],
+                blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             });
             m
         };
@@ -2429,6 +2749,11 @@ mod import_paint_tests {
             opacities: vec![1.0],
             draw_orders: vec![500.0],
             positions: vec![],
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
         };
         let mut m = Model::new();
         m.art_meshes = vec![mesh("A", 0), mesh("B", 2), mesh("C", 2)];
@@ -2438,6 +2763,56 @@ mod import_paint_tests {
         assert_eq!(kept, vec![vec![0u8], vec![2u8]]);
         let pages: Vec<u32> = m.art_meshes.iter().map(|a| a.texture).collect();
         assert_eq!(pages, vec![0, 1, 1]);
+    }
+
+    #[test]
+    fn layers_wait_on_their_own_pages_until_the_atlas_is_made() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        let art = ayatsuri_import::from_layers(&doc(
+            400,
+            300,
+            &[("Body", "Torso", 10, 10, 30), ("Arm", "Torso", 100, 40, 20)],
+        ))
+        .unwrap();
+        s.add_imported(&ctx, art, Path::new("a.psd")).unwrap();
+        assert_eq!(s.texture_pngs.len(), 2, "one page per layer");
+        assert!(s.atlas_pending());
+        let loose = s.puppet.model().clone();
+        let loose_art = s.art_boxes();
+
+        let sizes = s.page_sizes();
+        let pieces = crate::atlas::pieces(s.puppet.model(), &sizes, &s.art_boxes());
+        let layout = crate::atlas::auto_layout(&pieces, 256, false).unwrap();
+        s.apply_atlas(&ctx, &pieces, &layout).unwrap();
+        assert!(!s.atlas_pending());
+        let packed = s.puppet.model().clone();
+        assert!(packed.art_meshes.iter().all(|m| m.texture == 2), "both on the new page");
+
+        // undo finds the layer pages and their art boxes again
+        s.undo();
+        assert!(s.atlas_pending());
+        for (m, l) in s.puppet.model().art_meshes.iter().zip(&loose.art_meshes) {
+            assert_eq!((m.texture, &m.uvs), (l.texture, &l.uvs));
+        }
+        assert_eq!(s.art_boxes(), loose_art);
+        s.redo();
+        assert!(!s.atlas_pending());
+
+        // saving leaves the old pages out; the layer pages stay marked
+        let dir = std::env::temp_dir().join(format!("ayatsuri-atlas-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.aom");
+        s.save_aom(&path).unwrap();
+        let back = Session::load_aom(&ctx, &path).unwrap();
+        assert_eq!(back.texture_pngs.len(), 1);
+        assert!(!back.atlas_pending());
+        s.undo();
+        s.save_aom(&path).unwrap();
+        let back = Session::load_aom(&ctx, &path).unwrap();
+        assert_eq!(back.texture_pngs.len(), 2);
+        assert!(back.atlas_pending(), "still waiting for the atlas after reopening");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2572,6 +2947,9 @@ mod deformer_name_tests {
                     opacities: vec![1.0],
                     positions: vec![0.0; 8],
                 }),
+                multiply: Vec::new(),
+                screen: Vec::new(),
+                blend_shapes: Vec::new(),
             })
             .collect();
         m

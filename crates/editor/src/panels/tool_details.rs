@@ -202,9 +202,29 @@ impl EditorUi {
         if let Some((di, cols, rows)) = warp {
             let cur = self.bezier_div.get(&di).copied().unwrap_or((2.min(cols), 2.min(rows)));
             let (mut bw, mut bh) = cur;
+            // the conversion division is typed, then applied: stepping it
+            // down and back up live would lose the shape on the way
+            let (mut cw, mut ch) = match self.td_division {
+                Some((d, c, r)) if d == di => (c, r),
+                _ => (cols as u32, rows as u32),
+            };
+            let mut apply = false;
             grid(ui, "td-warp", |ui| {
                 row(ui, crate::i18n::tr("Conversion division"), |ui| {
-                    ui.label(format!("{cols} × {rows}"));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut cw).range(1..=64));
+                        ui.label("×");
+                        ui.add(egui::DragValue::new(&mut ch).range(1..=64));
+                        apply = ui
+                            .add_enabled(
+                                (cw, ch) != (cols as u32, rows as u32),
+                                egui::Button::new(crate::i18n::tr("Apply")),
+                            )
+                            .on_hover_text(crate::i18n::tr(
+                                "Change its columns and rows; its shape is kept",
+                            ))
+                            .clicked();
+                    });
                 });
                 row(ui, crate::i18n::tr("Bezier division"), |ui| {
                     ui.add_enabled_ui(self.edit_level == 2, |ui| {
@@ -216,7 +236,20 @@ impl EditorUi {
                     });
                 });
             });
-            if (bw, bh) != cur {
+            if (cw, ch) != (cols as u32, rows as u32) {
+                ui.weak(if cw < cols as u32 || ch < rows as u32 {
+                    crate::i18n::tr(
+                        "Fewer divisions keep the shape only at the points that remain.",
+                    )
+                } else {
+                    crate::i18n::tr("Apply to change the division; the shape is kept.")
+                });
+            }
+            self.td_division = ((cw, ch) != (cols as u32, rows as u32)).then_some((di, cw, ch));
+            if apply {
+                self.td_division = None;
+                self.apply_warp_division(di, cw, ch);
+            } else if (bw, bh) != cur {
                 self.bezier_div.insert(di, (bw, bh));
             }
         }
@@ -329,6 +362,19 @@ impl EditorUi {
             {
                 self.mesh_mode = 5;
             }
+            if self.prefs.stroke_mesh_on()
+                && icon(
+                    ui,
+                    self.mesh_mode == 7,
+                    true,
+                    ph::PEN_NIB,
+                    "Stroke mesh-mapping (experimental): drag to build a mesh along a stroke. \
+                     Shift+E confirms, Delete cancels",
+                )
+                .clicked()
+            {
+                self.mesh_mode = 7;
+            }
         });
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -362,6 +408,11 @@ impl EditorUi {
             {
                 *action = Some(MeshAction::Reset);
             }
+            if icon(ui, false, true, ph::BROOM, "Clear mesh: remove every point to draw your own")
+                .clicked()
+            {
+                *action = Some(MeshAction::Clear);
+            }
         });
         grid(ui, "td-mesh", |ui| {
             row(ui, crate::i18n::tr("Auto connect"), |ui| {
@@ -375,7 +426,8 @@ impl EditorUi {
                         crate::i18n::tr("Protect edge exterior"),
                     )
                     .on_hover_text(crate::i18n::tr(
-                        "No faces over empty texture, so hair and lashes don't get bridged",
+                        "Keep faces inside the outline you drew with lines; with none drawn, no \
+                         faces over empty texture, so hair and lashes don't get bridged",
                     ));
                 });
             });
@@ -391,10 +443,16 @@ impl EditorUi {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (mode, glyph, tip) in [
-                (1u8, ph::PLUS_CIRCLE, "Add vertex"),
+                (
+                    1u8,
+                    ph::PLUS_CIRCLE,
+                    "Add vertex: each click draws a line from the last point. Ctrl+click adds \
+                     a single point, Shift+click keeps the line's start, Esc ends the line, \
+                     Alt+click deletes a point or line",
+                ),
                 (2, ph::MINUS_CIRCLE, "Delete vertex"),
                 (3, ph::LINE_SEGMENT, "Connect two points with an edge"),
-                (4, ph::SCISSORS, "Delete edge (line)"),
+                (4, ph::SCISSORS, "Delete edge (line): click a line, or its two points"),
             ] {
                 if icon(ui, self.mesh_mode == mode, true, glyph, tip).clicked() {
                     self.mesh_mode = mode;
@@ -415,6 +473,50 @@ impl EditorUi {
                 )),
                 None => ui.weak(crate::i18n::tr("Nothing copied yet.")),
             };
+        }
+        if self.mesh_mode == 7 {
+            section(
+                ui,
+                crate::i18n::tr("Mesh-mapping settings"),
+                "Drag to draw a stroke; drag away from it to redraw it, Shift+drag for another. Click the line to add a control point, Alt+click one to delete it. Ctrl+click the line adds a width handle (orange), Ctrl+drag one sets the width, Ctrl+Alt+click deletes it. Shift+E confirms, Delete cancels.",
+            );
+            let o = &mut self.tool_opts.stroke;
+            grid(ui, "td-stroke", |ui| {
+                row(ui, crate::i18n::tr("Mesh width"), |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut o.settings.width).range(0.5..=500.0).speed(0.2),
+                    );
+                });
+                row(ui, crate::i18n::tr("Repeated density"), |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut o.settings.density).range(2.0..=500.0).speed(0.2),
+                    );
+                });
+                row(ui, crate::i18n::tr("Number of vertices in mesh width"), |ui| {
+                    egui::ComboBox::from_id_salt("td-stroke-across")
+                        .width(48.0)
+                        .selected_text(o.settings.across.to_string())
+                        .show_ui(ui, |ui| {
+                            for n in 1..=3u8 {
+                                ui.selectable_value(&mut o.settings.across, n, n.to_string());
+                            }
+                        });
+                });
+                row(ui, crate::i18n::tr("Invert mesh"), |ui| {
+                    ui.add_enabled(
+                        o.settings.across == 2,
+                        egui::Checkbox::without_text(&mut o.settings.invert),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        "With 2 vertices across: flip the diagonal of the first and last cells",
+                    ));
+                });
+                row(ui, crate::i18n::tr("Maintain current mesh"), |ui| {
+                    ui.checkbox(&mut o.maintain, "").on_hover_text(crate::i18n::tr(
+                        "Off: the points and edges the stroke mesh covers are removed",
+                    ));
+                });
+            });
         }
         if self.mesh_mode == 5 {
             section(ui, crate::i18n::tr("Eraser"), "");
@@ -441,52 +543,137 @@ impl EditorUi {
         section(
             ui,
             crate::i18n::tr("Automatic mesh"),
-            "Traces the outline of the layer's pixels and fills it with points. Outline spacing sets the gap between outline points, inner spacing the gap inside, margin how far the outline stands off the art.",
+            "Cubism's Automatic Mesh generator, applied to every selected mesh. Intervals are the gaps between points on the outline and inside. Margins are pixels on a 1024px texture and grow with larger textures: outside is how far the outline stands off the art, inside how far in the inner ring runs.",
         );
-        let o = &mut self.tool_opts;
-        // the preset the numbers below (and the layout) match, or Custom
-        // once one is edited
-        let now = Self::AUTO_PRESETS.iter().position(|&(_, a, b, c, st)| {
-            (a, b, c, st) == (o.auto_spacing, o.auto_inner, o.auto_margin, o.auto_style)
-        });
-        let shown = now.map_or_else(
-            || crate::i18n::tr("Custom").to_string(),
-            |i| {
-                Self::AUTO_PRESETS
-                    .get(i)
-                    .map_or_else(String::new, |p| crate::i18n::tr(p.0).to_string())
+        let builtin = crate::prefs::MeshPreset::built_in();
+        let mut presets = builtin.clone();
+        presets.extend(self.prefs.mesh_presets.iter().cloned());
+        let o = &mut self.tool_opts.auto;
+        // the preset these numbers came from, by name, and whether they
+        // still match it
+        let named = presets.iter().position(|p| p.name == o.name);
+        let edited = named.and_then(|i| presets.get(i)).is_none_or(|p| !p.same_values(o));
+        let label = |i: usize, p: &crate::prefs::MeshPreset| {
+            let tr = crate::i18n::tr;
+            match p.name.as_str() {
+                _ if i >= builtin.len() => p.name.clone(),
+                "Standard" => tr("Standard").to_string(),
+                "Deformation (small)" => tr("Deformation (small)").to_string(),
+                "Deformation (large)" => tr("Deformation (large)").to_string(),
+                "Face standard" => tr("Face standard").to_string(),
+                other => other.to_string(),
+            }
+        };
+        let mut shown = named
+            .and_then(|i| presets.get(i).map(|p| label(i, p)))
+            .unwrap_or_else(|| crate::i18n::tr("Custom").to_string());
+        if named.is_some() && edited {
+            shown = crate::i18n::trf("{name} (changed)", &[("name", &shown)]);
+        }
+        let user = named.filter(|&i| i >= builtin.len()).map(|i| i - builtin.len());
+        let (mut add, mut delete, mut overwrite) = (false, false, false);
+        egui::ComboBox::from_id_salt("td-auto-preset").width(180.0).selected_text(shown).show_ui(
+            ui,
+            |ui| {
+                for (i, p) in presets.iter().enumerate() {
+                    if ui.selectable_label(named == Some(i) && !edited, label(i, p)).clicked() {
+                        *o = p.clone();
+                    }
+                }
             },
         );
-        grid(ui, "td-auto-preset", |ui| {
-            row(ui, crate::i18n::tr("Preset"), |ui| {
-                egui::ComboBox::from_id_salt("td-auto-preset").selected_text(shown).show_ui(
-                    ui,
-                    |ui| {
-                        for (i, &(name, outline, inner, margin, style)) in
-                            Self::AUTO_PRESETS.iter().enumerate()
-                        {
-                            if ui.selectable_label(now == Some(i), crate::i18n::tr(name)).clicked()
-                            {
-                                o.auto_preset = i;
-                                o.auto_spacing = outline;
-                                o.auto_inner = inner;
-                                o.auto_margin = margin;
-                                o.auto_style = style;
-                            }
-                        }
-                    },
-                );
-            });
+        ui.horizontal(|ui| {
+            add = ui.button(crate::i18n::tr("Add…")).clicked();
+            delete = ui
+                .add_enabled(user.is_some(), egui::Button::new(crate::i18n::tr("Delete")))
+                .on_hover_text(crate::i18n::tr("Remove this preset (the built-in ones stay)"))
+                .clicked();
+            overwrite = ui
+                .add_enabled(
+                    user.is_some() && edited,
+                    egui::Button::new(crate::i18n::tr("Overwrite")),
+                )
+                .on_hover_text(crate::i18n::tr("Save the values below into this preset"))
+                .clicked();
         });
+        if add {
+            self.tool_opts.auto_new_name = Some(String::new());
+        }
+        let mut save = false;
+        let o = &mut self.tool_opts.auto;
+        if let Some(name) = &mut self.tool_opts.auto_new_name {
+            let mut done = None;
+            ui.horizontal(|ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(name)
+                        .hint_text(crate::i18n::tr("Preset name"))
+                        .desired_width(120.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button(crate::i18n::tr("OK")).clicked() || enter {
+                    done = Some(true);
+                }
+                if ui.button(crate::i18n::tr("Cancel")).clicked() {
+                    done = Some(false);
+                }
+            });
+            if let Some(ok) = done {
+                let name = name.trim().to_string();
+                if ok && !name.is_empty() && !builtin.iter().any(|p| p.name == name) {
+                    o.name = name.clone();
+                    let preset = o.clone();
+                    match self.prefs.mesh_presets.iter_mut().find(|p| p.name == name) {
+                        Some(p) => *p = preset,
+                        None => self.prefs.mesh_presets.push(preset),
+                    }
+                    save = true;
+                }
+                self.tool_opts.auto_new_name = None;
+            }
+        }
+        let o = &mut self.tool_opts.auto;
+        if let Some(u) = user {
+            if delete && u < self.prefs.mesh_presets.len() {
+                self.prefs.mesh_presets.remove(u);
+                save = true;
+            } else if overwrite && let Some(p) = self.prefs.mesh_presets.get_mut(u) {
+                *p = o.clone();
+                save = true;
+            }
+        }
+        if save {
+            self.prefs.save();
+        }
         grid(ui, "td-auto", |ui| {
-            row(ui, crate::i18n::tr("Outline spacing"), |ui| {
-                ui.add(egui::DragValue::new(&mut o.auto_spacing).range(4.0..=256.0).suffix(" px"));
+            let px = |ui: &mut Ui, v: &mut f32, max: f32| {
+                ui.add(egui::DragValue::new(v).range(0.0..=max).speed(0.5));
+            };
+            row(ui, crate::i18n::tr("Vertices interval (outside)"), |ui| {
+                px(ui, &mut o.interval_outside, 512.0)
             });
-            row(ui, crate::i18n::tr("Inner spacing"), |ui| {
-                ui.add(egui::DragValue::new(&mut o.auto_inner).range(4.0..=512.0).suffix(" px"));
+            row(ui, crate::i18n::tr("Vertices interval (inside)"), |ui| {
+                px(ui, &mut o.interval_inside, 512.0)
             });
-            row(ui, crate::i18n::tr("Margin"), |ui| {
-                ui.add(egui::DragValue::new(&mut o.auto_margin).range(0.0..=128.0).suffix(" px"));
+            row(ui, crate::i18n::tr("Boundary margin (outside)"), |ui| {
+                px(ui, &mut o.margin_outside, 256.0)
+            });
+            row(ui, crate::i18n::tr("Boundary margin (inside)"), |ui| {
+                px(ui, &mut o.margin_inside, 256.0)
+            });
+            row(ui, crate::i18n::tr("Minimum boundary margin"), |ui| {
+                px(ui, &mut o.min_margin, 256.0)
+            });
+            row(ui, crate::i18n::tr("Minimum number of points on a boundary"), |ui| {
+                ui.add(egui::DragValue::new(&mut o.min_points).range(3..=64));
+            });
+            row(ui, crate::i18n::tr("Alpha value determined as transparent"), |ui| {
+                ui.add(egui::DragValue::new(&mut o.alpha).range(0..=254));
+            });
+            row(ui, crate::i18n::tr("Face layout"), |ui| {
+                ui.checkbox(&mut o.face, "").on_hover_text(crate::i18n::tr(
+                    "A second ring hugging the drawn edge instead of Cubism's inner ring, as \
+                     riggers build faces",
+                ));
             });
         });
     }

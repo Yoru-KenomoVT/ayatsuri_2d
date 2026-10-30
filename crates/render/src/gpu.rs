@@ -14,7 +14,17 @@ pub struct Vertex {
     pub pos: [f32; 2],
     pub uv: [f32; 2],
     pub color: [f32; 4],
+    /// The texture box this vertex's mesh may show (u0, v0, u1, v1):
+    /// samples outside it are transparent, so a mesh grown past its own
+    /// art never shows a neighbour's. [`NO_CLIP`] shows everything.
+    pub clip: [f32; 4],
+    /// Screen colour rgb (the multiply rides in `color`); a fourth float
+    /// for alignment. Black leaves the art as it is.
+    pub screen: [f32; 4],
 }
+
+/// A clip box that clips nothing.
+pub const NO_CLIP: [f32; 4] = [-1.0e6, -1.0e6, 1.0e6, 1.0e6];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BlendMode {
@@ -47,10 +57,24 @@ pub enum Cmd {
     /// each shape pairs an index range with the mask mesh's texture.
     MaskSet {
         shapes: Vec<(Range<u32>, u32)>,
+        /// Further sets the mask must also be inside (inherited clips): the
+        /// buffer ends as the product of every set's coverage.
+        and: Vec<Vec<(Range<u32>, u32)>>,
     },
     Draw {
         indices: Range<u32>,
         texture: u32,
+        blend: BlendMode,
+        mask: MaskMode,
+    },
+    /// Draw into a fresh, clear layer until the matching `EndLayer`
+    /// (Cubism 5.3's offscreen parts). Layers nest.
+    BeginLayer,
+    /// Land the layer on what is beneath it: `indices` is a quad over the
+    /// whole target whose uvs cover the layer, its vertex alpha the
+    /// layer's opacity; it blends and masks like any draw.
+    EndLayer {
+        indices: Range<u32>,
         blend: BlendMode,
         mask: MaskMode,
     },
@@ -106,15 +130,33 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) clip: vec4<f32>,
+    @location(3) screen: vec4<f32>,
 }
 
 @vertex
-fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>) -> VsOut {
+fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) clip: vec4<f32>, @location(4) screen: vec4<f32>) -> VsOut {
     var o: VsOut;
     o.pos = vec4<f32>(pos.x * uni.to_ndc.x + uni.to_ndc.z, pos.y * uni.to_ndc.y + uni.to_ndc.w, 0.0, 1.0);
     o.uv = uv;
     o.color = color;
+    o.clip = clip;
+    o.screen = screen;
     return o;
+}
+
+// the texel (premultiplied) through the multiply colour, then the screen
+// colour, as Cubism draws them; alpha is left to the caller
+fn tinted(t: vec4<f32>, in: VsOut) -> vec4<f32> {
+    let m = t.rgb * in.color.rgb;
+    return vec4<f32>(m + in.screen.rgb * t.a - m * in.screen.rgb, t.a);
+}
+
+// the texture, transparent outside the mesh's own art box
+fn art(in: VsOut) -> vec4<f32> {
+    let t = textureSample(tex, smp, in.uv);
+    let inside = all(in.uv >= in.clip.xy) && all(in.uv <= in.clip.zw);
+    return select(vec4<f32>(0.0), t, inside);
 }
 
 @group(1) @binding(0) var tex: texture_2d<f32>;
@@ -124,13 +166,13 @@ fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2)
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, smp, in.uv);
+    let t = art(in);
     let muv = in.pos.xy / uni.view.xy;
     let m = textureSample(mask_tex, smp, muv).r;
     var f = 1.0;
     if mask_mode.x == 1u { f = m; }
     if mask_mode.x == 2u { f = 1.0 - m; }
-    return vec4<f32>(t.rgb * in.color.rgb, t.a) * in.color.a * f;
+    return tinted(t, in) * in.color.a * f;
 }
 
 @group(3) @binding(0) var backdrop: texture_2d<f32>;
@@ -205,13 +247,13 @@ fn unpremul(c: vec4<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_advanced(in: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, smp, in.uv);
+    let t = art(in);
     let muv = in.pos.xy / uni.view.xy;
     let m = textureSample(mask_tex, smp, muv).r;
     var f = 1.0;
     if mask_mode.x == 1u { f = m; }
     if mask_mode.x == 2u { f = 1.0 - m; }
-    let src = vec4<f32>(t.rgb * in.color.rgb, t.a) * in.color.a * f;
+    let src = tinted(t, in) * in.color.a * f;
     let dst = textureLoad(backdrop, vec2<i32>(in.pos.xy), 0);
     let sa = src.a;
     let da = dst.a;
@@ -231,7 +273,7 @@ fn fs_advanced(in: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_mask(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(tex, smp, in.uv).a * in.color.a;
+    let a = art(in).a * in.color.a;
     return vec4<f32>(a, 0.0, 0.0, 1.0);
 }
 "#;
@@ -301,6 +343,8 @@ pub struct GpuRenderer {
     /// Every colour and alpha mode pair, one per `MODE_STRIDE` slot.
     advanced_modes: wgpu::Buffer,
     blit_pipeline: wgpu::RenderPipeline,
+    /// Multiplies the mask buffer by the scratch one: an inherited clip.
+    mask_and_pipeline: wgpu::RenderPipeline,
     mode_bufs: [wgpu::Buffer; 3],
     // bound as group 2 during mask passes, where the real mask buffer is the
     // render target and must not also be sampled
@@ -322,11 +366,25 @@ struct Offscreen {
     blit_bind: wgpu::BindGroup,
     mode_binds: [wgpu::BindGroup; 3],
     mask: wgpu::TextureView,
+    /// Scratch mask for one further set of an inherited clip, bound for
+    /// sampling as `mask2_bind`.
+    mask2: wgpu::TextureView,
+    mask2_bind: wgpu::BindGroup,
     /// A copy of the frame so far, for the advanced blend modes to read.
     backdrop_tex: wgpu::Texture,
     backdrop_bind: wgpu::BindGroup,
+    /// Offscreen part layers, one per nesting depth, made as needed.
+    layers: Vec<LayerTarget>,
     w: u32,
     h: u32,
+}
+
+struct LayerTarget {
+    msaa: wgpu::TextureView,
+    color: wgpu::TextureView,
+    color_tex: wgpu::Texture,
+    /// The resolved layer as a mesh texture, for landing it.
+    bind: wgpu::BindGroup,
 }
 
 fn blend_state(mode: BlendMode) -> wgpu::BlendState {
@@ -449,7 +507,13 @@ impl GpuRenderer {
         let vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![
+                0 => Float32x2,
+                1 => Float32x2,
+                2 => Float32x4,
+                3 => Float32x4,
+                4 => Float32x4
+            ],
         };
 
         let mask_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -634,11 +698,49 @@ impl GpuRenderer {
             cache: None,
         });
 
+        let mask_and_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ayatsuri-mask-and"),
+            layout: Some(&blit_pl),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: MASK_FORMAT,
+                    // mask = mask * scratch
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::Src,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent::REPLACE,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             anisotropy_clamp: 4,
+            // mip level 3 averages 8 px blocks: the 16 px the atlas leaves
+            // between pieces keeps neighbours out of it; smaller levels
+            // would mix them in when zoomed far out
+            lod_max_clamp: 3.0,
             ..Default::default()
         });
         let uni_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -677,6 +779,7 @@ impl GpuRenderer {
             backdrop_layout,
             advanced_modes,
             blit_pipeline,
+            mask_and_pipeline,
             mode_bufs,
             dummy_mode_bind: None,
             textures: Vec::new(),
@@ -868,6 +971,21 @@ impl GpuRenderer {
         );
         let color = color_tex.create_view(&Default::default());
         let mask = make("ayatsuri-maskbuf", MASK_FORMAT, 1, att_bind);
+        let mask2 = make("ayatsuri-maskbuf-and", MASK_FORMAT, 1, att_bind);
+        let mask2_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.blit_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&mask2),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
         let backdrop_tex = make_tex(
             "ayatsuri-backdrop",
             OFFSCREEN_FORMAT,
@@ -933,11 +1051,60 @@ impl GpuRenderer {
             blit_bind,
             mode_binds,
             mask,
+            mask2,
+            mask2_bind,
             backdrop_tex,
             backdrop_bind,
+            layers: Vec::new(),
             w,
             h,
         });
+    }
+
+    /// Enough layer targets for `depth` nested offscreen parts, at the
+    /// frame's size (a resize starts the list afresh).
+    fn ensure_layers(&mut self, device: &wgpu::Device, depth: usize) {
+        let Some(o) = &mut self.offscreen else { return };
+        let size =
+            wgpu::Extent3d { width: o.w.max(1), height: o.h.max(1), depth_or_array_layers: 1 };
+        while o.layers.len() < depth {
+            let make_tex = |label: &str, samples, usage| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: OFFSCREEN_FORMAT,
+                    usage,
+                    view_formats: &[],
+                })
+            };
+            let att = wgpu::TextureUsages::RENDER_ATTACHMENT;
+            let msaa =
+                make_tex("ayatsuri-layer-msaa", self.samples, att).create_view(&Default::default());
+            let color_tex = make_tex(
+                "ayatsuri-layer",
+                1,
+                att | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            );
+            let color = color_tex.create_view(&Default::default());
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.tex_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&color),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            o.layers.push(LayerTarget { msaa, color, color_tex, bind });
+        }
     }
 
     /// The last frame drawn, read back as premultiplied RGBA rows, for an
@@ -1021,6 +1188,19 @@ impl GpuRenderer {
             }
         }
         self.ensure_offscreen(device, packet.width, packet.height);
+        let mut deepest = 0usize;
+        let mut d = 0usize;
+        for cmd in &packet.cmds {
+            match cmd {
+                Cmd::BeginLayer => {
+                    d += 1;
+                    deepest = deepest.max(d);
+                }
+                Cmd::EndLayer { .. } => d = d.saturating_sub(1),
+                _ => {}
+            }
+        }
+        self.ensure_layers(device, deepest);
         let uni: [f32; 8] = [
             packet.to_ndc[0],
             packet.to_ndc[1],
@@ -1062,20 +1242,30 @@ impl GpuRenderer {
         }
         let Some(o) = &self.offscreen else { return };
 
-        // the frame splits into segments at every mask-set switch: a mask
-        // pass fills the mask buffer, then a main segment draws with it
-        let mut first_main = true;
-        let mut i = 0usize;
-        while i < packet.cmds.len() {
-            if let Some(Cmd::MaskSet { shapes }) = packet.cmds.get(i) {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("ayatsuri-maskset"),
+        // the target at each depth: 0 is the frame, then each open layer
+        let samples = self.samples;
+        let target =
+            |depth: usize| -> Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::Texture)> {
+                match depth.checked_sub(1) {
+                    None => Some((&o.msaa, &o.color, &o.color_tex)),
+                    Some(l) => o.layers.get(l).map(|l| (&l.msaa, &l.color, &l.color_tex)),
+                }
+            };
+        let open = |encoder: &mut wgpu::CommandEncoder, depth: usize, clear: bool| {
+            let (msaa, color, _) = target(depth)?;
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("ayatsuri-model"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &o.mask,
+                        view: if samples > 1 { msaa } else { color },
                         depth_slice: None,
-                        resolve_target: None,
+                        resolve_target: (samples > 1).then_some(color),
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            load: if clear {
+                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                            } else {
+                                wgpu::LoadOp::Load
+                            },
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -1083,14 +1273,106 @@ impl GpuRenderer {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                     multiview_mask: None,
-                });
-                pass.set_pipeline(&self.mask_pipeline);
-                pass.set_bind_group(0, &self.uni_bind, &[]);
-                let Some(dummy) = &self.dummy_mode_bind else { continue };
-                pass.set_bind_group(2, dummy, &[]);
-                pass.set_vertex_buffer(0, vbuf.slice(..));
-                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                for (range, texture) in shapes {
+                })
+                .forget_lifetime();
+            pass.set_bind_group(0, &self.uni_bind, &[]);
+            pass.set_vertex_buffer(0, vbuf.slice(..));
+            pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+            Some(pass)
+        };
+
+        // passes break at every mask-set switch (a mask pass fills the mask
+        // buffer), at every layer edge and before every advanced blend
+        let mut depth = 0usize;
+        let mut frame_cleared = false;
+        let mut pass: Option<wgpu::RenderPass<'static>> = None;
+        for cmd in &packet.cmds {
+            let (indices, bind, blend, mask) = match cmd {
+                Cmd::MaskSet { shapes, and } => {
+                    drop(pass.take());
+                    // the set's coverage into `view`, cleared first
+                    let fill = |encoder: &mut wgpu::CommandEncoder,
+                                view: &wgpu::TextureView,
+                                shapes: &[(Range<u32>, u32)]| {
+                        let mut mp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("ayatsuri-maskset"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        mp.set_pipeline(&self.mask_pipeline);
+                        mp.set_bind_group(0, &self.uni_bind, &[]);
+                        let Some(dummy) = &self.dummy_mode_bind else { return };
+                        mp.set_bind_group(2, dummy, &[]);
+                        mp.set_vertex_buffer(0, vbuf.slice(..));
+                        mp.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                        for (range, texture) in shapes {
+                            let Some(bind) = self
+                                .textures
+                                .get(*texture as usize)
+                                .and_then(Slot::bind)
+                                .or(self.white.as_ref())
+                            else {
+                                continue;
+                            };
+                            mp.set_bind_group(1, bind, &[]);
+                            mp.draw_indexed(range.clone(), 0, 0..1);
+                        }
+                    };
+                    fill(encoder, &o.mask, shapes);
+                    // each inherited set: draw it aside, multiply it in
+                    for set in and {
+                        fill(encoder, &o.mask2, set);
+                        let mut mp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("ayatsuri-mask-and"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &o.mask,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        mp.set_pipeline(&self.mask_and_pipeline);
+                        mp.set_bind_group(0, &o.mask2_bind, &[]);
+                        mp.draw(0..3, 0..1);
+                    }
+                    continue;
+                }
+                Cmd::BeginLayer => {
+                    drop(pass.take());
+                    if target(depth + 1).is_none() {
+                        continue;
+                    }
+                    depth += 1;
+                    pass = open(encoder, depth, true);
+                    continue;
+                }
+                Cmd::EndLayer { indices, blend, mask } => {
+                    drop(pass.take());
+                    let Some(layer) = depth.checked_sub(1).and_then(|l| o.layers.get(l)) else {
+                        continue;
+                    };
+                    depth -= 1;
+                    (indices, &layer.bind, *blend, *mask)
+                }
+                Cmd::Draw { indices, texture, blend, mask } => {
                     let Some(bind) = self
                         .textures
                         .get(*texture as usize)
@@ -1099,118 +1381,57 @@ impl GpuRenderer {
                     else {
                         continue;
                     };
-                    pass.set_bind_group(1, bind, &[]);
-                    pass.draw_indexed(range.clone(), 0, 0..1);
+                    (indices, bind, *blend, *mask)
                 }
-                drop(pass);
-                i += 1;
+            };
+            if pass.is_none() {
+                pass = open(encoder, depth, depth == 0 && !frame_cleared);
+            }
+            if depth == 0 {
+                frame_cleared = true;
+            }
+            let mode = match mask {
+                MaskMode::None => 0,
+                MaskMode::Normal => 1,
+                MaskMode::Inverted => 2,
+            };
+            let Some(mode_bind) = o.mode_binds.get(mode) else { continue };
+            if let BlendMode::Advanced { color, alpha } = blend {
+                // finish what is drawn so far (resolving it), copy it as the
+                // backdrop, and carry on in a fresh pass
+                drop(pass.take());
+                let Some((_, _, tex)) = target(depth) else { continue };
+                encoder.copy_texture_to_texture(
+                    tex.as_image_copy(),
+                    o.backdrop_tex.as_image_copy(),
+                    wgpu::Extent3d {
+                        width: o.w.max(1),
+                        height: o.h.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                );
+                let Some(mut p) = open(encoder, depth, false) else { continue };
+                let slot = u32::from(color).min(COLOR_MODES - 1) * ALPHA_MODES
+                    + u32::from(alpha).min(ALPHA_MODES - 1);
+                p.set_pipeline(&self.advanced_pipeline);
+                p.set_bind_group(1, bind, &[]);
+                p.set_bind_group(2, mode_bind, &[]);
+                p.set_bind_group(3, &o.backdrop_bind, &[slot * MODE_STRIDE as u32]);
+                p.draw_indexed(indices.clone(), 0, 0..1);
+                pass = Some(p);
                 continue;
             }
-
-            let run_start = i;
-            while i < packet.cmds.len() && !matches!(packet.cmds.get(i), Some(Cmd::MaskSet { .. }))
-            {
-                i += 1;
+            let Some(p) = pass.as_mut() else { continue };
+            if let Some((_, pipeline)) = self.draw_pipelines.iter().find(|(b, _)| *b == blend) {
+                p.set_pipeline(pipeline);
+                p.set_bind_group(1, bind, &[]);
+                p.set_bind_group(2, mode_bind, &[]);
+                p.draw_indexed(indices.clone(), 0, 0..1);
             }
-            let target = if self.samples > 1 { &o.msaa } else { &o.color };
-            let resolve = (self.samples > 1).then_some(&o.color);
-            let open = |encoder: &mut wgpu::CommandEncoder, clear: bool| {
-                let mut pass = encoder
-                    .begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("ayatsuri-model"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: target,
-                            depth_slice: None,
-                            resolve_target: resolve,
-                            ops: wgpu::Operations {
-                                load: if clear {
-                                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                                } else {
-                                    wgpu::LoadOp::Load
-                                },
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    })
-                    .forget_lifetime();
-                pass.set_bind_group(0, &self.uni_bind, &[]);
-                pass.set_vertex_buffer(0, vbuf.slice(..));
-                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                pass
-            };
-            let mut pass = Some(open(encoder, first_main));
-            first_main = false;
-            for cmd in packet.cmds.get(run_start..i).unwrap_or(&[]) {
-                let Cmd::Draw { indices, texture, blend, mask } = cmd else { continue };
-                let Some(bind) = self
-                    .textures
-                    .get(*texture as usize)
-                    .and_then(Slot::bind)
-                    .or(self.white.as_ref())
-                else {
-                    continue;
-                };
-                let mode = match mask {
-                    MaskMode::None => 0,
-                    MaskMode::Normal => 1,
-                    MaskMode::Inverted => 2,
-                };
-                let Some(mode_bind) = o.mode_binds.get(mode) else { continue };
-                if let BlendMode::Advanced { color, alpha } = *blend {
-                    // finish what is drawn so far (resolving it), copy it
-                    // as the backdrop, and carry on in a fresh pass
-                    drop(pass.take());
-                    encoder.copy_texture_to_texture(
-                        o.color_tex.as_image_copy(),
-                        o.backdrop_tex.as_image_copy(),
-                        wgpu::Extent3d {
-                            width: o.w.max(1),
-                            height: o.h.max(1),
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                    let mut p = open(encoder, false);
-                    let slot = u32::from(color).min(COLOR_MODES - 1) * ALPHA_MODES
-                        + u32::from(alpha).min(ALPHA_MODES - 1);
-                    p.set_pipeline(&self.advanced_pipeline);
-                    p.set_bind_group(1, bind, &[]);
-                    p.set_bind_group(2, mode_bind, &[]);
-                    p.set_bind_group(3, &o.backdrop_bind, &[slot * MODE_STRIDE as u32]);
-                    p.draw_indexed(indices.clone(), 0, 0..1);
-                    pass = Some(p);
-                    continue;
-                }
-                let Some(p) = pass.as_mut() else { continue };
-                if let Some((_, pipeline)) = self.draw_pipelines.iter().find(|(b, _)| b == blend) {
-                    p.set_pipeline(pipeline);
-                    p.set_bind_group(1, bind, &[]);
-                    p.set_bind_group(2, mode_bind, &[]);
-                    p.draw_indexed(indices.clone(), 0, 0..1);
-                }
-            }
-            drop(pass);
         }
-        if first_main {
-            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ayatsuri-clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: if self.samples > 1 { &o.msaa } else { &o.color },
-                    depth_slice: None,
-                    resolve_target: (self.samples > 1).then_some(&o.color),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+        drop(pass);
+        if !frame_cleared {
+            drop(open(encoder, 0, true));
         }
     }
 

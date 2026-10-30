@@ -4,7 +4,7 @@
 // form. Every function leaves the model untouched when it returns false or
 // None.
 
-use ayatsuri_format::model::{Binding, DeformerKind, Model};
+use ayatsuri_format::model::{ArtMesh, Binding, BlendShape, DeformerKind, Model};
 
 use crate::edit::{KeySrc, Target, axis_lens, product, remap, with_object};
 
@@ -71,19 +71,19 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
         Target::ArtMesh(i) => {
             let m = model.art_meshes.get_mut(i)?;
             let n = m.vertex_count as usize * 2;
-            Some((
-                m.binding.clone(),
-                vec![
-                    Chan { data: &mut m.positions, elems: n, kind: Kind::Points { grid: None } },
-                    Chan { data: &mut m.opacities, elems: 1, kind: Kind::Plain },
-                    Chan { data: &mut m.draw_orders, elems: 1, kind: Kind::Plain },
-                ],
-            ))
+            let mut chans = vec![
+                Chan { data: &mut m.positions, elems: n, kind: Kind::Points { grid: None } },
+                Chan { data: &mut m.opacities, elems: 1, kind: Kind::Plain },
+                Chan { data: &mut m.draw_orders, elems: 1, kind: Kind::Plain },
+            ];
+            colour_chans(&mut chans, &mut m.multiply, &mut m.screen);
+            Some((m.binding.clone(), chans))
         }
         Target::Deformer(i) => {
             let d = model.deformers.get_mut(i)?;
             let binding = d.binding.clone();
-            let chans = match &mut d.kind {
+            let ayatsuri_format::model::Deformer { kind, multiply, screen, .. } = d;
+            let mut chans = match kind {
                 DeformerKind::Warp(w) => {
                     let grid = Some((w.cols as usize + 1, w.rows as usize + 1));
                     let n = w.grid_points() * 2;
@@ -100,25 +100,90 @@ fn channels(model: &mut Model, target: Target) -> Option<(Binding, Vec<Chan<'_>>
                     Chan { data: &mut r.opacities, elems: 1, kind: Kind::Plain },
                 ],
             };
+            colour_chans(&mut chans, multiply, screen);
             Some((binding, chans))
         }
         Target::Part(i) => {
             let p = model.parts.get_mut(i)?;
-            Some((
-                p.binding.clone(),
-                vec![Chan { data: &mut p.draw_orders, elems: 1, kind: Kind::Plain }],
-            ))
+            let mut chans = vec![Chan { data: &mut p.draw_orders, elems: 1, kind: Kind::Plain }];
+            if let Some(o) = &mut p.offscreen {
+                chans.push(Chan { data: &mut o.opacities, elems: 1, kind: Kind::Plain });
+            }
+            Some((p.binding.clone(), chans))
         }
     }
 }
 
-/// The keys `target` has on `param`, if it is bound on it.
+/// Multiply and screen colours, when the object has any: three plain
+/// floats per keyform, carried over unchanged by mirroring.
+fn colour_chans<'a>(
+    chans: &mut Vec<Chan<'a>>,
+    multiply: &'a mut Vec<f32>,
+    screen: &'a mut Vec<f32>,
+) {
+    for data in [multiply, screen] {
+        if !data.is_empty() {
+            chans.push(Chan { data, elems: 3, kind: Kind::Plain });
+        }
+    }
+}
+
+/// The keys `target` has on `param`, if it is bound on it. A blend shape's
+/// keys come with its base key, 0.0, in its place among them.
 pub fn keys_on(model: &Model, target: Target, param: usize) -> Option<Vec<f32>> {
+    if let Some(shape) = blend_shape_on(model, target, param) {
+        let mut keys = shape.keys.clone();
+        keys.push(0.0);
+        keys.sort_by(f32::total_cmp);
+        return Some(keys);
+    }
     binding_of(model, target)?
         .axes
         .iter()
         .find(|a| a.parameter as usize == param)
         .map(|a| a.keys.clone())
+}
+
+/// `target`'s blend shape on `param`, when it has one.
+pub fn blend_shape_on(model: &Model, target: Target, param: usize) -> Option<&BlendShape> {
+    crate::shapes::shapes(model, target)?.iter().find(|s| s.parameter as usize == param)
+}
+
+/// How many normal keyforms a mesh has. Its blend shapes' keyforms are
+/// numbered after them, shape by shape in list order, key by key.
+fn normal_keyforms(m: &ArtMesh) -> usize {
+    m.positions.len().checked_div((m.vertex_count as usize).saturating_mul(2)).unwrap_or(0)
+}
+
+/// A mesh's keyform `k` as points, normal or blend shape (see
+/// `normal_keyforms` for the numbering).
+pub fn mesh_form_mut(m: &mut ArtMesh, k: usize) -> Option<&mut [f32]> {
+    let stride = (m.vertex_count as usize).checked_mul(2)?;
+    let normal = normal_keyforms(m);
+    let (pool, at) = if k < normal {
+        (&mut m.positions, k)
+    } else {
+        let mut rest = k - normal;
+        let mut hit = None;
+        for s in &mut m.blend_shapes {
+            if rest < s.keys.len() {
+                hit = Some(s);
+                break;
+            }
+            rest -= s.keys.len();
+        }
+        (&mut hit?.positions, rest)
+    };
+    let start = at.checked_mul(stride)?;
+    pool.get_mut(start..start.checked_add(stride)?)
+}
+
+/// The blend shape parameter whose keyform edits on `target` land in now
+/// (see `keyform_at`), for the editor's "Blend Shape is editable" label.
+pub fn editing_blend_shape(model: &Model, target: Target, values: &[f32]) -> Option<usize> {
+    let k = crate::shapes::keyform_at(model, target, values)??;
+    let (si, _) = crate::shapes::locate(model, target, k)?;
+    crate::shapes::shapes(model, target)?.get(si).map(|s| s.parameter as usize)
 }
 
 /// Every keyform at the key of `param` that its current value sits on, across
@@ -148,7 +213,12 @@ pub fn keyforms_on_key(
 
 /// The keyform the current parameter values sit on, when every bound axis
 /// is on a key (within a hundredth of its range). Copy and paste need one.
+/// An object with a blend shape parameter on one of its keys gives that
+/// blend shape keyform instead, whatever the normal axes are doing.
 pub fn keyform_at(model: &Model, target: Target, values: &[f32]) -> Option<usize> {
+    if let Some(k) = crate::shapes::keyform_at(model, target, values)? {
+        return Some(k);
+    }
     let binding = binding_of(model, target)?;
     let lens = axis_lens(binding);
     let mut coords = Vec::with_capacity(lens.len());
@@ -537,7 +607,15 @@ mod tests {
     use ayatsuri_format::model::{ArtMesh, BindingAxis, Canvas, Parameter};
 
     fn param(id: &str, min: f32, default: f32, max: f32) -> Parameter {
-        Parameter { id: id.into(), min, max, default, repeat: false, decimals: 3 }
+        Parameter {
+            id: id.into(),
+            min,
+            max,
+            default,
+            repeat: false,
+            decimals: 3,
+            blend_shape: false,
+        }
     }
 
     // one triangle, bound on X (-1, 0, 1) and Y (-1, 0, 1)
@@ -580,6 +658,11 @@ mod tests {
                 opacities: vec![1.0; 9],
                 draw_orders: vec![500.0; 9],
                 positions,
+                blend_shapes: Vec::new(),
+                clip_group: None,
+                clip_inherit: false,
+                multiply: Vec::new(),
+                screen: Vec::new(),
             }],
             ..Model::new()
         }

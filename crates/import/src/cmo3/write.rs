@@ -552,27 +552,19 @@ impl W {
         f
     }
 
-    fn colors(&mut self, form: usize, coord: usize) {
-        let m = self.t.obj_with(
-            "CFloatColor",
-            &[
-                ("red", "1.0".into()),
-                ("green", "1.0".into()),
-                ("blue", "1.0".into()),
-                ("alpha", "1.0".into()),
-            ],
-        );
-        self.t.set(form, "multiplyColor", m);
-        let s = self.t.obj_with(
-            "CFloatColor",
-            &[
-                ("red", "0.0".into()),
-                ("green", "0.0".into()),
-                ("blue", "0.0".into()),
-                ("alpha", "1.0".into()),
-            ],
-        );
-        self.t.set(form, "screenColor", s);
+    /// A form's multiply and screen colour: keyform `k`'s from the object's
+    /// pools (three floats a keyform; empty or short is neutral).
+    fn colors(&mut self, form: usize, coord: usize, multiply: &[f32], screen: &[f32], k: usize) {
+        let mut color = |field: &'static str, pool: &[f32], neutral: f32| {
+            let at = |c: usize| pool.get(k * 3 + c).copied().unwrap_or(neutral).to_string();
+            let obj = self.t.obj_with(
+                "CFloatColor",
+                &[("red", at(0)), ("green", at(1)), ("blue", at(2)), ("alpha", "1.0".into())],
+            );
+            self.t.set(form, field, obj);
+        };
+        color("multiplyColor", multiply, 1.0);
+        color("screenColor", screen, 0.0);
         self.t.set(form, "coordType", coord);
     }
 
@@ -893,7 +885,12 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
             blend: Blend::NORMAL,
         });
     }
-    let packed = layers::build(&Document { width: cw, height: ch, layers: layers_in })?;
+    let packed = layers::build_atlas(&Document {
+        width: cw,
+        height: ch,
+        layers: layers_in,
+        folders: Vec::new(),
+    })?;
     let pc = packed.model.canvas;
     let page = PAGE as f32;
     let mut placed: Vec<Placed> = Vec::with_capacity(materials.len());
@@ -1106,7 +1103,7 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
                     let acf = w.ac_form(g, node);
                     w.t.set(df, "super", acf);
                     w.t.f(df, "opacity", opacities.get(s).copied().unwrap_or(1.0));
-                    w.colors(df, coord);
+                    w.colors(df, coord, &d.multiply, &d.screen, s);
                     w.t.set(form, "super", df);
                     let pts = wd.positions.get(s * per..(s + 1) * per).unwrap_or(&[]);
                     let pts = convert(space, pts);
@@ -1145,7 +1142,7 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
                     let acf = w.ac_form(g, node);
                     w.t.set(df, "super", acf);
                     w.t.f(df, "opacity", opacities.get(s).copied().unwrap_or(1.0));
-                    w.colors(df, coord);
+                    w.colors(df, coord, &d.multiply, &d.screen, s);
                     w.t.set(form, "super", df);
                     w.t.push(forms, form);
                 }
@@ -1389,7 +1386,7 @@ pub fn to_cmo3(x: &Cmo3Export) -> Result<Vec<u8>, ImportError> {
             let order = m.draw_orders.get(s).copied().unwrap_or(500.0);
             w.t.i(df, "drawOrder", order.round() as i64);
             w.t.f(df, "opacity", m.opacities.get(s).copied().unwrap_or(1.0));
-            w.colors(df, coord);
+            w.colors(df, coord, &m.multiply, &m.screen, s);
             w.t.set(form, "super", df);
             let pts = m.positions.get(s * per..(s + 1) * per).unwrap_or(&[]);
             let pts = convert(space, pts);

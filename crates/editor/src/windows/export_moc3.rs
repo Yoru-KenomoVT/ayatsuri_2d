@@ -7,6 +7,14 @@ use egui::Ui;
 
 impl EditorUi {
     pub(crate) fn export_window(&mut self, ui: &mut Ui) {
+        // meshes that grew past their art in Mesh Edit: the export is where
+        // the atlas gets laid out for them (it waits until then)
+        let outgrown = if self.export_dlg.is_some() { self.outgrown_meshes().len() } else { 0 };
+        let mut lay_out = false;
+        // layers still on textures of their own: a moc3 takes its art from
+        // atlas pages, so the atlas is made first, as Cubism asks
+        let pending = self.session.as_ref().is_some_and(|s| s.atlas_pending());
+        let mut make_atlas = false;
         let Some(dlg) = &mut self.export_dlg else { return };
         let mut open = true;
         let mut go_moc3 = false;
@@ -163,8 +171,55 @@ impl EditorUi {
                                 );
                             }
                         }
+                        if pending {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} {}",
+                                        egui_phosphor::regular::WARNING,
+                                        crate::i18n::tr(
+                                            "The texture atlas has not been made yet: each layer is still on a texture of its own",
+                                        )
+                                    ))
+                                    .size(11.0)
+                                    .color(theme::pal().accent),
+                                );
+                                make_atlas = ui
+                                    .button(crate::i18n::tr("Make Texture Atlas…"))
+                                    .on_hover_text(crate::i18n::tr(
+                                        "Open the Texture Atlas to lay the layers out on pages",
+                                    ))
+                                    .clicked();
+                            });
+                        } else if outgrown > 0 {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} {}",
+                                        egui_phosphor::regular::WARNING,
+                                        crate::i18n::trf(
+                                            "{count} mesh(es) reach past their art on the texture atlas, so they would show a neighbour's pixels",
+                                            &[("count", &outgrown)],
+                                        )
+                                    ))
+                                    .size(11.0)
+                                    .color(theme::pal().accent),
+                                );
+                                lay_out = ui
+                                    .button(crate::i18n::tr("Lay out the atlas"))
+                                    .on_hover_text(crate::i18n::tr(
+                                        "Pack each mesh's own art again (one undo step), then export",
+                                    ))
+                                    .clicked();
+                            });
+                        }
                         if ui
-                            .button(egui::RichText::new(crate::i18n::tr("Export…")).strong())
+                            .add_enabled(
+                                !pending,
+                                egui::Button::new(
+                                    egui::RichText::new(crate::i18n::tr("Export…")).strong(),
+                                ),
+                            )
                             .clicked()
                         {
                             go_moc3 = true;
@@ -172,6 +227,12 @@ impl EditorUi {
                     }
                 }
             });
+        if lay_out {
+            self.repack_if_outgrown(&ui.ctx().clone());
+        }
+        if make_atlas {
+            self.open_atlas();
+        }
         if go_moc3 {
             let Some(dlg) = self.export_dlg.take() else { return };
             let start = self.prefs.export_folder.clone().filter(|d| d.is_dir());

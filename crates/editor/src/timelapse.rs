@@ -200,7 +200,9 @@ impl Recorder {
 
     /// Record the model as it is now. Same bytes as the last step: nothing.
     pub fn record(&mut self, model: &Model) {
-        let Ok(now) = rmp_serde::to_vec(model) else { return };
+        // fields by name, as .aom writes them: a field added to the model
+        // later can never shift what an old step holds (see `decode_model`)
+        let Ok(now) = rmp_serde::to_vec_named(model) else { return };
         if self.last.as_deref() == Some(now.as_slice()) {
             return;
         }
@@ -366,7 +368,7 @@ impl Player {
                             else {
                                 continue;
                             };
-                            if heads.len() > 1 && rmp_serde::from_slice::<Model>(&nb).is_err() {
+                            if heads.len() > 1 && decode_model(&nb).is_none() {
                                 continue;
                             }
                             let (j, _, hbl) = heads.remove(k);
@@ -470,8 +472,71 @@ impl Player {
     pub fn model(&mut self, i: usize) -> Option<Model> {
         let i = i.min(self.steps.len().saturating_sub(1));
         let bytes = self.bytes_at(i)?;
-        rmp_serde::from_slice(&bytes).ok()
+        decode_model(&bytes)
     }
+}
+
+/// A step's model. Steps recorded before 0.6.0 hold it as positional
+/// arrays, where a field inserted into the model since shifts every later
+/// one: those are put back into today's layout first (`old_layout`).
+pub(crate) fn decode_model(bytes: &[u8]) -> Option<Model> {
+    if let Ok(m) = rmp_serde::from_slice(bytes) {
+        return Some(m);
+    }
+    let mut v = rmpv::decode::read_value(&mut &bytes[..]).ok()?;
+    if !old_layout(&mut v) {
+        return None;
+    }
+    let mut fixed = Vec::with_capacity(bytes.len() + 64);
+    rmpv::encode::write_value(&mut fixed, &v).ok()?;
+    rmp_serde::from_slice(&fixed).ok()
+}
+
+/// Bring a positional model from an older layout to today's: the fields
+/// inserted mid-struct since steps were first recorded go in where they now
+/// sit, with their defaults. Every other field was added at the end, which
+/// a positional array missing it already reads as its default. Each old
+/// layout is told apart by its length, or by what sits where the field
+/// went, so a model already in today's layout is left alone. True when
+/// something was put in.
+fn old_layout(v: &mut rmpv::Value) -> bool {
+    use rmpv::Value;
+    let Value::Array(model) = v else { return false };
+    let mut changed = false;
+    // art meshes: `blend` after `flags` (0.5.6; before it, `vertex_count`,
+    // a number, sat there), then `clip_group` and `clip_inherit` after
+    // `masks` (0.6.0; the 0.5.x mesh had 16 fields)
+    if let Some(Value::Array(meshes)) = model.get_mut(4) {
+        let blend = default_blend();
+        for mesh in meshes {
+            let Value::Array(f) = mesh else { continue };
+            if f.len() == 15
+                && f.get(7).is_some_and(Value::is_number)
+                && let Some(b) = &blend
+            {
+                f.insert(7, b.clone());
+                changed = true;
+            }
+            if f.len() == 16 {
+                f.insert(12, Value::Nil);
+                f.insert(13, Value::Boolean(false));
+                changed = true;
+            }
+        }
+    }
+    // the model: `clip_groups` after `draw_groups` (0.6.0); 0.5.x models
+    // with anything after `draw_groups` had 8 to 11 fields
+    if (8..=11).contains(&model.len()) {
+        model.insert(7, Value::Array(Vec::new()));
+        changed = true;
+    }
+    changed
+}
+
+/// A mesh's default blend as the positional value an old step lacks.
+fn default_blend() -> Option<rmpv::Value> {
+    let bytes = rmp_serde::to_vec(&ayatsuri_format::model::Blend::default()).ok()?;
+    rmpv::decode::read_value(&mut &bytes[..]).ok()
 }
 
 /// How an export is going: frames written of the total, then the outcome.
@@ -773,6 +838,83 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A model with one art mesh carrying non-default values throughout.
+    fn one_mesh_model() -> Model {
+        let mut m = Model::new();
+        m.art_meshes.push(ayatsuri_format::model::ArtMesh {
+            id: "Eye".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            indices: vec![0, 1, 2],
+            masks: vec![4],
+            clip_group: None,
+            clip_inherit: false,
+            binding: Default::default(),
+            opacities: vec![0.5],
+            draw_orders: vec![300.0],
+            positions: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            blend_shapes: Vec::new(),
+            multiply: Vec::new(),
+            screen: Vec::new(),
+        });
+        m
+    }
+
+    /// Today's positional step with the fields an older layout lacked taken
+    /// out: `inserted` per mesh (indices), the trailing mesh fields after
+    /// `keep` of them, and the model's clip groups.
+    fn older_step(m: &Model, mesh_drop: &[usize], keep: usize) -> Vec<u8> {
+        let bytes = rmp_serde::to_vec(m).unwrap();
+        let mut v = rmpv::decode::read_value(&mut &bytes[..]).unwrap();
+        let rmpv::Value::Array(model) = &mut v else { panic!() };
+        if let Some(rmpv::Value::Array(meshes)) = model.get_mut(4) {
+            for mesh in meshes {
+                let rmpv::Value::Array(f) = mesh else { panic!() };
+                f.truncate(keep + mesh_drop.len());
+                for &k in mesh_drop.iter().rev() {
+                    f.remove(k);
+                }
+            }
+        }
+        model.remove(7);
+        let mut out = Vec::new();
+        rmpv::encode::write_value(&mut out, &v).unwrap();
+        out
+    }
+
+    /// The same model, compared by what it serializes to.
+    fn same(got: Option<Model>, want: &Model) -> bool {
+        got.is_some_and(|g| rmp_serde::to_vec(&g).ok() == rmp_serde::to_vec(want).ok())
+    }
+
+    #[test]
+    fn steps_from_older_layouts_still_read() {
+        let m = one_mesh_model();
+        // today's positional steps (before steps were written by name)
+        let now = rmp_serde::to_vec(&m).unwrap();
+        assert!(same(decode_model(&now), &m), "now");
+        // and by name, as they are written now
+        let named = rmp_serde::to_vec_named(&m).unwrap();
+        assert!(same(decode_model(&named), &m), "named");
+        // 0.5.x: no clip_group / clip_inherit (12, 13), nothing after
+        // positions, no clip groups on the model
+        let v058 = older_step(&m, &[12, 13], 16);
+        assert!(rmp_serde::from_slice::<Model>(&v058).is_err(), "the bug this guards");
+        assert!(same(decode_model(&v058), &m), "v058");
+        // before 0.5.6: no blend (7) either
+        let v055 = older_step(&m, &[7, 12, 13], 15);
+        assert!(same(decode_model(&v055), &m), "v055");
+        // garbage stays garbage
+        assert!(decode_model(&[0xc1, 0x00]).is_none());
+    }
 
     #[test]
     fn steps_come_back_as_they_were_recorded() {

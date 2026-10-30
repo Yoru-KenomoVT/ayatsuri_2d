@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.5.8"
+version = "0.6.0"
 edition = "2024"
 license = "GPL-3.0"
 authors = ["Yoru_KenomoVT"]
@@ -21,6 +21,7 @@ ayatsuri-capi = { path = "crates/capi" }
 ayatsuri-editor = { path = "crates/editor" }
 ayatsuri-import = { path = "crates/import" }
 ayatsuri-update = { path = "crates/update" }
+ayatsuri-pen = { path = "crates/pen" }
 openmoc3 = { path = "crates/openmoc3" }
 
 # foundation

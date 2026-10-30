@@ -82,6 +82,27 @@ fn binding_of(
     Ok((Binding { axes, curves: Vec::new() }, slots))
 }
 
+/// An object's multiply and screen colour pools from its forms (three
+/// floats a keyform, `n` keyforms); empty when every form is neutral.
+fn colors_of(forms: &[extract::Form], slots: &[usize], n: usize) -> (Vec<f32>, Vec<f32>) {
+    let (mut mul, mut scr) = (vec![1.0; n * 3], vec![0.0; n * 3]);
+    for (f, &s) in forms.iter().zip(slots) {
+        if let Some(m) = mul.get_mut(s * 3..s * 3 + 3) {
+            m.copy_from_slice(&f.multiply);
+        }
+        if let Some(c) = scr.get_mut(s * 3..s * 3 + 3) {
+            c.copy_from_slice(&f.screen);
+        }
+    }
+    if mul.iter().all(|&v| v == 1.0) {
+        mul.clear();
+    }
+    if scr.iter().all(|&v| v == 0.0) {
+        scr.clear();
+    }
+    (mul, scr)
+}
+
 pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
     let (cw, ch) = ex.canvas;
 
@@ -133,8 +154,8 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
             blend: crate::layers::Blend::NORMAL,
         });
     }
-    let document = Document { width: cw, height: ch, layers: layers_in };
-    let imported = layers::build(&document)?;
+    let document = Document { width: cw, height: ch, layers: layers_in, folders: Vec::new() };
+    let imported = layers::build_atlas(&document)?;
     let mut model: Model = imported.model;
     let c = model.canvas;
     let ppu = c.pixels_per_unit.max(1e-6);
@@ -166,6 +187,7 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
             default: p.default,
             repeat: p.repeat,
             decimals: p.decimals,
+            blend_shape: false,
         });
         param_names.push(p.name.clone());
         if p.folder.is_empty() {
@@ -269,6 +291,9 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
             enabled: true,
             binding,
             kind,
+            multiply: colors_of(&d.forms, &slots, n).0,
+            screen: colors_of(&d.forms, &slots, n).1,
+            blend_shapes: Vec::new(),
         });
     }
 
@@ -344,6 +369,8 @@ pub fn build(ex: Extract, name: &str) -> Result<Cmo3, ImportError> {
         am.binding = binding;
         am.opacities = opacities;
         am.draw_orders = draw_orders;
+        let n_kf = am.opacities.len();
+        (am.multiply, am.screen) = colors_of(&m.forms, &slots, n_kf);
         am.parent_deformer = parent;
         am.id = m.id.clone();
         // Cubism's eye toggle is a view setting; hidden meshes still export

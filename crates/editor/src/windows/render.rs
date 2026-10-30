@@ -126,6 +126,8 @@ struct Spec {
     name: String,
     model: Model,
     pngs: Vec<Vec<u8>>,
+    /// Each mesh's own art on its page, so none shows a neighbour's.
+    art: Vec<[f32; 4]>,
     anim: Option<Animation>,
     expression: Option<Expression>,
     timelapse: Option<PathBuf>,
@@ -1261,7 +1263,9 @@ impl Drawer {
 
     fn frame(&mut self, spec: &Spec, puppet: &ayatsuri_core::Puppet) -> (usize, usize, Vec<u8>) {
         if let Some(g) = &mut self.gpu {
-            if let Some(f) = g.draw(puppet, self.width) {
+            // a timelapse's steps have other meshes: they draw unclipped
+            let art: &[[f32; 4]] = if spec.timelapse.is_none() { &spec.art } else { &[] };
+            if let Some(f) = g.draw(puppet, self.width, art) {
                 return f;
             }
             log::warn!("render: the GPU could not draw a frame, drawing on the CPU");
@@ -1855,6 +1859,7 @@ impl EditorUi {
                 name: stem.clone(),
                 model: s.puppet.model().clone(),
                 pngs: s.texture_pngs.clone(),
+                art: s.art_boxes(),
                 anim,
                 expression: win.expression.and_then(|i| s.expressions.get(i).cloned()),
                 timelapse: s.aom_path.as_ref().map(|p| crate::timelapse::Recorder::sidecar(p)),
@@ -2945,6 +2950,7 @@ mod tests {
             name: "timelapse-test".into(),
             model: payload.model,
             pngs: payload.textures.into_iter().map(|b| b.into_vec()).collect(),
+            art: Vec::new(),
             anim: None,
             expression: None,
             timelapse: Some(crate::timelapse::Recorder::sidecar(&aom)),

@@ -135,7 +135,21 @@ fn write(path: &Path, bytes: &[u8], written: &mut Vec<PathBuf>) -> Result<(), St
 
 pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, String> {
     let name = safe(&opt.name);
-    let model = s.puppet.model();
+    // inherited clips go out as hidden helper masks, on copies
+    // pages no mesh draws from (kept for undo while the model is open)
+    // stay behind
+    let mut base = s.puppet.model().clone();
+    let (base_pngs, _) = crate::session::prune_pages(&mut base, s.texture_pngs.clone());
+    let expanded = crate::inherit_export::expand(&base, &base_pngs)?;
+    if let Some(e) = &expanded {
+        log::info!(
+            "export: {} inherited clip(s) carried by {} helper mask(s)",
+            e.meshes,
+            e.helpers
+        );
+    }
+    let model = expanded.as_ref().map_or(&base, |e| &e.model);
+    let pngs = expanded.as_ref().map_or(&base_pngs, |e| &e.pngs);
     let mut written = Vec::new();
 
     let moc = ayatsuri_import::to_moc3(model, opt.version).map_err(|e| e.to_string())?;
@@ -146,7 +160,7 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     let tex_dir = dir.join(&tex_dir_name);
     std::fs::create_dir_all(&tex_dir).map_err(|e| format!("{}: {e}", tex_dir.display()))?;
     let mut tex_refs = Vec::new();
-    for (i, png) in s.texture_pngs.iter().enumerate() {
+    for (i, png) in pngs.iter().enumerate() {
         let file = format!("texture_{i:02}.png");
         write(&tex_dir.join(&file), png, &mut written)?;
         tex_refs.push(format!("{tex_dir_name}/{file}"));
@@ -168,10 +182,12 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     let cdi = json!({
         "Version": 3,
         "Parameters": model.parameters.iter().enumerate().map(|(i, p)| {
+            // loose parameters (outside folders) have no group: only
+            // named folders are written as groups below
             let group = s
                 .groups
                 .iter()
-                .position(|g| g.params.contains(&i))
+                .position(|g| g.params.contains(&i) && !g.name.is_empty())
                 .map(|gi| format!("ParamGroup{gi}"))
                 .unwrap_or_default();
             json!({
@@ -286,6 +302,7 @@ mod tests {
                 default: 0.0,
                 repeat: false,
                 decimals: 3,
+                blend_shape: false,
             });
         }
         Session::create(&egui::Context::default(), "t".into(), String::new(), model).unwrap()

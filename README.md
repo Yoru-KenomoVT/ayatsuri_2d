@@ -353,11 +353,10 @@ Reporting bugs, sharing what you rig with it, and starring the repo help too.
 
 ## Licensing
 
-Deliberately not uniform: the project is **GPL-3.0**, `openmoc3` is **MIT** so
-the format work flows back to the community it came from, and the C ABI is
-**Apache-2.0**. The runtime's licence is still an open question, because a
-copyleft runtime cannot be embedded in a proprietary game. See
-[`LICENSING.md`](LICENSING.md).
+Deliberately not uniform: the editor is **GPL-3.0**, the runtime (`core`,
+`format` and `import`) is **MIT** so closed games and apps can embed it,
+`openmoc3` is **MIT** so the format work flows back to the community it came
+from, and the C ABI is **Apache-2.0**. See [`LICENSING.md`](LICENSING.md).
 
 ## Artwork
 

@@ -144,6 +144,8 @@ pub(crate) fn paste(
     let mut next: Model = s.puppet.model().clone();
     let mut pngs = s.texture_pngs.clone();
     let mut added = Vec::new();
+    // each pasted mesh's index, by the id it was copied with
+    let mut copies: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for c in &clip.meshes {
         let mut mesh = c.mesh.clone();
         let kept = !next.art_meshes.iter().any(|m| m.id == mesh.id);
@@ -206,13 +208,61 @@ pub(crate) fn paste(
             path = None;
         }
         let beside = if home { Some(mesh.id.clone()) } else { None };
+        let original = mesh.id.clone();
         let i = ayatsuri_core::edit::insert_art_mesh(&mut next, mesh, path, beside.as_deref());
+        copies.insert(original, i);
         let name = if kept || !home {
             c.name.clone()
         } else {
             crate::i18n::trf("{name} copy", &[("name", &c.name)])
         };
         added.push((i, name));
+    }
+    // a mask copied along clips the copies (an eye's white clips the copied
+    // iris, not the old one); the rest stay on the meshes they named. Such a
+    // copy leaves its clip group, whose masks are the originals'.
+    for (c, &(i, _)) in clip.meshes.iter().zip(&added) {
+        let mut moved = false;
+        let masks: Vec<u32> = c
+            .masks
+            .iter()
+            .filter_map(|id| match copies.get(id) {
+                Some(&k) => {
+                    moved = true;
+                    Some(k)
+                }
+                None => next.art_meshes.iter().position(|m| &m.id == id),
+            })
+            .filter(|&k| k != i)
+            .map(|k| k as u32)
+            .collect();
+        if let Some(m) = next.art_meshes.get_mut(i) {
+            m.masks = masks;
+            if moved {
+                m.clip_group = None;
+            }
+        }
+    }
+    // at a tied draw order the later mesh draws in front, and a pasted one
+    // is the last of all: the copies move, as one block in the order they
+    // came, to just after the front-most of their originals, so they stack
+    // right over them and not over everything (hair over a copied eye)
+    let before = next.art_meshes.len() - added.len();
+    let front = clip
+        .meshes
+        .iter()
+        .filter_map(|c| next.art_meshes.iter().take(before).position(|m| m.id == c.mesh.id))
+        .max();
+    if let Some(front) = front {
+        let pasted: Vec<usize> = added.iter().map(|&(i, _)| i).collect();
+        let mut order: Vec<usize> = (0..=front).collect();
+        order.extend(&pasted);
+        order.extend((front + 1..next.art_meshes.len()).filter(|i| !pasted.contains(i)));
+        if ayatsuri_core::palette::reorder_meshes(&mut next, &order) {
+            for (k, (i, _)) in added.iter_mut().enumerate() {
+                *i = front + 1 + k;
+            }
+        }
     }
     if home {
         // same texture pages: an ordinary edit
@@ -226,4 +276,42 @@ pub(crate) fn paste(
         s.swap_in_pub(ctx, next, pngs)?;
     }
     Ok(added)
+}
+
+/// The art meshes a Clip IDs text names, for `mesh` to clip by: IDs split
+/// by commas, semicolons or spaces, in the order typed, each once. Also
+/// gives back the words that named no other mesh (unknown IDs, or the
+/// mesh's own).
+pub(crate) fn resolve_ids(model: &Model, mesh: usize, text: &str) -> (Vec<u32>, Vec<String>) {
+    let ids: Vec<&str> = model.art_meshes.iter().map(|m| m.id.as_str()).collect();
+    resolve_in(&ids, mesh, text)
+}
+
+fn resolve_in(ids: &[&str], mesh: usize, text: &str) -> (Vec<u32>, Vec<String>) {
+    let (mut found, mut unknown) = (Vec::new(), Vec::new());
+    for word in text.split([',', ';', ' ', '\t', '\n', '\r']).filter(|w| !w.is_empty()) {
+        match ids.iter().position(|&id| id == word) {
+            Some(mi) if mi != mesh => {
+                if !found.contains(&(mi as u32)) {
+                    found.push(mi as u32);
+                }
+            }
+            _ => unknown.push(word.to_string()),
+        }
+    }
+    (found, unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clip_ids_resolve_in_order_once() {
+        let ids = ["Eye", "Iris", "Hi"];
+        let (found, unknown) = resolve_in(&ids, 2, "Iris, Eye;Iris  Nope,Hi");
+        assert_eq!(found, vec![1, 0]);
+        assert_eq!(unknown, vec!["Nope".to_string(), "Hi".to_string()]);
+        assert_eq!(resolve_in(&ids, 0, " , ").0, Vec::<u32>::new());
+    }
 }
