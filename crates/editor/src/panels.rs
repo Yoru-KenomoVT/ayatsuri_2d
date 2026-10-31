@@ -997,6 +997,9 @@ struct MeshDrag {
     /// Mirror Edit: the point across the axis, and how far it has moved
     /// (parent space), mirroring this one.
     partner: Option<(usize, f32, f32)>,
+    /// The rest of the picked points, when a picked one was grabbed: they
+    /// move with it, each with how far it has moved (parent space).
+    group: Vec<(usize, f32, f32)>,
 }
 
 /// A Mesh Edit point move: the vertex, how far (parent space), and the
@@ -7475,6 +7478,16 @@ impl EditorUi {
             "zoom-in" => self.view_zoom = (self.view_zoom * 1.25).clamp(ZOOM_MIN, ZOOM_MAX),
             "zoom-out" => self.view_zoom = (self.view_zoom / 1.25).clamp(ZOOM_MIN, ZOOM_MAX),
             "search" => self.focus_search = true,
+            // in Mesh Edit, every point of the mesh being edited
+            "select-all" if have && self.mesh_edit.is_some() => {
+                let n = self
+                    .mesh_edit
+                    .and_then(|mi| self.session.as_ref()?.puppet.model().art_meshes.get(mi))
+                    .map_or(0, |m| m.vertex_count as usize);
+                self.mesh_picked = (0..n).collect();
+                self.mesh_picked_on = self.mesh_edit;
+                log::info!("picked all {n} points");
+            }
             "select-all" if have => {
                 if let Some(s) = &self.session {
                     self.multi_sel = (0..s.puppet.model().art_meshes.len())
@@ -15330,7 +15343,13 @@ impl EditorUi {
                 self.mesh_picked.retain(|&v| v < screen_pts.len());
                 if !space && self.mesh_mode == 6 {
                     let add = ui.ctx().input(|i| i.modifiers.shift);
+                    let on_pick = ui.ctx().input(|i| i.pointer.press_origin()).is_some_and(|o| {
+                        self.mesh_picked
+                            .iter()
+                            .any(|&v| screen_pts.get(v).is_some_and(|sp| sp.distance(o) < reach))
+                    });
                     if resp.drag_started()
+                        && !on_pick
                         && let Some(p) = resp.interact_pointer_pos()
                     {
                         self.mesh_lasso = vec![p];
@@ -15496,11 +15515,29 @@ impl EditorUi {
                         .filter(|&(_, d)| d < reach)
                         .min_by(|a, b| a.1.total_cmp(&b.1))
                 });
-                if !space && !alt && matches!(self.mesh_mode, 0 | 1 | 3 | 4) {
+                // in Select points a drag that starts on a picked point moves
+                // the pick; elsewhere it draws the lasso
+                let grabs_pick =
+                    near_press.or(near).is_some_and(|(vi, _)| self.mesh_picked.contains(&vi));
+                if !space
+                    && !alt
+                    && (matches!(self.mesh_mode, 0 | 1 | 3 | 4)
+                        || (self.mesh_mode == 6 && grabs_pick))
+                {
                     if resp.drag_started()
                         && let Some((vi, _)) = near_press.or(near)
                         && let Some(local) = s.puppet.mesh_local_positions(mi)
                     {
+                        // a grabbed picked point brings the rest of the pick
+                        let group: Vec<(usize, f32, f32)> = if self.mesh_picked.contains(&vi) {
+                            self.mesh_picked
+                                .iter()
+                                .filter(|&&v| v != vi)
+                                .map(|&v| (v, 0.0, 0.0))
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                         let m_uvs = s
                             .puppet
                             .model()
@@ -15508,12 +15545,15 @@ impl EditorUi {
                             .get(mi)
                             .map(|m| m.uvs.clone())
                             .unwrap_or_default();
+                        // a group moves as it is, without mirroring
                         let partner = mirror_x
+                            .filter(|_| group.is_empty())
                             .and_then(|ax| {
                                 point_edit::mirror_partner(&screen_pts, vi, ax, mirror_tol)
                             })
                             .map(|j| (j, 0.0, 0.0));
                         self.mesh_drag = Some(MeshDrag {
+                            group,
                             vertex: vi,
                             local,
                             dx: 0.0,
@@ -15549,6 +15589,14 @@ impl EditorUi {
                             *pdx += ldx;
                             *pdy += ldy;
                         }
+                        // the rest of the pick moves the same way on screen
+                        for (j, gdx, gdy) in &mut d.group {
+                            let qx = d.local.get(*j * 2).copied().unwrap_or(0.0) + *gdx;
+                            let qy = d.local.get(*j * 2 + 1).copied().unwrap_or(0.0) + *gdy;
+                            let (ldx, ldy) = parent_delta(&s.puppet, parent, qx, qy, mdx, mdy);
+                            *gdx += ldx;
+                            *gdy += ldy;
+                        }
                     }
                     if resp.drag_stopped()
                         && let Some(d) = self.mesh_drag.take()
@@ -15569,7 +15617,16 @@ impl EditorUi {
                                 .and_then(|(t, w)| mix_uv(&d.model_uvs, t, w)),
                         };
                         let uv = ptr.and_then(uv_at);
+                        let moved = ptr.zip(d.start.get(d.vertex)).map(|(p, &a)| p - a);
                         mesh_op = Some(match (uv, d.partner) {
+                            _ if !d.group.is_empty() => {
+                                let mut moves = vec![(d.vertex, d.dx, d.dy, uv)];
+                                for &(j, gdx, gdy) in &d.group {
+                                    let to = moved.zip(d.start.get(j)).map(|(m, &b)| b + m);
+                                    moves.push((j, gdx, gdy, to.and_then(uv_at)));
+                                }
+                                MeshOp::SlideMany(mi, moves)
+                            }
                             (uv, Some((j, pdx, pdy))) => {
                                 // the mirror's drop: its start, moved the
                                 // pointer's way flipped across the axis
@@ -15620,6 +15677,13 @@ impl EditorUi {
                 // live preview: the dragged vertex follows the pointer, and
                 // its mirror the other way across the axis
                 if let (Some(d), Some(ptr)) = (&self.mesh_drag, ptr) {
+                    if let Some(&a) = d.start.get(d.vertex) {
+                        for &(j, _, _) in &d.group {
+                            if let (Some(&b), Some(sp)) = (d.start.get(j), screen_pts.get_mut(j)) {
+                                *sp = b + (ptr - a);
+                            }
+                        }
+                    }
                     if let Some((j, _, _)) = d.partner
                         && let (Some(&a), Some(&b)) = (d.start.get(d.vertex), d.start.get(j))
                         && let Some(sp) = screen_pts.get_mut(j)
@@ -19702,6 +19766,15 @@ mod key_cmd_tests {
         assert_eq!(s.param_names, ["Hair", "Hair", "Hair 2", "Hair 3"]);
         assert_eq!(s.param_colors.len(), 4);
         assert_eq!(s.param_picked, [2, 3]);
+    }
+
+    #[test]
+    fn select_all_in_mesh_edit_picks_the_points_not_the_meshes() {
+        let mut ed = editor();
+        ed.enter_mesh_edit(0, false);
+        ed.run_key_action(&egui::Context::default(), "select-all");
+        assert_eq!(ed.mesh_picked.len(), 1);
+        assert!(ed.multi_sel.is_empty());
     }
 
     #[test]
