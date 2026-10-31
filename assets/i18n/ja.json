@@ -1577,5 +1577,6 @@
   "Fill page": "ページに合わせる",
   "Scale every piece up (or down) as far as they all still fit one page": "すべてのピースが1ページに収まる範囲で、まとめて拡大（または縮小）します",
   "Turn a quarter left": "左に90°回転",
-  "Turn a quarter right": "右に90°回転"
+  "Turn a quarter right": "右に90°回転",
+  "Drag to turn a quarter at a time; click to turn right": "ドラッグで90°ずつ回転、クリックで右に回転"
 }

@@ -1577,5 +1577,6 @@
   "Fill page": "페이지 채우기",
   "Scale every piece up (or down) as far as they all still fit one page": "모든 조각이 한 페이지에 들어가는 한도까지 함께 확대(또는 축소)합니다",
   "Turn a quarter left": "왼쪽으로 90° 회전",
-  "Turn a quarter right": "오른쪽으로 90° 회전"
+  "Turn a quarter right": "오른쪽으로 90° 회전",
+  "Drag to turn a quarter at a time; click to turn right": "드래그하면 90°씩 회전, 클릭하면 오른쪽으로 회전"
 }
