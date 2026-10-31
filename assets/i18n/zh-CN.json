@@ -1562,7 +1562,6 @@
   "Edit Mesh (Solo)": "编辑网格（单独显示）",
   "Edit the selected meshes with everything else hidden": "隐藏其他所有内容，编辑所选网格",
   "{count} meshes: click one to edit it": "{count} 个网格：点击其中一个进行编辑",
-  "Hide other meshes (S)": "隐藏其他网格 (S)",
   "Pick points first.": "请先选择点。",
   "Drag to move the mirror axis": "拖动以移动镜像轴",
   "Center of the canvas": "画布中心",
