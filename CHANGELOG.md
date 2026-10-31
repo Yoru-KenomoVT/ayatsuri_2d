@@ -76,10 +76,9 @@
 
 - **Select children picks everything under the deformer**: it only picked
   the art meshes right under it; now it picks every deformer and art mesh
-  under it, at any depth. In the Deformer palette, Shift+click picks every
-  row between the two clicks, deformers and art meshes alike, and Ctrl+click
-  can add a deformer inside one already picked. A plain click still picks
-  only the deformer. Moving, re-parenting and flipping a pick act on its
+  under it, at any depth. In the Deformer palette, Shift+click from a
+  deformer down to an art mesh picks every row between, deformers and art
+  meshes alike. Moving, re-parenting and flipping a pick act on its
   outermost deformers, so nothing moves twice.
 
 - **Textures up to the GPU's own limit**: the GPU was asked for 8192 px
