@@ -849,8 +849,18 @@ impl EditorUi {
             copy_names(&meta.id, &base, &ids, &names)
         };
         let ok = s.edit(|m| {
-            ayatsuri_core::edit::create_parameter(m, id.clone(), meta.min, meta.default, meta.max)
-                .is_some()
+            let made = ayatsuri_core::edit::create_parameter(
+                m,
+                id.clone(),
+                meta.min,
+                meta.default,
+                meta.max,
+            );
+            // every setting comes along, Blend Shape included
+            if let Some(p) = made.and_then(|i| m.parameters.get_mut(i)) {
+                *p = ayatsuri_format::model::Parameter { id: id.clone(), ..meta.clone() };
+            }
+            made.is_some()
         });
         if !ok {
             return None;

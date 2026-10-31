@@ -55,7 +55,8 @@
   picked it copied only the one right-clicked, and copies of parameters
   with the same name came out with the same name too. It now copies each
   picked parameter once, every copy's ID and name are new, and the copy
-  keeps its parameter's colour.
+  keeps its parameter's colour and every setting, Blend Shape included
+  (a copy of a blend shape parameter came out as a normal one).
 - **Shortcuts no longer fire while typing**: in a text field such as
   Rename only Save still works, since a capital letter is Shift+key and
   Ctrl+Z or Ctrl+C belong to the field. While a dialog is open, keys
