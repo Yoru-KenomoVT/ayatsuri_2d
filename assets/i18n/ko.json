@@ -1569,5 +1569,9 @@
   "Back to the overlay color": "오버레이 색으로 되돌리기",
   "Selected mesh color override": "선택한 메시 색 덮어쓰기",
   "Select an art mesh": "아트메시를 선택하세요",
-  "Copied. Cut works on art meshes: delete the deformers with Delete.": "복사했습니다. 잘라내기는 아트메시에만 적용됩니다. 디포머는 Delete로 삭제하세요."
+  "Copied. Cut works on art meshes: delete the deformers with Delete.": "복사했습니다. 잘라내기는 아트메시에만 적용됩니다. 디포머는 Delete로 삭제하세요.",
+  "Texture size": "텍스처 크기",
+  "Resize on export": "내보낼 때 크기 조정",
+  "Writes each texture page with its longer side this size. The model and the editor keep their own pages.": "각 텍스처 페이지를 긴 변이 이 크기가 되도록 내보냅니다. 모델과 에디터의 페이지는 그대로입니다.",
+  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "내보내는 동안 페이지당 약 {gb} GB의 메모리를 사용하며, 이렇게 큰 페이지를 불러올 수 있는 앱은 많지 않습니다."
 }

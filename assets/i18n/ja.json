@@ -1569,5 +1569,9 @@
   "Back to the overlay color": "オーバーレイの色に戻す",
   "Selected mesh color override": "選択メッシュの色を上書き",
   "Select an art mesh": "アートメッシュを選択してください",
-  "Copied. Cut works on art meshes: delete the deformers with Delete.": "コピーしました。カットはアートメッシュのみ対象です。デフォーマは Delete で削除してください。"
+  "Copied. Cut works on art meshes: delete the deformers with Delete.": "コピーしました。カットはアートメッシュのみ対象です。デフォーマは Delete で削除してください。",
+  "Texture size": "テクスチャサイズ",
+  "Resize on export": "書き出し時にリサイズ",
+  "Writes each texture page with its longer side this size. The model and the editor keep their own pages.": "各テクスチャページを長辺がこのサイズになるように書き出します。モデルとエディタのページはそのままです。",
+  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "書き出し中はページごとに約 {gb} GB のメモリを使います。この大きさのページを読み込めるアプリは多くありません。"
 }

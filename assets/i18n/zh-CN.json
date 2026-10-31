@@ -1569,5 +1569,9 @@
   "Back to the overlay color": "恢复为叠加层颜色",
   "Selected mesh color override": "所选网格颜色覆盖",
   "Select an art mesh": "请选择一个图形网格",
-  "Copied. Cut works on art meshes: delete the deformers with Delete.": "已复制。剪切仅适用于图形网格；请用 Delete 删除变形器。"
+  "Copied. Cut works on art meshes: delete the deformers with Delete.": "已复制。剪切仅适用于图形网格；请用 Delete 删除变形器。",
+  "Texture size": "纹理尺寸",
+  "Resize on export": "导出时调整大小",
+  "Writes each texture page with its longer side this size. The model and the editor keep their own pages.": "按此尺寸（长边）写出每个纹理页。模型和编辑器中的页面保持不变。",
+  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "导出时每页约占用 {gb} GB 内存，且很少有应用能加载这么大的页面。"
 }
