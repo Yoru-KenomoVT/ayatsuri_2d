@@ -50,6 +50,11 @@
 
 ### Fixed
 
+- **Stroke mesh on a mesh left with a point or two**: after Clear and a
+  point or two placed by hand, a stroke failed ("the mesh could not be
+  rebuilt") or piled its points onto the few there were. The stroke, Auto
+  Mesh and a paste now place the new mesh on the art as it was on entering
+  Mesh Edit whenever the mesh has under three points or no faces.
 - **Blend shapes stay put when their object moves**: a mesh or warp put
   under a new deformer (or moved to another parent) had its blend shape
   keyforms left in the old space, so the shapes jumped. Editing the base

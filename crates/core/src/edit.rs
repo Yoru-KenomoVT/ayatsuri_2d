@@ -2746,9 +2746,14 @@ pub fn remesh_from(
     uvs: &[f32],
     indices: &[u16],
 ) -> bool {
+    // a mesh too bare to be sampled (cleared, or a few points with no
+    // faces) is rebuilt from the reference, or every new point would land
+    // on its one or two points
     if let Some(r) = reference
         && let Some(m) = model.art_meshes.get_mut(mesh)
-        && m.vertex_count == 0
+        && (m.vertex_count < 3 || m.indices.is_empty())
+        && r.vertex_count >= 3
+        && !r.indices.is_empty()
         && m.blend_shapes.len() == r.blend_shapes.len()
     {
         m.vertex_count = r.vertex_count;
@@ -5200,6 +5205,34 @@ mod tests {
         // keyform 1 (A = 1) is not in the base form: the shape stays
         assert!(move_vertices_in(&mut m, 0, Some(1), &[(0, 1.0, 0.0)]));
         assert_eq!(m.art_meshes[0].blend_shapes[0].positions, vec![base[0] + 1.0, base[1] + 0.5]);
+    }
+
+    #[test]
+    fn a_mesh_left_with_one_point_is_rebuilt_from_its_reference() {
+        let mut m = test_model();
+        // the art as shown: a unit square of two triangles, uv = position
+        let full = ArtMesh {
+            vertex_count: 4,
+            uvs: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            binding: Binding::default(),
+            ..m.art_meshes[0].clone()
+        };
+        // cleared, then one point placed: nothing to sample
+        m.art_meshes[0] = ArtMesh {
+            vertex_count: 1,
+            uvs: vec![0.5, 0.5],
+            indices: vec![],
+            positions: vec![0.5, 0.5],
+            ..full.clone()
+        };
+        let uvs = [0.25, 0.25, 0.75, 0.25, 0.5, 0.75];
+        assert!(remesh_from(&mut m, 0, Some(&full), &uvs, &[0, 1, 2]));
+        // each new point lands where its uv is on the art
+        assert_eq!(m.art_meshes[0].positions, uvs.to_vec());
     }
 
     #[test]
