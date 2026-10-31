@@ -1562,5 +1562,9 @@
   "Edit Mesh (Solo)": "메시 편집(솔로)",
   "Edit the selected meshes with everything else hidden": "다른 모든 것을 숨기고 선택한 메시를 편집합니다",
   "{count} meshes: click one to edit it": "메시 {count}개: 클릭하여 편집할 메시 선택",
-  "Hide other meshes (S)": "다른 메시 숨기기 (S)"
+  "Hide other meshes (S)": "다른 메시 숨기기 (S)",
+  "Pick points first.": "먼저 점을 선택하세요.",
+  "Drag to move the mirror axis": "드래그하여 대칭축 이동",
+  "Center of the canvas": "캔버스 중앙",
+  "Center of selected vertices": "선택한 정점의 중앙"
 }

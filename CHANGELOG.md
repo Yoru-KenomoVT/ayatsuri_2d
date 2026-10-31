@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Move the Mirror Edit axis**: drag the axis by its Mirror tab on the
+  canvas, or put it at the canvas centre or the centre of the picked points
+  from Tool Details, as Cubism's axis position does.
 - **Edit Mesh on several meshes** (#47): with several meshes picked, Edit
   Mesh takes them all. The others show faintly, a click on one in the Move
   mode edits it next, and Auto Mesh in the Edit Mesh dialog runs on all of

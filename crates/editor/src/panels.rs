@@ -874,6 +874,11 @@ pub struct EditorUi {
     /// vertical axis (a vertical guide line nearest the centre, else the
     /// canvas centre).
     mirror_edit: bool,
+    /// Where the mirror axis was put by hand (dragged by its tab, or set to
+    /// the picked points' centre), canvas pixels; None follows the guides.
+    mirror_at: Option<f32>,
+    /// Put the mirror axis at the centre of the picked points next frame.
+    mirror_to_pick: bool,
     guide_drag: Option<usize>,
     clip_invert: bool,
     art_pending: Option<(usize, ayatsuri_format::model::ArtPath)>,
@@ -1929,6 +1934,8 @@ impl Default for EditorUi {
             pen: Default::default(),
             show_guides: true,
             mirror_edit: false,
+            mirror_at: None,
+            mirror_to_pick: false,
             guide_drag: None,
             art_pending: None,
             pick_pages: std::collections::HashMap::new(),
@@ -11608,14 +11615,35 @@ impl EditorUi {
         }
         let (origin, scale) = view_origin_scale(view, c, self.view_zoom, self.view_pan);
         // the mirror axis on screen, when Mirror Edit is on
-        let mirror_x = self.mirror_edit.then(|| {
-            let at = s
-                .guides
+        // Center of selected vertices, as Cubism's axis position offers
+        if std::mem::take(&mut self.mirror_to_pick)
+            && let Some(mi) = self.mesh_edit
+            && let Some(g) = s.puppet.mesh_geometry(mi)
+        {
+            let xs: Vec<f32> = self
+                .mesh_picked
                 .iter()
-                .filter(|g| g.vertical)
-                .map(|g| g.at)
-                .min_by(|a, b| (a - cw * 0.5).abs().total_cmp(&(b - cw * 0.5).abs()))
-                .unwrap_or(cw * 0.5);
+                .filter_map(|&v| {
+                    g.positions.get(v * 2).map(|&x| x * c.pixels_per_unit + c.origin_x)
+                })
+                .collect();
+            if xs.is_empty() {
+                set_notice(&mut self.notice, crate::i18n::tr("Pick points first."));
+            } else {
+                let (lo, hi) =
+                    xs.iter().fold((f32::MAX, f32::MIN), |(l, h), &x| (l.min(x), h.max(x)));
+                self.mirror_at = Some((lo + hi) / 2.0);
+            }
+        }
+        let mirror_x = self.mirror_edit.then(|| {
+            let at = self.mirror_at.unwrap_or_else(|| {
+                s.guides
+                    .iter()
+                    .filter(|g| g.vertical)
+                    .map(|g| g.at)
+                    .min_by(|a, b| (a - cw * 0.5).abs().total_cmp(&(b - cw * 0.5).abs()))
+                    .unwrap_or(cw * 0.5)
+            });
             origin.x + at * scale
         });
         let mirror_tol = (3.0 * scale).max(2.0);
@@ -16241,13 +16269,30 @@ impl EditorUi {
                     );
                     y += 10.0;
                 }
-                vp.text(
+                // the name is a tab: drag it to move the axis
+                let tab = vp.text(
                     pos2(ax + 6.0, view.min.y + 6.0),
                     Align2::LEFT_TOP,
                     crate::i18n::tr("Mirror"),
                     FontId::proportional(11.0),
                     col,
                 );
+                let grab = ui
+                    .interact(
+                        tab.expand(4.0).union(Rect::from_center_size(
+                            pos2(ax, tab.center().y),
+                            vec2(10.0, tab.height() + 8.0),
+                        )),
+                        egui::Id::new("mirror-axis-tab"),
+                        Sense::drag(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+                    .on_hover_text(crate::i18n::tr("Drag to move the mirror axis"));
+                if grab.dragged()
+                    && let Some(p) = grab.interact_pointer_pos()
+                {
+                    self.mirror_at = Some((p.x - origin.x) / scale);
+                }
             }
             let rulers = !self.prefs.rulers_off;
             let top = Rect::from_min_max(view.min, pos2(view.max.x, view.min.y + RULER));
