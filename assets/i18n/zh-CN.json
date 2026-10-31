@@ -1565,5 +1565,7 @@
   "Pick points first.": "请先选择点。",
   "Drag to move the mirror axis": "拖动以移动镜像轴",
   "Center of the canvas": "画布中心",
-  "Center of selected vertices": "所选顶点的中心"
+  "Center of selected vertices": "所选顶点的中心",
+  "Wire color": "线框颜色",
+  "Back to the overlay color": "恢复为叠加层颜色"
 }

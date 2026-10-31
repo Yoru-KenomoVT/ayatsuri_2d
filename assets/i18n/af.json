@@ -1565,5 +1565,7 @@
   "Pick points first.": "Kies eers punte.",
   "Drag to move the mirror axis": "Sleep om die spieëlas te skuif",
   "Center of the canvas": "Middel van die doek",
-  "Center of selected vertices": "Middel van die gekose punte"
+  "Center of selected vertices": "Middel van die gekose punte",
+  "Wire color": "Draadkleur",
+  "Back to the overlay color": "Terug na die oorleg-kleur"
 }

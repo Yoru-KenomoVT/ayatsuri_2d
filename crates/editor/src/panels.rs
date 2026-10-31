@@ -10833,6 +10833,37 @@ impl EditorUi {
                 );
                 row(ui, crate::i18n::tr("Texture"), format!("{}", m.texture));
                 row(ui, crate::i18n::tr("Vertices"), format!("{}", m.vertex_count));
+                // the wire colour, for every picked mesh at once
+                ui.horizontal(|ui| {
+                    ui.label(crate::i18n::tr("Wire color"));
+                    let targets: Vec<String> = std::iter::once(i)
+                        .chain(self.multi_sel.iter().copied())
+                        .filter_map(|mi| s.puppet.model().art_meshes.get(mi).map(|a| a.id.clone()))
+                        .collect();
+                    let current = s.mesh_colors.get(&m.id).copied();
+                    let mut rgb = current.unwrap_or([0xE5, 0x48, 0x48]);
+                    let mut set = None;
+                    if ui.color_edit_button_srgb(&mut rgb).changed() {
+                        set = Some(Some(rgb));
+                    }
+                    if current.is_some()
+                        && ui
+                            .small_button(egui_phosphor::regular::X)
+                            .on_hover_text(crate::i18n::tr("Back to the overlay color"))
+                            .clicked()
+                    {
+                        set = Some(None);
+                    }
+                    if let Some(c) = set {
+                        for id in targets {
+                            match c {
+                                Some(c) => s.mesh_colors.insert(id, c),
+                                None => s.mesh_colors.remove(&id),
+                            };
+                        }
+                        s.modified = true;
+                    }
+                });
                 let stack = s.puppet.drawables().position(|d| d.mesh == i);
                 row(
                     ui,
@@ -12506,7 +12537,7 @@ impl EditorUi {
                 let mut owner: Vec<(usize, usize)> = Vec::new();
                 let mut pts: Vec<Pos2> = Vec::new();
                 let mut weights: Vec<f32> = Vec::new();
-                let mut wires: Vec<(Vec<u16>, usize)> = Vec::new();
+                let mut wires: Vec<(Vec<u16>, usize, Color32)> = Vec::new();
                 for &gm in &group {
                     let Some(g) = s.puppet.mesh_geometry(gm) else { continue };
                     let base = pts.len();
@@ -12518,7 +12549,7 @@ impl EditorUi {
                             weights.push(w.and_then(|w| w.get(vi)).copied().unwrap_or(0.0));
                         }
                     }
-                    wires.push((g.indices.to_vec(), base));
+                    wires.push((g.indices.to_vec(), base, mesh_wire(s, gm, self.disp.mesh_color)));
                 }
                 let editable = matches!(self.tool, Tool::Arrow | Tool::Lasso)
                     && !space
@@ -12625,8 +12656,8 @@ impl EditorUi {
                         }
                     }
                 }
-                let stroke = Stroke::new(self.disp.mesh_width, self.disp.mesh_color);
-                for (idx, base) in &wires {
+                for (idx, base, col) in &wires {
+                    let stroke = Stroke::new(self.disp.mesh_width, *col);
                     for t in idx.as_chunks::<3>().0 {
                         let (Some(&a), Some(&b), Some(&c2)) = (
                             pts.get(base + t[0] as usize),
@@ -12640,8 +12671,8 @@ impl EditorUi {
                         vp.line_segment([c2, a], stroke);
                     }
                 }
-                for p in &pts {
-                    vp.circle_filled(*p, 1.8, self.disp.mesh_color);
+                for (p, &(gm, _)) in pts.iter().zip(&owner) {
+                    vp.circle_filled(*p, 1.8, mesh_wire(s, gm, self.disp.mesh_color));
                 }
                 if editable {
                     point_edit::draw_overlay(&self.pts, &vp, &pts, true, 0.0, grab_hot);
@@ -12897,7 +12928,8 @@ impl EditorUi {
                         }
                     }
                     let (tris, _) = gidx.as_chunks::<3>();
-                    let stroke = Stroke::new(self.disp.mesh_width, self.disp.mesh_color);
+                    let wire = mesh_wire(s, mi, self.disp.mesh_color);
+                    let stroke = Stroke::new(self.disp.mesh_width, wire);
                     for &[a, b, cx] in tris {
                         let (Some(&s0), Some(&s1), Some(&s2)) =
                             (pts.get(a as usize), pts.get(b as usize), pts.get(cx as usize))
@@ -12911,7 +12943,7 @@ impl EditorUi {
                     for (vi, p) in pts.iter().enumerate() {
                         let r =
                             if hover_pt == Some(vi) && self.pts.drag.is_none() { 4.0 } else { 1.8 };
-                        vp.circle_filled(*p, r, self.disp.mesh_color);
+                        vp.circle_filled(*p, r, wire);
                     }
                     draw_weights(&vp, &pts, self.brush_w.get(&(1, mi)), self.disp.weight_color);
                     if !path_s.is_empty() {
@@ -14860,7 +14892,7 @@ impl EditorUi {
             let on_current = here.is_some_and(|p| inside(&screen_tris(mi), p));
             for &other in self.mesh_edit_also.iter().filter(|_| !self.mesh_solo) {
                 let tris = screen_tris(other);
-                let faint = theme::pal().text_faint.gamma_multiply(0.5);
+                let faint = mesh_wire(s, other, theme::pal().text_faint).gamma_multiply(0.5);
                 for t in &tris {
                     vp.add(egui::Shape::closed_line(t.to_vec(), Stroke::new(0.6, faint)));
                 }
@@ -15723,7 +15755,8 @@ impl EditorUi {
                     add_mesh_shape(&vp, mesh);
                 }
 
-                let stroke = Stroke::new(1.2, theme::pal().accent);
+                let wire = mesh_wire(s, mi, theme::pal().accent);
+                let stroke = Stroke::new(1.2, wire);
                 let (tris, _) = g.indices.as_chunks::<3>();
                 for &[a, b, cx] in tris {
                     let (Some(&s0), Some(&s1), Some(&s2)) = (
@@ -15750,7 +15783,7 @@ impl EditorUi {
                     } else {
                         (2.6, Color32::WHITE)
                     };
-                    vp.circle(*sp, r, fill, Stroke::new(1.0, theme::pal().accent));
+                    vp.circle(*sp, r, fill, Stroke::new(1.0, wire));
                 }
                 // a held point shows the closed hand; one under the pointer
                 // the pointing hand
@@ -17204,6 +17237,16 @@ fn default_physics_group(n: usize) -> ayatsuri_format::model::PhysicsGroup {
         norm_position: ayatsuri_format::model::PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
         norm_angle: ayatsuri_format::model::PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
     }
+}
+
+/// An art mesh's wire colour: its own when one was picked, else `default`.
+fn mesh_wire(s: &Session, mi: usize, default: Color32) -> Color32 {
+    s.puppet
+        .model()
+        .art_meshes
+        .get(mi)
+        .and_then(|m| s.mesh_colors.get(&m.id))
+        .map_or(default, |&[r, g, b]| Color32::from_rgb(r, g, b))
 }
 
 /// Whether a running chain's links are as long as `nodes` say.
