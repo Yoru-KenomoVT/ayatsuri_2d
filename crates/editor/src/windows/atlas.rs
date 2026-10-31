@@ -36,6 +36,20 @@ pub struct AtlasWin {
     /// The page size whose GPU memory toast was closed, so it stays closed
     /// until the size changes.
     mem_closed: Option<u32>,
+    /// A handle on the selected piece being dragged.
+    handle: Option<HandleDrag>,
+}
+
+/// Dragging one of the selected piece's handles: a corner scales it about
+/// the opposite corner, the knob above turns it about its centre in
+/// quarter turns.
+#[derive(Clone, Copy)]
+enum HandleDrag {
+    /// The fixed corner and the piece's scale and size when the drag began,
+    /// in page pixels; `left`/`top` say which side the dragged corner is on.
+    Scale { anchor: (f32, f32), scale: f32, size: (f32, f32), left: bool, top: bool },
+    /// The pointer's angle about the centre and the turns when it began.
+    Turn { center: (f32, f32), angle: f32, turns: u8 },
 }
 
 /// The sizes the page picker offers.
@@ -79,6 +93,7 @@ impl AtlasWin {
             verified: false,
             scale: 1.0,
             mem_closed: None,
+            handle: None,
         };
         // the layers still on textures of their own: start from a packed
         // layout to make the atlas from, at the size most models use
@@ -94,6 +109,36 @@ impl AtlasWin {
     /// Each piece's turns as placed now, which a new layout keeps.
     fn turns(&self) -> Vec<u8> {
         self.layout.places.iter().map(|p| p.turns).collect()
+    }
+
+    /// The pieces cut from the same rectangle as piece `i` (itself too):
+    /// copies of one mesh, which share a scale and turn.
+    fn twins(&self, i: usize) -> Vec<usize> {
+        let Some(p) = self.pieces.get(i) else { return Vec::new() };
+        let key = (p.page, p.x, p.y, p.w, p.h, p.art);
+        self.pieces
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| (q.page, q.x, q.y, q.w, q.h, q.art) == key)
+            .map(|(j, _)| j)
+            .collect()
+    }
+
+    /// Give piece `i` and its twins this scale and turn, then place `i` so
+    /// its corner sits at (x, y), kept on the page.
+    fn reshape(&mut self, i: usize, scale: f32, turns: u8, x: f32, y: f32) {
+        for j in self.twins(i) {
+            if let Some(t) = self.layout.places.get_mut(j) {
+                t.scale = scale;
+                t.turns = turns;
+            }
+        }
+        let n = self.layout.page_size;
+        if let (Some(p), Some(pl)) = (self.pieces.get(i), self.layout.places.get_mut(i)) {
+            let (w, h) = pl.size(p);
+            pl.x = (x.round().max(0.0) as u32).min(n.saturating_sub(w));
+            pl.y = (y.round().max(0.0) as u32).min(n.saturating_sub(h));
+        }
     }
 
     fn auto(&mut self) {
@@ -530,6 +575,123 @@ impl EditorUi {
                             hit = Some(i);
                         }
                     }
+                    // the selected piece's handles: corners scale it about the
+                    // opposite corner, the knob above turns it a quarter at a time
+                    if let Some(i) = win.selected
+                        && let (Some(p), Some(pl)) =
+                            (win.pieces.get(i).cloned(), win.layout.places.get(i).cloned())
+                        && pl.page == win.page
+                    {
+                        let p = &p;
+                        let (w, h) = pl.size(p);
+                        let (x0, y0) = (pl.x as f32, pl.y as f32);
+                        let (x1, y1) = (x0 + w as f32, y0 + h as f32);
+                        let accent = crate::theme::pal().accent;
+                        let corners =
+                            [(x0, y0, true, true), (x1, y0, false, true), (x1, y1, false, false), (x0, y1, true, false)];
+                        for (k, &(cx, cy, left, top)) in corners.iter().enumerate() {
+                            let at = to_screen(cx, cy);
+                            let hr = Rect::from_center_size(at, vec2(9.0, 9.0));
+                            let hresp = ui.interact(
+                                hr,
+                                ui.id().with(("atlas-corner", k)),
+                                Sense::drag(),
+                            );
+                            if hresp.drag_started() {
+                                // the corner across from this one stays put
+                                let anchor = (if left { x1 } else { x0 }, if top { y1 } else { y0 });
+                                win.handle = Some(HandleDrag::Scale {
+                                    anchor,
+                                    scale: pl.scale,
+                                    size: (w as f32, h as f32),
+                                    left,
+                                    top,
+                                });
+                            }
+                            if hresp.dragged()
+                                && let Some(HandleDrag::Scale { anchor, scale, size, left, top }) =
+                                    win.handle
+                                && let Some(pt) = hresp.interact_pointer_pos()
+                            {
+                                let (px, py) = from_screen(pt);
+                                let f = ((px - anchor.0).abs() / size.0.max(1.0))
+                                    .max((py - anchor.1).abs() / size.1.max(1.0));
+                                let new = (scale * f).clamp(0.01, 16.0);
+                                let mut next = pl.clone();
+                                next.scale = new;
+                                let (nw, nh) = next.size(p);
+                                let nx = if left { anchor.0 - nw as f32 } else { anchor.0 };
+                                let ny = if top { anchor.1 - nh as f32 } else { anchor.1 };
+                                win.reshape(i, new, pl.turns, nx, ny);
+                            }
+                            if hresp.hovered() || hresp.dragged() {
+                                ui.ctx().set_cursor_icon(if left == top {
+                                    egui::CursorIcon::ResizeNwSe
+                                } else {
+                                    egui::CursorIcon::ResizeNeSw
+                                });
+                            }
+                            painter.rect_filled(hr.shrink(1.0), 1.0, Color32::WHITE);
+                            painter.rect_stroke(hr.shrink(1.0), 1.0, Stroke::new(1.5, accent), egui::StrokeKind::Inside);
+                        }
+                        // the turn knob, above the top edge's middle
+                        let top_mid = to_screen((x0 + x1) / 2.0, y0);
+                        let knob = top_mid - vec2(0.0, 22.0);
+                        painter.line_segment([top_mid, knob], Stroke::new(1.0, accent));
+                        let kr = Rect::from_center_size(knob, vec2(14.0, 14.0));
+                        let kresp = ui
+                            .interact(kr, ui.id().with("atlas-turn"), Sense::click_and_drag())
+                            .on_hover_text(tr("Drag to turn a quarter at a time; click to turn right"));
+                        let centre = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                        let angle_of = |pt: Pos2| {
+                            let c = to_screen(centre.0, centre.1);
+                            (pt.y - c.y).atan2(pt.x - c.x)
+                        };
+                        if kresp.drag_started()
+                            && let Some(pt) = kresp.interact_pointer_pos()
+                        {
+                            win.handle = Some(HandleDrag::Turn {
+                                center: centre,
+                                angle: angle_of(pt),
+                                turns: pl.turns,
+                            });
+                        }
+                        let mut turn_to = None;
+                        if kresp.dragged()
+                            && let Some(HandleDrag::Turn { center, angle, turns }) = win.handle
+                            && let Some(pt) = kresp.interact_pointer_pos()
+                        {
+                            let c = to_screen(center.0, center.1);
+                            let now = (pt.y - c.y).atan2(pt.x - c.x);
+                            let mut d = now - angle;
+                            while d > std::f32::consts::PI {
+                                d -= std::f32::consts::TAU;
+                            }
+                            while d < -std::f32::consts::PI {
+                                d += std::f32::consts::TAU;
+                            }
+                            let steps = (d / std::f32::consts::FRAC_PI_2).round() as i32;
+                            turn_to = Some(((turns as i32 + steps).rem_euclid(4) as u8, center));
+                        } else if kresp.clicked() {
+                            turn_to = Some(((pl.turns + 1) % 4, centre));
+                        }
+                        if let Some((t, c)) = turn_to
+                            && t != pl.turns
+                        {
+                            let mut next = pl.clone();
+                            next.turns = t;
+                            let (nw, nh) = next.size(p);
+                            win.reshape(i, pl.scale, t, c.0 - nw as f32 / 2.0, c.1 - nh as f32 / 2.0);
+                        }
+                        if kresp.hovered() || kresp.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        }
+                        painter.circle_filled(knob, 5.5, Color32::WHITE);
+                        painter.circle_stroke(knob, 5.5, Stroke::new(1.5, accent));
+                    }
+                    if ui.input(|inp| inp.pointer.any_released()) {
+                        win.handle = None;
+                    }
                     // big pages: a small red toast in the corner, closed with its x
                     let page_side = win.layout.page_size;
                     if page_side > 8192 && win.mem_closed != Some(page_side) {
@@ -676,14 +838,7 @@ impl EditorUi {
                             ));
                             // this piece's own scale and turn; copies of the
                             // same rectangle go with it
-                            let key = (p.page, p.x, p.y, p.w, p.h, p.art);
-                            let twins: Vec<usize> = win
-                                .pieces
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, q)| (q.page, q.x, q.y, q.w, q.h, q.art) == key)
-                                .map(|(j, _)| j)
-                                .collect();
+                            let twins = win.twins(i);
                             if let Some(pl) = win.layout.places.get(i).cloned() {
                                 let mut next = pl.clone();
                                 ui.horizontal(|ui| {

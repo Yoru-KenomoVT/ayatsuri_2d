@@ -1577,5 +1577,6 @@
   "Fill page": "填满页面",
   "Scale every piece up (or down) as far as they all still fit one page": "将所有块一起放大（或缩小），直到刚好都能放进一页",
   "Turn a quarter left": "向左旋转 90°",
-  "Turn a quarter right": "向右旋转 90°"
+  "Turn a quarter right": "向右旋转 90°",
+  "Drag to turn a quarter at a time; click to turn right": "拖动按 90° 旋转；单击向右旋转"
 }

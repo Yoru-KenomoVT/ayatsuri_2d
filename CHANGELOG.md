@@ -10,6 +10,9 @@
   longer leaves them crowded in one corner). The uvs and the copied pixels
   follow the scale and turn. The GPU memory warning for pages over 8192 px
   is now a small red toast in the corner of the page view, closed with its x.
+  The selected piece has handles on the page: drag a corner to scale it
+  about the opposite corner, or the knob above it to turn it a quarter at
+  a time (a click turns it right).
 - **Texture size on moc3 export**: Resize on export writes each texture
   page with its longer side up to 49152 px, for the files only; the model
   and the editor keep their own pages, which the GPU can hold.
