@@ -76,6 +76,12 @@
 
 ### Fixed
 
+- **Select children picks child deformers too**: it only picked the art
+  meshes right under the deformer; now the deformers right under it are
+  picked as well, bringing everything inside them. In the Deformer palette,
+  rows inside a picked deformer show as picked, since they move and copy
+  with it.
+
 - **Texture atlas pages up to the GPU's own limit**: the GPU was asked
   for 8192 px textures at most whatever it could take, so the atlas's page
   size stopped at 8192. It now asks for the card's limit, 16384 or 32768

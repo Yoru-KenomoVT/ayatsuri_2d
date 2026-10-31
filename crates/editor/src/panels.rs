@@ -9793,6 +9793,31 @@ impl EditorUi {
         let mut def_cmd: Option<DefCmd> = None;
         let rename_sc = self.sc("rename");
         let picked_defs = def_group(self.selected, &self.def_pick);
+        // deformers inside a picked one come along with it, so their rows
+        // and meshes show as picked too
+        let inside_pick: Vec<bool> = match &self.session {
+            Some(s) => {
+                let defs = &s.puppet.model().deformers;
+                (0..defs.len())
+                    .map(|d| {
+                        let mut cur = defs.get(d).and_then(|x| x.parent_deformer);
+                        let mut hops = 0;
+                        while let Some(c) = cur {
+                            if picked_defs.contains(&(c as usize)) {
+                                return true;
+                            }
+                            cur = defs.get(c as usize).and_then(|x| x.parent_deformer);
+                            hops += 1;
+                            if hops > 1024 {
+                                break;
+                            }
+                        }
+                        false
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
         let mut def_rows: Vec<usize> = Vec::new();
         let mut def_click: Option<usize> = None;
         let mut def_mesh_rows: Vec<usize> = Vec::new();
@@ -9915,7 +9940,10 @@ impl EditorUi {
             for (i, dep, _, is_warp, has_kids) in rows {
                 let (rect, resp) = ui
                     .allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click_and_drag());
-                if self.selected == Some(Sel::Deformer(i)) || picked_defs.contains(&i) {
+                if self.selected == Some(Sel::Deformer(i))
+                    || picked_defs.contains(&i)
+                    || inside_pick.get(i).copied().unwrap_or(false)
+                {
                     paint_picked_row(ui, rect);
                 }
                 def_rows.push(i);
@@ -10117,17 +10145,28 @@ impl EditorUi {
                     }
                     ui.separator();
                     if ui.button(crate::i18n::tr("Select children")).clicked() {
-                        self.multi_sel = s
-                            .puppet
-                            .model()
+                        // the meshes and deformers right under it; a child
+                        // deformer brings everything under it along
+                        let model = s.puppet.model();
+                        self.multi_sel = model
                             .art_meshes
                             .iter()
                             .enumerate()
                             .filter(|(_, m)| m.parent_deformer == Some(i as u32))
                             .map(|(mi, _)| mi)
                             .collect();
-                        if let Some(&first) = self.multi_sel.last() {
-                            self.selected = Some(Sel::Mesh(first));
+                        self.def_pick = model
+                            .deformers
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, d)| d.parent_deformer == Some(i as u32))
+                            .map(|(di, _)| di)
+                            .collect();
+                        self.def_anchor = self.def_pick.first().copied();
+                        if let Some(&first) = self.def_pick.first() {
+                            self.selected = Some(Sel::Deformer(first));
+                        } else if let Some(&last) = self.multi_sel.last() {
+                            self.selected = Some(Sel::Mesh(last));
                         }
                         ui.close();
                     }
@@ -10161,7 +10200,11 @@ impl EditorUi {
                     def_drop_target(ui, &resp, None, Some(i as u32), false, &mut def_cmd);
                     def_mesh_rows.push(mi);
                     all_rows.push((false, mi));
-                    if self.selected == Some(Sel::Mesh(mi)) || self.multi_sel.contains(&mi) {
+                    if self.selected == Some(Sel::Mesh(mi))
+                        || self.multi_sel.contains(&mi)
+                        || picked_defs.contains(&i)
+                        || inside_pick.get(i).copied().unwrap_or(false)
+                    {
                         paint_picked_row(ui, rect);
                     }
                     let x = rect.min.x + 62.0 + dep as f32 * 14.0;
