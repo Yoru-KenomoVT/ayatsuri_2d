@@ -1573,5 +1573,9 @@
   "Texture size": "纹理尺寸",
   "Resize on export": "导出时调整大小",
   "Writes each texture page with its longer side this size. The model and the editor keep their own pages.": "按此尺寸（长边）写出每个纹理页。模型和编辑器中的页面保持不变。",
-  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "导出时每页约占用 {gb} GB 内存，且很少有应用能加载这么大的页面。"
+  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "导出时每页约占用 {gb} GB 内存，且很少有应用能加载这么大的页面。",
+  "Fill page": "填满页面",
+  "Scale every piece up (or down) as far as they all still fit one page": "将所有块一起放大（或缩小），直到刚好都能放进一页",
+  "Turn a quarter left": "向左旋转 90°",
+  "Turn a quarter right": "向右旋转 90°"
 }

@@ -1573,5 +1573,9 @@
   "Texture size": "텍스처 크기",
   "Resize on export": "내보낼 때 크기 조정",
   "Writes each texture page with its longer side this size. The model and the editor keep their own pages.": "각 텍스처 페이지를 긴 변이 이 크기가 되도록 내보냅니다. 모델과 에디터의 페이지는 그대로입니다.",
-  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "내보내는 동안 페이지당 약 {gb} GB의 메모리를 사용하며, 이렇게 큰 페이지를 불러올 수 있는 앱은 많지 않습니다."
+  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "내보내는 동안 페이지당 약 {gb} GB의 메모리를 사용하며, 이렇게 큰 페이지를 불러올 수 있는 앱은 많지 않습니다.",
+  "Fill page": "페이지 채우기",
+  "Scale every piece up (or down) as far as they all still fit one page": "모든 조각이 한 페이지에 들어가는 한도까지 함께 확대(또는 축소)합니다",
+  "Turn a quarter left": "왼쪽으로 90° 회전",
+  "Turn a quarter right": "오른쪽으로 90° 회전"
 }

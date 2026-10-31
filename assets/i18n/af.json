@@ -1573,5 +1573,9 @@
   "Texture size": "Tekstuurgrootte",
   "Resize on export": "Skaal by uitvoer",
   "Writes each texture page with its longer side this size. The model and the editor keep their own pages.": "Skryf elke tekstuurblad met sy langste sy op hierdie grootte. Die model en die redigeerder hou hul eie blaaie.",
-  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "Ongeveer {gb} GB geheue per blad tydens uitvoer, en min toepassings laai so groot blaaie."
+  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "Ongeveer {gb} GB geheue per blad tydens uitvoer, en min toepassings laai so groot blaaie.",
+  "Fill page": "Vul blad",
+  "Scale every piece up (or down) as far as they all still fit one page": "Skaal alle stukke so ver op (of af) as wat hulle saam nog op een blad pas",
+  "Turn a quarter left": "Kwartdraai links",
+  "Turn a quarter right": "Kwartdraai regs"
 }

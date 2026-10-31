@@ -1573,5 +1573,9 @@
   "Texture size": "テクスチャサイズ",
   "Resize on export": "書き出し時にリサイズ",
   "Writes each texture page with its longer side this size. The model and the editor keep their own pages.": "各テクスチャページを長辺がこのサイズになるように書き出します。モデルとエディタのページはそのままです。",
-  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "書き出し中はページごとに約 {gb} GB のメモリを使います。この大きさのページを読み込めるアプリは多くありません。"
+  "About {gb} GB of memory per page while exporting, and few apps load pages this large.": "書き出し中はページごとに約 {gb} GB のメモリを使います。この大きさのページを読み込めるアプリは多くありません。",
+  "Fill page": "ページに合わせる",
+  "Scale every piece up (or down) as far as they all still fit one page": "すべてのピースが1ページに収まる範囲で、まとめて拡大（または縮小）します",
+  "Turn a quarter left": "左に90°回転",
+  "Turn a quarter right": "右に90°回転"
 }

@@ -38,12 +38,42 @@ pub struct Piece {
 /// share one place.
 type PieceKey = (usize, u32, u32, u32, u32, Option<[u32; 4]>);
 
-/// Where a piece goes: page and top-left, in page pixels of the new size.
+/// Where a piece goes: page and top-left, in page pixels of the new size,
+/// how much it is scaled, and how many quarter turns clockwise.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Place {
     pub page: usize,
     pub x: u32,
     pub y: u32,
+    pub scale: f32,
+    pub turns: u8,
+}
+
+impl Place {
+    pub fn at(page: usize, x: u32, y: u32) -> Self {
+        Place { page, x, y, scale: 1.0, turns: 0 }
+    }
+
+    /// The piece's size here, scaled and turned, in page pixels.
+    pub fn size(&self, p: &Piece) -> (u32, u32) {
+        let w = ((p.w as f32 * self.scale).round() as u32).max(1);
+        let h = ((p.h as f32 * self.scale).round() as u32).max(1);
+        if self.turns % 2 == 1 { (h, w) } else { (w, h) }
+    }
+
+    /// Where a point of the piece (x, y from its top-left, unscaled piece
+    /// pixels) lands on the new page.
+    pub fn map(&self, p: &Piece, x: f32, y: f32) -> (f32, f32) {
+        let (sx, sy) = (x * self.scale, y * self.scale);
+        let (w, h) = (p.w as f32 * self.scale, p.h as f32 * self.scale);
+        let (dx, dy) = match self.turns % 4 {
+            1 => (h - sy, sx),
+            2 => (w - sx, h - sy),
+            3 => (sy, w - sx),
+            _ => (sx, sy),
+        };
+        (self.x as f32 + dx, self.y as f32 + dy)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -101,30 +131,72 @@ pub fn pieces(model: &Model, page_sizes: &[(u32, u32)], art: &[[f32; 4]]) -> Vec
 /// right, a new shelf when the row fills, a new page when the page fills.
 /// Pieces that share one rectangle (copies of a mesh) go to one place.
 /// A piece bigger than a page is scaled down to fit when `fit` is set,
-/// else it is reported as the error.
+/// else it is reported as the error. Every piece is scaled by `scale` first
+/// (and keeps the turns it has in `turns`, parallel to the pieces).
 pub fn auto_layout(pieces: &[Piece], page_size: u32, fit: bool) -> Result<Layout, String> {
+    auto_layout_scaled(pieces, page_size, fit, 1.0, &[])
+}
+
+/// The largest scale (at most `limit`) at which every piece packs onto one
+/// page of `page_size`, to the nearest percent; the pieces then fill it.
+pub fn fill_scale(pieces: &[Piece], page_size: u32, turns: &[u8], limit: f32) -> f32 {
+    let one_page =
+        |k: f32| auto_layout_scaled(pieces, page_size, false, k, turns).is_ok_and(|l| l.pages <= 1);
+    let (mut lo, mut hi) = (0.01f32, limit.max(0.01));
+    if one_page(hi) {
+        return hi;
+    }
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        if one_page(mid) { lo = mid } else { hi = mid }
+    }
+    (lo * 100.0).floor().max(1.0) / 100.0
+}
+
+pub fn auto_layout_scaled(
+    pieces: &[Piece],
+    page_size: u32,
+    fit: bool,
+    scale: f32,
+    turns: &[u8],
+) -> Result<Layout, String> {
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     let page_size = page_size.clamp(MIN_PAGE, MAX_PAGE);
     let mut key_of: HashMap<PieceKey, usize> = HashMap::new();
-    let mut unique: Vec<(u32, u32)> = Vec::new();
+    // each unique rectangle: its size placed, its scale and turns
+    let mut unique: Vec<(u32, u32, f32, u8)> = Vec::new();
     let mut slot: Vec<usize> = Vec::with_capacity(pieces.len());
-    for p in pieces {
+    for (pi, p) in pieces.iter().enumerate() {
         let k = (p.page, p.x, p.y, p.w, p.h, p.art);
         let i = *key_of.entry(k).or_insert_with(|| {
-            unique.push((p.w, p.h));
+            let t = turns.get(pi).copied().unwrap_or(0) % 4;
+            let mut place = Place { scale, turns: t, ..Place::at(0, 0, 0) };
+            let (w, h) = place.size(p);
+            if fit && (w > page_size || h > page_size) {
+                // scaled down until it fits, proportions kept
+                place.scale *= page_size as f32 / w.max(h) as f32;
+            }
+            let (w, h) = place.size(p);
+            unique.push((w.min(page_size), h.min(page_size), place.scale, t));
             unique.len() - 1
         });
         slot.push(i);
     }
     let mut order: Vec<usize> = (0..unique.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(unique.get(i).map(|s| s.1).unwrap_or(0)));
-    let mut placed: Vec<Place> = vec![Place { page: 0, x: 0, y: 0 }; unique.len()];
+    let mut placed: Vec<Place> = vec![Place::at(0, 0, 0); unique.len()];
     let (mut page, mut x, mut y, mut shelf) = (0usize, 0u32, 0u32, 0u32);
     for i in order {
-        let (w, h) = unique.get(i).copied().unwrap_or((0, 0));
-        if (w > page_size || h > page_size) && !fit {
-            return Err(format!("a {w} x {h} piece does not fit a {page_size} px page"));
+        let (w, h, k, t) = unique.get(i).copied().unwrap_or((0, 0, 1.0, 0));
+        let whole = pieces
+            .get(slot.iter().position(|&s| s == i).unwrap_or(0))
+            .map(|p| Place { scale: k, turns: t, ..Place::at(0, 0, 0) }.size(p));
+        if let Some((fw, fh)) = whole
+            && (fw > page_size || fh > page_size)
+            && !fit
+        {
+            return Err(format!("a {fw} x {fh} piece does not fit a {page_size} px page"));
         }
-        let (w, h) = (w.min(page_size), h.min(page_size));
         if x + w > page_size {
             x = 0;
             y += shelf + GAP;
@@ -137,15 +209,13 @@ pub fn auto_layout(pieces: &[Piece], page_size: u32, fit: bool) -> Result<Layout
             shelf = 0;
         }
         if let Some(p) = placed.get_mut(i) {
-            *p = Place { page, x, y };
+            *p = Place { page, x, y, scale: k, turns: t };
         }
         x += w + GAP;
         shelf = shelf.max(h);
     }
-    let places = slot
-        .iter()
-        .map(|&i| placed.get(i).cloned().unwrap_or(Place { page: 0, x: 0, y: 0 }))
-        .collect();
+    let places =
+        slot.iter().map(|&i| placed.get(i).cloned().unwrap_or(Place::at(0, 0, 0))).collect();
     Ok(Layout { page_size, pages: if unique.is_empty() { 0 } else { page + 1 }, places })
 }
 
@@ -173,7 +243,8 @@ pub fn verify(pieces: &[Piece], layout: &Layout) -> Problems {
     let side = layout.page_size;
     let rect = |i: usize| {
         let (p, pl) = (pieces.get(i)?, layout.places.get(i)?);
-        Some((pl.page, pl.x, pl.y, pl.x.saturating_add(p.w), pl.y.saturating_add(p.h)))
+        let (w, h) = pl.size(p);
+        Some((pl.page, pl.x, pl.y, pl.x.saturating_add(w), pl.y.saturating_add(h)))
     };
     let key = |p: &Piece| -> PieceKey { (p.page, p.x, p.y, p.w, p.h, p.art) };
     let mut out = Problems::default();
@@ -213,14 +284,13 @@ pub fn apply_to_model(
     for (p, place) in pieces.iter().zip(&layout.places) {
         let Some(&(pw, ph)) = page_sizes.get(p.page) else { continue };
         let Some(am) = model.art_meshes.get_mut(p.mesh) else { continue };
-        // a piece scaled to fit a page keeps its proportions
-        let sx = (layout.page_size.min(p.w)) as f32 / p.w.max(1) as f32;
-        let sy = (layout.page_size.min(p.h)) as f32 / p.h.max(1) as f32;
+        // scaled and turned as the piece is placed
         for uv in am.uvs.as_chunks_mut::<2>().0 {
             let px = uv[0] * pw as f32 - p.x as f32;
             let py = uv[1] * ph as f32 - p.y as f32;
-            uv[0] = (place.x as f32 + px * sx) / n;
-            uv[1] = (place.y as f32 + py * sy) / n;
+            let (x, y) = place.map(p, px, py);
+            uv[0] = x / n;
+            uv[1] = y / n;
         }
         am.texture = first_new_page + place.page as u32;
     }
@@ -256,7 +326,6 @@ pub fn build_pages(
                 cache = decode(src).map(|img| (src, img));
             }
             let Some((_, source)) = &cache else { continue };
-            let (w, h) = (p.w.min(n), p.h.min(n));
             let mut view = image::imageops::crop_imm(source, p.x, p.y, p.w, p.h).to_image();
             // only the mesh's own art comes along
             if let Some([x0, y0, x1, y1]) = p.art {
@@ -267,13 +336,20 @@ pub fn build_pages(
                     }
                 }
             }
-            if w == p.w && h == p.h {
-                image::imageops::replace(&mut img, &view, pl.x as i64, pl.y as i64);
-            } else {
-                let small =
-                    image::imageops::resize(&view, w, h, image::imageops::FilterType::Triangle);
-                image::imageops::replace(&mut img, &small, pl.x as i64, pl.y as i64);
+            // scaled, then turned, as the uvs are
+            let sw = ((p.w as f32 * pl.scale).round() as u32).max(1);
+            let sh = ((p.h as f32 * pl.scale).round() as u32).max(1);
+            if (sw, sh) != (p.w, p.h) {
+                view =
+                    image::imageops::resize(&view, sw, sh, image::imageops::FilterType::CatmullRom);
             }
+            let view = match pl.turns % 4 {
+                1 => image::imageops::rotate90(&view),
+                2 => image::imageops::rotate180(&view),
+                3 => image::imageops::rotate270(&view),
+                _ => view,
+            };
+            image::imageops::replace(&mut img, &view, pl.x as i64, pl.y as i64);
         }
         out.push(img);
     }
@@ -340,7 +416,7 @@ mod tests {
             Piece { mesh: 2, page: 0, x: 0, y: 0, w: 50, h: 50, art: None },
             Piece { mesh: 3, page: 0, x: 0, y: 0, w: 50, h: 50, art: None },
         ];
-        let place = |page, x, y| Place { page, x, y };
+        let place = |page, x, y| Place::at(page, x, y);
         let mut layout = Layout {
             page_size: 256,
             pages: 2,
@@ -378,13 +454,40 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_scaled_piece_maps_and_copies_the_same_way() {
+        let p = Piece { mesh: 0, page: 0, x: 0, y: 0, w: 2, h: 1, art: None };
+        let pl = Place { scale: 2.0, turns: 1, ..Place::at(0, 10, 10) };
+        // 2 x 1 doubled is 4 x 2, a quarter turn makes it 2 x 4
+        assert_eq!(pl.size(&p), (2, 4));
+        // the top-left corner goes to the top-right after a quarter turn
+        assert_eq!(pl.map(&p, 0.0, 0.0), (12.0, 10.0));
+        assert_eq!(pl.map(&p, 2.0, 1.0), (10.0, 14.0));
+        // the pixels land where the uvs say: the left pixel red at the top
+        let mut src = image::RgbaImage::new(2, 1);
+        src.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        src.put_pixel(1, 0, image::Rgba([0, 0, 255, 255]));
+        let layout = Layout { page_size: 16, pages: 1, places: vec![pl] };
+        let pages = build_pages(&[p], &layout, |_| Some(src.clone()));
+        assert_eq!(pages[0].get_pixel(11, 10)[0], 255, "red at the top");
+        assert_eq!(pages[0].get_pixel(11, 13)[2], 255, "blue at the bottom");
+    }
+
+    #[test]
+    fn fill_page_scales_the_pieces_up_to_the_page() {
+        let ps = vec![Piece { mesh: 0, page: 0, x: 0, y: 0, w: 100, h: 100, art: None }];
+        let k = fill_scale(&ps, 1024, &[], 16.0);
+        assert!((10.0..=10.24).contains(&k), "{k}");
+        let l = auto_layout_scaled(&ps, 1024, false, k, &[]).unwrap();
+        assert_eq!(l.pages, 1);
+    }
+
+    #[test]
     fn uvs_follow_their_piece_exactly() {
         let mut m = Model::new();
         m.art_meshes.push(mesh(0, &[0.25, 0.25, 0.5, 0.25, 0.5, 0.5]));
         let sizes = [(1024, 1024)];
         let ps = pieces(&m, &sizes, &[]);
-        let layout =
-            Layout { page_size: 512, pages: 1, places: vec![Place { page: 0, x: 100, y: 200 }] };
+        let layout = Layout { page_size: 512, pages: 1, places: vec![Place::at(0, 100, 200)] };
         apply_to_model(&mut m, &ps, &layout, &sizes, 3);
         let am = &m.art_meshes[0];
         assert_eq!(am.texture, 3);
@@ -402,8 +505,7 @@ mod tests {
             if x < 4 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) }
         });
         let ps = vec![Piece { mesh: 0, page: 0, x: 0, y: 0, w: 8, h: 8, art: Some([0, 0, 4, 8]) }];
-        let layout =
-            Layout { page_size: 16, pages: 1, places: vec![Place { page: 0, x: 0, y: 0 }] };
+        let layout = Layout { page_size: 16, pages: 1, places: vec![Place::at(0, 0, 0)] };
         let out = build_pages(&ps, &layout, |_| Some(src.clone()));
         assert_eq!(out[0].get_pixel(2, 2), &image::Rgba([255, 0, 0, 255]));
         assert_eq!(out[0].get_pixel(6, 2), &image::Rgba([0, 0, 0, 0]));
@@ -417,8 +519,7 @@ mod tests {
     #[test]
     fn pages_are_rebuilt_from_the_pieces() {
         let ps = vec![Piece { mesh: 0, page: 0, x: 2, y: 2, w: 4, h: 4, art: None }];
-        let layout =
-            Layout { page_size: 16, pages: 1, places: vec![Place { page: 0, x: 8, y: 8 }] };
+        let layout = Layout { page_size: 16, pages: 1, places: vec![Place::at(0, 8, 8)] };
         let src = image::RgbaImage::from_fn(8, 8, |x, y| {
             if (2..6).contains(&x) && (2..6).contains(&y) {
                 image::Rgba([255, 0, 0, 255])

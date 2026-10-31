@@ -31,6 +31,8 @@ pub struct AtlasWin {
     custom: bool,
     /// What Verify placement last said, when it found nothing.
     verified: bool,
+    /// Auto layout scales every piece by this first (Fill page finds it).
+    scale: f32,
 }
 
 /// The sizes the page picker offers.
@@ -56,11 +58,7 @@ impl AtlasWin {
         let page_count = used.len().max(1);
         let places = pieces
             .iter()
-            .map(|p| Place {
-                page: used.iter().position(|&u| u == p.page).unwrap_or(0),
-                x: p.x,
-                y: p.y,
-            })
+            .map(|p| Place::at(used.iter().position(|&u| u == p.page).unwrap_or(0), p.x, p.y))
             .collect();
         let mut win = AtlasWin {
             pieces,
@@ -76,6 +74,7 @@ impl AtlasWin {
             panning: false,
             custom: false,
             verified: false,
+            scale: 1.0,
         };
         // the layers still on textures of their own: start from a packed
         // layout to make the atlas from, at the size most models use
@@ -88,8 +87,20 @@ impl AtlasWin {
         win
     }
 
+    /// Each piece's turns as placed now, which a new layout keeps.
+    fn turns(&self) -> Vec<u8> {
+        self.layout.places.iter().map(|p| p.turns).collect()
+    }
+
     fn auto(&mut self) {
-        match crate::atlas::auto_layout(&self.pieces, self.layout.page_size, self.fit) {
+        let turns = self.turns();
+        match crate::atlas::auto_layout_scaled(
+            &self.pieces,
+            self.layout.page_size,
+            self.fit,
+            self.scale,
+            &turns,
+        ) {
             Ok(l) => {
                 self.layout = l;
                 self.page = 0;
@@ -174,6 +185,30 @@ impl EditorUi {
                         );
                     }
                     ui.checkbox(&mut win.fit, tr("Scale pieces that don't fit"));
+                    // every piece scaled together; Fill page finds the most
+                    // that still fits one page
+                    ui.label(tr("Scale"));
+                    let sc = ui.add(
+                        egui::DragValue::new(&mut win.scale)
+                            .range(0.01..=16.0)
+                            .speed(0.01)
+                            .max_decimals(2),
+                    );
+                    if sc.drag_stopped() || sc.lost_focus() {
+                        win.auto();
+                    }
+                    if ui
+                        .button(tr("Fill page"))
+                        .on_hover_text(tr(
+                            "Scale every piece up (or down) as far as they all still fit one page",
+                        ))
+                        .clicked()
+                    {
+                        let turns = win.turns();
+                        win.scale =
+                            crate::atlas::fill_scale(&win.pieces, win.layout.page_size, &turns, 16.0);
+                        win.auto();
+                    }
                     if ui.button(tr("Auto layout")).clicked() {
                         win.auto();
                     }
@@ -453,25 +488,33 @@ impl EditorUi {
                         if pl.page != win.page {
                             continue;
                         }
-                        let (w, h) = (
-                            p.w.min(win.layout.page_size) as f32,
-                            p.h.min(win.layout.page_size) as f32,
-                        );
+                        let (w, h) = pl.size(p);
                         let r = Rect::from_min_max(
                             to_screen(pl.x as f32, pl.y as f32),
-                            to_screen(pl.x as f32 + w, pl.y as f32 + h),
+                            to_screen(pl.x as f32 + w as f32, pl.y as f32 + h as f32),
                         );
                         if let (Some(Some(t)), Some(&(pw, ph))) =
                             (s.textures.get(p.page), win.sizes.get(p.page))
                         {
-                            let uv = Rect::from_min_max(
-                                pos2(p.x as f32 / pw as f32, p.y as f32 / ph as f32),
-                                pos2(
-                                    (p.x + p.w) as f32 / pw as f32,
-                                    (p.y + p.h) as f32 / ph as f32,
-                                ),
-                            );
-                            painter.image(t.id(), r, uv, Color32::WHITE);
+                            // the piece's corners, turned as it is placed
+                            let uv = |x: u32, y: u32| pos2(x as f32 / pw as f32, y as f32 / ph as f32);
+                            let corners = [
+                                ((0.0, 0.0), uv(p.x, p.y)),
+                                ((p.w as f32, 0.0), uv(p.x + p.w, p.y)),
+                                ((p.w as f32, p.h as f32), uv(p.x + p.w, p.y + p.h)),
+                                ((0.0, p.h as f32), uv(p.x, p.y + p.h)),
+                            ];
+                            let mut mesh = egui::Mesh::with_texture(t.id());
+                            for ((cx, cy), tuv) in corners {
+                                let (x, y) = pl.map(p, cx, cy);
+                                mesh.vertices.push(egui::epaint::Vertex {
+                                    pos: to_screen(x, y),
+                                    uv: tuv,
+                                    color: Color32::WHITE,
+                                });
+                            }
+                            mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+                            painter.add(egui::Shape::mesh(mesh));
                         }
                         let on = win.selected == Some(i);
                         // a piece overlapping another, or past the page, in red
@@ -521,7 +564,7 @@ impl EditorUi {
                         && let Some(pl) = win.layout.places.get_mut(i)
                     {
                         let (x, y) = from_screen(pt - off);
-                        let (w, h) = win.pieces.get(i).map_or((0, 0), |p| (p.w, p.h));
+                        let (w, h) = win.pieces.get(i).map_or((0, 0), |p| pl.size(p));
                         pl.x =
                             (x.round().max(0.0) as u32).min(win.layout.page_size.saturating_sub(w));
                         pl.y =
@@ -593,6 +636,50 @@ impl EditorUi {
                                     ("page", &p.page),
                                 ],
                             ));
+                            // this piece's own scale and turn; copies of the
+                            // same rectangle go with it
+                            let key = (p.page, p.x, p.y, p.w, p.h, p.art);
+                            let twins: Vec<usize> = win
+                                .pieces
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, q)| (q.page, q.x, q.y, q.w, q.h, q.art) == key)
+                                .map(|(j, _)| j)
+                                .collect();
+                            if let Some(pl) = win.layout.places.get(i).cloned() {
+                                let mut next = pl.clone();
+                                ui.horizontal(|ui| {
+                                    ui.label(tr("Scale"));
+                                    ui.add(
+                                        egui::DragValue::new(&mut next.scale)
+                                            .range(0.01..=16.0)
+                                            .speed(0.01)
+                                            .max_decimals(2),
+                                    );
+                                    if ui
+                                        .button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                                        .on_hover_text(tr("Turn a quarter left"))
+                                        .clicked()
+                                    {
+                                        next.turns = (next.turns + 3) % 4;
+                                    }
+                                    if ui
+                                        .button(egui_phosphor::regular::ARROW_CLOCKWISE)
+                                        .on_hover_text(tr("Turn a quarter right"))
+                                        .clicked()
+                                    {
+                                        next.turns = (next.turns + 1) % 4;
+                                    }
+                                });
+                                if next != pl {
+                                    for j in twins {
+                                        if let Some(t) = win.layout.places.get_mut(j) {
+                                            t.scale = next.scale;
+                                            t.turns = next.turns;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     });
                 });
