@@ -866,22 +866,34 @@ fn map_child(model: &mut Model, c: Child, f: &dyn Fn(f32, f32) -> (f32, f32)) {
         }
     };
     match c {
+        // blend shape keyforms are whole forms in the same space, so they
+        // go through the same map or the shapes jump on a re-parent
         Child::Mesh(i) => {
             if let Some(m) = model.art_meshes.get_mut(i) {
                 map_pairs(&mut m.positions);
-            }
-        }
-        Child::Deformer(i) => match model.deformers.get_mut(i).map(|d| &mut d.kind) {
-            Some(DeformerKind::Warp(w)) => map_pairs(&mut w.positions),
-            Some(DeformerKind::Rotation(r)) => {
-                for (x, y) in r.origins_x.iter_mut().zip(r.origins_y.iter_mut()) {
-                    let (nx, ny) = f(*x, *y);
-                    *x = nx;
-                    *y = ny;
+                for b in &mut m.blend_shapes {
+                    map_pairs(&mut b.positions);
                 }
             }
-            None => {}
-        },
+        }
+        Child::Deformer(i) => {
+            match model.deformers.get_mut(i).map(|d| (&mut d.kind, &mut d.blend_shapes)) {
+                Some((DeformerKind::Warp(w), shapes)) => {
+                    map_pairs(&mut w.positions);
+                    for b in shapes {
+                        map_pairs(&mut b.positions);
+                    }
+                }
+                Some((DeformerKind::Rotation(r), _)) => {
+                    for (x, y) in r.origins_x.iter_mut().zip(r.origins_y.iter_mut()) {
+                        let (nx, ny) = f(*x, *y);
+                        *x = nx;
+                        *y = ny;
+                    }
+                }
+                None => {}
+            }
+        }
     }
 }
 
@@ -2974,8 +2986,28 @@ pub fn move_vertices_in(
     moves: &[(usize, f32, f32)],
 ) -> bool {
     let Some(k) = keyform else { return move_vertices(model, mesh, moves) };
+    // a blend shape adds (its form - the base form): as much of this move as
+    // reaches the base form goes into the shapes too, so they keep their
+    // offset instead of pulling the art back
+    let carry = match model.art_meshes.get(mesh) {
+        Some(m) if k < crate::keyform::normal_keyforms(m) && !m.blend_shapes.is_empty() => {
+            base_weight(&model.parameters, &m.binding, k)
+        }
+        _ => 0.0,
+    };
     let Some(m) = model.art_meshes.get_mut(mesh) else { return false };
     let count = m.vertex_count as usize;
+    if carry != 0.0 {
+        let stride = count * 2;
+        for b in &mut m.blend_shapes {
+            if stride == 0 || b.positions.len() % stride != 0 {
+                continue;
+            }
+            for form in b.positions.chunks_exact_mut(stride) {
+                shift_points(form, moves, count, carry);
+            }
+        }
+    }
     let Some(form) = crate::keyform::mesh_form_mut(m, k) else { return false };
     let mut touched = false;
     for &(vertex, dx, dy) in moves {
@@ -3020,12 +3052,30 @@ pub fn move_warp_points(
         }
         return touched;
     }
+    // as for meshes: the blend shapes take the part of the move that reaches
+    // the base form (all of it when every keyform moves)
+    let carry = match (keyform, model.deformers.get(deformer)) {
+        (_, Some(d)) if d.blend_shapes.is_empty() => 0.0,
+        (None, Some(_)) => 1.0,
+        (Some(k), Some(d)) => base_weight(&model.parameters, &d.binding, k),
+        _ => 0.0,
+    };
     let Some(d) = model.deformers.get_mut(deformer) else { return false };
     let DeformerKind::Warp(w) = &mut d.kind else { return false };
     let count = w.grid_points();
     let stride = count * 2;
     if stride == 0 {
         return false;
+    }
+    if carry != 0.0 {
+        for b in &mut d.blend_shapes {
+            if b.positions.len() % stride != 0 {
+                continue;
+            }
+            for form in b.positions.chunks_exact_mut(stride) {
+                shift_points(form, moves, count, carry);
+            }
+        }
     }
     let mut touched = false;
     for (k, form) in w.positions.chunks_exact_mut(stride).enumerate() {
@@ -3046,6 +3096,40 @@ pub fn move_warp_points(
         }
     }
     touched
+}
+
+/// How much keyform `k` counts in the base form, the blend with every
+/// parameter at its default: what a blend shape's difference is taken from.
+fn base_weight(params: &[ayatsuri_format::model::Parameter], binding: &Binding, k: usize) -> f32 {
+    let eps = |p: usize| {
+        let snap = 0.1f32.powi(params.get(p).map_or(3, |q| q.decimals).clamp(0, 10));
+        (snap, snap * 1.5)
+    };
+    let mut corners = Vec::new();
+    if !crate::blend::corners(
+        binding,
+        |p| params.get(p).map_or(0.0, |q| q.default),
+        eps,
+        &mut corners,
+    ) {
+        return 0.0;
+    }
+    corners.iter().filter(|c| c.0 == k).map(|c| c.1).sum()
+}
+
+/// Add `scale` of each move to the points of one form.
+fn shift_points(form: &mut [f32], moves: &[(usize, f32, f32)], count: usize, scale: f32) {
+    for &(p, dx, dy) in moves {
+        if p >= count {
+            continue;
+        }
+        if let Some(x) = form.get_mut(p * 2) {
+            *x += dx * scale;
+        }
+        if let Some(y) = form.get_mut(p * 2 + 1) {
+            *y += dy * scale;
+        }
+    }
 }
 
 /// Cubism's Ctrl+drag on a warp: its grid points move by `moves` (parent
@@ -5059,6 +5143,63 @@ mod tests {
         let (inner, outer) = (idx(&m, "inner"), idx(&m, "outer"));
         assert!(set_parent(&mut m, Child::Deformer(outer), Some(inner)).is_none());
         assert!(set_parent(&mut m, Child::Deformer(outer), Some(outer)).is_none());
+    }
+
+    #[test]
+    fn a_blend_shape_stays_put_when_its_mesh_goes_under_a_new_warp() {
+        let mut m = test_model();
+        m.parameters[1].blend_shape = true;
+        // keyed on B: the vertex 0.5 higher at B = 1
+        let base = m.art_meshes[0].positions.clone();
+        m.art_meshes[0].blend_shapes = vec![BlendShape {
+            parameter: 1,
+            keys: vec![1.0],
+            positions: vec![base[0], base[1] + 0.5, base[2], base[3] + 0.5],
+            ..Default::default()
+        }];
+        let at = |m: &Model| {
+            let mut p = Puppet::new(m.clone());
+            p.set_value(1, 1.0);
+            p.update();
+            p.drawables().next().map(|d| d.positions.to_vec()).unwrap_or_default()
+        };
+        let before = at(&m);
+        let warp = NewDeformer::Warp { rows: 2, cols: 2 };
+        create_deformer(
+            &mut m,
+            warp,
+            &[Child::Mesh(0)],
+            None,
+            (-1.0, -1.0, 3.0, 1.0),
+            None,
+            "W".into(),
+        )
+        .unwrap();
+        let after = at(&m);
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(&after) {
+            assert!((a - b).abs() < 1e-3, "{before:?} became {after:?}");
+        }
+    }
+
+    #[test]
+    fn editing_the_base_keyform_carries_the_blend_shape_along() {
+        let mut m = test_model();
+        m.parameters[1].blend_shape = true;
+        let base = m.art_meshes[0].positions.clone();
+        m.art_meshes[0].blend_shapes = vec![BlendShape {
+            parameter: 1,
+            keys: vec![1.0],
+            positions: vec![base[0], base[1] + 0.5],
+            ..Default::default()
+        }];
+        // keyform 0 is the base form (A's default is 0): move it right by 1
+        assert!(move_vertices_in(&mut m, 0, Some(0), &[(0, 1.0, 0.0)]));
+        // the shape moved with it, so its offset is still straight up 0.5
+        assert_eq!(m.art_meshes[0].blend_shapes[0].positions, vec![base[0] + 1.0, base[1] + 0.5]);
+        // keyform 1 (A = 1) is not in the base form: the shape stays
+        assert!(move_vertices_in(&mut m, 0, Some(1), &[(0, 1.0, 0.0)]));
+        assert_eq!(m.art_meshes[0].blend_shapes[0].positions, vec![base[0] + 1.0, base[1] + 0.5]);
     }
 
     #[test]

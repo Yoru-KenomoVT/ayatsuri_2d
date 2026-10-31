@@ -49,6 +49,12 @@
 
 ### Fixed
 
+- **Blend shapes stay put when their object moves**: a mesh or warp put
+  under a new deformer (or moved to another parent) had its blend shape
+  keyforms left in the old space, so the shapes jumped. Editing the base
+  form (Temporary Deform, moving points or a warp grid at the default
+  pose) left the shapes behind too, pulling the art back towards where it
+  was; they now take the same move.
 - **The pendulum preview follows a length as it is dragged**: shrinking a
   node's length drew the chain longer (and growing it shorter) until the
   mouse was let go, because the view's scale followed the new value while
