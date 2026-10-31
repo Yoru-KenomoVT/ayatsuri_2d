@@ -7,8 +7,11 @@
 - **Edit Mesh on several meshes** (#47): with several meshes picked, Edit
   Mesh takes them all. The others show faintly, a click on one in the Move
   mode edits it next, and Auto Mesh in the Edit Mesh dialog runs on all of
-  them. ArtMesh > Edit Mesh (Solo) does the same with everything else
-  hidden until it ends. Done or Cancel covers the whole session.
+  them. Done or Cancel covers the whole session. As in Cubism, the
+  other meshes now show as they are instead of darkened; S (or the Edit
+  Mesh panel's Hide other meshes) hides everything outside the session and
+  brings it back, without touching the model's Solo. ArtMesh > Edit Mesh
+  (Solo) starts with them hidden.
 - **Breath** (#50): the Breath button beside Follow makes the model idle in
   the preview, as the Cubism SDK's breath does: each listed parameter moves
   by (offset + peak * sin(2 pi t / cycle)) * weight, and physics reacts to

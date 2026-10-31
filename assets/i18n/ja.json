@@ -1561,5 +1561,6 @@
   "Greyed parameters are not in this model and are skipped.": "グレーのパラメータはこのモデルにないため、スキップされます。",
   "Edit Mesh (Solo)": "メッシュを編集（ソロ）",
   "Edit the selected meshes with everything else hidden": "選択したメッシュを、他をすべて非表示にして編集します",
-  "{count} meshes: click one to edit it": "{count} 個のメッシュ：クリックで編集対象を切り替え"
+  "{count} meshes: click one to edit it": "{count} 個のメッシュ：クリックで編集対象を切り替え",
+  "Hide other meshes (S)": "他のメッシュを隠す (S)"
 }
