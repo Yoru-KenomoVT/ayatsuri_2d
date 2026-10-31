@@ -9251,11 +9251,14 @@ impl EditorUi {
         pick_in(pick, anchor, row, shift, ctrl, order);
     }
 
-    /// Shift+click in the Deformer palette: every row from the last clicked
-    /// one to this, deformers and art meshes alike, nested ones too. False
-    /// when there is no last row, and the usual range applies.
+    /// Shift+click in the Deformer palette when the last clicked row was the
+    /// other kind. Onto a deformer: every deformer between the two is picked
+    /// (the outermost of them). Onto an art mesh from a deformer: every row
+    /// between, deformers and art meshes alike, so a deformer and what it
+    /// holds pick together. False when the anchor is the same kind, or
+    /// gone, and the usual range applies.
     fn pick_across(&mut self, deformer: bool, row: usize, all_rows: &[(bool, usize)]) -> bool {
-        let Some(anchor) = self.def_row_anchor else {
+        let Some(anchor) = self.def_row_anchor.filter(|a| a.0 != deformer) else {
             return false;
         };
         let at = |r: (bool, usize)| all_rows.iter().position(|&x| x == r);
@@ -9264,23 +9267,31 @@ impl EditorUi {
         };
         let (lo, hi) = (a.min(b), a.max(b));
         let run = all_rows.get(lo..=hi).unwrap_or_default();
-        self.def_pick = run.iter().filter(|r| r.0).map(|r| r.1).collect();
-        self.multi_sel = run.iter().filter(|r| !r.0).map(|r| r.1).collect();
-        self.part_pick.clear();
-        // a deformer stays the selection while any is picked, so the
-        // deformers count as picked alongside the meshes
-        self.selected = if deformer {
-            Some(Sel::Deformer(row))
-        } else if let Some(&d) = self.def_pick.last() {
-            Some(Sel::Deformer(d))
-        } else {
-            Some(Sel::Mesh(row))
-        };
+        let defs: Vec<usize> = run.iter().filter(|r| r.0).map(|r| r.1).collect();
         if deformer {
+            self.def_pick = match &self.session {
+                Some(s) => top_level_pick(s.puppet.model(), &defs),
+                None => defs,
+            };
             self.def_anchor = Some(row);
+            self.selected = if self.def_pick.contains(&row) {
+                Some(Sel::Deformer(row))
+            } else {
+                self.def_pick.last().copied().map(Sel::Deformer)
+            };
+            self.multi_sel.clear();
         } else {
+            // the deformers stay the selection, so they count as picked
+            // alongside the meshes
+            self.def_pick = defs;
+            self.multi_sel = run.iter().filter(|r| !r.0).map(|r| r.1).collect();
             self.mesh_anchor = Some(row);
+            self.selected = match self.def_pick.last() {
+                Some(&d) => Some(Sel::Deformer(d)),
+                None => Some(Sel::Mesh(row)),
+            };
         }
+        self.part_pick.clear();
         log::debug!(
             "Deformer palette: Shift+click picked {} deformer(s) and {} mesh(es)",
             self.def_pick.len(),
@@ -9306,6 +9317,9 @@ impl EditorUi {
             self.def_anchor = None;
         }
         pick_in(&mut self.def_pick, &mut self.def_anchor, row, shift, ctrl, order);
+        if let Some(s) = &self.session {
+            self.def_pick = top_level_pick(s.puppet.model(), &self.def_pick);
+        }
         self.selected = if self.def_pick.contains(&row) {
             Some(Sel::Deformer(row))
         } else {
@@ -20335,28 +20349,24 @@ mod palette_pick_tests {
         // deformer 0 holding mesh 5, then deformer 1 holding meshes 6 and 7
         let rows = [(true, 0), (false, 5), (true, 1), (false, 6), (false, 7)];
         let mut ed = EditorUi::new();
-        // a mesh clicked, then Shift on a deformer above it: every row
-        // between them is picked, deformers and meshes
+        // a mesh clicked, then Shift on a deformer above it: the deformers
+        // between them are picked
         ed.def_row_anchor = Some((false, 7));
         assert!(ed.pick_across(true, 0, &rows));
         assert_eq!(def_group(ed.selected, &ed.def_pick), vec![0, 1]);
-        assert_eq!(ed.multi_sel, vec![5, 6, 7]);
-        // and the other way: from a deformer down to a mesh, the deformers
-        // still count as picked
+        assert!(ed.multi_sel.is_empty());
+        // from a deformer down to a mesh: every row between, and the
+        // deformers still count as picked
         ed.def_row_anchor = Some((true, 0));
         assert!(ed.pick_across(false, 6, &rows));
         assert_eq!(ed.multi_sel, vec![5, 6]);
         assert_eq!(def_group(ed.selected, &ed.def_pick), vec![0, 1]);
-        // deformer to deformer takes the meshes between too
-        assert!(ed.pick_across(true, 1, &rows));
-        assert_eq!(ed.multi_sel, vec![5]);
-        // no last row: the usual range applies
-        ed.def_row_anchor = None;
+        // the same kind keeps the usual range
         assert!(!ed.pick_across(true, 1, &rows));
     }
 
     #[test]
-    fn nested_deformers_join_a_pick_and_outermost_ones_move() {
+    fn only_top_level_deformers_join_a_pick() {
         use ayatsuri_core::edit::{NewDeformer, create_deformer};
         let mut m = Model::new();
         let warp = |m: &mut Model, parent: Option<u32>, id: &str| {
@@ -20376,19 +20386,22 @@ mod palette_pick_tests {
             v.into_iter().map(|i| m.deformers[i].id.clone()).collect()
         };
         assert_eq!(ids(outermost(&m, &[c])), vec!["C"]);
-        // in the palette a child of a picked deformer can be picked too
-        // (moves and flips still take only the outermost)
+        // in the palette: Ctrl+click on a child of a picked deformer is
+        // refused, and on its parent drops the child
         let mut ed = EditorUi::new();
         let ctx = egui::Context::default();
         ed.session = Some(Session::create(&ctx, "t".into(), String::new(), m).unwrap());
         let order = [a, b, c, d];
         ed.pick_def_rows(b, false, false, &order);
         ed.pick_def_rows(c, false, true, &order);
-        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![b, c]);
-        // a Shift run over a branch picks every row in it
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![b]);
+        ed.pick_def_rows(d, false, true, &order);
+        ed.pick_def_rows(a, false, true, &order);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![d, a]);
+        // a Shift run over a branch keeps its top: A and D, not B and C
         ed.pick_def_rows(a, false, false, &order);
         ed.pick_def_rows(d, true, false, &order);
-        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![a, b, c, d]);
+        assert_eq!(def_group(ed.selected, &ed.def_pick), vec![a, d]);
     }
 
     #[test]
