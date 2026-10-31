@@ -64,6 +64,10 @@
 
 ### Fixed
 
+- **Texture atlas pages up to the GPU's own limit**: the GPU was asked
+  for 8192 px textures at most whatever it could take, so the atlas's page
+  size stopped at 8192. It now asks for the card's limit, 16384 or 32768
+  on most.
 - **Stroke mesh on a mesh left with a point or two**: after Clear and a
   point or two placed by hand, a stroke failed ("the mesh could not be
   rebuilt") or piled its points onto the few there were. The stroke, Auto
