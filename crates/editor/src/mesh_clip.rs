@@ -1,4 +1,5 @@
-// Art meshes on the system clipboard, so Ctrl+V works (egui only sends a
+// Art meshes, and deformers with everything under them, on the system
+// clipboard, as Cubism copies objects. Art meshes go so Ctrl+V works (egui only sends a
 // paste when the clipboard holds text) and meshes paste into another
 // project. The text is a marker line and JSON: each mesh with every
 // keyform, its ArtPath, the IDs (not indices) of its parameters, parents
@@ -13,7 +14,7 @@
 
 use std::path::Path;
 
-use ayatsuri_format::model::{ArtMesh, ArtPath, Model};
+use ayatsuri_format::model::{ArtMesh, ArtPath, Deformer, DeformerKind, Model};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +28,26 @@ pub(crate) struct ClipFile {
     /// Which project it came from: pasting back into it keeps texture and
     /// parents as they are.
     project: String,
+    /// Deformers copied with their children, parents first.
+    #[serde(default)]
+    pub(crate) deformers: Vec<ClipDeformer>,
     pub(crate) meshes: Vec<ClipMesh>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct ClipDeformer {
+    pub(crate) name: String,
+    pub(crate) deformer: Deformer,
+    /// Per binding axis, then per blend shape: parameter id, min, default,
+    /// max, and whether it is a blend shape parameter.
+    params: Vec<(String, f32, f32, f32, bool)>,
+    shape_params: Vec<(String, f32, f32, f32, bool)>,
+    part: Option<String>,
+    /// Its parent deformer's id, when it has one.
+    parent: Option<String>,
+    /// The same deformer carried out of its parent into canvas space at the
+    /// rest pose, for a paste where that parent is missing.
+    rooted: Option<Deformer>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -37,6 +57,10 @@ pub(crate) struct ClipMesh {
     pub(crate) path: Option<ArtPath>,
     /// Per binding axis, in order: the parameter's id, min, default, max.
     params: Vec<(String, f32, f32, f32)>,
+    /// Per blend shape: its parameter's id, min, default, max, and that it
+    /// is a blend shape parameter.
+    #[serde(default)]
+    shape_params: Vec<(String, f32, f32, f32, bool)>,
     part: Option<String>,
     deformer: Option<String>,
     masks: Vec<String>,
@@ -55,6 +79,114 @@ pub(crate) fn project_key(s: &Session) -> String {
     s.aom_path
         .as_deref()
         .map_or_else(|| format!("unsaved:{}", s.name), |p: &Path| p.display().to_string())
+}
+
+/// A parameter as the clipboard names it.
+fn param_entry(model: &Model, p: u32) -> Option<(String, f32, f32, f32, bool)> {
+    let q = model.parameters.get(p as usize)?;
+    Some((q.id.clone(), q.min, q.default, q.max, q.blend_shape))
+}
+
+/// Deformer `d` carried from its parent's space into the canvas at the rest
+/// pose: its grid points or rotation origins, in every keyform and shape.
+fn rooted(rest: &ayatsuri_core::Puppet, d: &Deformer) -> Option<Deformer> {
+    let parent = d.parent_deformer? as usize;
+    let map = |x: f32, y: f32| rest.deformer_point(parent, x, y);
+    let mut out = d.clone();
+    out.parent_deformer = None;
+    let map_pairs = |v: &mut Vec<f32>| {
+        for p in v.as_chunks_mut::<2>().0 {
+            let (x, y) = map(p[0], p[1]);
+            p[0] = x;
+            p[1] = y;
+        }
+    };
+    match &mut out.kind {
+        DeformerKind::Warp(w) => {
+            map_pairs(&mut w.positions);
+            for b in &mut out.blend_shapes {
+                map_pairs(&mut b.positions);
+            }
+        }
+        DeformerKind::Rotation(r) => {
+            for (x, y) in r.origins_x.iter_mut().zip(r.origins_y.iter_mut()) {
+                (*x, *y) = map(*x, *y);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The clipboard file for deformers (each with every deformer and art mesh
+/// under it) and art meshes of a session.
+pub(crate) fn copy_objects(s: &Session, deformers: &[usize], meshes: &[usize]) -> ClipFile {
+    let model = s.puppet.model();
+    // the deformers and everything under them
+    let mut defs: Vec<usize> = Vec::new();
+    for (i, d) in model.deformers.iter().enumerate() {
+        let mut cur = Some(i as u32);
+        let mut hops = 0;
+        while let Some(c) = cur {
+            if deformers.contains(&(c as usize)) {
+                defs.push(i);
+                break;
+            }
+            cur = model.deformers.get(c as usize).and_then(|x| x.parent_deformer);
+            hops += 1;
+            if hops > 1024 {
+                break;
+            }
+        }
+        let _ = d;
+    }
+    let mut all_meshes: Vec<usize> = meshes.to_vec();
+    for (mi, m) in model.art_meshes.iter().enumerate() {
+        if m.parent_deformer.is_some_and(|p| defs.contains(&(p as usize)))
+            && !all_meshes.contains(&mi)
+        {
+            all_meshes.push(mi);
+        }
+    }
+    all_meshes.sort_unstable();
+    let mut clip = copy(s, &all_meshes);
+    let rest = ayatsuri_core::Puppet::new(model.clone());
+    let mut rest = rest;
+    rest.update();
+    clip.deformers = defs
+        .iter()
+        .filter_map(|&di| {
+            let d = model.deformers.get(di)?;
+            let parent = d.parent_deformer.and_then(|p| model.deformers.get(p as usize));
+            Some(ClipDeformer {
+                name: s
+                    .deformer_names
+                    .get(di)
+                    .cloned()
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| d.id.clone()),
+                params: d
+                    .binding
+                    .axes
+                    .iter()
+                    .filter_map(|a| param_entry(model, a.parameter))
+                    .collect(),
+                shape_params: d
+                    .blend_shapes
+                    .iter()
+                    .filter_map(|b| param_entry(model, b.parameter))
+                    .collect(),
+                part: d.parent_part.and_then(|p| model.parts.get(p as usize)).map(|p| p.id.clone()),
+                parent: parent.map(|p| p.id.clone()),
+                // only a deformer whose parent is not copied along can lose it
+                rooted: d
+                    .parent_deformer
+                    .filter(|p| !defs.contains(&(*p as usize)))
+                    .and_then(|_| rooted(&rest, d)),
+                deformer: d.clone(),
+            })
+        })
+        .collect();
+    clip
 }
 
 /// The clipboard file for some meshes of a session.
@@ -100,6 +232,11 @@ pub(crate) fn copy(s: &Session, meshes: &[usize]) -> ClipFile {
                         Some((p.id.clone(), p.min, p.default, p.max))
                     })
                     .collect(),
+                shape_params: mesh
+                    .blend_shapes
+                    .iter()
+                    .filter_map(|b| param_entry(model, b.parameter))
+                    .collect(),
                 part: mesh
                     .parent_part
                     .and_then(|p| model.parts.get(p as usize))
@@ -117,7 +254,7 @@ pub(crate) fn copy(s: &Session, meshes: &[usize]) -> ClipFile {
             })
         })
         .collect();
-    ClipFile { project: project_key(s), meshes: out }
+    ClipFile { project: project_key(s), deformers: Vec::new(), meshes: out }
 }
 
 impl ClipFile {
@@ -133,21 +270,86 @@ impl ClipFile {
     }
 }
 
-/// Paste into a session as one undo step; returns the new meshes' indices
-/// with the names they should carry.
+/// What a paste made: the new art meshes' and deformers' indices, each
+/// with the name it should carry.
+pub(crate) struct Pasted {
+    pub(crate) meshes: Vec<(usize, String)>,
+    pub(crate) deformers: Vec<(usize, String)>,
+}
+
+/// Paste into a session as one undo step.
 pub(crate) fn paste(
     s: &mut Session,
     ctx: &egui::Context,
     clip: &ClipFile,
-) -> Result<Vec<(usize, String)>, String> {
+) -> Result<Pasted, String> {
     let home = clip.project == project_key(s);
     let mut next: Model = s.puppet.model().clone();
     let mut pngs = s.texture_pngs.clone();
     let mut added = Vec::new();
+    // a parameter by id, made with the same range when missing
+    let param = |next: &mut Model, e: &(String, f32, f32, f32, bool)| -> Result<u32, String> {
+        let (id, min, default, max, blend) = e;
+        if let Some(i) = next.parameters.iter().position(|p| &p.id == id) {
+            return Ok(i as u32);
+        }
+        let i = ayatsuri_core::edit::create_parameter(next, id.clone(), *min, *default, *max)
+            .ok_or_else(|| format!("could not make parameter {id}"))?;
+        if let Some(p) = next.parameters.get_mut(i) {
+            p.blend_shape = *blend;
+        }
+        Ok(i as u32)
+    };
+    // the deformers, after every one there, parents first as they came: each
+    // pasted one's index by the id it was copied with
+    let mut pasted_defs: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut added_defs = Vec::new();
+    for c in &clip.deformers {
+        let copied_parent = c.parent.as_ref().and_then(|id| pasted_defs.get(id).copied());
+        let there =
+            c.parent.as_ref().and_then(|id| next.deformers.iter().position(|d| &d.id == id));
+        let mut d = match (copied_parent, there, &c.rooted) {
+            (None, None, Some(r)) => r.clone(),
+            _ => c.deformer.clone(),
+        };
+        d.parent_deformer = copied_parent.or(there).map(|i| i as u32);
+        if c.parent.is_some() && d.parent_deformer.is_none() && c.rooted.is_none() {
+            d.parent_deformer = None;
+        }
+        if !home {
+            for (axis, e) in d.binding.axes.iter_mut().zip(&c.params) {
+                axis.parameter = param(&mut next, e)?;
+            }
+            for (b, e) in d.blend_shapes.iter_mut().zip(&c.shape_params) {
+                b.parameter = param(&mut next, e)?;
+            }
+            d.parent_part = c
+                .part
+                .as_ref()
+                .and_then(|id| next.parts.iter().position(|p| &p.id == id))
+                .map(|i| i as u32);
+        }
+        // a fresh id: the original's with _copy, numbered when taken
+        let base = format!("{}_copy", c.deformer.id);
+        let mut id = base.clone();
+        let mut n = 2;
+        while next.deformers.iter().any(|x| x.id == id) {
+            id = format!("{base}{n}");
+            n += 1;
+        }
+        d.id = id;
+        next.deformers.push(d);
+        let i = next.deformers.len() - 1;
+        pasted_defs.insert(c.deformer.id.clone(), i);
+        added_defs.push((i, crate::i18n::trf("{name} copy", &[("name", &c.name)]).to_string()));
+    }
     // each pasted mesh's index, by the id it was copied with
     let mut copies: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for c in &clip.meshes {
         let mut mesh = c.mesh.clone();
+        // under a copied deformer: under its copy, keys and all
+        let under_copy = c.deformer.as_ref().and_then(|id| pasted_defs.get(id).copied());
         let kept = !next.art_meshes.iter().any(|m| m.id == mesh.id);
         let mut path = c.path.clone();
         if !home {
@@ -166,13 +368,18 @@ pub(crate) fn paste(
                 };
                 axis.parameter = at as u32;
             }
+            // blend shapes name their parameter by index too
+            for (b, e) in mesh.blend_shapes.iter_mut().zip(&c.shape_params) {
+                b.parameter = param(&mut next, e)?;
+            }
             mesh.parent_part = c
                 .part
                 .as_ref()
                 .and_then(|id| next.parts.iter().position(|p| &p.id == id))
                 .map(|i| i as u32);
-            let parent =
-                c.deformer.as_ref().and_then(|id| next.deformers.iter().position(|d| &d.id == id));
+            let parent = under_copy.or_else(|| {
+                c.deformer.as_ref().and_then(|id| next.deformers.iter().position(|d| &d.id == id))
+            });
             if parent.is_none() && c.deformer.is_some() {
                 // its points only meant something in that deformer's space:
                 // it keeps the pose it was drawn in, without keys
@@ -206,6 +413,9 @@ pub(crate) fn paste(
             // a path's colours live on the swatch page, which does not come
             // along: the mesh keeps its pixels (the crop) and drops the path
             path = None;
+        }
+        if home && let Some(k) = under_copy {
+            mesh.parent_deformer = Some(k as u32);
         }
         let beside = if home { Some(mesh.id.clone()) } else { None };
         let original = mesh.id.clone();
@@ -275,7 +485,7 @@ pub(crate) fn paste(
     } else {
         s.swap_in_pub(ctx, next, pngs)?;
     }
-    Ok(added)
+    Ok(Pasted { meshes: added, deformers: added_defs })
 }
 
 /// The art meshes a Clip IDs text names, for `mesh` to clip by: IDs split
@@ -313,5 +523,64 @@ mod tests {
         assert_eq!(found, vec![1, 0]);
         assert_eq!(unknown, vec!["Nope".to_string(), "Hi".to_string()]);
         assert_eq!(resolve_in(&ids, 0, " , ").0, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn a_copied_deformer_pastes_with_its_mesh_under_the_copy() {
+        use ayatsuri_core::edit::{Child, NewDeformer};
+        use ayatsuri_format::model::Binding;
+        let mut m = Model::new();
+        m.art_meshes.push(ArtMesh {
+            id: "Hair".into(),
+            parent_part: None,
+            parent_deformer: None,
+            visible: true,
+            enabled: true,
+            texture: 0,
+            flags: 0,
+            blend: Default::default(),
+            vertex_count: 3,
+            uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            indices: vec![0, 1, 2],
+            masks: vec![],
+            binding: Binding::default(),
+            opacities: vec![1.0],
+            draw_orders: vec![500.0],
+            positions: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            blend_shapes: Vec::new(),
+            clip_group: None,
+            clip_inherit: false,
+            multiply: Vec::new(),
+            screen: Vec::new(),
+        });
+        let warp = NewDeformer::Warp { rows: 2, cols: 2 };
+        ayatsuri_core::edit::create_deformer(
+            &mut m,
+            warp,
+            &[Child::Mesh(0)],
+            None,
+            (0.0, 0.0, 1.0, 1.0),
+            None,
+            "HairWarp".into(),
+        )
+        .unwrap();
+        let ctx = egui::Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), m).unwrap();
+        let clip = copy_objects(&s, &[0], &[]);
+        assert_eq!((clip.deformers.len(), clip.meshes.len()), (1, 1));
+        let pasted = paste(&mut s, &ctx, &clip).unwrap();
+        let model = s.puppet.model();
+        assert_eq!(model.deformers.len(), 2);
+        let (d, _) = pasted.deformers[0];
+        assert_eq!(model.deformers[d].id, "HairWarp_copy");
+        let (mi, _) = pasted.meshes[0];
+        assert_eq!(model.art_meshes[mi].parent_deformer, Some(d as u32));
+        // the original keeps its own
+        let orig = model.art_meshes.iter().position(|a| a.id == "Hair").unwrap();
+        assert_eq!(model.art_meshes[orig].parent_deformer, Some(0));
+        // drawn where the original is
+        let mut p = ayatsuri_core::Puppet::new(model.clone());
+        p.update();
+        assert_eq!(p.mesh_drawn_positions(orig), p.mesh_drawn_positions(mi));
     }
 }

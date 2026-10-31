@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Copy and paste deformers with their layers**: Ctrl+C with deformers
+  selected copies each with every deformer and art mesh under it, keys,
+  blend shapes and all; Ctrl+V pastes copies (IDs ending in _copy) with
+  the copied art meshes under the copied deformers, picked to move
+  together, as Cubism copies objects. Into another model parameters match
+  by ID (made when missing), and a deformer whose parent is not there is
+  carried into canvas space. Art meshes' blend shapes now keep their
+  parameters when pasted into another model too.
 - **Mirror Edit mirrors new points and strokes**: with Mirror Edit on, a
   point added in Mesh Edit gets its mirror across the axis (splitting the
   face it lands in, or joined to the mirrors of its lines), in the same
