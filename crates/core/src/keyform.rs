@@ -151,7 +151,7 @@ pub fn blend_shape_on(model: &Model, target: Target, param: usize) -> Option<&Bl
 
 /// How many normal keyforms a mesh has. Its blend shapes' keyforms are
 /// numbered after them, shape by shape in list order, key by key.
-fn normal_keyforms(m: &ArtMesh) -> usize {
+pub(crate) fn normal_keyforms(m: &ArtMesh) -> usize {
     m.positions.len().checked_div((m.vertex_count as usize).saturating_mul(2)).unwrap_or(0)
 }
 
