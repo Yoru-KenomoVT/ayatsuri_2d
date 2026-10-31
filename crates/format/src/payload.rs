@@ -361,6 +361,8 @@ pub struct DisplayInfo {
     pub model_groups: Option<Vec<(String, String, Vec<String>)>>,
     pub guides: Vec<GuideLine>,
     pub bezier_nets: Vec<(String, u32, u32, u32, Vec<f32>)>,
+    /// Art mesh wire colours by mesh id, packed 0xRRGGBB.
+    pub mesh_colors: Vec<(String, i32)>,
 }
 
 /// A guide line on the canvas, as Cubism's Guide Line Settings has them.

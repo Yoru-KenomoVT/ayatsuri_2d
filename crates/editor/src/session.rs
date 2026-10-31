@@ -199,6 +199,9 @@ pub struct Session {
     /// them) drawn in front at full strength and alone pickable; the rest
     /// sit behind the inactive color. None when Solo is off.
     pub solo: Option<std::collections::HashSet<String>>,
+    /// Wire colours picked for art meshes, by mesh id: the mesh's lines and
+    /// points draw in it instead of the overlay colour.
+    pub mesh_colors: std::collections::HashMap<String, [u8; 3]>,
     /// Name, visibility and reset shape of meshes an edit removed, by id,
     /// so undoing the delete gets them back.
     departed: HashMap<String, MeshExtras>,
@@ -1116,6 +1119,17 @@ impl Session {
                     )
                 })
                 .collect();
+            s.mesh_colors = d
+                .mesh_colors
+                .iter()
+                .filter(|&&(_, c)| c >= 0)
+                .map(|(id, c)| {
+                    (
+                        id.clone(),
+                        [((c >> 16) & 0xff) as u8, ((c >> 8) & 0xff) as u8, (c & 0xff) as u8],
+                    )
+                })
+                .collect();
             if d.param_colors.len() == n {
                 s.param_colors = d
                     .param_colors
@@ -1439,6 +1453,7 @@ impl Session {
             part_shown: vec![true; n_parts],
             mesh_shown: vec![true; n_meshes],
             solo: None,
+            mesh_colors: Default::default(),
             departed: HashMap::new(),
             parts_departed: HashMap::new(),
             deformer_shown: vec![true; n_defs],
@@ -2026,6 +2041,15 @@ impl Session {
                         .collect();
                     nets.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
                     nets
+                },
+                mesh_colors: {
+                    let mut c: Vec<(String, i32)> = self
+                        .mesh_colors
+                        .iter()
+                        .map(|(id, &rgb)| (id.clone(), pack_rgb(Some(rgb))))
+                        .collect();
+                    c.sort();
+                    c
                 },
             }),
         }
@@ -2621,6 +2645,18 @@ mod import_paint_tests {
         let got = back.bezier_nets.get(&(0, 0)).expect("handles came back");
         assert_eq!((got.bw, got.bh), (1, 1));
         assert_eq!(got.net, net);
+    }
+
+    #[test]
+    fn mesh_wire_colours_come_back_after_a_save() {
+        let ctx = Context::default();
+        let mut s = Session::create(&ctx, "t".into(), String::new(), Model::new()).unwrap();
+        s.mesh_colors.insert("HairFront".into(), [0x12, 0x34, 0x56]);
+        let path = std::env::temp_dir().join(format!("ay-wire-{}.aom", std::process::id()));
+        s.save_aom(&path).unwrap();
+        let back = Session::load(&ctx, &path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(back.mesh_colors.get("HairFront"), Some(&[0x12, 0x34, 0x56]));
     }
 
     #[test]

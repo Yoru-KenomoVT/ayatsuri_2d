@@ -1565,5 +1565,7 @@
   "Pick points first.": "먼저 점을 선택하세요.",
   "Drag to move the mirror axis": "드래그하여 대칭축 이동",
   "Center of the canvas": "캔버스 중앙",
-  "Center of selected vertices": "선택한 정점의 중앙"
+  "Center of selected vertices": "선택한 정점의 중앙",
+  "Wire color": "와이어 색",
+  "Back to the overlay color": "오버레이 색으로 되돌리기"
 }
