@@ -1562,5 +1562,9 @@
   "Edit Mesh (Solo)": "メッシュを編集（ソロ）",
   "Edit the selected meshes with everything else hidden": "選択したメッシュを、他をすべて非表示にして編集します",
   "{count} meshes: click one to edit it": "{count} 個のメッシュ：クリックで編集対象を切り替え",
-  "Hide other meshes (S)": "他のメッシュを隠す (S)"
+  "Hide other meshes (S)": "他のメッシュを隠す (S)",
+  "Pick points first.": "先に点を選択してください。",
+  "Drag to move the mirror axis": "ドラッグして対称軸を移動",
+  "Center of the canvas": "キャンバスの中央",
+  "Center of selected vertices": "選択した頂点の中央"
 }

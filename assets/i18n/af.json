@@ -1562,5 +1562,9 @@
   "Edit Mesh (Solo)": "Wysig maas (solo)",
   "Edit the selected meshes with everything else hidden": "Wysig die gekose mase met alles anders versteek",
   "{count} meshes: click one to edit it": "{count} mase: klik op een om dit te wysig",
-  "Hide other meshes (S)": "Versteek ander mase (S)"
+  "Hide other meshes (S)": "Versteek ander mase (S)",
+  "Pick points first.": "Kies eers punte.",
+  "Drag to move the mirror axis": "Sleep om die spieëlas te skuif",
+  "Center of the canvas": "Middel van die doek",
+  "Center of selected vertices": "Middel van die gekose punte"
 }

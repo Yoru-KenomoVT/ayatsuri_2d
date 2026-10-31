@@ -543,6 +543,24 @@ impl EditorUi {
              the vertical guide line nearest the centre, or the canvas centre",
             ),
         );
+        // the axis's position, as Cubism's: drag its Mirror tab on the
+        // canvas, or put it at the canvas centre or the picked points' centre
+        ui.add_enabled_ui(self.mirror_edit, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(crate::i18n::tr("Center of the canvas")).clicked() {
+                    self.mirror_at = None;
+                }
+                if ui
+                    .add_enabled(
+                        self.mesh_edit.is_some(),
+                        egui::Button::new(crate::i18n::tr("Center of selected vertices")),
+                    )
+                    .clicked()
+                {
+                    self.mirror_to_pick = true;
+                }
+            });
+        });
 
         section(
             ui,
