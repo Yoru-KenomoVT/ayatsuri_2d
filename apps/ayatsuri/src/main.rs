@@ -191,6 +191,11 @@ fn gpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
             let side = adapter.limits().max_texture_dimension_2d;
             desc.required_limits.max_texture_dimension_2d =
                 side.max(desc.required_limits.max_texture_dimension_2d);
+            log::info!(
+                "GPU: {} takes textures up to {} px",
+                adapter.get_info().name,
+                desc.required_limits.max_texture_dimension_2d
+            );
             desc
         });
     }

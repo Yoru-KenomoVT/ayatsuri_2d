@@ -9,11 +9,10 @@ use std::collections::HashMap;
 
 use ayatsuri_format::model::Model;
 
-/// The smallest and largest page sides a layout takes. The editor keeps
-/// its pages at 8192 px at most, which every app and GPU loads; bigger
-/// textures are only written on export (Resize on export).
+/// The smallest and largest page sides a layout takes; the GPU's own
+/// limit (see `gpu_view::max_texture_side`) is usually lower.
 pub const MIN_PAGE: u32 = 256;
-pub const MAX_PAGE: u32 = 8192;
+pub const MAX_PAGE: u32 = 65536;
 
 /// Room around a piece, so filtering never samples a neighbour, down to
 /// the smallest mip level the canvas draws with (see the renderer's
@@ -449,8 +448,8 @@ mod tests {
         let too_big = vec![Piece { mesh: 0, page: 0, x: 0, y: 0, w: 600, h: 10, art: None }];
         assert!(auto_layout(&too_big, 512, false).is_err());
         assert_eq!(auto_layout(&too_big, 512, true).unwrap().pages, 1);
-        // a custom size past the cap stops at it
-        assert_eq!(auto_layout(&too_big, 20000, false).unwrap().page_size, MAX_PAGE);
+        // a custom size past the old 16384 cap is kept as asked
+        assert_eq!(auto_layout(&too_big, 20000, false).unwrap().page_size, 20000);
         assert_eq!(auto_layout(&too_big, 100, true).unwrap().page_size, MIN_PAGE);
     }
 
