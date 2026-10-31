@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Mirror Edit mirrors new points and strokes**: with Mirror Edit on, a
+  point added in Mesh Edit gets its mirror across the axis (splitting the
+  face it lands in, or joined to the mirrors of its lines), in the same
+  undo step, as Cubism's Add vertex does; and each stroke of the stroke
+  tool gets a mirrored copy, shown thin while drawing. A stroke crossing
+  the axis stays single.
 - **Wire colours for art meshes**: Selected mesh color override, under
   ArtMesh display settings in Tool Details, sets a colour for the selected
   meshes, and their lines and points draw in it
