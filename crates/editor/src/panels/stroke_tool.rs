@@ -35,6 +35,28 @@ pub(super) struct StrokeEdit {
     /// A new line that would redraw stroke `.0`, waiting for the rigger to
     /// say whether to replace it.
     ask: Option<(usize, Stroke)>,
+    /// Mirror Edit's axis, canvas x in pixels: each stroke gets a mirrored
+    /// copy across it.
+    pub(super) mirror: Option<f32>,
+}
+
+impl StrokeEdit {
+    /// The strokes with their mirrors. A stroke that crosses the axis is
+    /// left single: its mirror would lie over it.
+    pub(super) fn with_mirrors(&self) -> Vec<Stroke> {
+        let mut out = self.strokes.clone();
+        if let Some(ax) = self.mirror {
+            for st in &self.strokes {
+                let left = st.points.iter().all(|p| p[0] < ax);
+                let right = st.points.iter().all(|p| p[0] > ax);
+                if left || right {
+                    let points = st.points.iter().map(|p| [2.0 * ax - p[0], p[1]]).collect();
+                    out.push(Stroke { points, widths: st.widths.clone() });
+                }
+            }
+        }
+        out
+    }
 }
 
 enum Drag {
@@ -99,12 +121,16 @@ pub(super) fn stroke_tool(
     // the mesh as shown now: screen points and faces, for the preview of
     // what Maintain current mesh off removes
     existing: (&[Pos2], &[u16]),
+    // Mirror Edit's axis, canvas pixels
+    mirror: Option<f32>,
 ) -> Option<StrokeAct> {
     let (alt, ctrl, shift) = mods;
     if state.as_ref().is_none_or(|e| e.mesh != mesh) {
-        *state = Some(StrokeEdit { mesh, strokes: Vec::new(), drag: None, ask: None });
+        *state =
+            Some(StrokeEdit { mesh, strokes: Vec::new(), drag: None, ask: None, mirror: None });
     }
     let edit = state.as_mut()?;
+    edit.mirror = mirror;
     let set = &opts.settings;
     let ptr = ui.ctx().input(|i| i.pointer.latest_pos());
 
@@ -355,7 +381,8 @@ fn draw(
     maintain: bool,
 ) {
     let red = theme::pal().rotation_red;
-    let (pts, tris) = stroke_mesh::build_all(&edit.strokes, set);
+    let all = edit.with_mirrors();
+    let (pts, tris) = stroke_mesh::build_all(&all, set);
     if !maintain && !tris.is_empty() {
         let (scr_old, idx) = existing;
         let old_px: Vec<P> = scr_old.iter().map(|&p| view.px(p)).collect();
@@ -391,6 +418,12 @@ fn draw(
         vp.rect_filled(Rect::from_center_size(*p, vec2(4.0, 4.0)), 0.0, red);
     }
     let green = theme::pal().warp_green;
+    // the mirrored copies, thin: they follow their strokes
+    for s in all.iter().skip(edit.strokes.len()) {
+        let line: Vec<Pos2> =
+            stroke_mesh::curve(&s.points).iter().map(|&p| view.screen(p)).collect();
+        vp.add(egui::Shape::line(line, Line::new(1.0, green.gamma_multiply(0.7))));
+    }
     for s in &edit.strokes {
         let line: Vec<Pos2> =
             stroke_mesh::curve(&s.points).iter().map(|&p| view.screen(p)).collect();
@@ -497,7 +530,7 @@ impl EditorUi {
         let to_model = |p: P| -> P { [(p[0] - c.origin_x) / ppu, (p[1] - c.origin_y) / ppu] };
 
         let (new_pts, new_tris) =
-            stroke_mesh::build_all(&edit.strokes, &self.tool_opts.stroke.settings);
+            stroke_mesh::build_all(&edit.with_mirrors(), &self.tool_opts.stroke.settings);
         // 1 across gives points only, which join the mesh as they are
         if new_pts.is_empty() {
             log::warn!("stroke mesh: the stroke is too short to make a mesh");
@@ -641,6 +674,7 @@ mod tests {
             strokes: vec![Stroke::new(vec![px(0.1, 0.5), px(0.9, 0.5)])],
             drag: None,
             ask: None,
+            mirror: None,
         });
         ed.apply_stroke_mesh();
         let s = ed.session.as_mut().unwrap();
@@ -662,6 +696,24 @@ mod tests {
     }
 
     #[test]
+    fn mirror_edit_copies_strokes_on_one_side_only() {
+        let edit = StrokeEdit {
+            mesh: 0,
+            strokes: vec![
+                Stroke::new(vec![[10.0, 0.0], [30.0, 5.0]]),
+                Stroke::new(vec![[40.0, 0.0], [60.0, 0.0]]),
+            ],
+            drag: None,
+            ask: None,
+            mirror: Some(50.0),
+        };
+        let all = edit.with_mirrors();
+        // the second crosses the axis and stays single
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[2].points, vec![[90.0, 0.0], [70.0, 5.0]]);
+    }
+
+    #[test]
     fn without_maintain_the_stroke_takes_what_it_covers() {
         let mut ed = editor();
         let c = ed.session.as_ref().unwrap().puppet.model().canvas;
@@ -680,6 +732,7 @@ mod tests {
             strokes: vec![Stroke::new(vec![px(-0.1, 0.0), px(1.1, 0.0)])],
             drag: None,
             ask: None,
+            mirror: None,
         });
         ed.apply_stroke_mesh();
         let n = ed.session.as_ref().unwrap().puppet.model().art_meshes[0].vertex_count;

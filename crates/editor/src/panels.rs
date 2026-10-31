@@ -15799,6 +15799,7 @@ impl EditorUi {
                         sv,
                         (alt, ctrl, shift),
                         (&screen_pts, g.indices),
+                        mirror_x.map(|ax| (ax - origin.x) / scale),
                     );
                     if act == Some(stroke_tool::StrokeAct::Confirm) {
                         self.stroke_confirm = true;
@@ -15883,6 +15884,38 @@ impl EditorUi {
                     }
                     _ => None,
                 }
+            };
+            // Mirror Edit: an added point gets its mirror across the axis,
+            // joined to the mirrors of its lines (Cubism's Add vertex)
+            let click = ui.ctx().input(|i| i.pointer.interact_pos());
+            let mirror_add = match (&op, mirror_x, click) {
+                (
+                    MeshOp::Add(mi, ..) | MeshOp::AddRef(mi, ..) | MeshOp::AddFree(mi, ..),
+                    Some(ax),
+                    Some(p),
+                ) if (p.x - ax).abs() > mirror_tol => {
+                    let (links, connect) = match &op {
+                        MeshOp::AddRef(_, _, _, c, l, _) | MeshOp::AddFree(_, _, _, c, l, _) => {
+                            (l.clone(), *c)
+                        }
+                        _ => (Vec::new(), None),
+                    };
+                    let split = matches!(op, MeshOp::Add(..));
+                    let before: Vec<Pos2> = s
+                        .puppet
+                        .mesh_geometry(*mi)
+                        .map(|g| {
+                            g.positions
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|q| to_screen(q[0], q[1]))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some((*mi, ax, pos2(2.0 * ax - p.x, p.y), links, connect, split, before))
+                }
+                _ => None,
             };
             let applied = match op {
                 MeshOp::Move(mi, vi, dx, dy) => {
@@ -16118,6 +16151,78 @@ impl EditorUi {
                     done
                 }
             };
+            if applied
+                && let Some((mi, ax, at, links, connect, split, before)) = mirror_add
+                && let Some(art) = self.mesh_art.as_ref().filter(|a| a.mesh == mi)
+            {
+                let partner = |v: u16| {
+                    point_edit::mirror_partner(&before, v as usize, ax, mirror_tol)
+                        .map(|j| j as u16)
+                };
+                let n = s.puppet.model().art_meshes.get(mi).map_or(0, |m| m.vertex_count);
+                let reference = art.reference.clone();
+                let spot = art_uv(&art_screen(art, &to_screen), &art.indices, &art.uvs, at);
+                // inside a face, the mirror splits the face it lands in too
+                let face = split
+                    .then(|| {
+                        let g = s.puppet.mesh_geometry(mi)?;
+                        let pts: Vec<Pos2> = g
+                            .positions
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|q| to_screen(q[0], q[1]))
+                            .collect();
+                        let (c, w) = mesh_weights(&pts, g.indices, at)?;
+                        let ti = g
+                            .indices
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .position(|t| t.map(usize::from) == c)?;
+                        w.iter().all(|&x| x >= 0.0).then_some((ti, w))
+                    })
+                    .flatten();
+                let placed = match face {
+                    Some((ti, w)) => s.edit(|m| {
+                        let Some(v) = ayatsuri_core::edit::add_vertex(m, mi, ti, w) else {
+                            return false;
+                        };
+                        if let Some((u, t)) = spot
+                            && let Some(pair) = m
+                                .art_meshes
+                                .get_mut(mi)
+                                .and_then(|am| am.uvs.get_mut(v * 2..v * 2 + 2))
+                        {
+                            pair.copy_from_slice(&[u, t]);
+                        }
+                        true
+                    }),
+                    None => {
+                        let ap = art_screen(art, &to_screen);
+                        let place = (!art.indices.is_empty())
+                            .then(|| mesh_weights(&ap, &art.indices, at))
+                            .flatten()
+                            .or_else(|| basis_weights(&ap, at));
+                        let edge = connect.and_then(|(a, b)| Some((partner(a)?, partner(b)?)));
+                        place.is_some_and(|(c, w)| {
+                            s.edit(|m| {
+                                ayatsuri_core::edit::add_vertex_from(m, mi, &reference, c, w, edge)
+                                    .is_some()
+                            })
+                        })
+                    }
+                };
+                if placed {
+                    s.join_last_edit();
+                    for l in links {
+                        if let Some(pl) = partner(l) {
+                            connect_pair(&mut self.pending_edges, s, mi, n as u16, pl);
+                        }
+                    }
+                    log::debug!("mesh {mi}: mirrored point {n} placed");
+                }
+            }
             if !applied {
                 log::warn!("mesh edit had nothing to do");
             } else if let Some((mi, verts)) = settle

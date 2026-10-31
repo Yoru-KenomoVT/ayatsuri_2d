@@ -1694,6 +1694,14 @@ impl Session {
 
     /// A follow-up to the edit just made, folded into its undo step, so one
     /// undo takes both back.
+    /// Fold the edit just made into the one before it, so one undo takes
+    /// both back (a point and its mirror).
+    pub fn join_last_edit(&mut self) {
+        if self.undo.len() >= 2 {
+            self.undo.pop();
+        }
+    }
+
     pub fn amend(&mut self, f: impl FnOnce(&mut Model) -> bool) -> bool {
         let mut after = self.puppet.model().clone();
         if !f(&mut after) {
