@@ -8,7 +8,8 @@
   own scale and quarter-turn buttons, and Scale with Fill page sizes every
   piece together, as far up as they still fit one page (a bigger page no
   longer leaves them crowded in one corner). The uvs and the copied pixels
-  follow the scale and turn.
+  follow the scale and turn. The GPU memory warning for pages over 8192 px
+  is now a small red toast in the corner of the page view, closed with its x.
 - **Texture size on moc3 export**: Resize on export writes each texture
   page with its longer side up to 49152 px, for the files only; the model
   and the editor keep their own pages, which the GPU can hold.
