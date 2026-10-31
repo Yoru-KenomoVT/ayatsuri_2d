@@ -33,6 +33,9 @@ pub struct AtlasWin {
     verified: bool,
     /// Auto layout scales every piece by this first (Fill page finds it).
     scale: f32,
+    /// The page size whose GPU memory toast was closed, so it stays closed
+    /// until the size changes.
+    mem_closed: Option<u32>,
 }
 
 /// The sizes the page picker offers.
@@ -75,6 +78,7 @@ impl AtlasWin {
             custom: false,
             verified: false,
             scale: 1.0,
+            mem_closed: None,
         };
         // the layers still on textures of their own: start from a packed
         // layout to make the atlas from, at the size most models use
@@ -171,18 +175,6 @@ impl EditorUi {
                         if r.drag_stopped() || r.lost_focus() {
                             win.auto();
                         }
-                    }
-                    let side = win.layout.page_size;
-                    if side > 8192 {
-                        // RGBA, plus about a third more for the mip levels
-                        let mb = (side as u64 * side as u64 * 4) * 4 / 3 / (1024 * 1024);
-                        ui.colored_label(
-                            crate::theme::pal().rotation_red,
-                            crate::i18n::trf(
-                                "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px",
-                                &[("mb", &mb)],
-                            ),
-                        );
                     }
                     ui.checkbox(&mut win.fit, tr("Scale pieces that don't fit"));
                     // every piece scaled together; Fill page finds the most
@@ -537,6 +529,52 @@ impl EditorUi {
                         if pointer.is_some_and(|pt| r.contains(pt)) {
                             hit = Some(i);
                         }
+                    }
+                    // big pages: a small red toast in the corner, closed with its x
+                    let page_side = win.layout.page_size;
+                    if page_side > 8192 && win.mem_closed != Some(page_side) {
+                        // RGBA, plus about a third more for the mip levels
+                        let mb =
+                            (page_side as u64 * page_side as u64 * 4) * 4 / 3 / (1024 * 1024);
+                        let red = crate::theme::pal().rotation_red;
+                        let w = (side * 0.6).min(300.0);
+                        let area = Rect::from_min_size(
+                            pos2(rect.max.x - 8.0 - w, rect.min.y + 8.0),
+                            vec2(w, side - 16.0),
+                        );
+                        let mut toast = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(area)
+                                .layout(egui::Layout::top_down(egui::Align::Max)),
+                        );
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(58, 26, 26))
+                            .stroke(Stroke::new(1.0, red))
+                            .corner_radius(4.0)
+                            .inner_margin(6.0)
+                            .show(&mut toast, |ui| {
+                                ui.set_max_width(w - 12.0);
+                                ui.horizontal_top(|ui| {
+                                    if ui
+                                        .small_button(egui_phosphor::regular::X)
+                                        .on_hover_text(tr("Close"))
+                                        .clicked()
+                                    {
+                                        win.mem_closed = Some(page_side);
+                                    }
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(trf(
+                                                "{mb} MB of GPU memory per page. Some apps and GPUs can't load pages over 8192 px",
+                                                &[("mb", &mb)],
+                                            ))
+                                            .size(11.0)
+                                            .color(red),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                            });
                     }
                     // panning: the middle button anywhere, or the left on empty space
                     let middle = ui.input(|i| i.pointer.middle_down());
