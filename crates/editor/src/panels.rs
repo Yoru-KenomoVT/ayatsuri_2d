@@ -791,6 +791,9 @@ pub struct EditorUi {
     /// The solo that was on before an Edit Mesh (Solo) session, restored
     /// when it ends.
     mesh_edit_solo: Option<Option<std::collections::HashSet<String>>>,
+    /// S in Mesh Edit: only the mesh being edited shows, and the editing
+    /// stays on it. The model's Solo is left as it was.
+    mesh_solo: bool,
     /// The cut tool's drag: where the pointer was last frame, and the
     /// edges and lines it has crossed so far (removed on release).
     cut_sweep: Option<Pos2>,
@@ -1893,6 +1896,7 @@ impl Default for EditorUi {
             erase_marked: std::collections::BTreeSet::new(),
             mesh_edit_also: Vec::new(),
             mesh_edit_solo: None,
+            mesh_solo: false,
             cut_sweep: None,
             cut_marked: std::collections::BTreeSet::new(),
             pick_radius: 8.0,
@@ -4829,6 +4833,7 @@ impl EditorUi {
             {
                 s.solo = before;
             }
+            self.mesh_solo = false;
             return;
         };
         let (verts, tris, id) =
@@ -4905,6 +4910,7 @@ impl EditorUi {
             {
                 s.solo = before;
             }
+            self.mesh_solo = false;
             self.mesh_drag = None;
             self.mesh_snapshot = None;
             self.mesh_mode = 0;
@@ -7439,6 +7445,12 @@ impl EditorUi {
                 }
             }
             "mirror-edit" => self.mirror_edit = !self.mirror_edit,
+            // in Mesh Edit, S solos the mesh being edited; the model's
+            // Solo is left alone
+            "solo" if self.mesh_edit.is_some() => {
+                self.mesh_solo = !self.mesh_solo;
+                log::debug!("Mesh Edit solo {}", if self.mesh_solo { "on" } else { "off" });
+            }
             "solo" => self.toggle_solo(),
             "highlight-children" => self.highlight_children = !self.highlight_children,
             "guides-clear" => {
@@ -11705,6 +11717,14 @@ impl EditorUi {
         if self.mesh_edit.is_none() {
             s.drop_full_textures();
         }
+        // Mesh Edit's solo hides everything but the mesh being edited
+        let view_solo = match self.mesh_edit.filter(|_| self.mesh_solo) {
+            Some(mi) => Some(crate::gpu_view::Solo {
+                meshes: std::iter::once(mi).collect(),
+                tint: [0.0; 4],
+            }),
+            None => solo_view(s, &self.prefs),
+        };
         if self.gpu {
             // keep offering the textures until the renderer has them
             if s.gpu_pending.is_some() && s.gpu_uploaded.load(std::sync::atomic::Ordering::Acquire)
@@ -11799,7 +11819,7 @@ impl EditorUi {
                 pos2(origin.x, origin.y),
                 scale,
                 ui.ctx().pixels_per_point(),
-                solo_view(s, &self.prefs).as_ref(),
+                view_solo.as_ref(),
                 // the atlas view leaves the art unclipped, as exported
                 &if self.atlas_view { Vec::new() } else { s.art_boxes() },
                 // Mesh Edit draws the mesh's art frozen above the scrim; the
@@ -11810,7 +11830,7 @@ impl EditorUi {
         } else {
             // Solo: the others first behind the inactive color, then the
             // soloed meshes in front as they are
-            let solo = solo_view(s, &self.prefs);
+            let solo = view_solo;
             let draws: Vec<_> = s.puppet.drawables().collect();
             let soloed = |mi: usize| solo.as_ref().is_some_and(|v| v.meshes.contains(&mi));
             let order = draws
@@ -14817,10 +14837,10 @@ impl EditorUi {
             let inside = |tris: &[[Pos2; 3]], p: Pos2| {
                 tris.iter().any(|t| point_edit::point_in_polygon(p, t))
             };
-            let pick = resp.clicked() && self.mesh_mode == 0;
+            let pick = resp.clicked() && self.mesh_mode == 0 && !self.mesh_solo;
             let here = pick.then(|| resp.interact_pointer_pos()).flatten();
             let on_current = here.is_some_and(|p| inside(&screen_tris(mi), p));
-            for &other in &self.mesh_edit_also {
+            for &other in self.mesh_edit_also.iter().filter(|_| !self.mesh_solo) {
                 let tris = screen_tris(other);
                 let faint = theme::pal().text_faint.gamma_multiply(0.5);
                 for t in &tris {
@@ -19645,6 +19665,12 @@ mod key_cmd_tests {
         ed.multi_sel = vec![0];
         ed.enter_mesh_edit(0, true);
         assert_eq!(ed.mesh_edit_set(), [0]);
+        // S in Mesh Edit is its own solo: the model's stays as it was
+        let model_solo = ed.session.as_ref().unwrap().solo.clone();
+        let ctx = egui::Context::default();
+        ed.run_key_action(&ctx, "solo");
+        assert!(ed.mesh_solo);
+        assert_eq!(ed.session.as_ref().unwrap().solo, model_solo);
         let solo = ed.session.as_ref().unwrap().solo.clone().unwrap();
         assert!(solo.contains("ArtMesh0"));
         assert_eq!(ed.mesh_edit_solo, Some(None));
