@@ -8,9 +8,7 @@
   own scale and quarter-turn buttons, and Scale with Fill page sizes every
   piece together, as far up as they still fit one page (a bigger page no
   longer leaves them crowded in one corner). The uvs and the copied pixels
-  follow the scale and turn. The GPU memory warning for pages over 8192 px
-  is now a small red toast in the corner of the page view, closed with its x.
-  The selected piece has handles on the page: drag a corner to scale it
+  follow the scale and turn. The selected piece has handles on the page: drag a corner to scale it
   about the opposite corner, or the knob above it to turn it a quarter at
   a time (a click turns it right).
 - **Texture size on moc3 export**: Resize on export writes each texture
@@ -82,10 +80,11 @@
   rows inside a picked deformer show as picked, since they move and copy
   with it.
 
-- **Texture atlas pages up to the GPU's own limit**: the GPU was asked
-  for 8192 px textures at most whatever it could take, so the atlas's page
-  size stopped at 8192. It now asks for the card's limit, 16384 or 32768
-  on most.
+- **Textures up to the GPU's own limit**: the GPU was asked for 8192 px
+  textures at most whatever it could take, so bigger textures could not be
+  loaded. It now asks for the card's limit, 16384 or 32768 on most. Atlas
+  pages made in the editor still stop at 8192 px; bigger pages are only
+  written on export.
 - **Stroke mesh on a mesh left with a point or two**: after Clear and a
   point or two placed by hand, a stroke failed ("the mesh could not be
   rebuilt") or piled its points onto the few there were. The stroke, Auto
