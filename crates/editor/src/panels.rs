@@ -11717,11 +11717,12 @@ impl EditorUi {
         if self.mesh_edit.is_none() {
             s.drop_full_textures();
         }
-        // Mesh Edit's solo hides everything but the mesh being edited
+        // Mesh Edit's solo dims everything but the mesh being edited, in
+        // Solo's inactive color
         let view_solo = match self.mesh_edit.filter(|_| self.mesh_solo) {
             Some(mi) => Some(crate::gpu_view::Solo {
                 meshes: std::iter::once(mi).collect(),
-                tint: [0.0; 4],
+                tint: solo_tint(&self.prefs),
             }),
             None => solo_view(s, &self.prefs),
         };
@@ -18619,9 +18620,14 @@ fn solo_view(s: &Session, prefs: &Prefs) -> Option<crate::gpu_view::Solo> {
         .filter(|(_, m)| ids.contains(&m.id))
         .map(|(i, _)| i)
         .collect();
+    Some(crate::gpu_view::Solo { meshes, tint: solo_tint(prefs) })
+}
+
+/// Solo's inactive color, as the renderer takes it.
+fn solo_tint(prefs: &Prefs) -> [f32; 4] {
     let [r, g, b, a] = prefs.solo_tint.unwrap_or(SOLO_TINT);
     let f = |x: u8| x as f32 / 255.0;
-    Some(crate::gpu_view::Solo { meshes, tint: [f(r), f(g), f(b), f(a)] })
+    [f(r), f(g), f(b), f(a)]
 }
 
 /// While Solo is on, a badge in the view's lower left: click it to leave

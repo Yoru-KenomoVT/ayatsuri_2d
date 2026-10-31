@@ -12,7 +12,8 @@
   mode edits it next, and Auto Mesh in the Edit Mesh dialog runs on all of
   them. ArtMesh > Edit Mesh (Solo) does the same with everything else
   hidden until it ends. Done or Cancel covers the whole session. In Mesh
-  Edit, S shows only the mesh being edited and keeps the editing on it,
+  Edit, S dims everything but the mesh being edited (in Solo's inactive
+  color) and keeps the editing on it,
   until S again; the model's Solo is left as it was.
 - **Breath** (#50): the Breath button beside Follow makes the model idle in
   the preview, as the Cubism SDK's breath does: each listed parameter moves
