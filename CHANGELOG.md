@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Move picked points together in Mesh Edit**: drag any picked point and
+  the whole pick moves with it, in one undo step, sliding over the art like
+  a single point does. In Select points mode a drag that starts on a picked
+  point moves the pick instead of drawing a lasso. Ctrl+A in Mesh Edit
+  picks every point of the mesh (it selected every mesh before).
 - **Move the Mirror Edit axis**: drag the axis by its Mirror tab on the
   canvas, or put it at the canvas centre or the centre of the picked points
   from Tool Details, as Cubism's axis position does.
