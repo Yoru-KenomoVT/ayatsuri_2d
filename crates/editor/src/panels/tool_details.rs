@@ -257,6 +257,49 @@ impl EditorUi {
         self.overlay_settings(ui);
     }
 
+    /// A wire colour of their own for the selected meshes, saved with the
+    /// model: their lines and points draw in it instead of the line colour.
+    fn mesh_color_override(&mut self, ui: &mut Ui) {
+        let mut picked: Vec<usize> = self.multi_sel.clone();
+        if let Some(super::Sel::Mesh(mi)) = self.selected
+            && !picked.contains(&mi)
+        {
+            picked.insert(0, mi);
+        }
+        let Some(s) = &mut self.session else { return };
+        let ids: Vec<String> = picked
+            .iter()
+            .filter_map(|&mi| s.puppet.model().art_meshes.get(mi).map(|a| a.id.clone()))
+            .collect();
+        let Some(first) = ids.first() else {
+            ui.weak(crate::i18n::tr("Select an art mesh"));
+            return;
+        };
+        let current = s.mesh_colors.get(first).copied();
+        let mut rgb = current.unwrap_or([0xE5, 0x48, 0x48]);
+        let mut set = None;
+        if ui.color_edit_button_srgb(&mut rgb).changed() {
+            set = Some(Some(rgb));
+        }
+        if current.is_some()
+            && ui
+                .small_button(egui_phosphor::regular::X)
+                .on_hover_text(crate::i18n::tr("Back to the overlay color"))
+                .clicked()
+        {
+            set = Some(None);
+        }
+        if let Some(c) = set {
+            for id in ids {
+                match c {
+                    Some(c) => s.mesh_colors.insert(id, c),
+                    None => s.mesh_colors.remove(&id),
+                };
+            }
+            s.modified = true;
+        }
+    }
+
     /// The overlay display settings, shared by Tool Details and Settings >
     /// View. Changes are saved straight away.
     pub(crate) fn overlay_settings(&mut self, ui: &mut Ui) {
@@ -286,6 +329,9 @@ impl EditorUi {
                     self.prefs.overlay.mesh_color = rgba(d.mesh_color);
                     changed = true;
                 }
+            });
+            row(ui, crate::i18n::tr("Selected mesh color override"), |ui| {
+                self.mesh_color_override(ui);
             });
         });
         section(ui, crate::i18n::tr("Warp deformer display settings"), "");

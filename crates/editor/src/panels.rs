@@ -10833,37 +10833,6 @@ impl EditorUi {
                 );
                 row(ui, crate::i18n::tr("Texture"), format!("{}", m.texture));
                 row(ui, crate::i18n::tr("Vertices"), format!("{}", m.vertex_count));
-                // the wire colour, for every picked mesh at once
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr("Wire color"));
-                    let targets: Vec<String> = std::iter::once(i)
-                        .chain(self.multi_sel.iter().copied())
-                        .filter_map(|mi| s.puppet.model().art_meshes.get(mi).map(|a| a.id.clone()))
-                        .collect();
-                    let current = s.mesh_colors.get(&m.id).copied();
-                    let mut rgb = current.unwrap_or([0xE5, 0x48, 0x48]);
-                    let mut set = None;
-                    if ui.color_edit_button_srgb(&mut rgb).changed() {
-                        set = Some(Some(rgb));
-                    }
-                    if current.is_some()
-                        && ui
-                            .small_button(egui_phosphor::regular::X)
-                            .on_hover_text(crate::i18n::tr("Back to the overlay color"))
-                            .clicked()
-                    {
-                        set = Some(None);
-                    }
-                    if let Some(c) = set {
-                        for id in targets {
-                            match c {
-                                Some(c) => s.mesh_colors.insert(id, c),
-                                None => s.mesh_colors.remove(&id),
-                            };
-                        }
-                        s.modified = true;
-                    }
-                });
                 let stack = s.puppet.drawables().position(|d| d.mesh == i);
                 row(
                     ui,
