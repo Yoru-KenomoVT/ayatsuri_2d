@@ -45,6 +45,10 @@
 
 ### Fixed
 
+- **The pendulum preview follows a length as it is dragged**: shrinking a
+  node's length drew the chain longer (and growing it shorter) until the
+  mouse was let go, because the view's scale followed the new value while
+  the chain still came from the running physics with the old one.
 - **The launcher starts the editor when its splash can't open** (#49): on
   desktops that refuse the splash's transparent window, such as Linux Mint,
   nothing started at all. The editor now starts without the splash.
