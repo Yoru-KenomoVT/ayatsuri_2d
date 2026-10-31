@@ -1566,6 +1566,7 @@
   "Drag to move the mirror axis": "ドラッグして対称軸を移動",
   "Center of the canvas": "キャンバスの中央",
   "Center of selected vertices": "選択した頂点の中央",
-  "Wire color": "ワイヤーの色",
-  "Back to the overlay color": "オーバーレイの色に戻す"
+  "Back to the overlay color": "オーバーレイの色に戻す",
+  "Selected mesh color override": "選択メッシュの色を上書き",
+  "Select an art mesh": "アートメッシュを選択してください"
 }

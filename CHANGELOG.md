@@ -4,8 +4,9 @@
 
 ### Added
 
-- **Wire colours for art meshes**: the Inspector's Wire color sets a
-  colour for the selected meshes, and their lines and points draw in it
+- **Wire colours for art meshes**: Selected mesh color override, under
+  ArtMesh display settings in Tool Details, sets a colour for the selected
+  meshes, and their lines and points draw in it
   (in the selection overlay and in Mesh Edit) to tell neighbouring meshes
   apart. Saved with the model; the × goes back to the overlay colour.
 - **Move picked points together in Mesh Edit**: drag any picked point and

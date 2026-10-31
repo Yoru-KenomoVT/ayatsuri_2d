@@ -1566,6 +1566,7 @@
   "Drag to move the mirror axis": "Sleep om die spieëlas te skuif",
   "Center of the canvas": "Middel van die doek",
   "Center of selected vertices": "Middel van die gekose punte",
-  "Wire color": "Draadkleur",
-  "Back to the overlay color": "Terug na die oorleg-kleur"
+  "Back to the overlay color": "Terug na die oorleg-kleur",
+  "Selected mesh color override": "Gekose maas se kleur oorskryf",
+  "Select an art mesh": "Kies 'n kunsmaas"
 }
