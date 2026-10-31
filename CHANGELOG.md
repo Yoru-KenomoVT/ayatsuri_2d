@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Scale and turn pieces in the Texture Atlas**: a selected piece has its
+  own scale and quarter-turn buttons, and Scale with Fill page sizes every
+  piece together, as far up as they still fit one page (a bigger page no
+  longer leaves them crowded in one corner). The uvs and the copied pixels
+  follow the scale and turn.
 - **Texture size on moc3 export**: Resize on export writes each texture
   page with its longer side up to 49152 px, for the files only; the model
   and the editor keep their own pages, which the GPU can hold.
