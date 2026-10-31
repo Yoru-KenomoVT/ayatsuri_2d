@@ -5079,13 +5079,17 @@ impl EditorUi {
         // at rest the preview mirrors the running physics for this group, so
         // moving its input parameters swings it; a drag or Swing hands it to
         // the private sim until that settles
-        let drawn: Vec<(f32, f32)> = match live_chain.filter(|c| c.len() == nodes.len()) {
-            Some(chain) if !live => {
-                ui.ctx().request_repaint();
-                chain
-            }
-            _ => self.phys_prev.iter().map(|p| (p.0, p.1)).collect(),
-        };
+        // a setting being dragged reaches the model only on release, so till
+        // then the running chain has the old lengths: the preview's own,
+        // which has the new ones, is drawn instead
+        let drawn: Vec<(f32, f32)> =
+            match live_chain.filter(|c| c.len() == nodes.len() && chain_matches(c, nodes)) {
+                Some(chain) if !live => {
+                    ui.ctx().request_repaint();
+                    chain
+                }
+                _ => self.phys_prev.iter().map(|p| (p.0, p.1)).collect(),
+            };
         // the frame's cross through the pivot, turned by the angle inputs as
         // they move (and by the view's own turn), as in Cubism
         if let Some(&(ax, ay)) = drawn.first() {
@@ -17199,6 +17203,36 @@ fn default_physics_group(n: usize) -> ayatsuri_format::model::PhysicsGroup {
         ],
         norm_position: ayatsuri_format::model::PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
         norm_angle: ayatsuri_format::model::PhysicsRange { min: -10.0, default: 0.0, max: 10.0 },
+    }
+}
+
+/// Whether a running chain's links are as long as `nodes` say.
+fn chain_matches(chain: &[(f32, f32)], nodes: &[ayatsuri_format::model::PhysicsNode]) -> bool {
+    chain.iter().zip(chain.iter().skip(1)).zip(nodes.iter().skip(1)).all(|((a, b), n)| {
+        let have = (b.0 - a.0).hypot(b.1 - a.1);
+        let want = n.x.hypot(n.y);
+        (have - want).abs() <= want.max(1.0) * 0.01
+    })
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::chain_matches;
+    use ayatsuri_format::model::PhysicsNode;
+
+    #[test]
+    fn a_chain_with_the_old_lengths_does_not_match_the_edited_nodes() {
+        let node = |y: f32| PhysicsNode {
+            x: 0.0,
+            y,
+            mobility: 1.0,
+            delay: 1.0,
+            acceleration: 1.0,
+            radius: 0.0,
+        };
+        let nodes = [node(0.0), node(5.0)];
+        assert!(chain_matches(&[(0.0, 0.0), (3.0, 4.0)], &nodes));
+        assert!(!chain_matches(&[(0.0, 0.0), (0.0, 10.0)], &nodes));
     }
 }
 
