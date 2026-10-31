@@ -19676,6 +19676,23 @@ mod key_cmd_tests {
         assert_eq!(s.param_picked, [2, 3]);
     }
 
+    #[test]
+    fn a_replicated_blend_shape_is_still_a_blend_shape() {
+        let mut ed = editor();
+        let s = ed.session.as_mut().unwrap();
+        s.edit(|m| {
+            let p = &mut m.parameters[0];
+            p.blend_shape = true;
+            p.repeat = true;
+            p.decimals = 1;
+            true
+        });
+        ed.run_param_cmd(param_menu::ParamCmd::Replicate(0));
+        let p = &ed.session.as_ref().unwrap().puppet.model().parameters[1];
+        assert_eq!(p.id, "P2");
+        assert!(p.blend_shape && p.repeat && p.decimals == 1);
+    }
+
     fn mesh(ed: &EditorUi) -> ArtMesh {
         ed.session.as_ref().unwrap().puppet.model().art_meshes[0].clone()
     }
