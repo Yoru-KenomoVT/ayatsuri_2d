@@ -1568,5 +1568,6 @@
   "Center of selected vertices": "Middel van die gekose punte",
   "Back to the overlay color": "Terug na die oorleg-kleur",
   "Selected mesh color override": "Gekose maas se kleur oorskryf",
-  "Select an art mesh": "Kies 'n kunsmaas"
+  "Select an art mesh": "Kies 'n kunsmaas",
+  "Copied. Cut works on art meshes: delete the deformers with Delete.": "Gekopieer. Knip werk op kunsmase: verwyder die vervormers met Delete."
 }

@@ -1568,5 +1568,6 @@
   "Center of selected vertices": "선택한 정점의 중앙",
   "Back to the overlay color": "오버레이 색으로 되돌리기",
   "Selected mesh color override": "선택한 메시 색 덮어쓰기",
-  "Select an art mesh": "아트메시를 선택하세요"
+  "Select an art mesh": "아트메시를 선택하세요",
+  "Copied. Cut works on art meshes: delete the deformers with Delete.": "복사했습니다. 잘라내기는 아트메시에만 적용됩니다. 디포머는 Delete로 삭제하세요."
 }

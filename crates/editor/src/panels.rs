@@ -9476,16 +9476,32 @@ impl EditorUi {
     /// paste into another project); Cut deletes them after, as one undo step.
     fn copy_meshes(&mut self, ctx: &egui::Context, cut: bool) {
         let meshes = self.selected_meshes();
+        // selected deformers come with every deformer and art mesh under them
+        let defs = def_group(self.selected, &self.def_pick);
         let Some(s) = &self.session else { return };
-        if meshes.is_empty() {
+        if meshes.is_empty() && defs.is_empty() {
             return;
         }
-        let clip = crate::mesh_clip::copy(s, &meshes);
+        let clip = crate::mesh_clip::copy_objects(s, &defs, &meshes);
         ctx.copy_text(clip.to_text());
-        log::info!("{} {} art mesh(es)", if cut { "cut" } else { "copied" }, clip.meshes.len());
+        log::info!(
+            "{} {} deformer(s) and {} art mesh(es)",
+            if cut && defs.is_empty() { "cut" } else { "copied" },
+            clip.deformers.len(),
+            clip.meshes.len()
+        );
         self.mesh_clip = Some(clip);
         if cut {
-            self.delete_meshes(meshes);
+            if defs.is_empty() {
+                self.delete_meshes(meshes);
+            } else {
+                set_notice(
+                    &mut self.notice,
+                    crate::i18n::tr(
+                        "Copied. Cut works on art meshes: delete the deformers with Delete.",
+                    ),
+                );
+            }
         }
     }
 
@@ -9495,15 +9511,35 @@ impl EditorUi {
     fn paste_meshes(&mut self, ctx: &egui::Context, clip: &crate::mesh_clip::ClipFile) {
         let Some(s) = &mut self.session else { return };
         match crate::mesh_clip::paste(s, ctx, clip) {
-            Ok(added) => {
+            Ok(pasted) => {
+                let added = pasted.meshes;
                 for (i, name) in &added {
                     if let Some(n) = s.mesh_names.get_mut(*i) {
                         n.clone_from(name);
                     }
                 }
-                log::info!("pasted {} art mesh(es)", added.len());
-                self.selected = added.first().map(|&(i, _)| Sel::Mesh(i));
-                self.multi_sel = added.iter().skip(1).map(|&(i, _)| i).collect();
+                if s.deformer_names.len() < s.puppet.model().deformers.len() {
+                    s.deformer_names.resize(s.puppet.model().deformers.len(), String::new());
+                }
+                for (i, name) in &pasted.deformers {
+                    if let Some(n) = s.deformer_names.get_mut(*i) {
+                        n.clone_from(name);
+                    }
+                }
+                log::info!(
+                    "pasted {} deformer(s) and {} art mesh(es)",
+                    pasted.deformers.len(),
+                    added.len()
+                );
+                // the pasted deformers are picked, ready to move together
+                if let Some(&(d, _)) = pasted.deformers.first() {
+                    self.selected = Some(Sel::Deformer(d));
+                    self.def_pick = pasted.deformers.iter().map(|&(i, _)| i).collect();
+                    self.multi_sel.clear();
+                } else {
+                    self.selected = added.first().map(|&(i, _)| Sel::Mesh(i));
+                    self.multi_sel = added.iter().skip(1).map(|&(i, _)| i).collect();
+                }
             }
             Err(e) => log::warn!("paste: {e}"),
         }

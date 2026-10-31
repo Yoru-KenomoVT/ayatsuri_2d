@@ -1568,5 +1568,6 @@
   "Center of selected vertices": "所选顶点的中心",
   "Back to the overlay color": "恢复为叠加层颜色",
   "Selected mesh color override": "所选网格颜色覆盖",
-  "Select an art mesh": "请选择一个图形网格"
+  "Select an art mesh": "请选择一个图形网格",
+  "Copied. Cut works on art meshes: delete the deformers with Delete.": "已复制。剪切仅适用于图形网格；请用 Delete 删除变形器。"
 }
