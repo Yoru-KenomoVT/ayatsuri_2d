@@ -178,6 +178,25 @@ fn window_icon() -> Option<std::sync::Arc<egui::IconData>> {
     Some(std::sync::Arc::new(egui::IconData { rgba: img.into_raw(), width, height }))
 }
 
+/// egui-wgpu asks the GPU for textures of 8192 px at most, whatever the
+/// card can take; the texture atlas wants the card's own limit (16384 or
+/// 32768 on most), so the device is asked for that instead.
+fn gpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuSetup, wgpu};
+    let mut config = eframe::egui_wgpu::WgpuConfiguration::default();
+    if let WgpuSetup::CreateNew(create) = &mut config.wgpu_setup {
+        let base: std::sync::Arc<_> = create.device_descriptor.clone();
+        create.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
+            let mut desc = base(adapter);
+            let side = adapter.limits().max_texture_dimension_2d;
+            desc.required_limits.max_texture_dimension_2d =
+                side.max(desc.required_limits.max_texture_dimension_2d);
+            desc
+        });
+    }
+    config
+}
+
 fn main() -> eframe::Result {
     ayatsuri_editor::logging::init(log::LevelFilter::Info);
     let options = eframe::NativeOptions {
@@ -190,6 +209,7 @@ fn main() -> eframe::Result {
                 None => v,
             }
         },
+        wgpu_options: gpu_options(),
         ..Default::default()
     };
     // `ayatsuri model.moc3` opens straight onto a model
