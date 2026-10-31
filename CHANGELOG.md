@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Texture size on moc3 export**: Resize on export writes each texture
+  page with its longer side up to 49152 px, for the files only; the model
+  and the editor keep their own pages, which the GPU can hold.
 - **Copy and paste deformers with their layers**: Ctrl+C with deformers
   selected copies each with every deformer and art mesh under it, keys,
   blend shapes and all; Ctrl+V pastes copies (IDs ending in _copy) with

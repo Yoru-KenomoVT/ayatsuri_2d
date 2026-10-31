@@ -1650,6 +1650,8 @@ pub(crate) struct ExportDlg {
     pub(crate) image_width: u32,
     pub(crate) jpeg: bool,
     pub(crate) transparent: bool,
+    /// moc3: the texture pages' longer side as written, when resized.
+    pub(crate) texture_size: Option<u32>,
 }
 
 /// The New Model dialog's working copy.
@@ -8236,6 +8238,7 @@ impl EditorUi {
             image_width: s.puppet.model().canvas.width.max(1.0) as u32,
             jpeg: false,
             transparent: true,
+            texture_size: None,
         });
         dlg.tab = tab;
         self.export_dlg = Some(dlg);

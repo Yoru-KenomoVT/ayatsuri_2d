@@ -144,7 +144,44 @@ impl EditorUi {
                                 );
                             });
                             ui.end_row();
+                            // only the written files: the model's pages, and
+                            // what the editor shows, keep their size
+                            ui.label(crate::i18n::tr("Texture size"));
+                            ui.horizontal(|ui| {
+                                let mut resize = dlg.texture_size.is_some();
+                                if ui
+                                    .checkbox(&mut resize, crate::i18n::tr("Resize on export"))
+                                    .on_hover_text(crate::i18n::tr(
+                                        "Writes each texture page with its longer side this size. The model and the editor keep their own pages.",
+                                    ))
+                                    .changed()
+                                {
+                                    dlg.texture_size = resize.then_some(8192);
+                                }
+                                if let Some(side) = &mut dlg.texture_size {
+                                    ui.add(
+                                        egui::DragValue::new(side)
+                                            .range(1024..=crate::export::MAX_EXPORT_TEXTURE)
+                                            .speed(64.0)
+                                            .suffix(" px"),
+                                    );
+                                }
+                            });
+                            ui.end_row();
                         });
+                        if let Some(side) = dlg.texture_size
+                            && side > 16384
+                        {
+                            // decoded RGBA while it is resized and written
+                            let gb = (side as f64).powi(2) * 4.0 / (1024.0 * 1024.0 * 1024.0);
+                            ui.colored_label(
+                                crate::theme::pal().rotation_red,
+                                crate::i18n::trf(
+                                    "About {gb} GB of memory per page while exporting, and few apps load pages this large.",
+                                    &[("gb", &format!("{gb:.1}"))],
+                                ),
+                            );
+                        }
                         ui.weak(crate::i18n::tr(
                             "Writes <name>.moc3, .model3.json, .cdi3.json and the textures.",
                         ));
@@ -381,6 +418,7 @@ impl EditorUi {
             physics: dlg.physics,
             motions: dlg.motions,
             expressions: dlg.expressions,
+            texture_size: dlg.texture_size,
         };
         match crate::export::export(s, dir, &opt) {
             Ok(files) => {

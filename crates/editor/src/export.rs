@@ -21,6 +21,31 @@ pub struct Options {
     pub physics: bool,
     pub motions: bool,
     pub expressions: bool,
+    /// Write each texture page with its longer side this many pixels (up
+    /// to 49152), resized on the way out; None writes them as they are.
+    /// The model's own pages, and so the editor, keep their size.
+    pub texture_size: Option<u32>,
+}
+
+/// The largest texture side the export writes.
+pub const MAX_EXPORT_TEXTURE: u32 = 49152;
+
+/// A page resized for export: its longer side `side` pixels, its shape
+/// kept. UVs are fractions of the page, so they need no change.
+fn resize_page(png: &[u8], side: u32) -> Result<Vec<u8>, String> {
+    let img = image::load_from_memory(png).map_err(|e| e.to_string())?;
+    let (w, h) = (img.width().max(1), img.height().max(1));
+    let side = side.clamp(16, MAX_EXPORT_TEXTURE);
+    if w.max(h) == side {
+        return Ok(png.to_vec());
+    }
+    let k = side as f64 / w.max(h) as f64;
+    let (nw, nh) = (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1));
+    let out = img.resize_exact(nw, nh, image::imageops::FilterType::CatmullRom);
+    let mut bytes = Vec::new();
+    out.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(bytes)
 }
 
 /// File names keep to what every filesystem accepts.
@@ -162,7 +187,13 @@ pub fn export(s: &Session, dir: &Path, opt: &Options) -> Result<Vec<PathBuf>, St
     let mut tex_refs = Vec::new();
     for (i, png) in pngs.iter().enumerate() {
         let file = format!("texture_{i:02}.png");
-        write(&tex_dir.join(&file), png, &mut written)?;
+        match opt.texture_size {
+            Some(side) => {
+                let out = resize_page(png, side)?;
+                write(&tex_dir.join(&file), &out, &mut written)?;
+            }
+            None => write(&tex_dir.join(&file), png, &mut written)?,
+        }
         tex_refs.push(format!("{tex_dir_name}/{file}"));
     }
 
@@ -359,6 +390,7 @@ mod tests {
             physics: false,
             motions: true,
             expressions: true,
+            texture_size: None,
         };
         export(&s, &dir, &opt).unwrap();
         let model3 = std::fs::read_to_string(dir.join("t.model3.json")).unwrap();
@@ -444,5 +476,16 @@ mod overwrite_tests {
         assert!(outside.exists(), "a path out of the folder is never followed");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn a_page_resizes_on_its_longer_side() {
+        let img = image::RgbaImage::from_pixel(64, 32, image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let out = image::load_from_memory(&resize_page(&png, 256).unwrap()).unwrap();
+        assert_eq!((out.width(), out.height()), (256, 128));
     }
 }
